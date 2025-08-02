@@ -70,7 +70,7 @@ class NacosToolWindow(private val project: Project, private val toolWindow: Tool
         initializeComponents()
         setupLayout()
         setupEventHandlers()
-        loadInitialData()
+        //loadInitialData()
         
         return createMainPanel()
     }

@@ -13,6 +13,7 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
 import com.intellij.util.ui.JBUI
+import com.nanyin.nacos.search.services.NacosSearchService
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.MouseAdapter
@@ -43,7 +44,7 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     private var configurations: List<NacosConfiguration> = emptyList()
     private var currentNamespace: NamespaceInfo? = null
     private var currentPage = 1
-    private val pageSize = 50
+    private var pageSize = 10
     
     // Coroutine scope for async operations
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -334,7 +335,9 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
         currentNamespace = newNamespace
         currentPage = 1 // Reset to first page when namespace changes
+        pageSize = 10 // Reset to first page when namespace changes
         loadConfigurations()
+
     }
     
     /**

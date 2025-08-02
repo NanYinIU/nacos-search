@@ -27,7 +27,7 @@ class NacosSearchService {
     // Pagination state
     private val _paginationState = MutableStateFlow(PaginationState())
     val paginationState: StateFlow<PaginationState> = _paginationState.asStateFlow()
-    
+
     /**
      * Search request data class
      */
@@ -92,11 +92,12 @@ class NacosSearchService {
             val configurations: List<NacosConfiguration>,
             val totalCount: Int,
             val pageNumber: Int,
+            val pageSize: Int,
             val pagesAvailable: Int
         ) : SearchState()
         data class Error(val message: String, val throwable: Throwable? = null) : SearchState()
     }
-    
+
     /**
      * Pagination state data class
      */
@@ -180,6 +181,7 @@ class NacosSearchService {
                     configurations = configurations,
                     totalCount = response.totalCount,
                     pageNumber = response.pageNumber,
+                    pageSize = request.pageSize,
                     pagesAvailable = response.pagesAvailable
                 )
                 

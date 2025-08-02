@@ -248,7 +248,7 @@ class NacosApiService {
                 put("search", searchMode)
                 namespaceId?.let { put("tenant", it) }
             }
-            
+
             val url = buildUrl(CONFIG_LIST_ENDPOINT, params)
             logger.debug("Listing configurations: $url")
             

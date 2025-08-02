@@ -2,17 +2,20 @@ package com.nanyin.nacos.search.ui
 
 import com.nanyin.nacos.search.services.NacosSearchService
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
-import kotlinx.coroutines.flow.StateFlow
+import com.nanyin.nacos.search.listeners.NamespaceChangeListener
+import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.services.NamespaceService
 import java.awt.FlowLayout
 import javax.swing.*
 
 /**
  * Pagination panel for search results
  */
-class PaginationPanel : JPanel(FlowLayout(FlowLayout.CENTER, 5, 0)) {
-    
+class PaginationPanel : JPanel(FlowLayout(FlowLayout.CENTER, 5, 0)), NamespaceChangeListener {
+    private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
     // UI Components
     private val previousButton = JButton("prev").apply {
         icon = AllIcons.Actions.Back
@@ -43,6 +46,9 @@ class PaginationPanel : JPanel(FlowLayout(FlowLayout.CENTER, 5, 0)) {
         setupLayout()
         setupEventHandlers()
         border = JBUI.Borders.empty(5)
+
+        // Register as namespace change listener
+        namespaceService.addNamespaceChangeListener(this)
     }
     
     private fun setupLayout() {
@@ -164,5 +170,18 @@ class PaginationPanel : JPanel(FlowLayout(FlowLayout.CENTER, 5, 0)) {
         SwingUtilities.invokeLater {
             pageSizeComboBox.selectedItem = pageSize
         }
+    }
+
+    override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
+        var totalCountNum = newNamespace?.configCount;
+        if(totalCountNum == null) {
+            totalCountNum = 0;
+        }
+        updatePagination(NacosSearchService.PaginationState(
+            currentPage = 1,
+            pageSize = 10,
+            totalCount = totalCountNum,
+            totalPages = totalCountNum / 10
+        ))
     }
 }

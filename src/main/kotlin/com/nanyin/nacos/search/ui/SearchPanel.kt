@@ -119,15 +119,15 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
                 // add(searchModeLabel)
                 add(searchButton)
                 add(clearButton)
-                add(advancedToggle)
+                //add(advancedToggle)
             }, BorderLayout.CENTER)
         }
         
         add(mainPanel, BorderLayout.NORTH)
-        add(advancedPanel, BorderLayout.CENTER)
+        //add(advancedPanel, BorderLayout.CENTER)
         
         // Initially hide advanced panel
-        advancedPanel.isVisible = false
+        //advancedPanel.isVisible = false
     }
     
     private fun createAdvancedPanel(): JPanel {

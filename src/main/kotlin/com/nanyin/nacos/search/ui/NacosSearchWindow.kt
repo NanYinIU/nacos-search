@@ -16,7 +16,6 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.collect
 import java.awt.BorderLayout
 import java.awt.Dimension
 import javax.swing.*
@@ -108,7 +107,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         rightSplitter = JBSplitter(true, 0.4f).apply {
             firstComponent = configListWithPagination
             secondComponent = JBScrollPane(configDetailPanel).apply {
-                minimumSize = Dimension(400, 200)
+                minimumSize = Dimension(400, 300)
             }
         }
         
@@ -359,7 +358,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                             paginationPanel.updatePagination(
                                 NacosSearchService.PaginationState(
                                     currentPage = state.pageNumber,
-                                    pageSize = 10,
+                                    pageSize = state.pageSize,
                                     totalCount = state.totalCount,
                                     totalPages = state.pagesAvailable
                                 )

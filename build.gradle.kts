@@ -63,7 +63,7 @@ tasks {
     
     patchPluginXml {
         sinceBuild.set("232")
-        untilBuild.set("241.*")
+        untilBuild.set(provider { null }) // 不设置最高版本，表示无限兼容
         
         pluginDescription.set("""
             <p>Nacos Search plugin for IntelliJ IDEA that allows developers to query Nacos configurations 
