@@ -89,7 +89,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         
         // Create top panel with namespace and search
         val topPanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(5)
+            border = JBUI.Borders.empty(2)
             
             add(namespacePanel, BorderLayout.NORTH)
             add(searchPanel, BorderLayout.CENTER)
@@ -98,7 +98,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // Create config list panel with pagination
         val configListWithPagination = JPanel(BorderLayout()).apply {
             add(JBScrollPane(configListPanel).apply {
-                minimumSize = Dimension(300, 200)
+                minimumSize = Dimension(400, 200)
             }, BorderLayout.CENTER)
             add(paginationPanel, BorderLayout.SOUTH)
         }

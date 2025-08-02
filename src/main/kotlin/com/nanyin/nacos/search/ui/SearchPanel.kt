@@ -24,8 +24,8 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
     private lateinit var searchField: JBTextField
     private lateinit var searchButton: JButton
     private lateinit var clearButton: JButton
-    private lateinit var advancedToggle: JButton
-    private lateinit var advancedPanel: JPanel
+    // private lateinit var advancedToggle: JButton
+    // private lateinit var advancedPanel: JPanel
     // private lateinit var searchModeLabel: JBLabel
     
     // Advanced search components
@@ -69,10 +69,10 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
             isEnabled = false
         }
         
-        advancedToggle = JButton("Advanced").apply {
-            toolTipText = "Toggle advanced search options"
-            font = font.deriveFont(Font.PLAIN, 11f)
-        }
+//        advancedToggle = JButton("Advanced").apply {
+//            toolTipText = "Toggle advanced search options"
+//            font = font.deriveFont(Font.PLAIN, 11f)
+//        }
         
 //        searchModeLabel = JBLabel("精确搜索").apply {
 //            toolTipText = "当前搜索模式"
@@ -218,9 +218,9 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
         
         // Advanced toggle
-        advancedToggle.addActionListener {
-            toggleAdvancedPanel()
-        }
+//        advancedToggle.addActionListener {
+//            toggleAdvancedPanel()
+//        }
         
         // Enter key in search field
         searchField.addKeyListener(object : KeyAdapter() {
@@ -377,8 +377,8 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
     
     private fun toggleAdvancedPanel() {
         isAdvancedVisible = !isAdvancedVisible
-        advancedPanel.isVisible = isAdvancedVisible
-        advancedToggle.text = if (isAdvancedVisible) "Simple" else "Advanced"
+        // advancedPanel.isVisible = isAdvancedVisible
+        // advancedToggle.text = if (isAdvancedVisible) "Simple" else "Advanced"
         
         // Trigger layout update
         revalidate()
@@ -447,7 +447,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
         searchField.isEnabled = enabled
         searchButton.isEnabled = enabled
         clearButton.isEnabled = enabled && hasActiveSearch()
-        advancedToggle.isEnabled = enabled
+        // advancedToggle.isEnabled = enabled
         
         dataIdField.isEnabled = enabled
         groupField.isEnabled = enabled

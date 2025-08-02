@@ -11,8 +11,10 @@ import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.AnimatedIcon
+import com.intellij.ui.EditorTextField
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import kotlinx.coroutines.*
 import java.awt.*
@@ -41,11 +43,11 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
     private var editorPanel: JPanel? = null
     
     // Metadata labels
-    private lateinit var dataIdLabel: JBLabel
-    private lateinit var groupLabel: JBLabel
-    private lateinit var namespaceLabel: JBLabel
-    private lateinit var typeLabel: JBLabel
-    private lateinit var sizeLabel: JBLabel
+    private lateinit var dataIdLabel: EditorTextField
+    private lateinit var groupLabel: EditorTextField
+    private lateinit var namespaceLabel: EditorTextField
+    private lateinit var typeLabel: EditorTextField
+    private lateinit var sizeLabel: EditorTextField
     
     // State
     private var currentConfiguration: NacosConfiguration? = null
@@ -63,11 +65,23 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
     
     private fun initializeComponents() {
         // Metadata panel components
-        dataIdLabel = JBLabel()
-        groupLabel = JBLabel()
-        namespaceLabel = JBLabel()
-        typeLabel = JBLabel()
-        sizeLabel = JBLabel()
+        dataIdLabel = EditorTextField()
+        dataIdLabel.setOneLineMode(true);
+        dataIdLabel.setEnabled(false);
+
+        groupLabel = EditorTextField()
+        groupLabel.setOneLineMode(true);
+        groupLabel.setEnabled(false);
+
+        namespaceLabel = EditorTextField()
+        namespaceLabel.setOneLineMode(true);
+        namespaceLabel.setEnabled(false);
+        typeLabel = EditorTextField()
+        typeLabel.setOneLineMode(true);
+        typeLabel.setEnabled(false);
+        sizeLabel = EditorTextField()
+        sizeLabel.setOneLineMode(true);
+        sizeLabel.setEnabled(false);
         
         metadataPanel = createMetadataPanel()
         
@@ -146,14 +160,14 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
             )
             
             add(createMetadataRow("Data ID:", dataIdLabel))
-            add(createMetadataRow("Group:", groupLabel))
+            // add(createMetadataRow("Group:", groupLabel))
             add(createMetadataRow("Namespace:", namespaceLabel))
-            add(createMetadataRow("Type:", typeLabel))
-            add(createMetadataRow("Size:", sizeLabel))
+            // add(createMetadataRow("Type:", typeLabel))
+            // add(createMetadataRow("Size:", sizeLabel))
         }
     }
     
-    private fun createMetadataRow(labelText: String, valueLabel: JBLabel): JPanel {
+    private fun createMetadataRow(labelText: String, valueLabel: EditorTextField): JPanel {
         return JPanel(FlowLayout(FlowLayout.LEFT, 0, 2)).apply {
             add(JBLabel(labelText).apply {
                 font = font.deriveFont(Font.BOLD)

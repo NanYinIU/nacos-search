@@ -14,8 +14,9 @@ import javax.swing.*
 /**
  * Pagination panel for search results
  */
-class PaginationPanel : JPanel(FlowLayout(FlowLayout.CENTER, 5, 0)), NamespaceChangeListener {
+class PaginationPanel : JPanel(FlowLayout(FlowLayout.CENTER, 2, 0)), NamespaceChangeListener {
     private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
+    private val nacosSearchService = ApplicationManager.getApplication().getService(NacosSearchService::class.java)
     // UI Components
     private val previousButton = JButton("prev").apply {
         icon = AllIcons.Actions.Back
@@ -125,7 +126,7 @@ class PaginationPanel : JPanel(FlowLayout(FlowLayout.CENTER, 5, 0)), NamespaceCh
             if (pageSizeComboBox.selectedItem as Int != state.pageSize) {
                 pageSizeComboBox.selectedItem = state.pageSize
             }
-            
+
             // Enable page size selector
             pageSizeComboBox.isEnabled = true
         }
@@ -183,5 +184,6 @@ class PaginationPanel : JPanel(FlowLayout(FlowLayout.CENTER, 5, 0)), NamespaceCh
             totalCount = totalCountNum,
             totalPages = totalCountNum / 10
         ))
+        // 重新search更新
     }
 }
