@@ -24,7 +24,7 @@ class NacosSearchService {
     private val _searchState = MutableStateFlow<SearchState>(SearchState.Idle)
     val searchState: StateFlow<SearchState> = _searchState.asStateFlow()
     
-    // Pagination state
+    // Pagination state , 缺少初始化
     private val _paginationState = MutableStateFlow(PaginationState())
     val paginationState: StateFlow<PaginationState> = _paginationState.asStateFlow()
 
@@ -205,8 +205,9 @@ class NacosSearchService {
         nacosApiService: NacosApiService
     ) {
         val nextPageNo = _paginationState.value.nextPage()
+        val nextPageSize = _paginationState.value.pageSize
         if (nextPageNo != null) {
-            val newRequest = currentRequest.copy(pageNo = nextPageNo)
+            val newRequest = currentRequest.copy(pageNo = nextPageNo, pageSize = nextPageSize)
             performSearch(newRequest, nacosApiService)
         }
     }
@@ -219,8 +220,9 @@ class NacosSearchService {
         nacosApiService: NacosApiService
     ) {
         val prevPageNo = _paginationState.value.previousPage()
+        val nextPageSize = _paginationState.value.pageSize
         if (prevPageNo != null) {
-            val newRequest = currentRequest.copy(pageNo = prevPageNo)
+            val newRequest = currentRequest.copy(pageNo = prevPageNo, pageSize = nextPageSize)
             performSearch(newRequest, nacosApiService)
         }
     }

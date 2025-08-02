@@ -24,7 +24,7 @@
         <!-- Tool Window -->
         <toolWindow id="Nacos Search" 
                    secondary="true" 
-                   icon="/icons/nacos.svg" 
+                   icon="/icon.png"
                    anchor="right" 
                    factoryClass="com.nanyin.nacos.search.ui.NacosSearchToolWindowFactory"/>
         

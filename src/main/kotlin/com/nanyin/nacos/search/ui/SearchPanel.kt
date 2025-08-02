@@ -103,8 +103,8 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
             toolTipText = "Enable case-sensitive search"
         }
         
-        // Advanced panel
-        advancedPanel = createAdvancedPanel()
+//        // Advanced panel
+//        advancedPanel = createAdvancedPanel()
     }
     
     private fun setupLayout() {
@@ -114,8 +114,8 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
         val mainPanel = JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(5)
             
-            add(JPanel(FlowLayout(FlowLayout.LEFT, 5, 0)).apply {
-                add(searchField.apply { preferredSize = Dimension(300, 25) })
+            add(JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply {
+                add(searchField.apply { preferredSize = Dimension(300, 20) })
                 // add(searchModeLabel)
                 add(searchButton)
                 add(clearButton)

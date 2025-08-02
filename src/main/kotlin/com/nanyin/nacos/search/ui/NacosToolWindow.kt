@@ -76,7 +76,7 @@ class NacosToolWindow(private val project: Project, private val toolWindow: Tool
     }
     
     private fun initializeComponents() {
-        searchField = JBTextField(30).apply {
+        searchField = JBTextField(50).apply {
             emptyText.text = "Search configurations..."
         }
         
