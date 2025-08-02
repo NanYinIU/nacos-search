@@ -13,7 +13,7 @@ java {
     }
 }
 
-group = "com.github.nacos.search"
+group = "com.nanyin.nacos.search"
 version = "1.0.0"
 
 repositories {
