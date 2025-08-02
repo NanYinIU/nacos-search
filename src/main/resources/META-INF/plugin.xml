@@ -1,0 +1,58 @@
+<idea-plugin>
+    <id>com.github.nacos.search</id>
+    <name>Nacos Search</name>
+    <vendor email="support@nacos.io" url="https://nacos.io">Nacos Team</vendor>
+
+    <description><![CDATA[
+        <p>Nacos Search plugin for IntelliJ IDEA that allows developers to query Nacos configurations 
+        directly from within the IDE with local caching for improved performance.</p>
+        
+        <p>Features:</p>
+        <ul>
+            <li>Connect to Nacos server via Open API</li>
+            <li>Local caching of configuration data</li>
+            <li>Search across dataId, group, and content</li>
+            <li>Namespace and group filtering</li>
+            <li>Seamless IntelliJ IDEA integration</li>
+        </ul>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Tool Window -->
+        <toolWindow id="Nacos Search" 
+                   secondary="true" 
+                   icon="/icons/nacos.svg" 
+                   anchor="right" 
+                   factoryClass="com.github.nacos.search.ui.NacosSearchToolWindowFactory"/>
+        
+        <!-- Settings -->
+        <applicationConfigurable 
+            parentId="tools" 
+            instance="com.github.nacos.search.settings.NacosConfigurable" 
+            id="com.github.nacos.search.settings.NacosConfigurable" 
+            displayName="Nacos Search"/>
+        
+        <!-- Services are now registered via @Service annotations -->
+    </extensions>
+
+    <actions>
+        <!-- Refresh Cache Action -->
+        <action id="com.github.nacos.search.actions.RefreshCacheAction" 
+               class="com.github.nacos.search.actions.RefreshCacheAction" 
+               text="Refresh Cache" 
+               description="Refresh Nacos configuration cache">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+        
+        <!-- Clear Cache Action -->
+        <action id="com.github.nacos.search.actions.ClearCacheAction" 
+               class="com.github.nacos.search.actions.ClearCacheAction" 
+               text="Clear Cache" 
+               description="Clear Nacos configuration cache">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

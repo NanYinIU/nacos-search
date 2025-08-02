@@ -1,0 +1,15 @@
+<ivy-module version="2.0">
+  <info organisation="bundledPlugin" module="com.intellij.java" revision="2023.2.5+831"/>
+  <configurations>
+    <conf name="default" visibility="public"/>
+  </configurations>
+  <publications>
+    <artifact name="/Applications/IntelliJ IDEA CE.app/Contents/plugins/java" type="directory" conf="default"/>
+  </publications>
+  <dependencies>
+    <dependency org="bundledPlugin" name="com.intellij.copyright" rev="232.10227.8+216"/>
+    <dependency org="bundledPlugin" name="com.intellij.platform.images" rev="232.10227.8+747"/>
+    <dependency org="bundledPlugin" name="training" rev="232.10227.8+809"/>
+    <dependency org="bundledPlugin" name="com.jetbrains.performancePlugin" rev="232.10227.8+809"/>
+  </dependencies>
+</ivy-module>

@@ -1,0 +1,13 @@
+<ivy-module version="2.0">
+  <info organisation="bundledPlugin" module="org.toml.lang" revision="243.21565.193+181"/>
+  <configurations>
+    <conf name="default" visibility="public"/>
+  </configurations>
+  <publications>
+    <artifact name="/Applications/IntelliJ IDEA.app/Contents/plugins/toml" type="directory" conf="default"/>
+  </publications>
+  <dependencies>
+    <dependency org="bundledPlugin" name="com.intellij.modules.json" rev="243.21565.193+179"/>
+    <dependency org="bundledPlugin" name="tanvd.grazi" rev="243.21565.193+237"/>
+  </dependencies>
+</ivy-module>
