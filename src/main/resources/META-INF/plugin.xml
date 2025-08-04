@@ -1,17 +1,16 @@
 <idea-plugin>
     <id>com.nanyin.nacos.search</id>
     <name>Nacos Search</name>
-    <vendor email="support@nacos.io" url="https://nacos.io">Nacos Team</vendor>
+    <vendor email="nanyiniu@gmail.com" url="">Nacos Viewer by nanyin</vendor>
 
     <description><![CDATA[
         <p>Nacos Search plugin for IntelliJ IDEA that allows developers to query Nacos configurations 
-        directly from within the IDE with local caching for improved performance.</p>
+        directly from within the IDE</p>
         
         <p>Features:</p>
         <ul>
             <li>Connect to Nacos server via Open API</li>
             <li>Local caching of configuration data</li>
-            <li>Search across dataId, group, and content</li>
             <li>Namespace and group filtering</li>
             <li>Seamless IntelliJ IDEA integration</li>
         </ul>

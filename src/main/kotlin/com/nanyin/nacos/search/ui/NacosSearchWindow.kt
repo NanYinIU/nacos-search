@@ -89,7 +89,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         
         // Create compact top panel with namespace and search - fixed at top
         val topPanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(1, 2, 1, 2) // Reduced padding for compact design
+            border = JBUI.Borders.empty(1, 2) // Reduced padding for compact design
             
             // Compact namespace panel
             add(namespacePanel.apply {

@@ -2,11 +2,15 @@ package com.nanyin.nacos.search.ui
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.Disposable
 import com.intellij.ui.AnimatedIcon
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
@@ -15,13 +19,16 @@ import com.nanyin.nacos.search.services.NacosApiService
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.ActionEvent
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.ReentrantLock
 import javax.swing.*
+import kotlin.concurrent.withLock
 
 
 /**
  * Panel for displaying configuration details with syntax highlighting
  */
-class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
+class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
     
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
     
@@ -34,16 +41,29 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
     private lateinit var refreshButton: JButton
     private lateinit var copyButton: JButton
     
-    // Editor components
+    // Editor components with thread-safe state management
     private var editor: EditorEx? = null
     private var editorPanel: JPanel? = null
     
+    // Thread safety for editor operations
+    private enum class EditorState {
+        NONE,
+        CREATING,
+        ACTIVE,
+        DISPOSING,
+        DISPOSED
+    }
+    
+    private val editorState = AtomicReference(EditorState.NONE)
+    private val editorLock = ReentrantLock()
+    private val logger = thisLogger()
+    
     // Metadata labels
-    private lateinit var dataIdLabel: JTextPane
-    private lateinit var groupLabel: JTextPane
-    private lateinit var namespaceLabel: JTextPane
-    private lateinit var typeLabel: JTextPane
-    private lateinit var sizeLabel: JTextPane
+    private lateinit var dataIdLabel: JTextField
+    private lateinit var groupLabel: JTextField
+    private lateinit var namespaceLabel: JTextField
+    private lateinit var typeLabel: JTextField
+    private lateinit var sizeLabel: JTextField
     
     // State
     private var currentConfiguration: NacosConfiguration? = null
@@ -51,6 +71,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
     
     // Coroutine scope for async operations
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var currentLoadingJob: Job? = null
     
     init {
         initializeComponents()
@@ -61,16 +82,32 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
     
     private fun initializeComponents() {
         // Metadata panel components
-        dataIdLabel = JTextPane()
+        dataIdLabel = JTextField()
         dataIdLabel.isEditable = false
-        groupLabel = JTextPane()
+        dataIdLabel.border = null
+        dataIdLabel.isOpaque = false
+        dataIdLabel.putClientProperty("JComponent.outline", "none")
+
+        groupLabel = JTextField()
         groupLabel.isEditable = false
-        namespaceLabel = JTextPane()
+        groupLabel.border = null
+        groupLabel.isOpaque = false
+        groupLabel.putClientProperty("JComponent.outline", "none")
+//        groupLabel.isEditable = false
+        namespaceLabel = JTextField()
         namespaceLabel.isEditable = false
-        typeLabel = JTextPane()
+        namespaceLabel.border = null
+        namespaceLabel.isOpaque = false
+        namespaceLabel.putClientProperty("JComponent.outline", "none")
+//        namespaceLabel.isEditable = false
+        typeLabel = JTextField()
         typeLabel.isEditable = false
-        sizeLabel = JTextPane()
-        sizeLabel.isEditable = false
+        typeLabel.border = null
+        typeLabel.isOpaque = false
+        typeLabel.putClientProperty("JComponent.outline", "none")
+//        typeLabel.isEditable = false
+        sizeLabel = JTextField()
+//        sizeLabel.isEditable = false
 
         
         metadataPanel = createMetadataPanel()
@@ -149,19 +186,19 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
                 JBUI.Borders.empty(5)
             )
             
-            add(createMetadataRow("Data ID:", dataIdLabel))
+            add(createMetadataRow("Data ID: ", dataIdLabel))
             // add(createMetadataRow("Group:", groupLabel))
-            add(createMetadataRow("Namespace:", namespaceLabel))
+            add(createMetadataRow("Namespace: ", namespaceLabel))
             // add(createMetadataRow("Type:", typeLabel))
             // add(createMetadataRow("Size:", sizeLabel))
         }
     }
     
-    private fun createMetadataRow(labelText: String, valueLabel: JTextPane): JPanel {
+    private fun createMetadataRow(labelText: String, valueLabel: JTextField): JPanel {
         return JPanel(FlowLayout(FlowLayout.LEFT, 0, 2)).apply {
             add(JBLabel(labelText).apply {
                 font = font.deriveFont(Font.BOLD)
-                preferredSize = Dimension(80, preferredSize.height)
+                preferredSize = Dimension(100, preferredSize.height)
             })
             add(valueLabel.apply { font = font.deriveFont(Font.ITALIC) })
         }
@@ -232,22 +269,25 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
     
     private fun updateMetadata(configuration: NacosConfiguration) {
-        SwingUtilities.invokeLater {
+        ApplicationManager.getApplication().invokeLater({
             dataIdLabel.text = configuration.dataId
             groupLabel.text = configuration.group
             namespaceLabel.text = configuration.tenantId ?: ""
             typeLabel.text = configuration.type ?: "text"
             sizeLabel.text = "Loading..."
-        }
+        }, ModalityState.defaultModalityState())
     }
     
     private fun loadConfigurationContent(configuration: NacosConfiguration) {
         if (isLoading) return
         
+        // Cancel previous loading operation
+        currentLoadingJob?.cancel()
+        
         setLoadingState(true)
         showCard("loading")
         
-        coroutineScope.launch {
+        currentLoadingJob = coroutineScope.launch {
             try {
                 val result = nacosApiService.getConfiguration(
                     dataId = configuration.dataId,
@@ -256,66 +296,110 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
                     useCache = true
                 )
                 
+                // Check if operation was cancelled
+                if (!isActive) return@launch
+                
                 result.onSuccess { configWithContent ->
                     configWithContent?.let { config ->
-                        displayConfigurationContent(config)
+                        displayConfigurationContentSafely(config)
                         setLoadingState(false)
                         showCard("content")
                         
-                        // Update size information
-                        SwingUtilities.invokeLater {
+                        // Update size information using proper IntelliJ threading
+                        ApplicationManager.getApplication().invokeLater({
                             val contentSize = config.content?.length ?: 0
                             sizeLabel.text = formatSize(contentSize)
-                        }
+                        }, ModalityState.defaultModalityState())
                     } ?: run {
                         setLoadingState(false)
                         showCard("error")
                     }
                 }.onFailure { error ->
-                    setLoadingState(false)
-                    showCard("error")
-                    showError("Failed to load configuration", error.message ?: "Unknown error")
+                    if (isActive) {
+                        setLoadingState(false)
+                        showCard("error")
+                        showError("Failed to load configuration", error.message ?: "Unknown error")
+                    }
                 }
             } catch (e: Exception) {
-                setLoadingState(false)
-                showCard("error")
-                showError("Error loading configuration", e.message ?: "Unknown error")
+                if (isActive) {
+                    setLoadingState(false)
+                    showCard("error")
+                    showError("Error loading configuration", e.message ?: "Unknown error")
+                }
             }
         }
     }
     
-    private fun displayConfigurationContent(configuration: NacosConfiguration) {
-        SwingUtilities.invokeLater {
-            // Dispose previous editor if exists
-            disposeEditor()
+    private fun displayConfigurationContentSafely(configuration: NacosConfiguration) {
+        ApplicationManager.getApplication().invokeLater({
+            // Dispose previous editor safely
+            disposeEditorSafely()
+            
+            // Wait for disposal to complete
+            editorLock.withLock {
+                while (editorState.get() == EditorState.DISPOSING) {
+                    Thread.sleep(10) // Brief wait for disposal completion
+                }
+                
+                // Reset state for new editor
+                editorState.set(EditorState.NONE)
+            }
             
             val content = configuration.content ?: ""
             val fileType = determineFileType(configuration)
             
-            // Create new editor
-            val document = EditorFactory.getInstance().createDocument(content)
-            editor = EditorFactory.getInstance().createEditor(document, project, fileType, true) as EditorEx
-            
-            editor?.let { ed ->
-                // Configure editor settings
-                val settings = ed.settings
-                settings.isLineNumbersShown = true
-                settings.isLineMarkerAreaShown = false
-                settings.isFoldingOutlineShown = true
-                settings.isRightMarginShown = false
-                settings.isWhitespacesShown = false
-                settings.isIndentGuidesShown = true
-                
-                // Create editor panel
-                editorPanel = JPanel(BorderLayout()).apply {
-                    add(ed.component, BorderLayout.CENTER)
-                }
-                
-                // Add to content panel
-                contentPanel.add(editorPanel, "content")
+            // Create new editor safely
+            val newEditor = createEditorSafely(content, fileType)
+            if (newEditor != null) {
+                editor = newEditor
+                updateEditorUI(newEditor)
                 copyButton.isEnabled = true
             }
+        }, ModalityState.defaultModalityState())
+    }
+    
+    private fun createEditorSafely(content: String, fileType: FileType): EditorEx? {
+        return editorLock.withLock {
+            if (!editorState.compareAndSet(EditorState.NONE, EditorState.CREATING)) {
+                logger.warn("Editor creation skipped - another operation in progress")
+                return null // Another operation in progress
+            }
+            
+            try {
+                val document = EditorFactory.getInstance().createDocument(content)
+                val newEditor = EditorFactory.getInstance().createEditor(document, project, fileType, true) as EditorEx
+                
+                // Register with Disposer for proper cleanup
+                Disposer.register(this) { EditorFactory.getInstance().releaseEditor(newEditor) }
+                
+                editorState.set(EditorState.ACTIVE)
+                newEditor
+            } catch (e: Exception) {
+                logger.error("Failed to create editor", e)
+                editorState.set(EditorState.NONE)
+                null
+            }
         }
+    }
+    
+    private fun updateEditorUI(ed: EditorEx) {
+        // Configure editor settings
+        val settings = ed.settings
+        settings.isLineNumbersShown = true
+        settings.isLineMarkerAreaShown = false
+        settings.isFoldingOutlineShown = true
+        settings.isRightMarginShown = false
+        settings.isWhitespacesShown = false
+        settings.isIndentGuidesShown = true
+        
+        // Create editor panel
+        editorPanel = JPanel(BorderLayout()).apply {
+            add(ed.component, BorderLayout.CENTER)
+        }
+        
+        // Add to content panel
+        contentPanel.add(editorPanel, "content")
     }
     
     private fun determineFileType(configuration: NacosConfiguration): FileType {
@@ -364,17 +448,17 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
     
     private fun setLoadingState(loading: Boolean) {
-        SwingUtilities.invokeLater {
+        ApplicationManager.getApplication().invokeLater({
             isLoading = loading
             refreshButton.isEnabled = !loading
-        }
+        }, ModalityState.defaultModalityState())
     }
     
     private fun showCard(cardName: String) {
-        SwingUtilities.invokeLater {
+        ApplicationManager.getApplication().invokeLater({
             val cardLayout = contentPanel.layout as CardLayout
             cardLayout.show(contentPanel, cardName)
-        }
+        }, ModalityState.defaultModalityState())
     }
     
     private fun showEmptyState() {
@@ -383,42 +467,72 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
     
     private fun showError(title: String, message: String) {
-        SwingUtilities.invokeLater {
+        ApplicationManager.getApplication().invokeLater({
             JOptionPane.showMessageDialog(
                 this,
                 message,
                 title,
                 JOptionPane.ERROR_MESSAGE
             )
+        }, ModalityState.defaultModalityState())
+    }
+    
+    private fun disposeEditorSafely() {
+        editorLock.withLock {
+            val currentState = editorState.get()
+            if (currentState == EditorState.DISPOSING || currentState == EditorState.DISPOSED) {
+                return // Already disposing or disposed
+            }
+            
+            if (!editorState.compareAndSet(currentState, EditorState.DISPOSING)) {
+                return // State changed, abort
+            }
+            
+            try {
+                editor?.let { ed ->
+                    if (!ed.isDisposed) {
+                        EditorFactory.getInstance().releaseEditor(ed)
+                    }
+                }
+                editor = null
+                
+                editorPanel?.let { panel ->
+                    contentPanel.remove(panel)
+                }
+                editorPanel = null
+                
+                editorState.set(EditorState.DISPOSED)
+            } catch (e: Exception) {
+                // Log error but don't rethrow to prevent cascading failures
+                logger.warn("Error disposing editor", e)
+                editorState.set(EditorState.DISPOSED)
+            }
         }
     }
     
+    // Legacy method for backward compatibility
     private fun disposeEditor() {
-        editor?.let { ed ->
-            EditorFactory.getInstance().releaseEditor(ed)
-            editor = null
-        }
-        editorPanel?.let { panel ->
-            contentPanel.remove(panel)
-            editorPanel = null
-        }
+        disposeEditorSafely()
     }
     
     /**
      * Clear the current configuration display
      */
     fun clearConfiguration() {
+        // Cancel any ongoing loading operation
+        currentLoadingJob?.cancel()
+        
         currentConfiguration = null
-        disposeEditor()
+        disposeEditorSafely()
         showEmptyState()
         
-        SwingUtilities.invokeLater {
+        ApplicationManager.getApplication().invokeLater({
             dataIdLabel.text = ""
             groupLabel.text = ""
             namespaceLabel.text = ""
             typeLabel.text = ""
             sizeLabel.text = ""
-        }
+        }, ModalityState.defaultModalityState())
     }
     
     /**
@@ -438,8 +552,14 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
     /**
      * Clean up resources
      */
-    fun dispose() {
-        disposeEditor()
+    override fun dispose() {
+        // Cancel any ongoing operations
+        currentLoadingJob?.cancel()
         coroutineScope.cancel()
+        
+        // Dispose editor safely
+        disposeEditorSafely()
+        
+        // Note: Registered disposables will be automatically cleaned up by Disposer
     }
 }
