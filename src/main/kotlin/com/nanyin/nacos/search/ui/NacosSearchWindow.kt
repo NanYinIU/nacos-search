@@ -87,37 +87,46 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun setupLayout() {
         border = JBUI.Borders.empty()
         
-        // Create top panel with namespace and search
+        // Create compact top panel with namespace and search - fixed at top
         val topPanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(2)
+            border = JBUI.Borders.empty(1, 2, 1, 2) // Reduced padding for compact design
             
-            add(namespacePanel, BorderLayout.NORTH)
-            add(searchPanel, BorderLayout.CENTER)
+            // Compact namespace panel
+            add(namespacePanel.apply {
+                preferredSize = Dimension(preferredSize.width, 28) // Fixed compact height
+            }, BorderLayout.NORTH)
+            
+            // Compact search panel
+            add(searchPanel.apply {
+                preferredSize = Dimension(preferredSize.width, 32) // Fixed compact height
+            }, BorderLayout.CENTER)
+            
+            // Set fixed height for entire top panel to keep it compact
+            preferredSize = Dimension(preferredSize.width, 65) // Total compact height
+            maximumSize = Dimension(Int.MAX_VALUE, 65) // Prevent expansion
         }
         
-        // Create config list panel with pagination
+        // Create config list panel with pagination - auto-resizable
         val configListWithPagination = JPanel(BorderLayout()).apply {
             add(JBScrollPane(configListPanel).apply {
-                minimumSize = Dimension(400, 200)
+                minimumSize = Dimension(400, 200) // Reduced minimum height
+                preferredSize = Dimension(400, 250)
             }, BorderLayout.CENTER)
             add(paginationPanel, BorderLayout.SOUTH)
         }
         
-        // Create right splitter for config list and detail
-        rightSplitter = JBSplitter(true, 0.4f).apply {
+        // Create splitter for config list and detail with more space for detail
+        rightSplitter = JBSplitter(true, 0.35f).apply { // Reduced ratio to give more space to detail
             firstComponent = configListWithPagination
             secondComponent = JBScrollPane(configDetailPanel).apply {
-                minimumSize = Dimension(400, 300)
+                minimumSize = Dimension(400, 250) // Increased minimum height for detail
+                preferredSize = Dimension(400, 400) // Increased preferred height
             }
         }
         
-        // Create main splitter
-        mainSplitter = JBSplitter(true, 0.1f).apply {
-            firstComponent = topPanel
-            secondComponent = rightSplitter
-        }
-        
-        add(mainSplitter, BorderLayout.CENTER)
+        // Use BorderLayout instead of splitter to fix top panel
+        add(topPanel, BorderLayout.NORTH) // Fixed at top
+        add(rightSplitter, BorderLayout.CENTER) // Takes remaining space
     }
     
     private fun setupEventHandlers() {

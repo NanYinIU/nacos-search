@@ -204,8 +204,22 @@ class NacosSearchService {
         currentRequest: SearchRequest,
         nacosApiService: NacosApiService
     ) {
-        val nextPageNo = _paginationState.value.nextPage()
+        var nextPageNo = _paginationState.value.nextPage()
         val nextPageSize = _paginationState.value.pageSize
+        if (currentRequest.namespace != null) {
+            if (_paginationState.value.totalCount != (currentRequest.namespace.configCount)) {
+                // 刷新分页参数
+                _paginationState.value = PaginationState(
+                    currentPage = 1,
+                    pageSize = 10,
+                    totalCount = currentRequest.namespace.configCount,
+                    totalPages = currentRequest.namespace.configCount / 10
+                )
+            }
+            nextPageNo = _paginationState.value.nextPage()
+
+        }
+
         if (nextPageNo != null) {
             val newRequest = currentRequest.copy(pageNo = nextPageNo, pageSize = nextPageSize)
             performSearch(newRequest, nacosApiService)

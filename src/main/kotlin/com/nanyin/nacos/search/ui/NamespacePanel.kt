@@ -8,6 +8,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.ui.AnimatedIcon
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
 import kotlinx.coroutines.*
@@ -60,30 +61,38 @@ class NamespacePanel(private val project: Project) : JPanel(BorderLayout()) {
         }
         
         statusLabel = JBLabel("Loading namespaces...").apply {
-            foreground = Color.GRAY
+            foreground = JBColor.GRAY
         }
     }
     
     private fun setupLayout() {
-        border = JBUI.Borders.empty(5)
+        border = JBUI.Borders.empty(2, 5, 1, 5) // Reduced vertical padding for compact design
         
         val topPanel = JPanel(BorderLayout()).apply {
-            add(JBLabel("Namespace: "), BorderLayout.WEST)
+            add(JBLabel("Namespace: ").apply {
+                preferredSize = Dimension(preferredSize.width, 22) // Fixed compact height
+            }, BorderLayout.WEST)
             
             val centerPanel = JPanel(BorderLayout()).apply {
-                add(namespaceCombo, BorderLayout.CENTER)
-                add(refreshButton, BorderLayout.EAST)
+                add(namespaceCombo.apply {
+                    preferredSize = Dimension(preferredSize.width, 22) // Fixed compact height
+                }, BorderLayout.CENTER)
+                add(refreshButton.apply {
+                    preferredSize = Dimension(preferredSize.width, 22) // Fixed compact height
+                }, BorderLayout.EAST)
             }
             add(centerPanel, BorderLayout.CENTER)
             
-            val rightPanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0)).apply {
+            val rightPanel = JPanel(FlowLayout(FlowLayout.LEFT, 3, 0)).apply { // Reduced horizontal gap
                 add(loadingLabel)
             }
             add(rightPanel, BorderLayout.EAST)
         }
         
         add(topPanel, BorderLayout.NORTH)
-        add(statusLabel, BorderLayout.SOUTH)
+        add(statusLabel.apply {
+            preferredSize = Dimension(preferredSize.width, 23) // Compact status label height
+        }, BorderLayout.SOUTH)
     }
     
     private fun setupEventHandlers() {

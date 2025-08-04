@@ -108,17 +108,23 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
     
     private fun setupLayout() {
-        border = JBUI.Borders.empty(5)
+        border = JBUI.Borders.empty(2, 5) // Reduced vertical padding for compact design
         
-        // Main search panel
+        // Main search panel with compact layout
         val mainPanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(2)
+            border = JBUI.Borders.empty(1) // Reduced border padding
             
             add(JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply {
                 add(searchModeLabel)
-                add(searchField.apply { preferredSize = Dimension(300, 24) })
-                add(searchButton)
-                add(clearButton)
+                add(searchField.apply { 
+                    preferredSize = Dimension(300, 22) // Slightly reduced height
+                })
+                add(searchButton.apply {
+                    preferredSize = Dimension(preferredSize.width, 22) // Match field height
+                })
+                add(clearButton.apply {
+                    preferredSize = Dimension(preferredSize.width, 22) // Match field height
+                })
             }, BorderLayout.CENTER)
         }
         add(mainPanel, BorderLayout.NORTH)

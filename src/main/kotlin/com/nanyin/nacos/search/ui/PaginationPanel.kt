@@ -16,20 +16,18 @@ import javax.swing.*
  */
 class PaginationPanel : JPanel(FlowLayout(FlowLayout.CENTER, 2, 0)), NamespaceChangeListener {
     private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
-    private val nacosSearchService = ApplicationManager.getApplication().getService(NacosSearchService::class.java)
+    // private val nacosSearchService = ApplicationManager.getApplication().getService(NacosSearchService::class.java)
     // UI Components
-    private val previousButton = JButton("prev").apply {
-        icon = AllIcons.Actions.Back
+    private val previousButton = JButton(AllIcons.Actions.Back).apply {
         isEnabled = false
     }
     
-    private val nextButton = JButton("next").apply {
-        icon = AllIcons.Actions.Forward
+    private val nextButton = JButton(AllIcons.Actions.Forward).apply {
         isEnabled = false
     }
     
-    private val pageInfoLabel = JBLabel("0 page，total 0 pages")
-    private val totalCountLabel = JBLabel("Total 0")
+    private val pageInfoLabel = JBLabel("0 page")
+    private val totalCountLabel = JBLabel("0 Items")
     
     private val pageSizeComboBox = JComboBox(arrayOf(10, 20, 50, 100)).apply {
         selectedItem = 10
@@ -93,7 +91,7 @@ class PaginationPanel : JPanel(FlowLayout(FlowLayout.CENTER, 2, 0)), NamespaceCh
             
             // Set initial labels
             pageInfoLabel.text = "Page 1, Total 1 Pages"
-            totalCountLabel.text = "Total 0"
+            totalCountLabel.text = "0 Items"
             
             // Set default page size
             pageSizeComboBox.selectedItem = 10
@@ -115,12 +113,13 @@ class PaginationPanel : JPanel(FlowLayout(FlowLayout.CENTER, 2, 0)), NamespaceCh
             
             // Update labels with better formatting
             pageInfoLabel.text = if (state.totalPages > 0) {
-                "Page ${state.currentPage}, Total ${state.totalPages} Pages"
+                "Page ${state.currentPage}"
+                // , Total ${state.totalPages} Pages
             } else {
                 "Page 1, Total 1 Pages"
             }
             
-            totalCountLabel.text = "Total ${state.totalCount}"
+            totalCountLabel.text = "${state.totalCount} Items"
             
             // Update page size if different
             if (pageSizeComboBox.selectedItem as Int != state.pageSize) {
@@ -139,8 +138,8 @@ class PaginationPanel : JPanel(FlowLayout(FlowLayout.CENTER, 2, 0)), NamespaceCh
         SwingUtilities.invokeLater {
             previousButton.isEnabled = false
             nextButton.isEnabled = false
-            pageInfoLabel.text = "0 page，total 0 pages"
-            totalCountLabel.text = "Total 0"
+            pageInfoLabel.text = "0 page"
+            totalCountLabel.text = "0 Items"
             pageSizeComboBox.selectedItem = 10
             isVisible = false
         }
