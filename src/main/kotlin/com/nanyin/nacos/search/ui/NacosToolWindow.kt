@@ -169,7 +169,7 @@ class NacosToolWindow(private val project: Project, private val toolWindow: Tool
     
     private fun createSearchPanel(): JPanel {
         val searchPanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(0, 0, 5, 0)
+            border = JBUI.Borders.emptyBottom(5)
         }
         
         val searchFieldPanel = JPanel(BorderLayout()).apply {
@@ -189,8 +189,8 @@ class NacosToolWindow(private val project: Project, private val toolWindow: Tool
         val actionsPanel = createActionsPanel()
         
         searchPanel.add(searchFieldPanel, BorderLayout.NORTH)
-        searchPanel.add(filtersPanel, BorderLayout.CENTER)
-        searchPanel.add(actionsPanel, BorderLayout.SOUTH)
+        // searchPanel.add(filtersPanel, BorderLayout.CENTER)
+        searchPanel.add(actionsPanel, BorderLayout.CENTER)
         
         return searchPanel
     }
@@ -250,7 +250,7 @@ class NacosToolWindow(private val project: Project, private val toolWindow: Tool
     
     private fun createStatusPanel(): JPanel {
         return JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(5, 0, 0, 0)
+            border = JBUI.Borders.emptyTop(2)
             add(statusLabel, BorderLayout.WEST)
         }
     }

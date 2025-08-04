@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.ui
 import com.nanyin.nacos.search.models.SearchCriteria
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.project.Project
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
@@ -26,7 +27,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
     private lateinit var clearButton: JButton
     // private lateinit var advancedToggle: JButton
     // private lateinit var advancedPanel: JPanel
-    // private lateinit var searchModeLabel: JBLabel
+     private lateinit var searchModeLabel: JBLabel
     
     // Advanced search components
     private lateinit var dataIdField: JBTextField
@@ -74,10 +75,9 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
 //            font = font.deriveFont(Font.PLAIN, 11f)
 //        }
         
-//        searchModeLabel = JBLabel("精确搜索").apply {
-//            toolTipText = "当前搜索模式"
-//            foreground = java.awt.Color.GRAY
-//        }
+        searchModeLabel = JBLabel("Search: ").apply {
+            foreground = JBColor.GRAY
+        }
         
         // Advanced search components
         dataIdField = JBTextField().apply {
@@ -112,30 +112,24 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
         
         // Main search panel
         val mainPanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(5)
+            border = JBUI.Borders.empty(2)
             
             add(JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply {
-                add(searchField.apply { preferredSize = Dimension(300, 20) })
-                // add(searchModeLabel)
+                add(searchModeLabel)
+                add(searchField.apply { preferredSize = Dimension(300, 24) })
                 add(searchButton)
                 add(clearButton)
-                //add(advancedToggle)
             }, BorderLayout.CENTER)
         }
-        
         add(mainPanel, BorderLayout.NORTH)
-        //add(advancedPanel, BorderLayout.CENTER)
-        
-        // Initially hide advanced panel
-        //advancedPanel.isVisible = false
     }
     
     private fun createAdvancedPanel(): JPanel {
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = JBUI.Borders.compound(
-                JBUI.Borders.customLine(Color.LIGHT_GRAY, 1, 0, 0, 0),
-                JBUI.Borders.empty(10, 0, 0, 0)
+                JBUI.Borders.customLine(JBColor.LIGHT_GRAY, 1, 0, 0, 0),
+                JBUI.Borders.emptyTop(10)
             )
             
             // Field search section

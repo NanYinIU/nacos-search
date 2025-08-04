@@ -1,26 +1,22 @@
 package com.nanyin.nacos.search.ui
 
-import com.nanyin.nacos.search.models.NacosConfiguration
-import com.nanyin.nacos.search.services.NacosApiService
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.EditorFactory
-import com.intellij.openapi.editor.EditorSettings
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.AnimatedIcon
-import com.intellij.ui.EditorTextField
 import com.intellij.ui.components.JBLabel
-import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
+import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.services.NacosApiService
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.ActionEvent
-import java.awt.event.ActionListener
 import javax.swing.*
+
 
 /**
  * Panel for displaying configuration details with syntax highlighting
@@ -43,11 +39,11 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
     private var editorPanel: JPanel? = null
     
     // Metadata labels
-    private lateinit var dataIdLabel: EditorTextField
-    private lateinit var groupLabel: EditorTextField
-    private lateinit var namespaceLabel: EditorTextField
-    private lateinit var typeLabel: EditorTextField
-    private lateinit var sizeLabel: EditorTextField
+    private lateinit var dataIdLabel: JTextPane
+    private lateinit var groupLabel: JTextPane
+    private lateinit var namespaceLabel: JTextPane
+    private lateinit var typeLabel: JTextPane
+    private lateinit var sizeLabel: JTextPane
     
     // State
     private var currentConfiguration: NacosConfiguration? = null
@@ -65,23 +61,17 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
     
     private fun initializeComponents() {
         // Metadata panel components
-        dataIdLabel = EditorTextField()
-        dataIdLabel.setOneLineMode(true);
-        dataIdLabel.setEnabled(false);
+        dataIdLabel = JTextPane()
+        dataIdLabel.isEditable = false
+        groupLabel = JTextPane()
+        groupLabel.isEditable = false
+        namespaceLabel = JTextPane()
+        namespaceLabel.isEditable = false
+        typeLabel = JTextPane()
+        typeLabel.isEditable = false
+        sizeLabel = JTextPane()
+        sizeLabel.isEditable = false
 
-        groupLabel = EditorTextField()
-        groupLabel.setOneLineMode(true);
-        groupLabel.setEnabled(false);
-
-        namespaceLabel = EditorTextField()
-        namespaceLabel.setOneLineMode(true);
-        namespaceLabel.setEnabled(false);
-        typeLabel = EditorTextField()
-        typeLabel.setOneLineMode(true);
-        typeLabel.setEnabled(false);
-        sizeLabel = EditorTextField()
-        sizeLabel.setOneLineMode(true);
-        sizeLabel.setEnabled(false);
         
         metadataPanel = createMetadataPanel()
         
@@ -122,7 +112,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
             add(metadataPanel, BorderLayout.CENTER)
             
             val actionPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 5, 0)).apply {
-                add(copyButton)
+                // add(copyButton)
                 add(refreshButton)
             }
             add(actionPanel, BorderLayout.EAST)
@@ -167,13 +157,13 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
     
-    private fun createMetadataRow(labelText: String, valueLabel: EditorTextField): JPanel {
+    private fun createMetadataRow(labelText: String, valueLabel: JTextPane): JPanel {
         return JPanel(FlowLayout(FlowLayout.LEFT, 0, 2)).apply {
             add(JBLabel(labelText).apply {
                 font = font.deriveFont(Font.BOLD)
                 preferredSize = Dimension(80, preferredSize.height)
             })
-            add(valueLabel)
+            add(valueLabel.apply { font = font.deriveFont(Font.ITALIC) })
         }
     }
     
