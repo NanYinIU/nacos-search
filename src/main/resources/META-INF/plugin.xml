@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>com.nanyin.nacos.search</id>
     <name>Nacos Search</name>
-    <vendor email="nanyiniu@gmail.com" url="">Nacos Viewer by nanyin</vendor>
+    <vendor email="nanyiniu@gmail.com" url="https://github.com/NanYinIU">Nacos Viewer by nanyin</vendor>
 
     <description><![CDATA[
         <p>Nacos Search plugin for IntelliJ IDEA that allows developers to query Nacos configurations 

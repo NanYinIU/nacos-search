@@ -109,8 +109,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // Create config list panel with pagination - auto-resizable
         val configListWithPagination = JPanel(BorderLayout()).apply {
             add(JBScrollPane(configListPanel).apply {
-                minimumSize = Dimension(400, 200) // Reduced minimum height
-                preferredSize = Dimension(400, 250)
+                minimumSize = Dimension(400, 210) // Reduced minimum height
+                preferredSize = Dimension(400, 260)
             }, BorderLayout.CENTER)
             add(paginationPanel, BorderLayout.SOUTH)
         }
