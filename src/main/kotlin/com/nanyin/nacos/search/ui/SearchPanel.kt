@@ -1,6 +1,8 @@
 package com.nanyin.nacos.search.ui
 
 import com.nanyin.nacos.search.models.SearchCriteria
+import com.nanyin.nacos.search.bundle.NacosSearchBundle
+import com.nanyin.nacos.search.services.LanguageService
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.project.Project
 import com.intellij.ui.JBColor
@@ -19,7 +21,7 @@ import javax.swing.event.DocumentListener
 /**
  * Panel for search functionality with advanced options
  */
-class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
+class SearchPanel(private val project: Project) : JPanel(BorderLayout()), LanguageAwareComponent {
     
     // UI Components
     private lateinit var searchField: JBTextField
@@ -40,6 +42,9 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
     private var isAdvancedVisible = false
     private var searchCriteria = SearchCriteria()
     
+    // Services
+    private val languageService = com.intellij.openapi.application.ApplicationManager.getApplication().getService(LanguageService::class.java)
+    
     // Search listener
     var onSearchRequested: ((SearchCriteria) -> Unit)? = null
     var onSearchCleared: (() -> Unit)? = null
@@ -54,18 +59,18 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun initializeComponents() {
         // Main search field
         searchField = JBTextField().apply {
-            emptyText.text = "Search configurations..."
+            emptyText.text = NacosSearchBundle.message("search.placeholder")
             columns = 20
         }
         
         // Action buttons
         searchButton = JButton(AllIcons.Actions.Search).apply {
-            toolTipText = "Search configurations"
+            toolTipText = NacosSearchBundle.message("search.tooltip")
             preferredSize = Dimension(24, 24)
         }
         
         clearButton = JButton(AllIcons.Actions.GC).apply {
-            toolTipText = "Clear search"
+            toolTipText = NacosSearchBundle.message("search.clear.tooltip")
             preferredSize = Dimension(24, 24)
             isEnabled = false
         }
@@ -75,32 +80,32 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
 //            font = font.deriveFont(Font.PLAIN, 11f)
 //        }
         
-        searchModeLabel = JBLabel("Search: ").apply {
+        searchModeLabel = JBLabel(NacosSearchBundle.message("search.mode.label")).apply {
             foreground = JBColor.GRAY
         }
         
         // Advanced search components
         dataIdField = JBTextField().apply {
-            emptyText.text = "Data ID pattern..."
+            emptyText.text = NacosSearchBundle.message("search.data.id.placeholder")
             columns = 15
         }
         
         groupField = JBTextField().apply {
-            emptyText.text = "Group pattern..."
+            emptyText.text = NacosSearchBundle.message("search.group.placeholder")
             columns = 15
         }
         
         contentField = JBTextField().apply {
-            emptyText.text = "Content contains..."
+            emptyText.text = NacosSearchBundle.message("search.content.placeholder")
             columns = 15
         }
         
-        exactMatchCheckBox = JCheckBox("Exact match").apply {
-            toolTipText = "Use exact string matching instead of pattern matching"
+        exactMatchCheckBox = JCheckBox(NacosSearchBundle.message("search.exact.match")).apply {
+            toolTipText = NacosSearchBundle.message("search.exact.match.tooltip")
         }
         
-        caseSensitiveCheckBox = JCheckBox("Case sensitive").apply {
-            toolTipText = "Enable case-sensitive search"
+        caseSensitiveCheckBox = JCheckBox(NacosSearchBundle.message("search.case.sensitive")).apply {
+            toolTipText = NacosSearchBundle.message("search.case.sensitive.tooltip")
         }
         
 //        // Advanced panel
@@ -108,26 +113,29 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
     
     private fun setupLayout() {
-        border = JBUI.Borders.empty(2, 5) // Reduced vertical padding for compact design
+        border = JBUI.Borders.empty(2, 4, 2, 4) // Minimal padding for compact design
         
-        // Main search panel with compact layout
-        val mainPanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(1) // Reduced border padding
-            
-            add(JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply {
-                add(searchModeLabel)
-                add(searchField.apply { 
-                    preferredSize = Dimension(300, 22) // Slightly reduced height
-                })
-                add(searchButton.apply {
-                    preferredSize = Dimension(preferredSize.width, 22) // Match field height
-                })
-                add(clearButton.apply {
-                    preferredSize = Dimension(preferredSize.width, 22) // Match field height
-                })
-            }, BorderLayout.CENTER)
+        // Simple search row
+        val searchRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+            add(searchModeLabel.apply {
+                font = font.deriveFont(Font.BOLD, 11f)
+                preferredSize = Dimension(50, 24)
+            })
+            add(searchField.apply { 
+                preferredSize = Dimension(300, 24)
+                minimumSize = Dimension(200, 24)
+            })
+            add(searchButton.apply {
+                preferredSize = Dimension(24, 24)
+                minimumSize = Dimension(24, 24)
+            })
+            add(clearButton.apply {
+                preferredSize = Dimension(24, 24)
+                minimumSize = Dimension(24, 24)
+            })
         }
-        add(mainPanel, BorderLayout.NORTH)
+        
+        add(searchRow, BorderLayout.CENTER)
     }
     
     private fun createAdvancedPanel(): JPanel {
@@ -139,7 +147,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
             )
             
             // Field search section
-            add(JBLabel("Field Search:").apply {
+            add(JBLabel(NacosSearchBundle.message("search.field.search")).apply {
                 font = font.deriveFont(Font.BOLD)
                 alignmentX = Component.LEFT_ALIGNMENT
             })
@@ -147,19 +155,19 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
             add(Box.createVerticalStrut(5))
             
             // Data ID row
-            add(createFieldRow("Data ID:", dataIdField))
+            add(createFieldRow(NacosSearchBundle.message("search.data.id"), dataIdField))
             add(Box.createVerticalStrut(3))
             
             // Group row
-            add(createFieldRow("Group:", groupField))
+            add(createFieldRow(NacosSearchBundle.message("search.group"), groupField))
             add(Box.createVerticalStrut(3))
             
             // Content row
-            add(createFieldRow("Content:", contentField))
+            add(createFieldRow(NacosSearchBundle.message("search.content"), contentField))
             add(Box.createVerticalStrut(10))
             
             // Options section
-            add(JBLabel("Options:").apply {
+            add(JBLabel(NacosSearchBundle.message("search.options")).apply {
                 font = font.deriveFont(Font.BOLD)
                 alignmentX = Component.LEFT_ALIGNMENT
             })
@@ -178,11 +186,11 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
             add(Box.createVerticalStrut(10))
             
             val actionPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
-                val applyButton = JButton("Apply").apply {
+                val applyButton = JButton(NacosSearchBundle.message("common.apply")).apply {
                     addActionListener { performAdvancedSearch() }
                 }
                 
-                val resetButton = JButton("Reset").apply {
+                val resetButton = JButton(NacosSearchBundle.message("common.reset")).apply {
                     addActionListener { resetAdvancedSearch() }
                 }
                 
@@ -314,11 +322,11 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
         // For now, we'll update the search field's tooltip
         SwingUtilities.invokeLater {
             val tooltip = when {
-                searchText.isEmpty() -> "Search configurations..."
-                searchText == "*" -> "Wildcard search: Show all configurations"
-                searchText.startsWith("*") && searchText.length > 1 -> "Prefix fuzzy search: Find configurations ending with '${searchText.substring(1)}'"
-                searchText.contains("*") || searchText.contains("?") -> "Fuzzy search: Pattern matching enabled"
-                else -> "Exact search: Find configurations containing '$searchText'"
+                searchText.isEmpty() -> NacosSearchBundle.message("search.placeholder")
+                searchText == "*" -> NacosSearchBundle.message("search.wildcard.tooltip")
+                searchText.startsWith("*") && searchText.length > 1 -> NacosSearchBundle.message("search.prefix.tooltip", searchText.substring(1))
+                searchText.contains("*") || searchText.contains("?") -> NacosSearchBundle.message("search.fuzzy.tooltip")
+                else -> NacosSearchBundle.message("search.exact.tooltip", searchText)
             }
             searchField.toolTipText = tooltip
         }
@@ -454,5 +462,35 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()) {
         contentField.isEnabled = enabled
         exactMatchCheckBox.isEnabled = enabled
         caseSensitiveCheckBox.isEnabled = enabled
+    }
+    
+    /**
+     * Called when the language is changed
+     */
+    override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) {
+        // Update placeholder text
+        searchField.emptyText.text = NacosSearchBundle.message("search.placeholder")
+        
+        // Update button tooltips
+        searchButton.toolTipText = NacosSearchBundle.message("search.button.tooltip")
+        clearButton.toolTipText = NacosSearchBundle.message("search.clear.tooltip")
+        
+        // Update labels
+        searchModeLabel.text = NacosSearchBundle.message("search.mode.label")
+        
+        // Update checkbox text
+        exactMatchCheckBox.text = NacosSearchBundle.message("search.exact.match")
+        caseSensitiveCheckBox.text = NacosSearchBundle.message("search.case.sensitive")
+        
+        // Revalidate and repaint
+        revalidate()
+        repaint()
+    }
+    
+    /**
+     * Get the current language service
+     */
+    override fun getLanguageService(): LanguageService {
+        return languageService
     }
 }

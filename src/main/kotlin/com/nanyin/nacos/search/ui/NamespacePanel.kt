@@ -2,6 +2,8 @@ package com.nanyin.nacos.search.ui
 
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NamespaceService
+import com.nanyin.nacos.search.services.LanguageService
+import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.application.ApplicationManager
@@ -20,9 +22,10 @@ import javax.swing.*
 /**
  * Panel for namespace selection and management
  */
-class NamespacePanel(private val project: Project) : JPanel(BorderLayout()) {
+class NamespacePanel(private val project: Project) : JPanel(BorderLayout()), LanguageAwareComponent {
     
     private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
+    private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
     
     // UI Components
     private lateinit var namespaceCombo: ComboBox<NamespaceInfo>
@@ -51,7 +54,7 @@ class NamespacePanel(private val project: Project) : JPanel(BorderLayout()) {
         }
         
         refreshButton = JButton(AllIcons.Actions.Refresh).apply {
-            toolTipText = "Refresh namespaces"
+            toolTipText = NacosSearchBundle.message("namespace.refresh")
             preferredSize = Dimension(24, 24)
         }
         
@@ -60,39 +63,39 @@ class NamespacePanel(private val project: Project) : JPanel(BorderLayout()) {
             isVisible = false
         }
         
-        statusLabel = JBLabel("Loading namespaces...").apply {
+        statusLabel = JBLabel(NacosSearchBundle.message("namespace.loading.namespaces")).apply {
             foreground = JBColor.GRAY
         }
     }
     
     private fun setupLayout() {
-        border = JBUI.Borders.empty(2, 5, 1, 5) // Reduced vertical padding for compact design
+        border = JBUI.Borders.empty(2, 4, 0, 4) // Minimal padding for compact design
         
-        val topPanel = JPanel(BorderLayout()).apply {
-            add(JBLabel("Namespace: ").apply {
-                preferredSize = Dimension(preferredSize.width, 22) // Fixed compact height
-            }, BorderLayout.WEST)
-            
-            val centerPanel = JPanel(BorderLayout()).apply {
+        val mainPanel = JPanel(BorderLayout()).apply {
+            // Namespace label and combo row
+            val namespaceRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+                add(JBLabel(NacosSearchBundle.message("namespace.label") + ":").apply {
+                    font = font.deriveFont(Font.BOLD, 11f)
+                    preferredSize = Dimension(60, 24)
+                })
                 add(namespaceCombo.apply {
-                    preferredSize = Dimension(preferredSize.width, 22) // Fixed compact height
-                }, BorderLayout.CENTER)
+                    preferredSize = Dimension(180, 24)
+                    minimumSize = Dimension(150, 24)
+                })
                 add(refreshButton.apply {
-                    preferredSize = Dimension(preferredSize.width, 22) // Fixed compact height
-                }, BorderLayout.EAST)
-            }
-            add(centerPanel, BorderLayout.CENTER)
-            
-            val rightPanel = JPanel(FlowLayout(FlowLayout.LEFT, 3, 0)).apply { // Reduced horizontal gap
+                    preferredSize = Dimension(24, 24)
+                    minimumSize = Dimension(24, 24)
+                })
                 add(loadingLabel)
             }
-            add(rightPanel, BorderLayout.EAST)
+            add(namespaceRow, BorderLayout.NORTH)
+            add(statusLabel.apply {
+                border = JBUI.Borders.emptyTop(2)
+                font = font.deriveFont(Font.ITALIC, 10f)
+            }, BorderLayout.SOUTH)
         }
         
-        add(topPanel, BorderLayout.NORTH)
-        add(statusLabel.apply {
-            preferredSize = Dimension(preferredSize.width, 23) // Compact status label height
-        }, BorderLayout.SOUTH)
+        add(mainPanel, BorderLayout.CENTER)
     }
     
     private fun setupEventHandlers() {
@@ -100,7 +103,7 @@ class NamespacePanel(private val project: Project) : JPanel(BorderLayout()) {
             loadNamespaces()
         }
         
-        namespaceCombo.addActionListener { e ->
+        namespaceCombo.addActionListener { _ ->
             if (!isLoading && namespaceCombo.selectedItem != null) {
                 val selectedNamespace = namespaceCombo.selectedItem as NamespaceInfo
                 onNamespaceSelected(selectedNamespace)
@@ -120,16 +123,16 @@ class NamespacePanel(private val project: Project) : JPanel(BorderLayout()) {
                     namespaces = loadedNamespaces
                     updateNamespaceCombo()
                     setLoadingState(false)
-                    updateStatus("${loadedNamespaces.size} namespaces loaded")
+                    updateStatus(NacosSearchBundle.message("namespace.loaded.namespaces", loadedNamespaces.size))
                 }.onFailure { error ->
                     setLoadingState(false)
-                    updateStatus("Failed to load namespaces: ${error.message}")
-                    showError("Failed to load namespaces", error.message ?: "Unknown error")
+                    updateStatus(NacosSearchBundle.message("namespace.failed.load"))
+                    showError(NacosSearchBundle.message("namespace.failed.load"), error.message ?: NacosSearchBundle.message("error.unknown"))
                 }
             } catch (e: Exception) {
                 setLoadingState(false)
-                updateStatus("Error loading namespaces: ${e.message}")
-                showError("Error loading namespaces", e.message ?: "Unknown error")
+                updateStatus(NacosSearchBundle.message("namespace.error.load"))
+                showError(NacosSearchBundle.message("namespace.error.load"), e.message ?: NacosSearchBundle.message("error.unknown"))
             }
         }
     }
@@ -163,9 +166,9 @@ class NamespacePanel(private val project: Project) : JPanel(BorderLayout()) {
         coroutineScope.launch {
             try {
                 namespaceService.setCurrentNamespace(namespace)
-                updateStatus("Selected namespace: ${namespace.namespaceName}")
+                updateStatus(NacosSearchBundle.message("namespace.selected", namespace.namespaceName))
             } catch (e: Exception) {
-                updateStatus("Failed to select namespace: ${e.message}")
+                updateStatus(NacosSearchBundle.message("namespace.failed.select"))
             }
         }
     }
@@ -251,6 +254,85 @@ class NamespacePanel(private val project: Project) : JPanel(BorderLayout()) {
             }
             
             return this
+        }
+    }
+    
+    /**
+     * Called when the language is changed
+     */
+    override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) {
+        // Refresh all UI text elements
+        refreshUIText()
+        
+        // Update combo box renderer
+        updateComboRenderer()
+        
+        // Update button tooltips
+        updateButtonTooltips()
+        
+        // Revalidate and repaint the UI
+        revalidate()
+        repaint()
+    }
+    
+    /**
+     * Get the current language service
+     */
+    override fun getLanguageService(): LanguageService {
+        return languageService
+    }
+    
+    /**
+     * Refresh all UI text elements
+     */
+    private fun refreshUIText() {
+        SwingUtilities.invokeLater {
+            // Update loading text
+            loadingLabel.text = NacosSearchBundle.message("namespace.loading.namespaces")
+            
+            // Update status text
+            updateStatusText()
+            
+            // Update refresh button tooltip
+            refreshButton.toolTipText = NacosSearchBundle.message("tooltip.namespace.refresh")
+        }
+    }
+    
+    /**
+     * Update combo box renderer
+     */
+    private fun updateComboRenderer() {
+        SwingUtilities.invokeLater {
+            // Force combo box to re-render with new language
+            namespaceCombo.repaint()
+        }
+    }
+    
+    /**
+     * Update button tooltips
+     */
+    private fun updateButtonTooltips() {
+        SwingUtilities.invokeLater {
+            refreshButton.toolTipText = NacosSearchBundle.message("tooltip.namespace.refresh")
+        }
+    }
+    
+    /**
+     * Update status text based on current state
+     */
+    private fun updateStatusText() {
+        SwingUtilities.invokeLater {
+            when {
+                isLoading -> {
+                    statusLabel.text = NacosSearchBundle.message("namespace.loading.namespaces")
+                }
+                namespaces.isEmpty() -> {
+                    statusLabel.text = NacosSearchBundle.message("namespace.no.namespaces")
+                }
+                else -> {
+                    statusLabel.text = NacosSearchBundle.message("namespace.loaded.namespaces", namespaces.size)
+                }
+            }
         }
     }
 }

@@ -1,6 +1,8 @@
 package com.nanyin.nacos.search.settings
 
 import com.nanyin.nacos.search.services.NacosApiService
+import com.nanyin.nacos.search.services.LanguageService
+import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.EDT
 import com.intellij.openapi.options.Configurable
@@ -13,6 +15,7 @@ import com.intellij.ui.layout.panel
 import com.intellij.util.ui.JBUI
 import kotlinx.coroutines.*
 import java.awt.BorderLayout
+import java.awt.Component
 import java.awt.FlowLayout
 import javax.swing.*
 
@@ -22,6 +25,7 @@ import javax.swing.*
 class NacosConfigurable : Configurable {
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
     private val apiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
+    private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
     
     // UI Components
     private lateinit var serverUrlField: JBTextField
@@ -54,25 +58,32 @@ class NacosConfigurable : Configurable {
     private lateinit var testConnectionButton: JButton
     private lateinit var resetButton: JButton
     
+    // Language selection components
+    private lateinit var languageComboBox: JComboBox<LanguageService.SupportedLanguage>
+    
     private var mainPanel: JPanel? = null
     
-    override fun getDisplayName(): String = "Nacos Search"
+    override fun getDisplayName(): String = NacosSearchBundle.message("settings.title")
     
     override fun createComponent(): JComponent {
         initializeComponents()
         
         mainPanel = panel {
-            titledRow("Server Configuration") {
-                row("Server URL:") {
+            titledRow(NacosSearchBundle.message("settings.server.config")) {
+                row(NacosSearchBundle.message("settings.server.url")) {
                     cell {
                         serverUrlField()
                         testConnectionButton()
                     }
                 }
-                row("Username:") { usernameField() }
-                row("Password:") { passwordField() }
-                row("Namespace:") { namespaceField() }
+                row(NacosSearchBundle.message("settings.server.username")) { usernameField() }
+                row(NacosSearchBundle.message("settings.server.password")) { passwordField() }
+                row(NacosSearchBundle.message("settings.server.namespace")) { namespaceField() }
             }
+            
+//            titledRow(NacosSearchBundle.message("settings.language.config")) {
+//                row(NacosSearchBundle.message("settings.language.selection")) { languageComboBox() }
+//            }
             
 //            titledRow("Authentication Configuration") {
 //                row("Authentication Mode:") { authModeComboBox() }
@@ -119,6 +130,7 @@ class NacosConfigurable : Configurable {
     }
     
     override fun isModified(): Boolean {
+        val selectedLanguage = languageComboBox.selectedItem as LanguageService.SupportedLanguage
         return serverUrlField.text != settings.serverUrl ||
                 usernameField.text != settings.username ||
                 String(passwordField.password) != settings.password ||
@@ -139,7 +151,8 @@ class NacosConfigurable : Configurable {
                 (connectionTimeoutSpinner.value as Int) != settings.connectionTimeoutSeconds ||
                 (readTimeoutSpinner.value as Int) != settings.readTimeoutSeconds ||
                 (retryAttemptsSpinner.value as Int) != settings.retryAttempts ||
-                (retryDelaySpinner.value as Int) != settings.retryDelaySeconds
+                (retryDelaySpinner.value as Int) != settings.retryDelaySeconds ||
+                selectedLanguage.code != settings.language
     }
     
     override fun apply() {
@@ -150,8 +163,8 @@ class NacosConfigurable : Configurable {
         val errors = tempSettings.validate()
         if (errors.isNotEmpty()) {
             Messages.showErrorDialog(
-                "Settings validation failed:\n${errors.joinToString("\n")}",
-                "Invalid Settings"
+                NacosSearchBundle.message("settings.validation.failed", errors.joinToString("\n")),
+                NacosSearchBundle.message("settings.invalid.title")
             )
             return
         }
@@ -160,8 +173,8 @@ class NacosConfigurable : Configurable {
         updateSettings()
         
         Messages.showInfoMessage(
-            "Settings have been saved successfully.",
-            "Settings Saved"
+            NacosSearchBundle.message("settings.saved.success"),
+            NacosSearchBundle.message("settings.saved.title")
         )
     }
     
@@ -197,8 +210,27 @@ class NacosConfigurable : Configurable {
         retryAttemptsSpinner = JSpinner(SpinnerNumberModel(3, 0, 10, 1))
         retryDelaySpinner = JSpinner(SpinnerNumberModel(2, 0, 10, 1))
         
-        testConnectionButton = JButton("Test Connection")
-        resetButton = JButton("Reset to Defaults")
+        testConnectionButton = JButton(NacosSearchBundle.message("settings.test.connection"))
+        resetButton = JButton(NacosSearchBundle.message("settings.reset.defaults"))
+        
+        // Language selection components
+        languageComboBox = JComboBox(languageService.getSupportedLanguages().toTypedArray()).apply {
+            renderer = object : DefaultListCellRenderer() {
+                override fun getListCellRendererComponent(
+                    list: JList<*>?,
+                    value: Any?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean
+                ): Component {
+                    super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                    if (value is LanguageService.SupportedLanguage) {
+                        text = value.displayName
+                    }
+                    return this
+                }
+            }
+        }
     }
     
     private fun loadSettings() {
@@ -228,6 +260,10 @@ class NacosConfigurable : Configurable {
         readTimeoutSpinner.value = settings.readTimeoutSeconds
         retryAttemptsSpinner.value = settings.retryAttempts
         retryDelaySpinner.value = settings.retryDelaySeconds
+        
+        // Load language setting
+        val currentLanguage = languageService.getCurrentLanguage()
+        languageComboBox.selectedItem = currentLanguage
         
         // Update authentication components state
         updateAuthenticationComponentsState()
@@ -260,6 +296,10 @@ class NacosConfigurable : Configurable {
         settings.readTimeoutSeconds = readTimeoutSpinner.value as Int
         settings.retryAttempts = retryAttemptsSpinner.value as Int
         settings.retryDelaySeconds = retryDelaySpinner.value as Int
+        
+        // Update language setting
+        val selectedLanguage = languageComboBox.selectedItem as LanguageService.SupportedLanguage
+        languageService.setLanguage(selectedLanguage.code)
     }
     
     private fun updateTempSettings(tempSettings: NacosSettings) {
@@ -290,8 +330,8 @@ class NacosConfigurable : Configurable {
         
         resetButton.addActionListener {
             val result = Messages.showYesNoDialog(
-                "Are you sure you want to reset all settings to defaults?",
-                "Reset Settings",
+                NacosSearchBundle.message("settings.reset.confirm"),
+                NacosSearchBundle.message("settings.reset.title"),
                 Messages.getQuestionIcon()
             )
             
@@ -356,8 +396,8 @@ class NacosConfigurable : Configurable {
         val errors = tempSettings.validate()
         if (errors.isNotEmpty()) {
             Messages.showErrorDialog(
-                "Cannot test connection with invalid settings:\n${errors.joinToString("\n")}",
-                "Invalid Settings"
+                NacosSearchBundle.message("settings.test.invalid", errors.joinToString("\n")),
+                NacosSearchBundle.message("settings.invalid.title")
             )
             return
         }
@@ -366,9 +406,9 @@ class NacosConfigurable : Configurable {
         val originalSettings = settings.copy()
         updateSettings()
         
-        ProgressManager.getInstance().run(object : Task.Backgroundable(null, "Testing Connection...", true) {
+        ProgressManager.getInstance().run(object : Task.Backgroundable(null, NacosSearchBundle.message("settings.test.progress"), true) {
             override fun run(indicator: ProgressIndicator) {
-                indicator.text = "Connecting to Nacos server..."
+                indicator.text = NacosSearchBundle.message("settings.test.connecting")
                 
                 val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
                 scope.launch {
@@ -379,21 +419,21 @@ class NacosConfigurable : Configurable {
                         withContext(Dispatchers.EDT) {
                             if (result.isSuccess) {
                                 Messages.showInfoMessage(
-                                    "Connection successful!",
-                                    "Connection Test"
+                                    NacosSearchBundle.message("settings.test.success"),
+                                    NacosSearchBundle.message("settings.test.title")
                                 )
                             } else {
                                 Messages.showErrorDialog(
-                                    "Connection failed: ${result.exceptionOrNull()?.message ?: "Unknown error"}",
-                                    "Connection Test Failed"
+                                    NacosSearchBundle.message("settings.test.failed", result.exceptionOrNull()?.message ?: NacosSearchBundle.message("error.unknown")),
+                                    NacosSearchBundle.message("settings.test.failed.title")
                                 )
                             }
                         }
                     } catch (e: Exception) {
                         withContext(Dispatchers.EDT) {
                             Messages.showErrorDialog(
-                                "Connection test failed: ${e.message}",
-                                "Connection Test Failed"
+                                NacosSearchBundle.message("settings.test.error", e.message ?: NacosSearchBundle.message("error.unknown")),
+                                NacosSearchBundle.message("settings.test.failed.title")
                             )
                         }
                     } finally {

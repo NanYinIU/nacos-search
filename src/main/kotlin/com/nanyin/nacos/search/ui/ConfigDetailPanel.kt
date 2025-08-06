@@ -1,5 +1,7 @@
 package com.nanyin.nacos.search.ui
 
+import com.nanyin.nacos.search.bundle.NacosSearchBundle
+import com.nanyin.nacos.search.services.LanguageService
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
@@ -12,6 +14,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.Disposable
 import com.intellij.ui.AnimatedIcon
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
 import com.nanyin.nacos.search.models.NacosConfiguration
@@ -28,9 +31,10 @@ import kotlin.concurrent.withLock
 /**
  * Panel for displaying configuration details with syntax highlighting
  */
-class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
+class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), Disposable, LanguageAwareComponent {
     
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
+    private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
     
     // UI Components
     private lateinit var metadataPanel: JPanel
@@ -118,7 +122,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         // Loading state
         loadingLabel = JBLabel().apply {
             icon = AnimatedIcon.Default.INSTANCE
-            text = "Loading configuration..."
+            text = NacosSearchBundle.message("config.detail.loading")
             horizontalAlignment = SwingConstants.CENTER
         }
         
@@ -130,31 +134,28 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         
         // Action buttons
         refreshButton = JButton(AllIcons.Actions.Refresh).apply {
-            toolTipText = "Refresh configuration"
+            toolTipText = NacosSearchBundle.message("config.detail.refresh")
             preferredSize = Dimension(24, 24)
         }
         
         copyButton = JButton(AllIcons.Actions.Copy).apply {
-            toolTipText = "Copy configuration content"
+            toolTipText = NacosSearchBundle.message("config.detail.copy")
             preferredSize = Dimension(24, 24)
             isEnabled = false
         }
     }
     
     private fun setupLayout() {
-        border = JBUI.Borders.empty(5)
+        border = JBUI.Borders.empty(2, 4, 2, 4) // Minimal padding for compact design
         
-        // Top panel with metadata and actions
-        val topPanel = JPanel(BorderLayout()).apply {
+        // Metadata and actions row
+        val headerPanel = JPanel(BorderLayout()).apply {
             add(metadataPanel, BorderLayout.CENTER)
             
-            val actionPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 5, 0)).apply {
-                // add(copyButton)
+            val actionPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
                 add(refreshButton)
             }
             add(actionPanel, BorderLayout.EAST)
-            
-            border = JBUI.Borders.emptyBottom(5)
         }
         
         // Add cards to content panel
@@ -162,7 +163,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         contentPanel.add(loadingLabel, "loading")
         contentPanel.add(errorPanel, "error")
         
-        add(topPanel, BorderLayout.NORTH)
+        add(headerPanel, BorderLayout.NORTH)
         add(contentPanel, BorderLayout.CENTER)
     }
     
@@ -181,37 +182,33 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
     private fun createMetadataPanel(): JPanel {
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = JBUI.Borders.compound(
-                JBUI.Borders.customLine(Color.LIGHT_GRAY, 0, 0, 1, 0),
-                JBUI.Borders.empty(5)
-            )
+            border = JBUI.Borders.empty(4, 2) // Minimal padding
             
-            add(createMetadataRow("Data ID: ", dataIdLabel))
-            // add(createMetadataRow("Group:", groupLabel))
-            add(createMetadataRow("Namespace: ", namespaceLabel))
-            // add(createMetadataRow("Type:", typeLabel))
-            // add(createMetadataRow("Size:", sizeLabel))
+            add(createMetadataRow(NacosSearchBundle.message("config.detail.metadata.data.id"), dataIdLabel))
+            add(createMetadataRow(NacosSearchBundle.message("config.detail.metadata.namespace"), namespaceLabel))
         }
     }
     
     private fun createMetadataRow(labelText: String, valueLabel: JTextField): JPanel {
-        return JPanel(FlowLayout(FlowLayout.LEFT, 0, 2)).apply {
+        return JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
             add(JBLabel(labelText).apply {
-                font = font.deriveFont(Font.BOLD)
-                preferredSize = Dimension(100, preferredSize.height)
+                preferredSize = Dimension(80, 20)
+                font = font.deriveFont(Font.BOLD, 11f)
             })
-            add(valueLabel.apply { font = font.deriveFont(Font.ITALIC) })
+            add(valueLabel.apply { 
+                font = font.deriveFont(Font.PLAIN, 11f)
+            })
         }
     }
     
     private fun createEmptyStatePanel(): JPanel {
         return JPanel(BorderLayout()).apply {
-            val messageLabel = JBLabel("No configuration selected").apply {
+            val messageLabel = JBLabel(NacosSearchBundle.message("config.detail.empty")).apply {
                 horizontalAlignment = SwingConstants.CENTER
                 foreground = Color.GRAY
             }
             
-            val instructionLabel = JBLabel("Select a configuration from the list to view details").apply {
+            val instructionLabel = JBLabel(NacosSearchBundle.message("config.detail.empty.instruction")).apply {
                 horizontalAlignment = SwingConstants.CENTER
                 foreground = Color.GRAY
                 font = font.deriveFont(Font.ITALIC)
@@ -232,13 +229,13 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
     
     private fun createErrorPanel(): JPanel {
         return JPanel(BorderLayout()).apply {
-            val errorLabel = JBLabel("Failed to load configuration").apply {
+            val errorLabel = JBLabel(NacosSearchBundle.message("config.detail.failed")).apply {
                 horizontalAlignment = SwingConstants.CENTER
                 foreground = Color.RED
                 icon = AllIcons.General.Error
             }
             
-            val retryButton = JButton("Retry").apply {
+            val retryButton = JButton(NacosSearchBundle.message("common.retry")).apply {
                 addActionListener {
                     currentConfiguration?.let { config ->
                         loadConfigurationContent(config)
@@ -274,7 +271,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
             groupLabel.text = configuration.group
             namespaceLabel.text = configuration.tenantId ?: ""
             typeLabel.text = configuration.type ?: "text"
-            sizeLabel.text = "Loading..."
+            sizeLabel.text = NacosSearchBundle.message("config.detail.loading.size")
         }, ModalityState.defaultModalityState())
     }
     
@@ -307,7 +304,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
                         
                         // Update size information using proper IntelliJ threading
                         ApplicationManager.getApplication().invokeLater({
-                            val contentSize = config.content?.length ?: 0
+                            val contentSize = config.content.length
                             sizeLabel.text = formatSize(contentSize)
                         }, ModalityState.defaultModalityState())
                     } ?: run {
@@ -346,7 +343,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
                 editorState.set(EditorState.NONE)
             }
             
-            val content = configuration.content ?: ""
+            val content = configuration.content
             val fileType = determineFileType(configuration)
             
             // Create new editor safely
@@ -440,8 +437,8 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
             // Show brief notification
             JOptionPane.showMessageDialog(
                 this,
-                "Configuration content copied to clipboard",
-                "Copy Successful",
+                NacosSearchBundle.message("config.detail.copy.success"),
+                NacosSearchBundle.message("common.success"),
                 JOptionPane.INFORMATION_MESSAGE
             )
         }
@@ -561,5 +558,120 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         disposeEditorSafely()
         
         // Note: Registered disposables will be automatically cleaned up by Disposer
+    }
+    
+    /**
+     * Called when the language is changed
+     */
+    override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) {
+        // Refresh all UI text elements
+        refreshUIText()
+        
+        // Rebuild metadata panel with new language
+        rebuildMetadataPanel()
+        
+        // Rebuild empty state panel with new language
+        rebuildEmptyStatePanel()
+        
+        // Rebuild error panel with new language
+        rebuildErrorPanel()
+        
+        // Update button tooltips
+        updateButtonTooltips()
+        
+        // Revalidate and repaint the UI
+        revalidate()
+        repaint()
+    }
+    
+    /**
+     * Get the current language service
+     */
+    override fun getLanguageService(): LanguageService {
+        return languageService
+    }
+    
+    /**
+     * Refresh all UI text elements
+     */
+    private fun refreshUIText() {
+        SwingUtilities.invokeLater {
+            // Update loading text
+            loadingLabel.text = NacosSearchBundle.message("config.detail.loading")
+            
+            // Update button tooltips
+            refreshButton.toolTipText = NacosSearchBundle.message("config.detail.refresh")
+            copyButton.toolTipText = NacosSearchBundle.message("config.detail.copy")
+            
+            // Update size label if there's content
+            currentConfiguration?.let { config ->
+                val contentSize = config.content.length
+                sizeLabel.text = formatSize(contentSize)
+            }
+        }
+    }
+    
+    /**
+     * Rebuild metadata panel with new language
+     */
+    private fun rebuildMetadataPanel() {
+        SwingUtilities.invokeLater {
+            // Remove old metadata panel
+            remove(metadataPanel)
+            
+            // Create new metadata panel with updated language
+            metadataPanel = createMetadataPanel()
+            
+            // Add to layout
+            val topPanel = getComponent(0) as? JPanel
+            topPanel?.add(metadataPanel, BorderLayout.CENTER)
+            
+            // Update metadata with current configuration
+            currentConfiguration?.let { config ->
+                updateMetadata(config)
+            }
+        }
+    }
+    
+    /**
+     * Rebuild empty state panel with new language
+     */
+    private fun rebuildEmptyStatePanel() {
+        SwingUtilities.invokeLater {
+            // Remove old empty state panel
+            contentPanel.remove(emptyStatePanel)
+            
+            // Create new empty state panel with updated language
+            emptyStatePanel = createEmptyStatePanel()
+            
+            // Add back to content panel
+            contentPanel.add(emptyStatePanel, "empty")
+        }
+    }
+    
+    /**
+     * Rebuild error panel with new language
+     */
+    private fun rebuildErrorPanel() {
+        SwingUtilities.invokeLater {
+            // Remove old error panel
+            contentPanel.remove(errorPanel)
+            
+            // Create new error panel with updated language
+            errorPanel = createErrorPanel()
+            
+            // Add back to content panel
+            contentPanel.add(errorPanel, "error")
+        }
+    }
+    
+    /**
+     * Update button tooltips
+     */
+    private fun updateButtonTooltips() {
+        SwingUtilities.invokeLater {
+            refreshButton.toolTipText = NacosSearchBundle.message("config.detail.refresh")
+            copyButton.toolTipText = NacosSearchBundle.message("config.detail.copy")
+        }
     }
 }

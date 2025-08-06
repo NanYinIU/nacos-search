@@ -66,6 +66,9 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     var lastGroupFilter: String = ""
     var lastTenantFilter: String = ""
     
+    // Language configuration
+    var language: String = "en"
+    
     // Connection configuration
     var connectionTimeoutSeconds: Int = 30
     var readTimeoutSeconds: Int = 60
@@ -180,6 +183,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         lastSearchQuery = ""
         lastGroupFilter = ""
         lastTenantFilter = ""
+        
+        language = "en"
         
         connectionTimeoutSeconds = 30
         readTimeoutSeconds = 60

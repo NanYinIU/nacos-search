@@ -4,11 +4,14 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.NamespaceService
+import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.listeners.NamespaceChangeListener
+import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.AnimatedIcon
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
@@ -25,10 +28,11 @@ import javax.swing.table.DefaultTableCellRenderer
 /**
  * Panel for displaying and managing configuration list with namespace filtering
  */
-class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), NamespaceChangeListener {
+class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), NamespaceChangeListener, LanguageAwareComponent {
     
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
     private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
+    private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
     
     // UI Components
     private lateinit var configTable: JBTable
@@ -70,31 +74,42 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         configTable = JBTable(tableModel).apply {
             setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
             autoResizeMode = JTable.AUTO_RESIZE_ALL_COLUMNS
-            fillsViewportHeight = false
+            fillsViewportHeight = true
+            rowHeight = 24 // Increased row height for better readability
             
-            // Set column widths
-            columnModel.getColumn(0).preferredWidth = 100 // Data ID
-            columnModel.getColumn(1).preferredWidth = 50 // Group
-            columnModel.getColumn(2).preferredWidth = 100 // Type
-            columnModel.getColumn(3).preferredWidth = 150 // Namespace
+            // Set column widths with better proportions
+            columnModel.getColumn(0).preferredWidth = 150 // Data ID
+            columnModel.getColumn(1).preferredWidth = 120 // Group
+            columnModel.getColumn(2).preferredWidth = 80 // Type
+            columnModel.getColumn(3).preferredWidth = 200 // Namespace
+            
+            // Enable alternating row colors for better readability
+            showHorizontalLines = false
+            showVerticalLines = false
+            intercellSpacing = Dimension(0, 0)
+            
+            // Improve selection appearance
+            selectionModel.selectionMode = ListSelectionModel.SINGLE_SELECTION
+            setRowSelectionAllowed(true)
+            setColumnSelectionAllowed(false)
         }
         
         scrollPane = JBScrollPane(configTable)
         
         loadingLabel = JBLabel().apply {
             icon = AnimatedIcon.Default.INSTANCE
-            text = "Loading configurations..."
+            text = NacosSearchBundle.message("config.list.loading")
             horizontalAlignment = SwingConstants.CENTER
             isVisible = false
         }
         
-        statusLabel = JBLabel("Ready").apply {
+        statusLabel = JBLabel(NacosSearchBundle.message("common.ready")).apply {
             foreground = Color.GRAY
             border = JBUI.Borders.empty(5)
         }
         
         refreshButton = JButton(AllIcons.Actions.Refresh).apply {
-            toolTipText = "Refresh configurations"
+            toolTipText = NacosSearchBundle.message("config.list.refresh")
             preferredSize = Dimension(24, 24)
         }
         
@@ -102,13 +117,17 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     }
     
     private fun setupLayout() {
-        border = JBUI.Borders.empty(5)
+        border = JBUI.Borders.empty(2, 4, 2, 4) // Minimal padding for compact design
         
-        // Top panel with refresh button
-        val topPanel = JPanel(BorderLayout()).apply {
-            add(JBLabel("Configurations"), BorderLayout.WEST)
-            add(refreshButton, BorderLayout.EAST)
-            border = JBUI.Borders.emptyBottom(5)
+        // Header with title and refresh button
+        val headerPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+            add(JBLabel(NacosSearchBundle.message("config.list.title")).apply {
+                font = font.deriveFont(Font.BOLD, 12f)
+            })
+            add(refreshButton.apply {
+                preferredSize = Dimension(24, 24)
+                minimumSize = Dimension(24, 24)
+            })
         }
         
         // Center panel with table or loading/empty state
@@ -118,9 +137,12 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
             add(emptyStatePanel, "empty")
         }
         
-        add(topPanel, BorderLayout.NORTH)
+        add(headerPanel, BorderLayout.NORTH)
         add(centerPanel, BorderLayout.CENTER)
-        add(statusLabel, BorderLayout.SOUTH)
+        add(statusLabel.apply {
+            border = JBUI.Borders.emptyTop(2)
+            font = font.deriveFont(Font.ITALIC, 10f)
+        }, BorderLayout.SOUTH)
     }
     
     private fun setupEventHandlers() {
@@ -153,12 +175,12 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     
     private fun createEmptyStatePanel(): JPanel {
         return JPanel(BorderLayout()).apply {
-            val messageLabel = JBLabel("No configurations found").apply {
+            val messageLabel = JBLabel(NacosSearchBundle.message("config.list.empty")).apply {
                 horizontalAlignment = SwingConstants.CENTER
                 foreground = Color.GRAY
             }
             
-            val instructionLabel = JBLabel("Select a namespace to view configurations").apply {
+            val instructionLabel = JBLabel(NacosSearchBundle.message("config.list.empty.instruction")).apply {
                 horizontalAlignment = SwingConstants.CENTER
                 foreground = Color.GRAY
                 font = font.deriveFont(Font.ITALIC)
@@ -204,22 +226,22 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
                     
                     if (configurations.isEmpty()) {
                         showCard("empty")
-                        updateStatus("No configurations found")
+                        updateStatus(NacosSearchBundle.message("config.list.empty"))
                     } else {
                         showCard("table")
-                        updateStatus("${configurations.size} configurations loaded")
+                        updateStatus(NacosSearchBundle.message("config.list.loaded", configurations.size))
                     }
                 }.onFailure { error ->
                     setLoadingState(false)
                     showCard("empty")
-                    updateStatus("Failed to load configurations: ${error.message}")
-                    showError("Failed to load configurations", error.message ?: "Unknown error")
+                    updateStatus(NacosSearchBundle.message("config.list.failed"))
+                    showError(NacosSearchBundle.message("config.list.failed"), error.message ?: NacosSearchBundle.message("error.unknown"))
                 }
             } catch (e: Exception) {
                 setLoadingState(false)
                 showCard("empty")
-                updateStatus("Error loading configurations: ${e.message}")
-                showError("Error loading configurations", e.message ?: "Unknown error")
+                updateStatus(NacosSearchBundle.message("config.list.error"))
+                showError(NacosSearchBundle.message("config.list.error"), e.message ?: NacosSearchBundle.message("error.unknown"))
             }
         }
     }
@@ -374,5 +396,106 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         }
         
         override fun isCellEditable(rowIndex: Int, columnIndex: Int): Boolean = false
+    }
+    
+    /**
+     * Called when the language is changed
+     */
+    override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) {
+        // Refresh all UI text elements
+        refreshUIText()
+        
+        // Rebuild empty state panel with new language
+        rebuildEmptyStatePanel()
+        
+        // Update table column headers
+        updateTableHeaders()
+        
+        // Update button tooltips
+        updateButtonTooltips()
+        
+        // Revalidate and repaint the UI
+        revalidate()
+        repaint()
+    }
+    
+    /**
+     * Get the current language service
+     */
+    override fun getLanguageService(): LanguageService {
+        return languageService
+    }
+    
+    /**
+     * Refresh all UI text elements
+     */
+    private fun refreshUIText() {
+        SwingUtilities.invokeLater {
+            // Update loading text
+            loadingLabel.text = NacosSearchBundle.message("config.list.loading")
+            
+            // Update status text
+            updateStatusText()
+            
+            // Update refresh button tooltip
+            refreshButton.toolTipText = NacosSearchBundle.message("tooltip.config.refresh")
+        }
+    }
+
+    /**
+     * Rebuild empty state panel with new language
+     */
+    private fun rebuildEmptyStatePanel() {
+
+        SwingUtilities.invokeLater {
+            // Remove old empty state panel
+            remove(emptyStatePanel)
+
+            // Create new empty state panel with updated language
+            emptyStatePanel = createEmptyStatePanel()
+
+            // Add back to the panel if currently showing empty state
+            if (configurations.isEmpty()) {
+                add(emptyStatePanel, BorderLayout.CENTER)
+            }
+        }
+    }
+    
+    /**
+     * Update table column headers
+     */
+    private fun updateTableHeaders() {
+        SwingUtilities.invokeLater {
+            tableModel.fireTableStructureChanged()
+        }
+    }
+    
+    /**
+     * Update button tooltips
+     */
+    private fun updateButtonTooltips() {
+        SwingUtilities.invokeLater {
+            refreshButton.toolTipText = NacosSearchBundle.message("tooltip.config.refresh")
+        }
+    }
+    
+    /**
+     * Update status text based on current state
+     */
+    private fun updateStatusText() {
+        SwingUtilities.invokeLater {
+            when {
+                isLoading -> {
+                    statusLabel.text = NacosSearchBundle.message("config.list.loading")
+                }
+                configurations.isEmpty() -> {
+                    statusLabel.text = NacosSearchBundle.message("config.list.empty")
+                }
+                else -> {
+                    val totalCount = configurations.size
+                    statusLabel.text = NacosSearchBundle.message("config.list.loaded", totalCount)
+                }
+            }
+        }
     }
 }

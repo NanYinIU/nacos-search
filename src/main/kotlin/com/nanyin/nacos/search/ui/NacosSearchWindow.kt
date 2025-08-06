@@ -6,6 +6,8 @@ import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.models.SearchCriteria
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NacosApiService
+import com.nanyin.nacos.search.services.LanguageService
+import com.nanyin.nacos.search.bundle.NacosSearchBundle
 // import com.nanyin.nacos.search.services.NacosConfigService // Not needed
 import com.nanyin.nacos.search.services.NacosSearchService
 import com.intellij.openapi.components.service
@@ -24,11 +26,12 @@ import javax.swing.*
  * Main window for Nacos Search plugin
  * Integrates all UI components and manages their interactions
  */
-class NacosSearchWindow(private val project: Project, private val toolWindow: ToolWindow) : JPanel(BorderLayout()) {
+class NacosSearchWindow(private val project: Project, private val toolWindow: ToolWindow) : JPanel(BorderLayout()), LanguageAwareComponent {
     
     // Services
     private val namespaceService = project.service<NamespaceService>()
     private val nacosApiService = project.service<NacosApiService>()
+    private val languageService = com.intellij.openapi.application.ApplicationManager.getApplication().getService(LanguageService::class.java)
     // private val nacosConfigService = project.service<NacosConfigService>() // Not needed
     private val nacosSearchService = NacosSearchService()
     
@@ -80,53 +83,52 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         )
         
         // Configure components
-        configListPanel.preferredSize = Dimension(400, 300)
-        configDetailPanel.preferredSize = Dimension(600, 300)
+        configListPanel.preferredSize = Dimension(400, 200)
+        configDetailPanel.preferredSize = Dimension(400, 250)
     }
     
     private fun setupLayout() {
         border = JBUI.Borders.empty()
         
-        // Create compact top panel with namespace and search - fixed at top
+        // Create ultra-compact top panel with namespace and search
         val topPanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(1, 2) // Reduced padding for compact design
+            border = JBUI.Borders.empty(1, 2)
             
-            // Compact namespace panel
+            // Ultra-compact namespace panel
             add(namespacePanel.apply {
-                preferredSize = Dimension(preferredSize.width, 28) // Fixed compact height
+                preferredSize = Dimension(preferredSize.width, 24)
             }, BorderLayout.NORTH)
             
-            // Compact search panel
+            // Ultra-compact search panel
             add(searchPanel.apply {
-                preferredSize = Dimension(preferredSize.width, 32) // Fixed compact height
+                preferredSize = Dimension(preferredSize.width, 28)
             }, BorderLayout.CENTER)
             
-            // Set fixed height for entire top panel to keep it compact
-            preferredSize = Dimension(preferredSize.width, 65) // Total compact height
-            maximumSize = Dimension(Int.MAX_VALUE, 65) // Prevent expansion
+            // Set fixed height for entire top panel
+            preferredSize = Dimension(preferredSize.width, 55)
+            maximumSize = Dimension(Int.MAX_VALUE, 55)
         }
         
-        // Create config list panel with pagination - auto-resizable
+        // Create config list panel with pagination
         val configListWithPagination = JPanel(BorderLayout()).apply {
             add(JBScrollPane(configListPanel).apply {
-                minimumSize = Dimension(400, 210) // Reduced minimum height
-                preferredSize = Dimension(400, 260)
+                minimumSize = Dimension(400, 180)
+                preferredSize = Dimension(400, 220)
             }, BorderLayout.CENTER)
             add(paginationPanel, BorderLayout.SOUTH)
         }
         
-        // Create splitter for config list and detail with more space for detail
-        rightSplitter = JBSplitter(true, 0.35f).apply { // Reduced ratio to give more space to detail
+        // Create splitter for config list and detail
+        rightSplitter = JBSplitter(true, 0.35f).apply {
             firstComponent = configListWithPagination
             secondComponent = JBScrollPane(configDetailPanel).apply {
-                minimumSize = Dimension(400, 250) // Increased minimum height for detail
-                preferredSize = Dimension(400, 400) // Increased preferred height
+                minimumSize = Dimension(400, 200)
+                preferredSize = Dimension(400, 350)
             }
         }
         
-        // Use BorderLayout instead of splitter to fix top panel
-        add(topPanel, BorderLayout.NORTH) // Fixed at top
-        add(rightSplitter, BorderLayout.CENTER) // Takes remaining space
+        add(topPanel, BorderLayout.NORTH)
+        add(rightSplitter, BorderLayout.CENTER)
     }
     
     private fun setupEventHandlers() {
@@ -202,7 +204,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                              }
                              is InitializationManager.InitializationState.Error -> {
                                  SwingUtilities.invokeLater {
-                                     showError("Initialization failed: ${state.message}")
+                                     showError(NacosSearchBundle.message("error.config.load.failed") + ": ${state.message}")
                                  }
                              }
                              else -> {}
@@ -211,7 +213,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                  )
             } catch (e: Exception) {
             SwingUtilities.invokeLater {
-                showError("Failed to initialize: ${e.message}")
+                showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
             }
         }
         }
@@ -230,7 +232,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     loadConfigurations()
                 }
             } catch (e: Exception) {
-                showError("Failed to load initial data: ${e.message}")
+                showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
             }
         }
     }
@@ -253,21 +255,21 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun handleSearchRequested(criteria: SearchCriteria) {
          val searchNameSpace = namespacePanel.getSelectedNamespace()
          if (searchNameSpace == null) {
-             showError("Please select a namespace first")
+             showError(NacosSearchBundle.message("namespace.select.first"))
              return
          }
          
          // Create enhanced SearchRequest for prefix asterisk fuzzy search
          val searchRequest = NacosSearchService.SearchRequest(
              dataId = criteria.dataId ?: "",
-             group = criteria.group,
+             group = criteria.group ?: "",
              namespace = searchNameSpace
          )
         currentNamespace = searchNameSpace;
          
          val processedCriteria = SearchCriteria(
              dataId = searchRequest.getProcessedDataId(),
-             group = criteria.group,
+             group = criteria.group ?: "",
              namespaceId = searchNameSpace.namespaceId,
              query = criteria.query,
              searchContent = criteria.searchContent,
@@ -294,7 +296,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         
         val currentNamespace = namespacePanel.getSelectedNamespace()
         if (currentNamespace == null) {
-            showError("请先选择命名空间")
+            showError(NacosSearchBundle.message("namespace.select.first"))
             return
         }
         
@@ -309,7 +311,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                  nacosSearchService.performSearch(searchRequest, nacosApiService)
              } catch (e: Exception) {
                     SwingUtilities.invokeLater {
-                        showError("Real-time search failed: ${e.message}")
+                        showError(NacosSearchBundle.message("error.search.failed") + ": ${e.message}")
                     }
                 }
          }
@@ -378,7 +380,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                         SwingUtilities.invokeLater {
                             setSearching(false)
                             paginationPanel.setLoading(false)
-                            showError("Search failed: ${state.message}")
+                            showError(NacosSearchBundle.message("error.search.failed") + ": ${state.message}")
                         }
                     }
                 }
@@ -466,7 +468,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 configListPanel.setConfigurations(configurations)
                 
             } catch (e: Exception) {
-                showError("Failed to load configurations: ${e.message}")
+                showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
                 configListPanel.setConfigurations(emptyList())
             } finally {
                 // Loading state is handled internally by ConfigListPanel
@@ -476,7 +478,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     
     private suspend fun searchConfigurations(
         namespace: NamespaceInfo,
-        criteria: SearchCriteria
+        _criteria: SearchCriteria
     ): List<NacosConfiguration> {
         return withContext(Dispatchers.IO) {
             val listConfigurations = nacosApiService.listConfigurations(namespace.namespaceId)
@@ -567,7 +569,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     }
                     
                     val pattern = criteria.query
-                    val content = configDetail.content ?: ""
+                    val content = configDetail.content
                     
                     val matches = if (criteria.useRegex) {
                         try {
@@ -604,7 +606,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             JOptionPane.showMessageDialog(
                 this,
                 message,
-                "Error",
+                NacosSearchBundle.message("common.error"),
                 JOptionPane.ERROR_MESSAGE
             )
         }
@@ -639,7 +641,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     loadConfigurationDetail(config)
                 }
             } catch (e: Exception) {
-                showError("Failed to refresh data: ${e.message}")
+                showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
             }
         }
     }
@@ -675,5 +677,38 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         searchPanel.setEnabled(enabled)
         configListPanel.isEnabled = enabled
         configDetailPanel.isEnabled = enabled
+    }
+    
+    /**
+     * Called when the language is changed
+     */
+    override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) {
+        // Refresh all child components
+        if (::namespacePanel.isInitialized) {
+            (namespacePanel as? LanguageAwareComponent)?.onLanguageChanged(newLanguage)
+        }
+        if (::searchPanel.isInitialized) {
+            (searchPanel as? LanguageAwareComponent)?.onLanguageChanged(newLanguage)
+        }
+        if (::configListPanel.isInitialized) {
+            (configListPanel as? LanguageAwareComponent)?.onLanguageChanged(newLanguage)
+        }
+        if (::configDetailPanel.isInitialized) {
+            (configDetailPanel as? LanguageAwareComponent)?.onLanguageChanged(newLanguage)
+        }
+        if (::paginationPanel.isInitialized) {
+            (paginationPanel as? LanguageAwareComponent)?.onLanguageChanged(newLanguage)
+        }
+        
+        // Revalidate and repaint the UI
+        revalidate()
+        repaint()
+    }
+    
+    /**
+     * Get the current language service
+     */
+    override fun getLanguageService(): LanguageService {
+        return languageService
     }
 }
