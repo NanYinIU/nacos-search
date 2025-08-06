@@ -36,7 +36,7 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
     private val totalCountLabel = JBLabel("0 " + NacosSearchBundle.message("pagination.items"))
     
     private val pageSizeComboBox = JComboBox(arrayOf(10, 20, 50, 100)).apply {
-        selectedItem = 10
+        selectedItem = 13
         toolTipText = NacosSearchBundle.message("tooltip.page.size")
     }
     
@@ -65,7 +65,7 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
         // Simple pagination controls row
         val paginationRow = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
             add(totalCountLabel.apply {
-                font = font.deriveFont(Font.BOLD, 11f)
+                font = font.deriveFont(Font.BOLD, 13f)
             })
             add(previousButton)
             add(pageInfoLabel.apply {
@@ -77,8 +77,8 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
                 font = font.deriveFont(Font.PLAIN, 13f)
             })
             add(pageSizeComboBox.apply {
-                preferredSize = Dimension(60, 22)
-                minimumSize = Dimension(50, 22)
+                preferredSize = Dimension(60, 24)
+                minimumSize = Dimension(50, 24)
             })
         }
         
@@ -113,7 +113,7 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
             nextButton.isEnabled = false
             
             // Set initial labels
-            pageInfoLabel.text = "0 " + NacosSearchBundle.message("pagination.page.info", 1, 1)
+            pageInfoLabel.text = "0 " + NacosSearchBundle.message("pagination.page.info", 1)
             totalCountLabel.text = "0 " + NacosSearchBundle.message("pagination.items")
             
             // Set default page size
@@ -139,9 +139,9 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
             
             // Update labels with better formatting
             pageInfoLabel.text = if (state.totalPages > 0) {
-                NacosSearchBundle.message("pagination.page", state.currentPage)
+                "${NacosSearchBundle.message("pagination.page")} ${state.currentPage}"
             } else {
-                NacosSearchBundle.message("pagination.page.info", 1, 1)
+                NacosSearchBundle.message("pagination.page.info", 1)
             }
             
             totalCountLabel.text = "${state.totalCount} ${NacosSearchBundle.message("pagination.items")}"

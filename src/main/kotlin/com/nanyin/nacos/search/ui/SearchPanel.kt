@@ -30,7 +30,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
     // private lateinit var advancedToggle: JButton
     // private lateinit var advancedPanel: JPanel
      private lateinit var searchModeLabel: JBLabel
-    
+    private lateinit var searchLabel: JBLabel
     // Advanced search components
     private lateinit var dataIdField: JBTextField
     private lateinit var groupField: JBTextField
@@ -83,6 +83,10 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
         searchModeLabel = JBLabel(NacosSearchBundle.message("search.mode.label")).apply {
             foreground = JBColor.GRAY
         }
+
+        searchLabel = JBLabel(NacosSearchBundle.message("search.mode.label")).apply {
+            foreground = JBColor.GRAY
+        }
         
         // Advanced search components
         dataIdField = JBTextField().apply {
@@ -117,7 +121,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
         
         // Simple search row
         val searchRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
-            add(searchModeLabel.apply {
+            add(searchLabel.apply {
                 font = font.deriveFont(Font.BOLD, 11f)
                 preferredSize = Dimension(100, 24)
             })
@@ -477,6 +481,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
         
         // Update labels
         searchModeLabel.text = NacosSearchBundle.message("search.mode.label")
+        searchLabel.text = NacosSearchBundle.message("search.label") + ": "
         
         // Update checkbox text
         exactMatchCheckBox.text = NacosSearchBundle.message("search.exact.match")
