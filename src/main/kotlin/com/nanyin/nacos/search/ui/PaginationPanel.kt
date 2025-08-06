@@ -69,12 +69,12 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
             })
             add(previousButton)
             add(pageInfoLabel.apply {
-                font = font.deriveFont(Font.PLAIN, 14f)
+                font = font.deriveFont(Font.PLAIN, 13f)
             })
             add(nextButton)
             // add(JLabel("|")) // Simple separator
             add(pageSizeLabel.apply {
-                font = font.deriveFont(Font.PLAIN, 14f)
+                font = font.deriveFont(Font.PLAIN, 13f)
             })
             add(pageSizeComboBox.apply {
                 preferredSize = Dimension(60, 22)

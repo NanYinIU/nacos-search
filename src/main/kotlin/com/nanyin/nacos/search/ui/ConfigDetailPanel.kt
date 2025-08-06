@@ -146,7 +146,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
     }
     
     private fun setupLayout() {
-        border = JBUI.Borders.empty(2, 4, 2, 4) // Minimal padding for compact design
+        border = JBUI.Borders.empty(2, 4) // Minimal padding for compact design
         
         // Metadata and actions row
         val headerPanel = JPanel(BorderLayout()).apply {

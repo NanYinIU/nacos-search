@@ -76,7 +76,7 @@ class NamespacePanel(private val project: Project) : JPanel(BorderLayout()), Lan
             val namespaceRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
                 add(JBLabel(NacosSearchBundle.message("namespace.label") + ":").apply {
                     font = font.deriveFont(Font.BOLD, 11f)
-                    preferredSize = Dimension(60, 24)
+                    preferredSize = Dimension(100, 24)
                 })
                 add(namespaceCombo.apply {
                     preferredSize = Dimension(180, 24)

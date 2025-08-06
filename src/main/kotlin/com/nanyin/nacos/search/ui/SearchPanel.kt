@@ -113,13 +113,13 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
     }
     
     private fun setupLayout() {
-        border = JBUI.Borders.empty(2, 4, 2, 4) // Minimal padding for compact design
+        border = JBUI.Borders.empty(2, 4) // Minimal padding for compact design
         
         // Simple search row
         val searchRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
             add(searchModeLabel.apply {
                 font = font.deriveFont(Font.BOLD, 11f)
-                preferredSize = Dimension(50, 24)
+                preferredSize = Dimension(100, 24)
             })
             add(searchField.apply { 
                 preferredSize = Dimension(300, 24)
