@@ -1,0 +1,110 @@
+src/test/kotlin/com/nanyin/nacos/search/services/NacosApiServiceTest.kt
+  s_3dcb83d1d1fcd2::t_e87747a8a4ee7c 3-4,8,10-12,14,16,19-21,24-109,111-112,115-121,124,129,133-134,136,138-146,148,150-153,155,157-164,166,168-242,244,256-257,259,266,268-269,271,279,281,284,286-290,292
+  s_3dcb83d1d1fcd2::t_762181a767b009 5,22
+.gitignore
+  s_dc1955a8fbb9a6::t_253818ed45fdd1 11-14
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchToolWindowFactory.kt
+  s_dc1955a8fbb9a6::t_845af760dceddc 18
+gradle/wrapper/gradle-wrapper.properties
+  s_dc1955a8fbb9a6::t_8d7a00a9fcfa3a 3
+src/test/kotlin/com/nanyin/nacos/search/services/LanguageServiceTest.kt
+  s_3dcb83d1d1fcd2::t_1fc8d85d86a216 1-118
+src/main/kotlin/com/nanyin/nacos/search/NacosSearchPlugin.kt
+  s_dc1955a8fbb9a6::t_716957b8891da9 11
+  s_dc1955a8fbb9a6::t_846a9e30aaa64a 19-20,24,30-31,33
+src/main/kotlin/com/nanyin/nacos/search/ui/LanguageRefreshUtil.kt
+  s_3dcb83d1d1fcd2::t_67a2b402437674 12
+  s_3dcb83d1d1fcd2::t_4bd057160dd3ff 103-106,108,111
+build.gradle.kts
+  s_dc1955a8fbb9a6::t_0703ad7208e423 43-46
+  s_dc1955a8fbb9a6::t_e78e4cc42a6fd3 47-48
+  s_dc1955a8fbb9a6::t_e29b85faf38d47 67-68
+  s_dc1955a8fbb9a6::t_b7520f34d4e205 1
+  s_3dcb83d1d1fcd2::t_4623d56ba4bc9d 37
+  s_dc1955a8fbb9a6::t_b218d3cfca38dd 66,69-73
+  s_dc1955a8fbb9a6::t_e3a6306492073e 3,7-8,24-27,30-32,35,55-65,74-76,83,85-87,89,91-93,95,97,107,119,131,135
+src/main/kotlin/com/nanyin/nacos/search/ui/NamespacePanel.kt
+  s_dc1955a8fbb9a6::t_08f3521207a12d 48
+  s_dc1955a8fbb9a6::t_66b1d45328d86e 33-34
+  s_dc1955a8fbb9a6::t_7522b7c4f6923d 16-21
+src/main/resources/META-INF/plugin.xml
+  s_dc1955a8fbb9a6::t_3cfcaf7812cfbb 37-39
+  s_dc1955a8fbb9a6::t_9d454f03e342fb 26
+src/main/kotlin/com/nanyin/nacos/search/services/NacosAuthService.kt
+  s_3dcb83d1d1fcd2::t_1b6b187f27ec87 193
+  s_3dcb83d1d1fcd2::t_9b9b8e3b52b24f 83
+  s_3dcb83d1d1fcd2::t_70281fc9d25f24 208
+  s_3dcb83d1d1fcd2::t_61f75e5f346e31 134,137,140,142
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosConfigurable.kt
+  s_dc1955a8fbb9a6::t_77edb1be49f79b 14
+  s_dc1955a8fbb9a6::t_aa6fc95f6e7166 72,74-75,77-81,83-86,88-91,95,97
+  s_dc1955a8fbb9a6::t_e4ea443af8d87f 76,82,87,92
+src/test/kotlin/com/nanyin/nacos/search/ui/NamespacePanelTest.kt
+  s_dc1955a8fbb9a6::t_099c5f7bc47cae 17-23,27
+  s_dc1955a8fbb9a6::t_3c7ecc22647042 119,146
+  s_dc1955a8fbb9a6::t_9c76d303fc7ddc 8-13,31,37-38,41,44,49-50,58,60-63,65,67,69-70,72,75,77-78,81,84,92,94,97,100,102,107-108,110,114,116,120,122,124,127,129-131,137,140
+  s_dc1955a8fbb9a6::t_46b1444c4dcb9b 86
+  s_1dd9f336e583c8::t_edaa761066a38d 3,7,14-16,89,91,132,134,136,138,141-142
+.claude/settings.local.json
+  s_1dd9f336e583c8::t_775918e4d1be7b 4-7,11
+.intellijPlatform/self-update.lock
+  s_1dd9f336e583c8::t_d3032f8a10b1b4 1
+src/main/kotlin/com/nanyin/nacos/search/NacosIcons.kt
+  s_1dd9f336e583c8::t_78372a35e44ee1 1-7
+src/main/resources/icons/nacosSearch.svg
+  s_1dd9f336e583c8::t_1ce12e6d0a3522 1-13
+src/main/resources/icons/nacosSearch_20.svg
+  s_1dd9f336e583c8::t_ff68ceb524351d 1-13
+src/main/resources/icons/nacosSearch_20_dark.svg
+  s_1dd9f336e583c8::t_277b2720128b0f 1-13
+src/main/resources/icons/nacosSearch_dark.svg
+  s_1dd9f336e583c8::t_fca9c609717dd4 1-13
+src/test/kotlin/com/nanyin/nacos/search/managers/InitializationManagerTest.kt
+  s_1dd9f336e583c8::t_4daac1bb61d854 1-134
+src/test/kotlin/com/nanyin/nacos/search/models/CachedItemTest.kt
+  s_1dd9f336e583c8::t_4be2f0b0bf2cd0 1-83
+src/test/kotlin/com/nanyin/nacos/search/models/NacosApiResponseTest.kt
+  s_1dd9f336e583c8::t_4ab9524ecd6297 1-76
+src/test/kotlin/com/nanyin/nacos/search/models/NacosConfigurationTest.kt
+  s_1dd9f336e583c8::t_d160c9ea3a31da 1-235
+src/test/kotlin/com/nanyin/nacos/search/models/SearchResultTest.kt
+  s_1dd9f336e583c8::t_f12bd67df3a2e8 1-84
+src/test/kotlin/com/nanyin/nacos/search/services/NacosAuthServiceTest.kt
+  s_1dd9f336e583c8::t_0788438bbcf816 1-251
+src/test/kotlin/com/nanyin/nacos/search/services/SearchServiceTest.kt
+  s_1dd9f336e583c8::t_644713bd7a01f1 1-215
+src/test/kotlin/com/nanyin/nacos/search/settings/NacosSettingsTest.kt
+  s_1dd9f336e583c8::t_a99a121a35dea3 1-328
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.1",
+  "base_commit_sha": "adfe5fcaa65495bbd0f560500cc1f08ef8f48b72",
+  "prompts": {},
+  "sessions": {
+    "s_1dd9f336e583c8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f033a-afc9-76f2-b237-9bdf7435b431",
+        "model": "gpt-5.5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_3dcb83d1d1fcd2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6716d31f-7c2d-495e-8d45-efb8cd9a7a3f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": null
+    },
+    "s_dc1955a8fbb9a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "98aacc6a-979e-4af0-9a71-481366adea01",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": null
+    }
+  }
+}
