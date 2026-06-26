@@ -15,7 +15,7 @@ class NacosSearchToolWindowFactory : ToolWindowFactory {
         val searchWindow = NacosSearchWindow(project, toolWindow)
         
         // Create content and add to tool window
-        val contentFactory = ContentFactory.SERVICE.getInstance()
+        val contentFactory = ContentFactory.getInstance()
         val content = contentFactory.createContent(
             searchWindow,
             "", // No tab title needed for single content

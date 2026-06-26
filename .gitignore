@@ -8,3 +8,7 @@ __pycache__
 
 # Ignore Gradle build output directory
 build
+
+# Ignore IntelliJ Platform Gradle Plugin downloaded artifacts and caches
+.intellijPlatform/
+.kotlin/

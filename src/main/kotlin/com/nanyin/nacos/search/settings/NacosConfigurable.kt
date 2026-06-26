@@ -11,7 +11,7 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.components.*
-import com.intellij.ui.layout.panel
+import com.intellij.ui.dsl.builder.*
 import com.intellij.util.ui.JBUI
 import kotlinx.coroutines.*
 import java.awt.BorderLayout
@@ -69,55 +69,32 @@ class NacosConfigurable : Configurable {
         initializeComponents()
         
         mainPanel = panel {
-            titledRow(NacosSearchBundle.message("settings.server.config")) {
+            group(NacosSearchBundle.message("settings.server.config")) {
                 row(NacosSearchBundle.message("settings.server.url")) {
-                    cell {
-                        serverUrlField()
-                        testConnectionButton()
-                    }
+                    cell(serverUrlField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                    cell(testConnectionButton)
                 }
-                row(NacosSearchBundle.message("settings.server.username")) { usernameField() }
-                row(NacosSearchBundle.message("settings.server.password")) { passwordField() }
-                row(NacosSearchBundle.message("settings.server.namespace")) { namespaceField() }
+                row(NacosSearchBundle.message("settings.server.username")) {
+                    cell(usernameField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                }
+                row(NacosSearchBundle.message("settings.server.password")) {
+                    cell(passwordField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                }
+                row(NacosSearchBundle.message("settings.server.namespace")) {
+                    cell(namespaceField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                }
             }
-            
-//            titledRow(NacosSearchBundle.message("settings.language.config")) {
-//                row(NacosSearchBundle.message("settings.language.selection")) { languageComboBox() }
-//            }
-            
-//            titledRow("Authentication Configuration") {
-//                row("Authentication Mode:") { authModeComboBox() }
-//                row { enableTokenAuthCheckBox() }
-//                row("Token Cache Duration (minutes):") { tokenCacheDurationSpinner() }
-//                row { autoTokenRefreshCheckBox() }
-//            }
-//
-//            titledRow("Cache Configuration") {
-//                row { cacheEnabledCheckBox() }
-//                row("Cache TTL (minutes):") { cacheTtlSpinner() }
-//                row("Max Cache Size:") { maxCacheSizeSpinner() }
-//                row { autoRefreshCheckBox() }
-//                row("Auto Refresh Interval (minutes):") { autoRefreshIntervalSpinner() }
-//            }
-//
-//            titledRow("Search Configuration") {
-//                row("Search Result Limit:") { searchResultLimitSpinner() }
-//                row { enableRegexCheckBox() }
-//                row { caseSensitiveCheckBox() }
-//                row { highlightMatchesCheckBox() }
-//            }
-            
-//            titledRow("Connection Configuration") {
-//                row("Connection Timeout (seconds):") { connectionTimeoutSpinner() }
-//                row("Read Timeout (seconds):") { readTimeoutSpinner() }
-//                row("Retry Attempts:") { retryAttemptsSpinner() }
-//                row("Retry Delay (seconds):") { retryDelaySpinner() }
-//            }
-//
+
             row {
-                cell {
-                    resetButton()
-                }
+                cell(resetButton)
             }
         }
         

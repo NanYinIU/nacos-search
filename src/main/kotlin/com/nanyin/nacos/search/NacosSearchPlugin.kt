@@ -8,7 +8,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.startup.StartupActivity
+import com.intellij.openapi.startup.ProjectActivity
 import kotlinx.coroutines.*
 import kotlinx.coroutines.delay
 
@@ -16,21 +16,21 @@ import kotlinx.coroutines.delay
  * Main plugin class that manages the Nacos Search plugin lifecycle
  */
 @Service(Service.Level.APP)
-class NacosSearchPlugin : StartupActivity {
-    
+class NacosSearchPlugin : ProjectActivity {
+
     private val logger = thisLogger()
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var autoRefreshJob: Job? = null
-    
+
     // Services
     private val settings by lazy { ApplicationManager.getApplication().getService(NacosSettings::class.java) }
     private val apiService by lazy { ApplicationManager.getApplication().getService(NacosApiService::class.java) }
     private val cacheService by lazy { ApplicationManager.getApplication().getService(CacheService::class.java) }
     private val searchService by lazy { ApplicationManager.getApplication().getService(SearchService::class.java) }
-    
-    override fun runActivity(project: Project) {
+
+    override suspend fun execute(project: Project) {
         logger.info("Initializing Nacos Search Plugin")
-        
+
         try {
             initializePlugin()
             setupAutoRefresh()

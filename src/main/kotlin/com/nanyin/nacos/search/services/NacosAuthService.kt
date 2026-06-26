@@ -80,7 +80,7 @@ class NacosAuthService {
                 
                 null
             } catch (e: Exception) {
-                logger.error("Failed to get valid access token", e)
+                logger.warn("Failed to get valid access token", e)
                 null
             }
         return ""
@@ -131,15 +131,15 @@ class NacosAuthService {
                 val globalAdmin = jsonResponse.get("globalAdmin")?.asBoolean ?: false
                 
                 if (accessToken.isNullOrBlank()) {
-                    logger.error("Login failed: accessToken is null or empty")
+                    logger.warn("Login failed: accessToken is null or empty")
                     return@withContext null
                 }
-                
+
                 logger.info("Successfully obtained access token, TTL: ${tokenTtl}s, GlobalAdmin: $globalAdmin")
                 return@withContext TokenInfo(accessToken, tokenTtl, globalAdmin)
-                
+
             } catch (e: Exception) {
-                logger.error("Login failed", e)
+                logger.warn("Login failed", e)
                 null
             }
         }
@@ -190,7 +190,7 @@ class NacosAuthService {
                 
                 true
             } catch (e: Exception) {
-                logger.error("Failed to refresh token", e)
+                logger.warn("Failed to refresh token", e)
                 false
             }
         }
@@ -205,7 +205,7 @@ class NacosAuthService {
             tokenCache.remove(cacheKey)
             logger.info("Logged out and cleared cached token")
         } catch (e: Exception) {
-            logger.error("Error during logout", e)
+            logger.warn("Error during logout", e)
         }
     }
     

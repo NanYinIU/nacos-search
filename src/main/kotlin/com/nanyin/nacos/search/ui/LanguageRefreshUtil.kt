@@ -9,6 +9,7 @@ import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import javax.swing.SwingUtilities
 import java.awt.Component
+import java.awt.GraphicsEnvironment
 
 /**
  * Utility class for refreshing UI components when language changes
@@ -99,11 +100,15 @@ object LanguageRefreshUtil {
      * Show a notification about language change
      */
     fun showLanguageChangeNotification(newLanguage: LanguageService.SupportedLanguage) {
+        if (GraphicsEnvironment.isHeadless()) {
+            return
+        }
+
         val message = NacosSearchBundle.message(
-            "language.changed.notification", 
+            "language.changed.notification",
             newLanguage.displayName
         )
-        
+
         ApplicationManager.getApplication().invokeLater {
             // Show a simple message dialog for now
             // In a real implementation, you might use IntelliJ's notification system

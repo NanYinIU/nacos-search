@@ -1,50 +1,53 @@
 package com.nanyin.nacos.search.ui
 
-import com.nanyin.nacos.search.models.NamespaceInfo
-import com.nanyin.nacos.search.services.NamespaceService
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import org.mockito.kotlin.*
-import kotlinx.coroutines.*
-import kotlinx.coroutines.runBlocking
-import org.mockito.Mockito
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.Assertions.assertDoesNotThrow
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
-import java.awt.EventQueue
+import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.services.NamespaceService
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Before
+import org.junit.Test
+import org.mockito.kotlin.any
+import org.mockito.kotlin.doNothing
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.reset
+import org.mockito.kotlin.timeout
+import org.mockito.kotlin.verify
+import org.mockito.kotlin.whenever
 import javax.swing.SwingUtilities
 
 class NamespacePanelTest : BasePlatformTestCase() {
-    
+
     private lateinit var mockProject: Project
     private lateinit var mockNamespaceService: NamespaceService
     private lateinit var namespacePanel: NamespacePanel
-    
+
     private val testNamespaces = listOf(
         NamespaceInfo("public", "Public Namespace"),
         NamespaceInfo("dev", "Development"),
         NamespaceInfo("staging", "Staging Environment")
     )
-    
-    @BeforeEach
+
+    @Before
     override fun setUp() {
         super.setUp()
-        
+
         mockProject = mock<Project>()
         mockNamespaceService = mock<NamespaceService>()
-        
-        // Setup default mock behaviors
+
         whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(CompletableDeferred(Result.success(testNamespaces)))
         whenever(mockNamespaceService.getCurrentNamespace()).thenReturn(null)
         doNothing().`when`(mockNamespaceService).setCurrentNamespace(any())
     }
-    
-    @AfterEach
+
+    @After
     override fun tearDown() {
         if (::namespacePanel.isInitialized) {
             namespacePanel.dispose()
@@ -52,122 +55,95 @@ class NamespacePanelTest : BasePlatformTestCase() {
         reset(mockNamespaceService, mockProject)
         super.tearDown()
     }
-    
+
     @Test
-    fun `test namespace panel initialization`() {
-        // When
-        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
-        
-        // Then
-        assertDoesNotThrow {
-            namespacePanel.getSelectedNamespace()
-        }
+    fun testNamespacePanelInitialization() {
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
+
+        namespacePanel.getSelectedNamespace()
     }
-    
+
     @Test
-    fun `test namespace panel loads namespaces on initialization`() {
-        // Given
+    fun testNamespacePanelLoadsNamespacesOnInitialization() {
         whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(CompletableDeferred(Result.success(testNamespaces)))
-        
-        // When
-        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
+
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
         waitForUi()
-        
-        // Then
+
         verify(mockNamespaceService, timeout(1000)).loadNamespacesAsync()
     }
-    
+
     @Test
-    fun `test namespace selection`() {
-        // Given
-        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
+    fun testNamespaceSelection() {
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
         val targetNamespace = testNamespaces[1]
         waitForNamespaceLoad()
-        
-        // When
+
         namespacePanel.setSelectedNamespace(targetNamespace)
         waitForUi()
-        
-        // Then
+
         val selectedNamespace = namespacePanel.getSelectedNamespace()
+        assertNotNull(selectedNamespace)
         assertEquals(targetNamespace.namespaceId, selectedNamespace?.namespaceId)
     }
-    
+
     @Test
-    fun `test refresh functionality`() {
-        // Given
-        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
+    fun testRefreshFunctionality() {
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
         waitForUi()
-        
-        // When
+
         namespacePanel.refresh()
         waitForUi()
-        
-        // Then
+
         verify(mockNamespaceService, timeout(1000).atLeast(2)).loadNamespacesAsync()
     }
-    
+
     @Test
-    fun `test error handling when loading namespaces fails`() {
-        // Given
+    fun testErrorHandlingWhenLoadingNamespacesFails() {
         val errorMessage = "Network error"
         whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(
             CompletableDeferred(Result.failure(RuntimeException(errorMessage)))
         )
-        
-        // When
-        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
+
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
         waitForUi()
-        
-        // Then
+
         assertNull(namespacePanel.getSelectedNamespace())
         verify(mockNamespaceService, timeout(1000)).loadNamespacesAsync()
     }
-    
+
     @Test
-    fun `test current namespace restoration`() {
-        // Given
+    fun testCurrentNamespaceRestoration() {
         val currentNamespace = testNamespaces[1]
         whenever(mockNamespaceService.getCurrentNamespace()).thenReturn(currentNamespace)
-        
-        // When
-        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
+
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
         waitForNamespaceLoad()
-        
-        // Then
+
         val selectedNamespace = namespacePanel.getSelectedNamespace()
+        assertNotNull(selectedNamespace)
         assertEquals(currentNamespace.namespaceId, selectedNamespace?.namespaceId)
     }
-    
+
     @Test
-    fun `test dispose cleans up resources`() {
-        // Given
-        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
-        
-        // When
-        assertDoesNotThrow {
-            namespacePanel.dispose()
-        }
-        
-        // Then - no exceptions should be thrown
+    fun testDisposeCleansUpResources() {
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
+
+        namespacePanel.dispose()
     }
-    
+
     @Test
-    fun `test namespace panel basic functionality`() {
-        // Given
-        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
-        
-        // When
+    fun testNamespacePanelBasicFunctionality() {
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
+
         val selectedNamespace = namespacePanel.getSelectedNamespace()
-        
-        // Then - should not throw exception
-        assertDoesNotThrow {
-            namespacePanel.refresh()
-        }
+
+        namespacePanel.refresh()
+        assertNull(selectedNamespace)
     }
 
     private fun waitForUi() {
-        if (EventQueue.isDispatchThread()) {
+        if (ApplicationManager.getApplication().isDispatchThread) {
             PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
         } else {
             SwingUtilities.invokeAndWait {

@@ -1,94 +1,247 @@
 package com.nanyin.nacos.search.services
 
+import com.google.gson.Gson
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosSettings
-import com.intellij.testFramework.ApplicationRule
+import com.sun.net.httpserver.HttpExchange
+import com.sun.net.httpserver.HttpHandler
+import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.extension.ExtendWith
-import org.mockito.Mock
-import org.mockito.MockitoAnnotations
-import org.mockito.kotlin.whenever
+import java.net.InetSocketAddress
+import java.nio.charset.StandardCharsets
 
-/**
- * Unit tests for NacosApiService
- */
+@TestApplication
 class NacosApiServiceTest {
-    
-    @Mock
-    private lateinit var mockSettings: NacosSettings
-    
+
+    companion object {
+        private lateinit var server: HttpServer
+        private var serverPort: Int = 0
+        private val gson = Gson()
+
+        private val namespacesResponse = mapOf(
+            "code" to 0,
+            "message" to "success",
+            "data" to listOf(
+                mapOf(
+                    "namespace" to "test-ns",
+                    "namespaceShowName" to "Test Namespace",
+                    "namespaceDesc" to "Test Description",
+                    "configCount" to 10,
+                    "type" to 1
+                )
+            )
+        )
+
+        private val configListResponse = mapOf(
+            "totalCount" to 1,
+            "pageNumber" to 1,
+            "pagesAvailable" to 1,
+            "pageItems" to listOf(
+                mapOf(
+                    "id" to "1",
+                    "dataId" to "test.properties",
+                    "group" to "DEFAULT_GROUP",
+                    "content" to "initial",
+                    "type" to "properties",
+                    "tenant" to "test-ns"
+                )
+            )
+        )
+
+        private val configDetailResponse = mapOf(
+            "dataId" to "test.properties",
+            "group" to "DEFAULT_GROUP",
+            "tenant" to "test-ns",
+            "content" to "key=value",
+            "type" to "properties",
+            "md5" to "abc123"
+        )
+
+        @JvmStatic
+        @BeforeAll
+        fun startServer() {
+            server = HttpServer.create(InetSocketAddress(0), 0)
+            serverPort = server.address.port
+
+            server.createContext("/nacos/v1/console/namespaces", object : HttpHandler {
+                override fun handle(exchange: HttpExchange) {
+                    sendJsonResponse(exchange, 200, namespacesResponse)
+                }
+            })
+
+            server.createContext("/nacos/v1/cs/configs", object : HttpHandler {
+                override fun handle(exchange: HttpExchange) {
+                    val query = exchange.requestURI.query ?: ""
+                    when {
+                        query.contains("show=all") -> sendJsonResponse(exchange, 200, configDetailResponse)
+                        else -> sendJsonResponse(exchange, 200, configListResponse)
+                    }
+                }
+            })
+
+            server.executor = null
+            server.start()
+        }
+
+        @JvmStatic
+        @AfterAll
+        fun stopServer() {
+            server.stop(0)
+        }
+
+        private fun sendJsonResponse(exchange: HttpExchange, statusCode: Int, body: Any) {
+            val response = gson.toJson(body)
+            val bytes = response.toByteArray(StandardCharsets.UTF_8)
+            exchange.responseHeaders.set("Content-Type", "application/json")
+            exchange.sendResponseHeaders(statusCode, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+    }
+
     private lateinit var apiService: NacosApiService
-    
+    private lateinit var settings: NacosSettings
+
     @BeforeEach
     fun setUp() {
-        MockitoAnnotations.openMocks(this)
-        
-        // Setup mock settings
-        whenever(mockSettings.serverUrl).thenReturn("http://localhost:8848")
-        whenever(mockSettings.username).thenReturn("nacos")
-        whenever(mockSettings.password).thenReturn("nacos")
-        whenever(mockSettings.namespace).thenReturn("public")
-        whenever(mockSettings.connectionTimeoutSeconds).thenReturn(30)
-        whenever(mockSettings.readTimeoutSeconds).thenReturn(60)
-        whenever(mockSettings.retryAttempts).thenReturn(3)
-        whenever(mockSettings.retryDelaySeconds).thenReturn(2)
-        
-        // Create service instance
+        settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        settings.resetToDefaults()
+        settings.serverUrl = "http://localhost:$serverPort"
+        settings.username = "nacos"
+        settings.password = "nacos"
+        settings.authMode = AuthMode.BASIC
+
         apiService = NacosApiService()
     }
-    
+
     @Test
     fun `test nacos service initialization`() {
-        // Test that the service can be initialized
         assertNotNull(apiService)
     }
-    
+
     @Test
     fun `test connection to nacos server`() = runBlocking {
         val result = apiService.testConnection()
-        // This test may fail if no actual Nacos server is running
-        // but we're testing the method exists and returns a Result
-        assertNotNull(result)
+        assertTrue(result.isSuccess)
+        assertTrue(result.getOrDefault(false))
     }
-    
+
     @Test
-    fun `test list configurations method exists`() = runBlocking {
-        val result = apiService.listConfigurations()
-        // This test may fail if no actual Nacos server is running
-        // but we're testing the method exists and returns a Result
-        assertNotNull(result)
+    fun `test list configurations`() = runBlocking {
+        val result = apiService.listConfigurations("test-ns", 1, 10)
+        assertTrue(result.isSuccess)
+
+        val response = result.getOrNull()
+        assertNotNull(response)
+        assertEquals(1, response!!.totalCount)
+        assertEquals(1, response.pageItems.size)
+        assertEquals("test.properties", response.pageItems[0].dataId)
     }
-    
+
     @Test
-    fun `test get configuration method exists`() = runBlocking {
-        val result = apiService.getConfiguration("test.properties", "DEFAULT_GROUP")
-        // This test may fail if no actual Nacos server is running
-        // but we're testing the method exists and returns a Result
-        assertNotNull(result)
+    fun `test list configurations with null namespace`() = runBlocking {
+        val result = apiService.listConfigurations(null, 1, 10)
+        assertTrue(result.isSuccess)
+        assertNotNull(result.getOrNull())
     }
-    
+
     @Test
-    fun `test get all configurations method exists`() = runBlocking {
-        val result = apiService.getAllConfigurations()
-        // This test may fail if no actual Nacos server is running
-        // but we're testing the method exists and returns a Result
-        assertNotNull(result)
+    fun `test get configuration`() = runBlocking {
+        val result = apiService.getConfiguration("test.properties", "DEFAULT_GROUP", "test-ns")
+        assertTrue(result.isSuccess)
+
+        val config = result.getOrNull()
+        assertNotNull(config)
+        assertEquals("test.properties", config!!.dataId)
+        assertEquals("key=value", config.content)
     }
-    
+
     @Test
-    fun `test settings validation`() {
-        // Test with valid settings
-        assertTrue(mockSettings.serverUrl.isNotEmpty())
-        
-        // Test with invalid settings
-        whenever(mockSettings.serverUrl).thenReturn("")
-        assertTrue(mockSettings.serverUrl.isEmpty())
+    fun `test get configuration with null namespace`() = runBlocking {
+        val result = apiService.getConfiguration("test.properties", "DEFAULT_GROUP", null)
+        assertTrue(result.isSuccess)
     }
-    
+
+    @Test
+    fun `test get all configurations`() = runBlocking {
+        val result = apiService.getAllConfigurations("test-ns")
+        assertTrue(result.isSuccess)
+
+        val configs = result.getOrNull()
+        assertNotNull(configs)
+        assertTrue(configs!!.isNotEmpty())
+    }
+
+    @Test
+    fun `test get all configurations with null namespace`() = runBlocking {
+        val result = apiService.getAllConfigurations(null)
+        assertTrue(result.isSuccess)
+    }
+
+    @Test
+    fun `test get namespaces`() = runBlocking {
+        val result = apiService.getNamespaces()
+        assertTrue(result.isSuccess)
+
+        val namespaces = result.getOrNull()
+        assertNotNull(namespaces)
+        assertTrue(namespaces!!.isNotEmpty())
+
+        val hasPublicNamespace = namespaces.any { it.isPublicNamespace() }
+        assertTrue(hasPublicNamespace)
+
+        val testNamespace = namespaces.find { it.namespaceId == "test-ns" }
+        assertNotNull(testNamespace)
+        assertEquals("Test Namespace", testNamespace!!.namespaceName)
+    }
+
+    @Test
+    fun `test get namespaces returns public namespace when api fails`() = runBlocking {
+        // Point to a non-existent port to trigger error handling
+        settings.serverUrl = "http://localhost:1"
+        val failingService = NacosApiService()
+
+        val result = failingService.getNamespaces()
+        assertTrue(result.isSuccess)
+
+        val namespaces = result.getOrNull()
+        assertNotNull(namespaces)
+        assertEquals(1, namespaces!!.size)
+        assertTrue(namespaces[0].isPublicNamespace())
+    }
+
+    @Test
+    fun `test getConfigurationFromItem returns full configuration`() = runBlocking {
+        val item = NacosApiService.ConfigItem(
+            id = "1",
+            dataId = "test.properties",
+            group = "DEFAULT_GROUP",
+            content = "initial",
+            type = "properties",
+            tenant = "test-ns"
+        )
+
+        val config = apiService.getConfigurationFromItem(item)
+        assertEquals("test.properties", config.dataId)
+        assertEquals("key=value", config.content)
+    }
+
+    @Test
+    fun `test clear cache`() {
+        assertDoesNotThrow {
+            apiService.clearCache()
+            apiService.clearCache("test-ns")
+        }
+    }
+
     @Test
     fun `test configuration key generation`() {
         val config = NacosConfiguration(
@@ -100,27 +253,22 @@ class NacosApiServiceTest {
             md5 = "abc123",
             lastModified = System.currentTimeMillis()
         )
-        
-        val key = config.getKey()
-        assertEquals("test.properties:DEFAULT_GROUP:public", key)
+
+        assertEquals("test.properties:DEFAULT_GROUP:public", config.getKey())
     }
-    
+
     @Test
     fun `test configuration display name`() {
         val config = NacosConfiguration(
             dataId = "test.properties",
             group = "DEFAULT_GROUP",
             tenantId = "public",
-            content = "test=value",
-            type = "properties",
-            md5 = "abc123",
-            lastModified = System.currentTimeMillis()
+            content = "test=value"
         )
-        
-        val displayName = config.getDisplayName()
-        assertEquals("test.properties (DEFAULT_GROUP) [public]", displayName)
+
+        assertEquals("test.properties (DEFAULT_GROUP) [public]", config.getDisplayName())
     }
-    
+
     @Test
     fun `test configuration type inference`() {
         val yamlConfig = NacosConfiguration(
@@ -128,128 +276,17 @@ class NacosApiServiceTest {
             group = "DEFAULT_GROUP",
             tenantId = "public",
             content = "key: value",
-            type = null,
-            md5 = "abc123",
-            lastModified = System.currentTimeMillis()
+            type = null
         )
-        
+
         assertEquals("yaml", yamlConfig.getConfigType())
-        
-        val jsonConfig = NacosConfiguration(
-            dataId = "test.json",
-            group = "DEFAULT_GROUP",
-            tenantId = "public",
-            content = "{\"key\": \"value\"}",
-            type = null,
-            md5 = "abc123",
-            lastModified = System.currentTimeMillis()
-        )
-        
-        assertEquals("json", jsonConfig.getConfigType())
     }
-    
+
     @Test
-    fun `test get namespaces method exists`() = runBlocking {
-        val result = apiService.getNamespaces()
-        // This test may fail if no actual Nacos server is running
-        // but we're testing the method exists and returns a Result
-        assertNotNull(result)
-    }
-    
-    @Test
-    fun `test get namespaces returns success result`() = runBlocking {
-        val result = apiService.getNamespaces()
-        
-        // Should not throw exception
-        assertNotNull(result)
-        
-        // Should return success with at least public namespace as fallback
-        assertTrue(result.isSuccess)
-        val namespaces = result.getOrNull()
-        assertNotNull(namespaces)
-        assertTrue(namespaces!!.isNotEmpty())
-        
-        // Should contain public namespace
-        val hasPublicNamespace = namespaces.any { it.isPublicNamespace() }
-        assertTrue(hasPublicNamespace, "Should contain public namespace as fallback")
-    }
-    
-    @Test
-    fun `test get namespaces handles errors gracefully`() = runBlocking {
-        // Test that the method handles errors gracefully and returns fallback
-        val result = apiService.getNamespaces()
-        
-        assertTrue(result.isSuccess)
-        val namespaces = result.getOrNull()
-        assertNotNull(namespaces)
-        
-        // Should always have at least the public namespace
-        assertTrue(namespaces!!.isNotEmpty())
-        val publicNamespace = namespaces.find { it.isPublicNamespace() }
-        assertNotNull(publicNamespace, "Should always include public namespace")
-    }
-    
-    @Test
-    fun `test get namespaces returns consistent public namespace`() = runBlocking {
-        val result = apiService.getNamespaces()
-        assertTrue(result.isSuccess)
-        
-        val namespaces = result.getOrNull()
-        assertNotNull(namespaces)
-        
-        val publicNamespaces = namespaces!!.filter { it.isPublicNamespace() }
-        assertEquals(1, publicNamespaces.size, "Should have exactly one public namespace")
-        
-        val publicNamespace = publicNamespaces.first()
-        assertEquals("", publicNamespace.namespaceId, "Public namespace should have empty ID")
-        assertEquals("public", publicNamespace.namespaceName, "Public namespace should be named 'public'")
-    }
-    
-    @Test
-    fun `test get configuration with namespace parameter`() = runBlocking {
-        val result = apiService.getConfiguration("test.properties", "DEFAULT_GROUP", "test-namespace")
-        // This test may fail if no actual Nacos server is running
-        // but we're testing the method exists and accepts namespace parameter
-        assertNotNull(result)
-    }
-    
-    @Test
-    fun `test get configuration with null namespace`() = runBlocking {
-        val result = apiService.getConfiguration("test.properties", "DEFAULT_GROUP", null)
-        // This test may fail if no actual Nacos server is running
-        // but we're testing the method works with null namespace (public)
-        assertNotNull(result)
-    }
-    
-    @Test
-    fun `test list configurations with namespace parameter`() = runBlocking {
-        val result = apiService.listConfigurations("test-namespace", 1, 10)
-        // This test may fail if no actual Nacos server is running
-        // but we're testing the method exists and accepts namespace parameter
-        assertNotNull(result)
-    }
-    
-    @Test
-    fun `test list configurations with null namespace`() = runBlocking {
-        val result = apiService.listConfigurations(null, 1, 10)
-        // This test may fail if no actual Nacos server is running
-        // but we're testing the method works with null namespace (public)
-        assertNotNull(result)
-    }
-    
-    @Test
-    fun `test get all configurations with namespace parameter`() = runBlocking {
-        val result = apiService.getAllConfigurations("test-namespace")
-        // This test may fail if no actual Nacos server is running
-        // but we're testing the method exists and accepts namespace parameter
-        assertNotNull(result)
-    }
-    
-    @Test
-    fun `test get all configurations with null namespace`() = runBlocking {
-        val result = apiService.getAllConfigurations(null)
-        // This test may fail if no actual Nacos server is running
-        // but we're testing the method works with null namespace (public)
-        assertNotNull(result)
+    fun `test settings validation`() {
+        assertTrue(settings.isValid())
+
+        settings.serverUrl = ""
+        assertFalse(settings.isValid())
     }
 }

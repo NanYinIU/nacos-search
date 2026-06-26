@@ -13,7 +13,12 @@ import com.intellij.ui.AnimatedIcon
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import java.awt.*
 import java.awt.event.ActionEvent
 import java.awt.event.ActionListener
@@ -25,7 +30,8 @@ import javax.swing.*
 class NamespacePanel(
     private val project: Project,
     private val namespaceService: NamespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java),
-    private val languageService: LanguageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
+    private val languageService: LanguageService = ApplicationManager.getApplication().getService(LanguageService::class.java),
+    private val dispatcher: CoroutineDispatcher = Dispatchers.Main
 ) : JPanel(BorderLayout()), LanguageAwareComponent {
     
     // UI Components
@@ -39,7 +45,7 @@ class NamespacePanel(
     private var namespaces: List<NamespaceInfo> = emptyList()
     
     // Coroutine scope for async operations
-    private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val coroutineScope = CoroutineScope(dispatcher + SupervisorJob())
     
     init {
         initializeComponents()

@@ -1,16 +1,11 @@
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "1.9.10"
-    id("org.jetbrains.intellij.platform") version "2.0.1"
-}
-
-// Configure Java toolchain to use Java 17
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
-    }
+    id("org.jetbrains.kotlin.jvm") version "2.0.21"
+    id("org.jetbrains.intellij.platform") version "2.16.0"
 }
 
 group = "com.nanyin.nacos.search"
@@ -26,55 +21,80 @@ repositories {
     }
 }
 
+kotlin {
+    jvmToolchain(17)
+}
+
 dependencies {
     intellijPlatform {
-        if (ideaLocalPath.isNotBlank()) {
-            local(ideaLocalPath)
-        } else {
-            intellijIdeaCommunity("2023.2.5", useInstaller = false)
-        }
+        // Build against a recent stable release that is compatible with 2026.1 EAP.
+        // Plugin verifier is configured below to test against additional versions.
+        create("IC", "2024.3.5")
         bundledPlugin("com.intellij.java")
         pluginVerifier()
-//        zipSigner {
-//            // Use default signing configuration
-//        }
-        instrumentationTools()
+        zipSigner()
         testFramework(TestFrameworkType.Platform)
+        testFramework(TestFrameworkType.JUnit5)
     }
 
     implementation("com.google.code.gson:gson:2.10.1")
     // Note: kotlinx-coroutines-core is provided by IntelliJ Platform
     // Note: SLF4J is provided by IntelliJ Platform (version 1.x)
-    testImplementation("org.junit.jupiter:junit-jupiter-api:5.10.1")
-    testImplementation("org.junit.jupiter:junit-jupiter-engine:5.10.1")
-    testImplementation("org.junit.jupiter:junit-jupiter-params:5.10.1")
-    testImplementation("org.junit.vintage:junit-vintage-engine:5.10.1")
+
+    testImplementation(platform("org.junit:junit-bom:5.10.1"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation("org.opentest4j:opentest4j:1.3.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.mockito:mockito-core:5.7.0")
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.1.0")
     // Note: kotlinx-coroutines-test is provided by IntelliJ Platform
 }
 
-// Configuration moved to intellijPlatform dependencies block above
+intellijPlatform {
+    signing {
+        // Defaults to PRIVATE_KEY / CERTIFICATE_CHAIN / PRIVATE_KEY_PASSWORD env vars.
+        // The signPlugin task is skipped automatically when credentials are absent.
+        privateKey = providers.environmentVariable("PRIVATE_KEY").orNull
+        certificateChain = providers.environmentVariable("CERTIFICATE_CHAIN").orNull
+        password = providers.environmentVariable("PRIVATE_KEY_PASSWORD").orNull
+    }
+
+    pluginVerification {
+        ides {
+            // Verify against the build target and recent stable releases.
+            create(IntelliJPlatformType.IntellijIdeaCommunity, "2024.3.5")
+            create(IntelliJPlatformType.IntellijIdeaCommunity, "2025.1")
+            // Verify against the 2026.1 EAP/Beta branch reported in the Marketplace failure.
+            // Pre-release builds are not published as installers, so useInstaller must be false.
+            create(IntelliJPlatformType.IntellijIdeaCommunity, "261-EAP-SNAPSHOT") {
+                useInstaller = false
+            }
+        }
+    }
+}
 
 tasks {
     withType<JavaCompile> {
         sourceCompatibility = "17"
         targetCompatibility = "17"
     }
-    
+
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-        kotlinOptions.jvmTarget = "17"
+        compilerOptions {
+            jvmTarget = JvmTarget.JVM_17
+        }
     }
-    
+
     patchPluginXml {
-        sinceBuild.set("232")
-        untilBuild.set(provider { null }) // 不设置最高版本，表示无限兼容
-        
+        sinceBuild.set("243")
+        untilBuild.set("261.*")
+
         pluginDescription.set("""
-            <p>Nacos Search plugin for IntelliJ IDEA that allows developers to query Nacos configurations 
+            <p>Nacos Search plugin for IntelliJ IDEA that allows developers to query Nacos configurations
             directly from within the IDE with local caching for improved performance.</p>
-            
+
             <p>Features:</p>
             <ul>
                 <li>Connect to Nacos server via Open API</li>
@@ -84,7 +104,7 @@ tasks {
                 <li>Seamless IntelliJ IDEA integration</li>
             </ul>
         """.trimIndent())
-        
+
         changeNotes.set("""
             <h3>1.0.0</h3>
             <ul>
@@ -96,7 +116,7 @@ tasks {
             </ul>
         """.trimIndent())
     }
-    
+
     test {
         useJUnitPlatform()
         testLogging {
@@ -108,34 +128,9 @@ tasks {
             showStandardStreams = true
         }
     }
-    
-    withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-        kotlinOptions {
-            jvmTarget = "17"
-            freeCompilerArgs += "-Xdiagnostics-log-level=verbose"
-            allWarningsAsErrors = false
-            verbose = true
-        }
-    }
-    
+
     runIde {
         jvmArgs("-Xmx2048m")
     }
-    
-    // Custom task to show detailed compilation errors
-    register("showCompilationErrors") {
-        dependsOn("compileTestKotlin")
-        doLast {
-            val compileTask = project.tasks.getByName("compileTestKotlin") as org.jetbrains.kotlin.gradle.tasks.KotlinCompile
-            if (compileTask.didWork) {
-                println("Compilation succeeded")
-            } else {
-                println("Compilation failed")
-                // Print any available error information
-                compileTask.kotlinOptions.allWarningsAsErrors = false
-                compileTask.kotlinOptions.suppressWarnings = false
-                compileTask.kotlinOptions.verbose = true
-            }
-        }
-    }
+
 }

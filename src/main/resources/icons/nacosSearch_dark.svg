@@ -1,0 +1,13 @@
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g stroke="#CED0D6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- 配置文件页（主体）：带折角的文档轮廓 -->
+    <path d="M4 2H10L12 4V14H4Z"/>
+    <path d="M10 2V4H12"/>
+    <!-- 两行 key-value（配置项），长短不一 -->
+    <path d="M6 5.4H10.3"/>
+    <path d="M6 7H9"/>
+    <!-- 放大镜（修饰符）：检视配置内容 -->
+    <circle cx="8.4" cy="10.2" r="2.4"/>
+    <path d="M10.2 12L11.8 13.6"/>
+  </g>
+</svg>
