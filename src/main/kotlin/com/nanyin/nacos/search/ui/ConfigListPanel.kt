@@ -30,7 +30,6 @@ import javax.swing.table.DefaultTableCellRenderer
  */
 class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), NamespaceChangeListener, LanguageAwareComponent {
     
-    private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
     private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
     private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
     
@@ -55,6 +54,7 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     
     // Configuration selection listener
     var onConfigurationSelected: ((NacosConfiguration) -> Unit)? = null
+    var onRefreshRequested: (() -> Unit)? = null
     
     init {
         initializeComponents()
@@ -64,9 +64,7 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         // Register as namespace change listener
         namespaceService.addNamespaceChangeListener(this)
         
-        // Load initial data
         currentNamespace = namespaceService.getCurrentNamespace()
-        loadConfigurations()
     }
     
     private fun initializeComponents() {
@@ -147,7 +145,7 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     
     private fun setupEventHandlers() {
         refreshButton.addActionListener {
-            loadConfigurations()
+            onRefreshRequested?.invoke()
         }
         
         configTable.addMouseListener(object : MouseAdapter() {
@@ -200,50 +198,7 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     }
     
     private fun loadConfigurations() {
-        if (isLoading) return
-        
-        setLoadingState(true)
-        showCard("loading")
-        
-        coroutineScope.launch {
-            try {
-                val namespaceId = currentNamespace?.namespaceId
-                val result = nacosApiService.listConfigurations(
-                    namespaceId = namespaceId,
-                    pageNo = currentPage,
-                    pageSize = pageSize,
-                    useCache = true
-                )
-                
-                result.onSuccess { loadedConfigurations ->
-                    // Convert ConfigItems to NacosConfigurations
-                    val configs = loadedConfigurations.pageItems.map { item ->
-                        nacosApiService.getConfigurationFromItem(item, useCache = true)
-                    }
-                    configurations = configs
-                    updateTable()
-                    setLoadingState(false)
-                    
-                    if (configurations.isEmpty()) {
-                        showCard("empty")
-                        updateStatus(NacosSearchBundle.message("config.list.empty"))
-                    } else {
-                        showCard("table")
-                        updateStatus(NacosSearchBundle.message("config.list.loaded", configurations.size))
-                    }
-                }.onFailure { error ->
-                    setLoadingState(false)
-                    showCard("empty")
-                    updateStatus(NacosSearchBundle.message("config.list.failed"))
-                    showError(NacosSearchBundle.message("config.list.failed"), error.message ?: NacosSearchBundle.message("error.unknown"))
-                }
-            } catch (e: Exception) {
-                setLoadingState(false)
-                showCard("empty")
-                updateStatus(NacosSearchBundle.message("config.list.error"))
-                showError(NacosSearchBundle.message("config.list.error"), e.message ?: NacosSearchBundle.message("error.unknown"))
-            }
-        }
+        onRefreshRequested?.invoke()
     }
     
     private fun updateTable() {
@@ -303,13 +258,14 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
      * Refresh configurations from server
      */
     fun refresh() {
-        loadConfigurations()
+        onRefreshRequested?.invoke()
     }
     
     /**
      * Set configurations directly without loading from server
      */
     fun setConfigurations(newConfigurations: List<NacosConfiguration>) {
+        setLoadingState(false)
         configurations = newConfigurations
         updateTable()
         
@@ -319,6 +275,14 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         } else {
             showCard("table")
             updateStatus("${configurations.size} configurations loaded")
+        }
+    }
+
+    fun setLoading(loading: Boolean) {
+        setLoadingState(loading)
+        if (loading) {
+            showCard("loading")
+            updateStatus(NacosSearchBundle.message("config.list.loading"))
         }
     }
     
@@ -358,7 +322,7 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         currentNamespace = newNamespace
         currentPage = 1 // Reset to first page when namespace changes
         pageSize = 10 // Reset to first page when namespace changes
-        loadConfigurations()
+        onRefreshRequested?.invoke()
 
     }
     

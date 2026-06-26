@@ -2,8 +2,8 @@ package com.nanyin.nacos.search.ui
 
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NamespaceService
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.mockito.kotlin.*
 import kotlinx.coroutines.*
@@ -13,10 +13,11 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
-import javax.swing.SwingUtilities
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import java.awt.EventQueue
+import javax.swing.SwingUtilities
 
 class NamespacePanelTest : BasePlatformTestCase() {
     
@@ -38,11 +39,7 @@ class NamespacePanelTest : BasePlatformTestCase() {
         mockNamespaceService = mock<NamespaceService>()
         
         // Setup default mock behaviors
-        val mockDeferred = mock<kotlinx.coroutines.Deferred<Result<List<NamespaceInfo>>>>()
-        runBlocking {
-            whenever(mockDeferred.await()).thenReturn(Result.success(testNamespaces))
-        }
-        whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(mockDeferred)
+        whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(CompletableDeferred(Result.success(testNamespaces)))
         whenever(mockNamespaceService.getCurrentNamespace()).thenReturn(null)
         doNothing().`when`(mockNamespaceService).setCurrentNamespace(any())
     }
@@ -59,7 +56,7 @@ class NamespacePanelTest : BasePlatformTestCase() {
     @Test
     fun `test namespace panel initialization`() {
         // When
-        namespacePanel = NamespacePanel(mockProject)
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
         
         // Then
         assertDoesNotThrow {
@@ -70,33 +67,26 @@ class NamespacePanelTest : BasePlatformTestCase() {
     @Test
     fun `test namespace panel loads namespaces on initialization`() {
         // Given
-        val mockDeferred = mock<kotlinx.coroutines.Deferred<Result<List<NamespaceInfo>>>>()
-        runBlocking {
-            whenever(mockDeferred.await()).thenReturn(Result.success(testNamespaces))
-        }
-        whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(mockDeferred)
+        whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(CompletableDeferred(Result.success(testNamespaces)))
         
         // When
-        namespacePanel = NamespacePanel(mockProject)
-        
-        // Wait for UI updates
-        SwingUtilities.invokeAndWait { }
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
+        waitForUi()
         
         // Then
-        verify(mockNamespaceService).loadNamespacesAsync()
+        verify(mockNamespaceService, timeout(1000)).loadNamespacesAsync()
     }
     
     @Test
     fun `test namespace selection`() {
         // Given
-        namespacePanel = NamespacePanel(mockProject)
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
         val targetNamespace = testNamespaces[1]
+        waitForNamespaceLoad()
         
         // When
         namespacePanel.setSelectedNamespace(targetNamespace)
-        
-        // Wait for UI updates
-        SwingUtilities.invokeAndWait { }
+        waitForUi()
         
         // Then
         val selectedNamespace = namespacePanel.getSelectedNamespace()
@@ -106,37 +96,32 @@ class NamespacePanelTest : BasePlatformTestCase() {
     @Test
     fun `test refresh functionality`() {
         // Given
-        namespacePanel = NamespacePanel(mockProject)
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
+        waitForUi()
         
         // When
         namespacePanel.refresh()
-        
-        // Wait for UI updates
-        SwingUtilities.invokeAndWait { }
+        waitForUi()
         
         // Then
-        verify(mockNamespaceService, atLeast(2)).loadNamespacesAsync()
+        verify(mockNamespaceService, timeout(1000).atLeast(2)).loadNamespacesAsync()
     }
     
     @Test
     fun `test error handling when loading namespaces fails`() {
         // Given
         val errorMessage = "Network error"
-        val mockDeferred = mock<kotlinx.coroutines.Deferred<Result<List<NamespaceInfo>>>>()
-        runBlocking {
-            whenever(mockDeferred.await()).thenReturn(Result.failure(RuntimeException(errorMessage)))
-        }
-        whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(mockDeferred)
+        whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(
+            CompletableDeferred(Result.failure(RuntimeException(errorMessage)))
+        )
         
         // When
-        namespacePanel = NamespacePanel(mockProject)
-        
-        // Wait for UI updates
-        SwingUtilities.invokeAndWait { }
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
+        waitForUi()
         
         // Then
         assertNull(namespacePanel.getSelectedNamespace())
-        verify(mockNamespaceService).loadNamespacesAsync()
+        verify(mockNamespaceService, timeout(1000)).loadNamespacesAsync()
     }
     
     @Test
@@ -146,10 +131,8 @@ class NamespacePanelTest : BasePlatformTestCase() {
         whenever(mockNamespaceService.getCurrentNamespace()).thenReturn(currentNamespace)
         
         // When
-        namespacePanel = NamespacePanel(mockProject)
-        
-        // Wait for UI updates
-        SwingUtilities.invokeAndWait { }
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
+        waitForNamespaceLoad()
         
         // Then
         val selectedNamespace = namespacePanel.getSelectedNamespace()
@@ -159,7 +142,7 @@ class NamespacePanelTest : BasePlatformTestCase() {
     @Test
     fun `test dispose cleans up resources`() {
         // Given
-        namespacePanel = NamespacePanel(mockProject)
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
         
         // When
         assertDoesNotThrow {
@@ -172,7 +155,7 @@ class NamespacePanelTest : BasePlatformTestCase() {
     @Test
     fun `test namespace panel basic functionality`() {
         // Given
-        namespacePanel = NamespacePanel(mockProject)
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService)
         
         // When
         val selectedNamespace = namespacePanel.getSelectedNamespace()
@@ -180,6 +163,24 @@ class NamespacePanelTest : BasePlatformTestCase() {
         // Then - should not throw exception
         assertDoesNotThrow {
             namespacePanel.refresh()
+        }
+    }
+
+    private fun waitForUi() {
+        if (EventQueue.isDispatchThread()) {
+            PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+        } else {
+            SwingUtilities.invokeAndWait {
+                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+            }
+        }
+    }
+
+    private fun waitForNamespaceLoad() {
+        waitForUi()
+        verify(mockNamespaceService, timeout(1000)).loadNamespacesAsync()
+        repeat(5) {
+            waitForUi()
         }
     }
 }

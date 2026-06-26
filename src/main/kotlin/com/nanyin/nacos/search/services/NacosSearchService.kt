@@ -1,7 +1,9 @@
 package com.nanyin.nacos.search.services
 
+import com.intellij.openapi.application.ApplicationManager
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.settings.NacosSettings
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import kotlinx.coroutines.*
@@ -15,6 +17,8 @@ import kotlinx.coroutines.flow.asStateFlow
 @Service(Service.Level.PROJECT)
 class NacosSearchService {
     private val logger = thisLogger()
+    private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+    private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
     
     // Search debouncer
     private var searchJob: Job? = null
@@ -27,6 +31,8 @@ class NacosSearchService {
     // Pagination state , 缺少初始化
     private val _paginationState = MutableStateFlow(PaginationState())
     val paginationState: StateFlow<PaginationState> = _paginationState.asStateFlow()
+    private var currentRequest: SearchRequest? = null
+    private var lastCompletedRequestKey: String? = null
 
     /**
      * Search request data class
@@ -36,6 +42,11 @@ class NacosSearchService {
         val group: String = "",
         val appName: String = "",
         val configTags: String = "",
+        val query: String = "",
+        val searchContent: Boolean = false,
+        val forceRefresh: Boolean = false,
+        val caseSensitive: Boolean = false,
+        val useRegex: Boolean = false,
         val namespace: NamespaceInfo? = null,
         val pageNo: Int = 1,
         val pageSize: Int = 10
@@ -80,6 +91,26 @@ class NacosSearchService {
         fun getSearchMode(): String {
             return if (isFuzzySearch()) "blur" else "accurate"
         }
+
+        fun requiresLocalIndex(): Boolean {
+            return searchContent || isWildcardOnlySearch() || isPrefixFuzzySearch() || useRegex
+        }
+
+        fun toCacheKey(): String {
+            return listOf(
+                "dataId=${getProcessedDataId()}",
+                "group=$group",
+                "appName=$appName",
+                "configTags=$configTags",
+                "query=$query",
+                "searchContent=$searchContent",
+                "caseSensitive=$caseSensitive",
+                "useRegex=$useRegex",
+                "search=${getSearchMode()}",
+                "pageNo=$pageNo",
+                "pageSize=$pageSize"
+            ).joinToString("|")
+        }
     }
     
     /**
@@ -93,9 +124,17 @@ class NacosSearchService {
             val totalCount: Int,
             val pageNumber: Int,
             val pageSize: Int,
-            val pagesAvailable: Int
+            val pagesAvailable: Int,
+            val source: SearchSource = SearchSource.REMOTE,
+            val fromCache: Boolean = false
         ) : SearchState()
         data class Error(val message: String, val throwable: Throwable? = null) : SearchState()
+    }
+
+    enum class SearchSource {
+        REMOTE,
+        CACHE,
+        STALE_CACHE
     }
 
     /**
@@ -147,53 +186,157 @@ class NacosSearchService {
     ) {
         try {
             _searchState.value = SearchState.Loading
-            
-            val result = nacosApiService.listConfigurations(
-                namespaceId = request.namespace?.namespaceId,
-                pageNo = request.pageNo,
-                pageSize = request.pageSize,
-                dataId = request.dataId,
-                group = request.group,
-                appName = request.appName,
-                configTags = request.configTags,
-                searchMode = request.getSearchMode(),
-                useCache = false // Don't use cache for search results
-            )
-            
-            if (result.isSuccess) {
-                val response = result.getOrNull()!!
-                
-                // Convert ConfigItems to NacosConfigurations
-                val configurations = response.pageItems.map { item ->
-                    nacosApiService.getConfigurationFromItem(item, useCache = true)
-                }
-                
-                // Update pagination state
-                _paginationState.value = PaginationState(
-                    currentPage = response.pageNumber,
-                    pageSize = request.pageSize,
-                    totalCount = response.totalCount,
-                    totalPages = response.pagesAvailable
-                )
-                
-                // Update search state
-                _searchState.value = SearchState.Success(
-                    configurations = configurations,
-                    totalCount = response.totalCount,
-                    pageNumber = response.pageNumber,
-                    pageSize = request.pageSize,
-                    pagesAvailable = response.pagesAvailable
-                )
-                
-                logger.info("Search completed: ${configurations.size} configurations found (page ${response.pageNumber}/${response.pagesAvailable})")
+
+            currentRequest = request
+            val result = if (request.requiresLocalIndex()) {
+                searchWithLocalIndex(request, nacosApiService)
             } else {
-                val error = result.exceptionOrNull() ?: Exception("Unknown search error")
-                _searchState.value = SearchState.Error("搜索失败: ${error.message}", error)
-                logger.warn("Search failed", error)
+                searchWithRemoteList(request, nacosApiService)
             }
+            publishResult(result, request)
         } catch (e: Exception) {
             _searchState.value = SearchState.Error("搜索过程中发生错误: ${e.message}", e)
             logger.warn("Search error", e)
+        }
+    }
+
+    private suspend fun searchWithRemoteList(
+        request: SearchRequest,
+        nacosApiService: NacosApiService
+    ): Result<SearchExecutionResult> {
+        val requestKey = request.toCacheKey()
+        val preferCache = !request.forceRefresh &&
+                (request.pageNo > 1 || requestKey == lastCompletedRequestKey)
+        if (preferCache && settings.cacheEnabled) {
+            val cached = cacheService.getListPage(
+                settings.serverUrl,
+                request.namespace?.namespaceId,
+                request.toApiListPageCacheKey()
+            )
+            if (cached != null) {
+                val configurations = cached.pageItems.map { item ->
+                    nacosApiService.getConfigurationFromItem(item, useCache = true)
+                }
+                lastCompletedRequestKey = requestKey
+                return Result.success(SearchExecutionResult(cached, configurations, SearchSource.CACHE))
+            }
+        }
+        val result = nacosApiService.listConfigurations(
+            namespaceId = request.namespace?.namespaceId,
+            pageNo = request.pageNo,
+            pageSize = request.pageSize,
+            dataId = request.getProcessedDataId(),
+            group = request.group,
+            appName = request.appName,
+            configTags = request.configTags,
+            searchMode = request.getSearchMode(),
+            useCache = settings.cacheEnabled,
+            forceRefresh = true
+        )
+
+        if (result.isSuccess) {
+            val response = result.getOrNull()!!
+            val configurations = response.pageItems.map { item ->
+                nacosApiService.getConfigurationFromItem(item, useCache = true)
+            }
+            lastCompletedRequestKey = requestKey
+            return Result.success(SearchExecutionResult(response, configurations, SearchSource.REMOTE))
+        }
+
+        val stale = cacheService.getListPage(
+            settings.serverUrl,
+            request.namespace?.namespaceId,
+            request.toApiListPageCacheKey(),
+            allowStale = true
+        )
+        if (stale != null) {
+            val configurations = stale.pageItems.map { item ->
+                nacosApiService.getConfigurationFromItem(item, useCache = true)
+            }
+            return Result.success(SearchExecutionResult(stale, configurations, SearchSource.STALE_CACHE))
+        }
+
+        return Result.failure(result.exceptionOrNull() ?: Exception("Unknown search error"))
+    }
+
+    private suspend fun searchWithLocalIndex(
+        request: SearchRequest,
+        nacosApiService: NacosApiService
+    ): Result<SearchExecutionResult> {
+        val namespaceId = request.namespace?.namespaceId
+        val cachedIndex = if (!request.forceRefresh && settings.cacheEnabled) {
+            cacheService.getNamespaceIndex(settings.serverUrl, namespaceId)
+        } else {
+            null
+        }
+        val source: SearchSource
+        val allConfigurations = if (cachedIndex != null) {
+            source = SearchSource.CACHE
+            cachedIndex
+        } else {
+            val remote = nacosApiService.getAllConfigurations(namespaceId, useCache = true)
+            if (remote.isSuccess) {
+                source = SearchSource.REMOTE
+                remote.getOrNull().orEmpty().also {
+                    if (settings.cacheEnabled) {
+                        cacheService.putNamespaceIndex(settings.serverUrl, namespaceId, it, settings.getCacheTtlMillis())
+                    }
+                }
+            } else {
+                val staleIndex = cacheService.getNamespaceIndex(settings.serverUrl, namespaceId, allowStale = true)
+                if (staleIndex != null) {
+                    source = SearchSource.STALE_CACHE
+                    staleIndex
+                } else {
+                    return Result.failure(remote.exceptionOrNull() ?: Exception("Unknown search error"))
+                }
+            }
+        }
+
+        val filtered = allConfigurations.filter { it.matchesRequest(request) }
+        val fromIndex = paginate(filtered, request.pageNo, request.pageSize)
+        val response = NacosApiService.ConfigListResponse(
+            totalCount = filtered.size,
+            pageNumber = request.pageNo,
+            pagesAvailable = calculateTotalPages(filtered.size, request.pageSize),
+            pageItems = fromIndex.mapIndexed { index, config ->
+                NacosApiService.ConfigItem(
+                    id = "${request.pageNo}-$index",
+                    dataId = config.dataId,
+                    group = config.group,
+                    content = config.content,
+                    type = config.type,
+                    tenant = config.tenantId
+                )
+            }
+        )
+        lastCompletedRequestKey = request.toCacheKey()
+        return Result.success(SearchExecutionResult(response, fromIndex, source))
+    }
+
+    private fun publishResult(result: Result<SearchExecutionResult>, request: SearchRequest) {
+        if (result.isSuccess) {
+            val execution = result.getOrNull()!!
+            _paginationState.value = PaginationState(
+                currentPage = execution.response.pageNumber,
+                pageSize = request.pageSize,
+                totalCount = execution.response.totalCount,
+                totalPages = execution.response.pagesAvailable
+            )
+            _searchState.value = SearchState.Success(
+                configurations = execution.configurations,
+                totalCount = execution.response.totalCount,
+                pageNumber = execution.response.pageNumber,
+                pageSize = request.pageSize,
+                pagesAvailable = execution.response.pagesAvailable,
+                source = execution.source,
+                fromCache = execution.source != SearchSource.REMOTE
+            )
+            logger.info("Search completed: ${execution.configurations.size} configurations found (${execution.source})")
+        } else {
+            val error = result.exceptionOrNull() ?: Exception("Unknown search error")
+            _searchState.value = SearchState.Error("搜索失败: ${error.message}", error)
+            logger.warn("Search failed", error)
         }
     }
     
@@ -221,7 +364,7 @@ class NacosSearchService {
         }
 
         if (nextPageNo != null) {
-            val newRequest = currentRequest.copy(pageNo = nextPageNo, pageSize = nextPageSize)
+            val newRequest = (this.currentRequest ?: currentRequest).copy(pageNo = nextPageNo, pageSize = nextPageSize)
             performSearch(newRequest, nacosApiService)
         }
     }
@@ -236,7 +379,7 @@ class NacosSearchService {
         val prevPageNo = _paginationState.value.previousPage()
         val nextPageSize = _paginationState.value.pageSize
         if (prevPageNo != null) {
-            val newRequest = currentRequest.copy(pageNo = prevPageNo, pageSize = nextPageSize)
+            val newRequest = (this.currentRequest ?: currentRequest).copy(pageNo = prevPageNo, pageSize = nextPageSize)
             performSearch(newRequest, nacosApiService)
         }
     }
@@ -249,7 +392,7 @@ class NacosSearchService {
         newPageSize: Int,
         nacosApiService: NacosApiService
     ) {
-        val newRequest = currentRequest.copy(pageNo = 1, pageSize = newPageSize)
+        val newRequest = (this.currentRequest ?: currentRequest).copy(pageNo = 1, pageSize = newPageSize)
         performSearch(newRequest, nacosApiService)
     }
     
@@ -270,6 +413,7 @@ class NacosSearchService {
         cancelSearch()
         _searchState.value = SearchState.Idle
         _paginationState.value = PaginationState()
+        currentRequest = null
     }
     
     /**
@@ -288,4 +432,61 @@ class NacosSearchService {
             else -> emptyList()
         }
     }
+
+    private fun SearchRequest.toApiListPageCacheKey(): String {
+        return listOf(
+            "appName=$appName",
+            "config_tags=$configTags",
+            "dataId=${getProcessedDataId()}",
+            "group=$group",
+            "pageNo=$pageNo",
+            "pageSize=$pageSize",
+            "search=${getSearchMode()}"
+        ).joinToString("|")
+    }
+
+    private fun NacosConfiguration.matchesRequest(request: SearchRequest): Boolean {
+        fun String.containsPattern(pattern: String): Boolean {
+            if (pattern.isBlank()) return true
+            return if (request.useRegex) {
+                try {
+                    Regex(pattern, if (request.caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE))
+                        .containsMatchIn(this)
+                } catch (_: Exception) {
+                    contains(pattern, ignoreCase = !request.caseSensitive)
+                }
+            } else {
+                contains(pattern, ignoreCase = !request.caseSensitive)
+            }
+        }
+
+        val processedDataId = request.getProcessedDataId()
+        if (processedDataId.isNotBlank() && !dataId.containsPattern(processedDataId)) return false
+        if (request.group.isNotBlank() && !group.containsPattern(request.group)) return false
+        if (request.query.isNotBlank()) {
+            val targetMatches = dataId.containsPattern(request.query) ||
+                    group.containsPattern(request.query) ||
+                    (tenantId?.contains(request.query, ignoreCase = !request.caseSensitive) == true)
+            val contentMatches = request.searchContent && content.containsPattern(request.query)
+            if (!targetMatches && !contentMatches) return false
+        }
+        return true
+    }
+
+    private fun paginate(configurations: List<NacosConfiguration>, pageNo: Int, pageSize: Int): List<NacosConfiguration> {
+        val from = ((pageNo - 1) * pageSize).coerceAtLeast(0)
+        if (from >= configurations.size) return emptyList()
+        return configurations.drop(from).take(pageSize)
+    }
+
+    private fun calculateTotalPages(totalCount: Int, pageSize: Int): Int {
+        if (totalCount == 0) return 0
+        return ((totalCount + pageSize - 1) / pageSize).coerceAtLeast(1)
+    }
+
+    private data class SearchExecutionResult(
+        val response: NacosApiService.ConfigListResponse,
+        val configurations: List<NacosConfiguration>,
+        val source: SearchSource
+    )
 }

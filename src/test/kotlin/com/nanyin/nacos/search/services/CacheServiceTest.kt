@@ -1,0 +1,103 @@
+package com.nanyin.nacos.search.services
+
+import com.intellij.testFramework.ApplicationRule
+import com.nanyin.nacos.search.models.NacosConfiguration
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Rule
+import org.junit.Test
+
+class CacheServiceTest {
+    @get:Rule
+    val applicationRule = ApplicationRule()
+
+    @Test
+    fun `configuration detail cache uses server namespace dataId and group`() = runBlocking {
+        val cacheService = CacheService()
+        cacheService.clearAll()
+
+        val config = NacosConfiguration(
+            dataId = "app.yaml",
+            group = "DEFAULT_GROUP",
+            tenantId = "dev",
+            content = "feature=true",
+            type = "yaml"
+        )
+
+        cacheService.putConfigDetail(
+            serverUrl = "http://nacos:8848",
+            namespaceId = "dev",
+            configuration = config,
+            ttl = 60_000L
+        )
+
+        val cached = cacheService.getConfigDetail(
+            serverUrl = "http://nacos:8848/",
+            namespaceId = "dev",
+            dataId = "app.yaml",
+            group = "DEFAULT_GROUP"
+        )
+
+        assertEquals(config, cached)
+        assertNull(
+            cacheService.getConfigDetail(
+                serverUrl = "http://other:8848",
+                namespaceId = "dev",
+                dataId = "app.yaml",
+                group = "DEFAULT_GROUP"
+            )
+        )
+    }
+
+    @Test
+    fun `list page cache expires independently from detail cache`() = runBlocking {
+        val cacheService = CacheService()
+        cacheService.clearAll()
+
+        val page = NacosApiService.ConfigListResponse(
+            totalCount = 1,
+            pageNumber = 1,
+            pagesAvailable = 1,
+            pageItems = listOf(
+                NacosApiService.ConfigItem(
+                    id = "1",
+                    dataId = "app.yaml",
+                    group = "DEFAULT_GROUP",
+                    content = "feature=true",
+                    type = "yaml",
+                    tenant = "dev"
+                )
+            )
+        )
+        val detail = NacosConfiguration("app.yaml", "DEFAULT_GROUP", "dev", "feature=true")
+
+        cacheService.putListPage(
+            serverUrl = "http://nacos:8848",
+            namespaceId = "dev",
+            requestKey = "page=1",
+            response = page,
+            ttl = 1L
+        )
+        cacheService.putConfigDetail(
+            serverUrl = "http://nacos:8848",
+            namespaceId = "dev",
+            configuration = detail,
+            ttl = 60_000L
+        )
+
+        Thread.sleep(5L)
+
+        assertNull(cacheService.getListPage("http://nacos:8848", "dev", "page=1"))
+        assertEquals(
+            detail,
+            cacheService.getConfigDetail("http://nacos:8848", "dev", "app.yaml", "DEFAULT_GROUP")
+        )
+
+        val stats = cacheService.getCacheStats()
+        assertEquals(1, stats.detailEntries)
+        assertEquals(0, stats.listPageEntries)
+        assertEquals(1, stats.cacheHits)
+        assertEquals(1, stats.cacheMisses)
+    }
+}

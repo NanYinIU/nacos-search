@@ -170,7 +170,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
     private fun setupEventHandlers() {
         refreshButton.addActionListener {
             currentConfiguration?.let { config ->
-                loadConfigurationContent(config)
+                loadConfigurationContent(config, forceRefresh = true)
             }
         }
         
@@ -275,7 +275,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         }, ModalityState.defaultModalityState())
     }
     
-    private fun loadConfigurationContent(configuration: NacosConfiguration) {
+    private fun loadConfigurationContent(configuration: NacosConfiguration, forceRefresh: Boolean = false) {
         if (isLoading) return
         
         // Cancel previous loading operation
@@ -290,7 +290,8 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
                     dataId = configuration.dataId,
                     group = configuration.group,
                     namespaceId = configuration.tenantId,
-                    useCache = true
+                    useCache = true,
+                    forceRefresh = forceRefresh
                 )
                 
                 // Check if operation was cancelled

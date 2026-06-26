@@ -15,6 +15,9 @@ java {
 
 group = "com.nanyin.nacos.search"
 version = "1.0.0"
+val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
+    .orElse("")
+    .get()
 
 repositories {
     mavenCentral()
@@ -25,8 +28,11 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        //intellijIdeaCommunity("2023.2.5", useInstaller = false)
-        local("/Applications/IntelliJ IDEA CE.app")
+        if (ideaLocalPath.isNotBlank()) {
+            local(ideaLocalPath)
+        } else {
+            intellijIdeaCommunity("2023.2.5", useInstaller = false)
+        }
         bundledPlugin("com.intellij.java")
         pluginVerifier()
 //        zipSigner {

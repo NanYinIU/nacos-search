@@ -24,11 +24,7 @@ class NacosApiService {
     private val gson = Gson()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
     private val authService = ApplicationManager.getApplication().getService(NacosAuthService::class.java)
-    
-    // Configuration cache by namespace
-    private val configCache = mutableMapOf<String, MutableMap<String, NacosConfiguration>>()
-    private val cacheTimestamps = mutableMapOf<String, Long>()
-    private val cacheExpirationMs = 5 * 60 * 1000L // 5 minutes
+    private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
     
     companion object {
         private const val CONFIG_ENDPOINT = "/nacos/v1/cs/config"
@@ -46,58 +42,7 @@ class NacosApiService {
         try {
             val url = "${settings.serverUrl}$NAMESPACE_ENDPOINT"
             logger.info("Testing connection to: $url")
-            
-            // Pre-configure auth headers to avoid suspend function call in tuner
-            val authHeaders = mutableMapOf<String, String>()
-            when (settings.authMode) {
-                AuthMode.TOKEN -> {
-                    // TOKEN模式：accessToken已经通过buildUrl添加到查询参数中，不需要设置Authorization头
-                    // 如果没有有效的token，则不设置任何认证头
-                    val token = if (settings.enableTokenAuth) authService.getValidAccessToken() else null
-                    if (token == null) {
-                        logger.warn("No valid access token available in TOKEN mode")
-                    }
-                }
-                AuthMode.HYBRID -> {
-                    // HYBRID模式：优先使用token，如果没有token则回退到Basic认证
-                    val token = if (settings.enableTokenAuth) authService.getValidAccessToken() else null
-                    if (token == null) {
-                        // 回退到Basic认证
-                        if (settings.username.isNotEmpty() && settings.password.isNotEmpty()) {
-                            val credentials = "${settings.username}:${settings.password}"
-                            val encodedCredentials = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())
-                            authHeaders["Authorization"] = "Basic $encodedCredentials"
-                            logger.debug("Using Basic authentication as fallback in HYBRID mode")
-                        } else {
-                            logger.warn("No valid token and no basic auth credentials in HYBRID mode")
-                        }
-                    } else {
-                        logger.debug("Using token authentication in HYBRID mode")
-                    }
-                }
-                AuthMode.BASIC -> {
-                    // BASIC模式：仅使用Basic认证
-                    if (settings.username.isNotEmpty() && settings.password.isNotEmpty()) {
-                        val credentials = "${settings.username}:${settings.password}"
-                        val encodedCredentials = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())
-                        authHeaders["Authorization"] = "Basic $encodedCredentials"
-                    } else {
-                        logger.warn("No basic auth credentials configured in BASIC mode")
-                    }
-                }
-            }
-            
-            val response = HttpRequests.request(url)
-                .connectTimeout(CONNECTION_TIMEOUT)
-                .readTimeout(READ_TIMEOUT)
-                .tuner { connection ->
-                    connection.setRequestProperty("Accept", "application/json")
-                    // Apply pre-configured auth headers
-                    authHeaders.forEach { (key, value) ->
-                        connection.setRequestProperty(key, value)
-                    }
-                }
-                .readString()
+            val response = requestJson(url, buildAuthHeaders())
             
             val apiResponse = gson.fromJson(response, NacosApiResponse::class.java)
             Result.success(apiResponse.isSuccess())
@@ -118,16 +63,13 @@ class NacosApiService {
         dataId: String,
         group: String,
         namespaceId: String? = null,
-        useCache: Boolean = true
+        useCache: Boolean = true,
+        forceRefresh: Boolean = false
     ): Result<NacosConfiguration?> = withContext(Dispatchers.IO) {
         try {
-            val cacheKey = "${namespaceId ?: "public"}:$dataId:$group"
-            val namespace = namespaceId ?: "public"
-            
-            // Check cache first if enabled
-            if (useCache && isCacheValid(namespace)) {
-                configCache[namespace]?.get(cacheKey)?.let { cachedConfig ->
-                    logger.debug("Returning cached configuration for $cacheKey")
+            if (useCache && !forceRefresh && settings.cacheEnabled) {
+                cacheService.getConfigDetail(settings.serverUrl, namespaceId, dataId, group)?.let { cachedConfig ->
+                    logger.debug("Returning cached configuration for $dataId:$group")
                     return@withContext Result.success(cachedConfig)
                 }
             }
@@ -140,58 +82,7 @@ class NacosApiService {
             
             val url = buildUrl(CONFIG_LIST_ENDPOINT, params)
             logger.debug("Fetching configuration: $url")
-            
-            // Pre-configure auth headers to avoid suspend function call in tuner
-            val authHeaders = mutableMapOf<String, String>()
-            when (settings.authMode) {
-                AuthMode.TOKEN -> {
-                    // TOKEN模式：accessToken已经通过buildUrl添加到查询参数中，不需要设置Authorization头
-                    // 如果没有有效的token，则不设置任何认证头
-                    val token = if (settings.enableTokenAuth) authService.getValidAccessToken() else null
-                    if (token == null) {
-                        logger.warn("No valid access token available in TOKEN mode")
-                    }
-                }
-                AuthMode.HYBRID -> {
-                    // HYBRID模式：优先使用token，如果没有token则回退到Basic认证
-                    val token = if (settings.enableTokenAuth) authService.getValidAccessToken() else null
-                    if (token == null) {
-                        // 回退到Basic认证
-                        if (settings.username.isNotEmpty() && settings.password.isNotEmpty()) {
-                            val credentials = "${settings.username}:${settings.password}"
-                            val encodedCredentials = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())
-                            authHeaders["Authorization"] = "Basic $encodedCredentials"
-                            logger.debug("Using Basic authentication as fallback in HYBRID mode")
-                        } else {
-                            logger.warn("No valid token and no basic auth credentials in HYBRID mode")
-                        }
-                    } else {
-                        logger.debug("Using token authentication in HYBRID mode")
-                    }
-                }
-                AuthMode.BASIC -> {
-                    // BASIC模式：仅使用Basic认证
-                    if (settings.username.isNotEmpty() && settings.password.isNotEmpty()) {
-                        val credentials = "${settings.username}:${settings.password}"
-                        val encodedCredentials = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())
-                        authHeaders["Authorization"] = "Basic $encodedCredentials"
-                    } else {
-                        logger.warn("No basic auth credentials configured in BASIC mode")
-                    }
-                }
-            }
-            
-            val response = HttpRequests.request(url)
-                .connectTimeout(CONNECTION_TIMEOUT)
-                .readTimeout(READ_TIMEOUT)
-                .tuner { connection ->
-                    connection.setRequestProperty("Accept", "application/json")
-                    // Apply pre-configured auth headers
-                    authHeaders.forEach { (key, value) ->
-                        connection.setRequestProperty(key, value)
-                    }
-                }
-                .readString()
+            val response = requestJson(url, buildAuthHeaders())
             
             val apiResponse = gson.fromJson(response, object : TypeToken<NacosConfiguration>() {}.type) as NacosConfiguration
             
@@ -199,8 +90,8 @@ class NacosApiService {
 
                 var config = apiResponse;
                 // Cache the configuration if cache is enabled
-                if (useCache) {
-                    cacheConfiguration(namespace, cacheKey, config)
+                if (useCache && settings.cacheEnabled) {
+                    cacheService.putConfigDetail(settings.serverUrl, namespaceId, config, settings.getCacheTtlMillis())
                 }
                 
                 Result.success(config)
@@ -235,7 +126,8 @@ class NacosApiService {
         appName: String = "",
         configTags: String = "",
         searchMode: String = "accurate",
-        useCache: Boolean = true
+        useCache: Boolean = true,
+        forceRefresh: Boolean = false
     ): Result<ConfigListResponse> = withContext(Dispatchers.IO) {
         try {
             val params = buildMap {
@@ -248,63 +140,23 @@ class NacosApiService {
                 put("search", searchMode)
                 namespaceId?.let { put("tenant", it) }
             }
+            val requestKey = normalizeRequestKey(params.filterKeys { it != "tenant" })
+
+            if (useCache && !forceRefresh && settings.cacheEnabled) {
+                cacheService.getListPage(settings.serverUrl, namespaceId, requestKey)?.let { cachedResponse ->
+                    logger.debug("Returning cached list page for $requestKey")
+                    return@withContext Result.success(cachedResponse)
+                }
+            }
 
             val url = buildUrl(CONFIG_LIST_ENDPOINT, params)
             logger.debug("Listing configurations: $url")
-            
-            // Pre-configure auth headers to avoid suspend function call in tuner
-        val authHeaders = mutableMapOf<String, String>()
-        when (settings.authMode) {
-            AuthMode.TOKEN -> {
-                // TOKEN模式：accessToken已经通过buildUrl添加到查询参数中，不需要设置Authorization头
-                // 如果没有有效的token，则不设置任何认证头
-                val token = if (settings.enableTokenAuth) authService.getValidAccessToken() else null
-                if (token == null) {
-                    logger.warn("No valid access token available in TOKEN mode")
-                }
-            }
-            AuthMode.HYBRID -> {
-                // HYBRID模式：优先使用token，如果没有token则回退到Basic认证
-                val token = if (settings.enableTokenAuth) authService.getValidAccessToken() else null
-                if (token == null) {
-                    // 回退到Basic认证
-                    if (settings.username.isNotEmpty() && settings.password.isNotEmpty()) {
-                        val credentials = "${settings.username}:${settings.password}"
-                        val encodedCredentials = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())
-                        authHeaders["Authorization"] = "Basic $encodedCredentials"
-                        logger.debug("Using Basic authentication as fallback in HYBRID mode")
-                    } else {
-                        logger.warn("No valid token and no basic auth credentials in HYBRID mode")
-                    }
-                } else {
-                    logger.debug("Using token authentication in HYBRID mode")
-                }
-            }
-            AuthMode.BASIC -> {
-                // BASIC模式：仅使用Basic认证
-                if (settings.username.isNotEmpty() && settings.password.isNotEmpty()) {
-                    val credentials = "${settings.username}:${settings.password}"
-                    val encodedCredentials = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())
-                    authHeaders["Authorization"] = "Basic $encodedCredentials"
-                } else {
-                    logger.warn("No basic auth credentials configured in BASIC mode")
-                }
-            }
-        }
-            
-            val response = HttpRequests.request(url)
-                .connectTimeout(CONNECTION_TIMEOUT)
-                .readTimeout(READ_TIMEOUT)
-                .tuner { connection ->
-                    connection.setRequestProperty("Accept", "application/json")
-                    // Apply pre-configured auth headers
-                    authHeaders.forEach { (key, value) ->
-                        connection.setRequestProperty(key, value)
-                    }
-                }
-                .readString()
+            val response = requestJson(url, buildAuthHeaders())
             
             val apiResponse = gson.fromJson(response, object : TypeToken<ConfigListResponse>() {}.type) as ConfigListResponse
+            if (useCache && settings.cacheEnabled) {
+                cacheService.putListPage(settings.serverUrl, namespaceId, requestKey, apiResponse, settings.getCacheTtlMillis())
+            }
             
             // Return the full response with pagination info
             Result.success(apiResponse)
@@ -355,52 +207,7 @@ class NacosApiService {
         try {
             val url = buildUrl(NAMESPACE_ENDPOINT, emptyMap())
             logger.debug("Fetching namespaces: $url")
-            
-            // Pre-configure auth headers to avoid suspend function call in tuner
-            val authHeaders = mutableMapOf<String, String>()
-            when (settings.authMode) {
-                AuthMode.TOKEN -> {
-                    val token = if (settings.enableTokenAuth) authService.getValidAccessToken() else null
-                    if (token == null) {
-                        logger.warn("No valid access token available in TOKEN mode")
-                    }
-                }
-                AuthMode.HYBRID -> {
-                    val token = if (settings.enableTokenAuth) authService.getValidAccessToken() else null
-                    if (token == null) {
-                        if (settings.username.isNotEmpty() && settings.password.isNotEmpty()) {
-                            val credentials = "${settings.username}:${settings.password}"
-                            val encodedCredentials = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())
-                            authHeaders["Authorization"] = "Basic $encodedCredentials"
-                            logger.debug("Using Basic authentication as fallback in HYBRID mode")
-                        } else {
-                            logger.warn("No valid token and no basic auth credentials in HYBRID mode")
-                        }
-                    } else {
-                        logger.debug("Using token authentication in HYBRID mode")
-                    }
-                }
-                AuthMode.BASIC -> {
-                    if (settings.username.isNotEmpty() && settings.password.isNotEmpty()) {
-                        val credentials = "${settings.username}:${settings.password}"
-                        val encodedCredentials = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())
-                        authHeaders["Authorization"] = "Basic $encodedCredentials"
-                    } else {
-                        logger.warn("No basic auth credentials configured in BASIC mode")
-                    }
-                }
-            }
-            
-            val response = HttpRequests.request(url)
-                .connectTimeout(CONNECTION_TIMEOUT)
-                .readTimeout(READ_TIMEOUT)
-                .tuner { connection ->
-                    connection.setRequestProperty("Accept", "application/json")
-                    authHeaders.forEach { (key, value) ->
-                        connection.setRequestProperty(key, value)
-                    }
-                }
-                .readString()
+            val response = requestJson(url, buildAuthHeaders())
             
             val apiResponse = gson.fromJson(response, object : TypeToken<NacosApiResponse<List<Map<String, Any>>>>() {}.type) as NacosApiResponse<List<Map<String, Any>>>
             
@@ -436,34 +243,15 @@ class NacosApiService {
     }
     
     /**
-     * Checks if the cache for a namespace is still valid
-     */
-    private fun isCacheValid(namespace: String): Boolean {
-        val timestamp = cacheTimestamps[namespace] ?: return false
-        return System.currentTimeMillis() - timestamp < cacheExpirationMs
-    }
-    
-    /**
-     * Caches a configuration for a specific namespace
-     */
-    private fun cacheConfiguration(namespace: String, cacheKey: String, config: NacosConfiguration) {
-        configCache.getOrPut(namespace) { mutableMapOf() }[cacheKey] = config
-        cacheTimestamps[namespace] = System.currentTimeMillis()
-        logger.debug("Cached configuration: $cacheKey")
-    }
-    
-    /**
      * Clears the cache for a specific namespace or all namespaces
      */
-    fun clearCache(namespace: String? = null) {
-        if (namespace != null) {
-            configCache.remove(namespace)
-            cacheTimestamps.remove(namespace)
-            logger.debug("Cleared cache for namespace: $namespace")
-        } else {
-            configCache.clear()
-            cacheTimestamps.clear()
+    suspend fun clearCache(namespace: String? = null) {
+        if (namespace == null) {
+            cacheService.clearAll()
             logger.debug("Cleared all configuration cache")
+        } else {
+            cacheService.invalidateNamespace(settings.serverUrl, namespace)
+            logger.debug("Cleared cache for namespace: $namespace")
         }
     }
     
@@ -497,7 +285,58 @@ class NacosApiService {
             "$baseUrl$endpoint"
         }
     }
-    
+
+    private suspend fun buildAuthHeaders(): Map<String, String> {
+        val authHeaders = mutableMapOf<String, String>()
+        when (settings.authMode) {
+            AuthMode.TOKEN -> {
+                val token = if (settings.enableTokenAuth) authService.getValidAccessToken() else null
+                if (token == null) {
+                    logger.warn("No valid access token available in TOKEN mode")
+                }
+            }
+            AuthMode.HYBRID -> {
+                val token = if (settings.enableTokenAuth) authService.getValidAccessToken() else null
+                if (token == null) {
+                    addBasicAuthHeader(authHeaders)
+                    logger.debug("Using Basic authentication as fallback in HYBRID mode")
+                } else {
+                    logger.debug("Using token authentication in HYBRID mode")
+                }
+            }
+            AuthMode.BASIC -> addBasicAuthHeader(authHeaders)
+        }
+        return authHeaders
+    }
+
+    private fun addBasicAuthHeader(headers: MutableMap<String, String>) {
+        if (settings.username.isNotEmpty() && settings.password.isNotEmpty()) {
+            val credentials = "${settings.username}:${settings.password}"
+            val encodedCredentials = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())
+            headers["Authorization"] = "Basic $encodedCredentials"
+        } else {
+            logger.warn("No basic auth credentials configured")
+        }
+    }
+
+    private fun requestJson(url: String, authHeaders: Map<String, String>): String {
+        return HttpRequests.request(url)
+            .connectTimeout(CONNECTION_TIMEOUT)
+            .readTimeout(READ_TIMEOUT)
+            .tuner { connection ->
+                connection.setRequestProperty("Accept", "application/json")
+                authHeaders.forEach { (key, value) ->
+                    connection.setRequestProperty(key, value)
+                }
+            }
+            .readString()
+    }
+
+    private fun normalizeRequestKey(params: Map<String, String>): String {
+        return params.entries
+            .sortedBy { it.key }
+            .joinToString("|") { (key, value) -> "$key=$value" }
+    }
 
     
     /**
@@ -526,6 +365,20 @@ class NacosApiService {
         item: ConfigItem,
         useCache: Boolean = true
     ): NacosConfiguration {
+        if (!item.content.isNullOrEmpty()) {
+            val configuration = NacosConfiguration(
+                dataId = item.dataId,
+                group = item.group,
+                tenantId = item.tenant,
+                content = item.content,
+                type = item.type
+            )
+            if (useCache && settings.cacheEnabled) {
+                cacheService.putConfigDetail(settings.serverUrl, item.tenant, configuration, settings.getCacheTtlMillis())
+            }
+            return configuration
+        }
+
         val fullConfig = getConfiguration(item.dataId, item.group, item.tenant, useCache)
         return fullConfig.getOrNull() ?: NacosConfiguration(
             dataId = item.dataId,

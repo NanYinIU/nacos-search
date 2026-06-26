@@ -11,6 +11,7 @@ import com.nanyin.nacos.search.bundle.NacosSearchBundle
 // import com.nanyin.nacos.search.services.NacosConfigService // Not needed
 import com.nanyin.nacos.search.services.NacosSearchService
 import com.intellij.openapi.components.service
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.ui.JBSplitter
@@ -30,10 +31,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     
     // Services
     private val namespaceService = project.service<NamespaceService>()
-    private val nacosApiService = project.service<NacosApiService>()
+    private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
     private val languageService = com.intellij.openapi.application.ApplicationManager.getApplication().getService(LanguageService::class.java)
     // private val nacosConfigService = project.service<NacosConfigService>() // Not needed
-    private val nacosSearchService = NacosSearchService()
+    private val nacosSearchService = project.service<NacosSearchService>()
     
     // Managers
     private lateinit var initializationManager: InitializationManager
@@ -53,6 +54,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private var currentNamespace: NamespaceInfo? = null
     private var currentConfiguration: NacosConfiguration? = null
     private var searchCriteria: SearchCriteria? = null
+    private var currentSearchRequest: NacosSearchService.SearchRequest? = null
     private var currentConfigurations = listOf<NacosConfiguration>()
     private var isSearching = false
     
@@ -172,8 +174,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // which calls onConfigurationSelected for double-clicks
         
         // Configuration list refresh handler
-        // Note: ConfigListPanel doesn't have onRefreshRequested property
-        // This will be handled internally by the panel
+        configListPanel.onRefreshRequested = {
+            handleRefreshRequested()
+        }
         
         // Configuration detail handlers
         // Note: ConfigDetailPanel doesn't have onConfigurationUpdated and onRefreshRequested properties
@@ -261,9 +264,15 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
          
          // Create enhanced SearchRequest for prefix asterisk fuzzy search
          val searchRequest = NacosSearchService.SearchRequest(
-             dataId = criteria.dataId ?: "",
-             group = criteria.group ?: "",
-             namespace = searchNameSpace
+             dataId = (criteria.dataId.ifBlank { criteria.query }),
+             group = criteria.group,
+             query = criteria.query,
+             searchContent = criteria.searchContent,
+             caseSensitive = criteria.caseSensitive,
+             useRegex = criteria.useRegex,
+             namespace = searchNameSpace,
+             pageNo = 1,
+             pageSize = paginationPanel.getCurrentPageSize()
          )
         currentNamespace = searchNameSpace;
          
@@ -278,7 +287,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
          )
          
          searchCriteria = processedCriteria
-         loadConfigurations()
+         currentSearchRequest = searchRequest
+         coroutineScope.launch {
+             nacosSearchService.performSearch(searchRequest, nacosApiService)
+         }
      }
     
     private fun handleSearchCleared() {
@@ -286,6 +298,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         loadConfigurations()
         paginationPanel.reset()
         nacosSearchService.resetSearch()
+        currentSearchRequest = null
     }
     
     private fun handleRealTimeSearch(query: String) {
@@ -303,8 +316,12 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // Perform real-time search with debouncing using enhanced SearchRequest
          val searchRequest = NacosSearchService.SearchRequest(
             dataId = query,
-            namespace = currentNamespace
+            query = query,
+            namespace = currentNamespace,
+            pageNo = 1,
+            pageSize = paginationPanel.getCurrentPageSize()
         )
+        currentSearchRequest = searchRequest
          
          coroutineScope.launch {
              try {
@@ -322,7 +339,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             val currentRequest = NacosSearchService.SearchRequest(
                  namespace = namespacePanel.getSelectedNamespace()
              )
-            nacosSearchService.previousPage(currentRequest, nacosApiService)
+            nacosSearchService.previousPage(currentSearchRequest ?: currentRequest, nacosApiService)
         }
     }
     
@@ -331,7 +348,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             val currentRequest = NacosSearchService.SearchRequest(
                  namespace = namespacePanel.getSelectedNamespace()
              )
-            nacosSearchService.nextPage(currentRequest, nacosApiService)
+            nacosSearchService.nextPage(currentSearchRequest ?: currentRequest, nacosApiService)
         }
     }
     
@@ -341,7 +358,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                  namespace = namespacePanel.getSelectedNamespace(),
                  pageSize = pageSize
              )
-            nacosSearchService.changePageSize(currentRequest, pageSize, nacosApiService)
+            currentSearchRequest = (currentSearchRequest ?: currentRequest).copy(pageNo = 1, pageSize = pageSize)
+            nacosSearchService.changePageSize(currentSearchRequest ?: currentRequest, pageSize, nacosApiService)
         }
     }
     
@@ -358,6 +376,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     is NacosSearchService.SearchState.Loading -> {
                         SwingUtilities.invokeLater {
                             setSearching(true)
+                            configListPanel.setLoading(true)
                             paginationPanel.setLoading(true)
                         }
                     }
@@ -379,6 +398,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     is NacosSearchService.SearchState.Error -> {
                         SwingUtilities.invokeLater {
                             setSearching(false)
+                            configListPanel.setLoading(false)
                             paginationPanel.setLoading(false)
                             showError(NacosSearchBundle.message("error.search.failed") + ": ${state.message}")
                         }
@@ -429,6 +449,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
     
     private fun handleRefreshRequested() {
+        currentSearchRequest = (currentSearchRequest ?: NacosSearchService.SearchRequest(
+            namespace = namespacePanel.getSelectedNamespace(),
+            pageSize = paginationPanel.getCurrentPageSize()
+        )).copy(forceRefresh = true)
         loadConfigurations()
     }
     
@@ -455,23 +479,18 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         
         coroutineScope.launch {
             try {
-                // Loading state is handled internally by ConfigListPanel
-                
-                val configurations: List<NacosConfiguration> = if (searchCriteria != null) {
-                    // Perform search
-                    searchConfigurations(namespace, searchCriteria!!)
-                } else {
-                    // Load all configurations
-                    nacosApiService.getAllConfigurations(namespace.namespaceId).getOrElse { emptyList() }
-                }
-                
-                configListPanel.setConfigurations(configurations)
+                val request = (currentSearchRequest ?: NacosSearchService.SearchRequest(
+                    namespace = namespace,
+                    pageNo = 1,
+                    pageSize = paginationPanel.getCurrentPageSize()
+                )).copy(namespace = namespace)
+                currentSearchRequest = request
+                nacosSearchService.performSearch(request, nacosApiService)
+                currentSearchRequest = request.copy(forceRefresh = false)
                 
             } catch (e: Exception) {
                 showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
                 configListPanel.setConfigurations(emptyList())
-            } finally {
-                // Loading state is handled internally by ConfigListPanel
             }
         }
     }

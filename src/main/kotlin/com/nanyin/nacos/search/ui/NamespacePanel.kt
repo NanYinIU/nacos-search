@@ -22,10 +22,11 @@ import javax.swing.*
 /**
  * Panel for namespace selection and management
  */
-class NamespacePanel(private val project: Project) : JPanel(BorderLayout()), LanguageAwareComponent {
-    
-    private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
-    private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
+class NamespacePanel(
+    private val project: Project,
+    private val namespaceService: NamespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java),
+    private val languageService: LanguageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
+) : JPanel(BorderLayout()), LanguageAwareComponent {
     
     // UI Components
     private lateinit var namespaceCombo: ComboBox<NamespaceInfo>
@@ -189,6 +190,9 @@ class NamespacePanel(private val project: Project) : JPanel(BorderLayout()), Lan
     }
     
     private fun showError(title: String, message: String) {
+        if (GraphicsEnvironment.isHeadless() || ApplicationManager.getApplication().isUnitTestMode) {
+            return
+        }
         SwingUtilities.invokeLater {
             JOptionPane.showMessageDialog(
                 this,
