@@ -4,37 +4,48 @@ import com.nanyin.nacos.search.managers.InitializationManager
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.models.SearchCriteria
+import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 // import com.nanyin.nacos.search.services.NacosConfigService // Not needed
 import com.nanyin.nacos.search.services.NacosSearchService
+import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.settings.NacosConfigurable
+import com.nanyin.nacos.search.settings.NacosSettings
+import com.nanyin.nacos.search.settings.NacosSettingsListener
 import com.intellij.openapi.components.service
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
+import com.intellij.openapi.options.ShowSettingsUtil
+import com.intellij.icons.AllIcons
 import com.intellij.ui.JBSplitter
+import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 
 import kotlinx.coroutines.*
 import java.awt.BorderLayout
 import java.awt.Dimension
+import java.awt.FlowLayout
 import javax.swing.*
 
 /**
- * Main window for Nacos Search plugin
+* Main window for Nacos Search plugin
  * Integrates all UI components and manages their interactions
  */
-class NacosSearchWindow(private val project: Project, private val toolWindow: ToolWindow) : JPanel(BorderLayout()), LanguageAwareComponent {
+class NacosSearchWindow(private val project: Project, private val toolWindow: ToolWindow) : JPanel(BorderLayout()), LanguageAwareComponent, NamespaceChangeListener, Disposable {
     
     // Services
-    private val namespaceService = project.service<NamespaceService>()
+    private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
     private val languageService = com.intellij.openapi.application.ApplicationManager.getApplication().getService(LanguageService::class.java)
     // private val nacosConfigService = project.service<NacosConfigService>() // Not needed
     private val nacosSearchService = project.service<NacosSearchService>()
+    private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
     
     // Managers
     private lateinit var initializationManager: InitializationManager
@@ -91,49 +102,102 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     
     private fun setupLayout() {
         border = JBUI.Borders.empty()
-        
-        // Create ultra-compact top panel with namespace and search
-        val topPanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(1, 2)
-            
-            // Ultra-compact namespace panel
-            add(namespacePanel.apply {
-                preferredSize = Dimension(preferredSize.width, 24)
-            }, BorderLayout.NORTH)
-            
-            // Ultra-compact search panel
-            add(searchPanel.apply {
-                preferredSize = Dimension(preferredSize.width, 28)
+
+        // ===== Header bar: title + icon toolbar =====
+        val headerBar = JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.empty(2, 8)
+            add(JBLabel(NacosSearchBundle.message("toolwindow.title")).apply {
+                font = font.deriveFont(java.awt.Font.BOLD, 12f)
             }, BorderLayout.CENTER)
-            
-            // Set fixed height for entire top panel
-            preferredSize = Dimension(preferredSize.width, 55)
-            maximumSize = Dimension(Int.MAX_VALUE, 55)
+            val iconBar = JPanel(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
+                isOpaque = false
+                add(iconButton(AllIcons.Actions.Refresh, NacosSearchBundle.message("toolwindow.refresh.all"), "nacos.toolwindow.refreshAll") { refreshAll() })
+                add(iconButton(AllIcons.General.Settings, NacosSearchBundle.message("toolwindow.settings"), "nacos.toolwindow.settings") { openSettings() })
+                add(iconButton(AllIcons.Actions.More, NacosSearchBundle.message("toolwindow.more"), "nacos.toolwindow.more") { showMoreMenu(this) })
+                add(iconButton(AllIcons.Actions.Collapseall, NacosSearchBundle.message("toolwindow.hide"), "nacos.toolwindow.hide") { toolWindow.hide(null) })
+            }
+            add(iconBar, BorderLayout.EAST)
         }
-        
-        // Create config list panel with pagination
+
+        // ===== Toolbar: namespace row + search row (stacked, compact) =====
+        val toolbarPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            add(namespacePanel)
+            add(searchPanel)
+        }
+
+        // Combine header + toolbar into top container
+        val topContainer = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(headerBar)
+            add(toolbarPanel)
+        }
+
+        // ===== Config list with pagination (upper split pane) =====
         val configListWithPagination = JPanel(BorderLayout()).apply {
-            add(JBScrollPane(configListPanel).apply {
-                minimumSize = Dimension(400, 180)
-                preferredSize = Dimension(400, 220)
-            }, BorderLayout.CENTER)
+            add(configListPanel, BorderLayout.CENTER)
             add(paginationPanel, BorderLayout.SOUTH)
         }
-        
-        // Create splitter for config list and detail
-        rightSplitter = JBSplitter(true, 0.35f).apply {
+
+        // ===== Vertical splitter: list (top) / detail (bottom) =====
+        rightSplitter = JBSplitter(true, 0.45f).apply {
             firstComponent = configListWithPagination
-            secondComponent = JBScrollPane(configDetailPanel).apply {
-                minimumSize = Dimension(400, 200)
-                preferredSize = Dimension(400, 350)
-            }
+            secondComponent = configDetailPanel
+            splitterProportionKey = "NacosSearchWindow.detailSplit"
         }
-        
-        add(topPanel, BorderLayout.NORTH)
+
+        add(topContainer, BorderLayout.NORTH)
         add(rightSplitter, BorderLayout.CENTER)
+    }
+
+    private fun iconButton(icon: javax.swing.Icon, tooltip: String, automationId: String, action: () -> Unit): JButton {
+        return JButton(icon).apply {
+            toolTipText = tooltip
+            putClientProperty("nacos.automation.id", automationId)
+            preferredSize = Dimension(28, 24)
+            minimumSize = Dimension(28, 24)
+            border = JBUI.Borders.empty()
+            isContentAreaFilled = false
+            addActionListener { action() }
+        }
+    }
+
+    private fun openSettings() {
+        ShowSettingsUtil.getInstance().editConfigurable(project, NacosConfigurable())
+    }
+
+    private fun showMoreMenu(invoker: JComponent) {
+        val popup = JPopupMenu()
+        popup.add(JMenuItem(NacosSearchBundle.message("action.refresh.cache")).apply {
+            addActionListener { refreshAll() }
+        })
+        popup.add(JMenuItem(NacosSearchBundle.message("action.clear.cache")).apply {
+            addActionListener { clearCache() }
+        })
+        popup.show(invoker, 0, invoker.height)
+    }
+
+    private fun clearCache() {
+        coroutineScope.launch {
+            ApplicationManager.getApplication().getService(CacheService::class.java).clearCache()
+            nacosApiService.clearCache()
+            handleRefreshRequested()
+        }
     }
     
     private fun setupEventHandlers() {
+        // Reload the configuration list whenever the selected namespace changes.
+        namespaceService.addNamespaceChangeListener(this)
+        ApplicationManager.getApplication().messageBus.connect(this).subscribe(
+            NacosSettingsListener.TOPIC,
+            object : NacosSettingsListener {
+                override fun settingsChanged() {
+                    handleSettingsChanged()
+                }
+            }
+        )
+
         // Namespace handlers
         // Note: NamespacePanel doesn't have onNamespaceChanged property
         // Namespace changes are handled internally by the panel
@@ -150,6 +214,12 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // Real-time search
         searchPanel.onRealTimeSearch = { query ->
             handleRealTimeSearch(query)
+        }
+        
+        // Group filter change — re-search with the selected group
+        searchPanel.onGroupFilterChanged = { _ ->
+            // The search is already triggered inside SearchPanel; this callback
+            // is available for any additional window-level handling if needed.
         }
         
         // Pagination events
@@ -179,14 +249,38 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         }
         
         // Configuration detail handlers
-        // Note: ConfigDetailPanel doesn't have onConfigurationUpdated and onRefreshRequested properties
-        // These events will be handled internally by the panel
+        // Wire dirty-state changes from detail panel to the list row red dot
+        configDetailPanel.onDirtyStateChanged = { config, dirty ->
+            config?.let { configListPanel.setConfigDirty(it.getKey(), dirty) }
+        }
         
         // Search service state observation
         setupSearchServiceObservers()
         
         // Initialize UI with proper namespace and pagination using InitializationManager
         performInitialization()
+    }
+
+    private fun handleSettingsChanged() {
+        coroutineScope.launch {
+            nacosApiService.clearCache()
+            nacosSearchService.resetSearch()
+            currentNamespace = null
+            currentConfiguration = null
+            currentSearchRequest = null
+            SwingUtilities.invokeLater {
+                searchPanel.clearAllCriteria()
+                configDetailPanel.clearConfiguration()
+                configListPanel.setConfigurations(emptyList())
+                paginationPanel.reset()
+            }
+
+            val namespaceResult = namespacePanel.refreshAndWait()
+            if (namespaceResult.isSuccess && settings.getActiveServer().autoRefreshOnOpen) {
+                currentNamespace = namespaceService.getCurrentNamespace()
+                loadConfigurations()
+            }
+        }
     }
     
     /**
@@ -228,9 +322,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 // Load namespaces first
                 namespacePanel.refresh()
                 
-                // Get current namespace and load configurations
+                // Get current namespace and load configurations when enabled for this server.
                 val currentNs = namespaceService.getCurrentNamespace()
-                if (currentNs != null) {
+                if (currentNs != null && settings.getActiveServer().autoRefreshOnOpen) {
                     currentNamespace = currentNs
                     loadConfigurations()
                 }
@@ -240,22 +334,47 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         }
     }
     
-    private fun handleNamespaceChanged(namespace: NamespaceInfo?) {
-        currentNamespace = namespace
+    override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
+        // Keep the window's notion of the active namespace in sync with the service so that
+        // subsequent reloads target the correct namespace.
+        currentNamespace = newNamespace
         currentConfiguration = null
         searchCriteria = null
-        
-        // Clear search
-        searchPanel.clearAllCriteria()
-        
-        // Clear detail panel
-        configDetailPanel.clearConfiguration()
-        
-        // Load configurations for new namespace
-        loadConfigurations()
+        currentSearchRequest = null
+
+        clearSearchUi()
+
+        if (newNamespace != null) {
+            // Fresh listing for the new namespace — no stale search criteria carried over.
+            val request = NacosSearchService.SearchRequest(
+                namespace = newNamespace,
+                pageNo = 1,
+                pageSize = paginationPanel.getCurrentPageSize(),
+                forceRefresh = true
+            )
+            currentSearchRequest = request
+            loadConfigurations()
+        } else {
+            clearSearchUi()
+        }
     }
-    
-    private fun handleSearchRequested(criteria: SearchCriteria) {
+
+    private fun clearSearchUi() {
+        val clearAction = {
+            searchPanel.clearAllCriteria()
+            configDetailPanel.clearConfiguration()
+            configListPanel.setConfigurations(emptyList())
+            paginationPanel.reset()
+        }
+
+        if (SwingUtilities.isEventDispatchThread()) {
+            clearAction()
+        } else {
+            SwingUtilities.invokeAndWait(clearAction)
+        }
+    }
+   
+   private fun handleSearchRequested(criteria: SearchCriteria) {
          val searchNameSpace = namespacePanel.getSelectedNamespace()
          if (searchNameSpace == null) {
              showError(NacosSearchBundle.message("namespace.select.first"))
@@ -306,34 +425,37 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             handleSearchCleared()
             return
         }
-        
-        val currentNamespace = namespacePanel.getSelectedNamespace()
+
+        currentNamespace = namespacePanel.getSelectedNamespace()
         if (currentNamespace == null) {
             showError(NacosSearchBundle.message("namespace.select.first"))
             return
         }
-        
-        // Perform real-time search with debouncing using enhanced SearchRequest
-         val searchRequest = NacosSearchService.SearchRequest(
+
+        // useRegex routes the request through the local index so partial dataId/group values
+        // match (Nacos "accurate" mode only matches exact dataIds, which made typing a partial
+        // name return zero results).
+        val searchRequest = NacosSearchService.SearchRequest(
             dataId = query,
             query = query,
             namespace = currentNamespace,
+            useRegex = true,
             pageNo = 1,
             pageSize = paginationPanel.getCurrentPageSize()
         )
         currentSearchRequest = searchRequest
-         
-         coroutineScope.launch {
-             try {
-                 nacosSearchService.performSearch(searchRequest, nacosApiService)
-             } catch (e: Exception) {
-                    SwingUtilities.invokeLater {
-                        showError(NacosSearchBundle.message("error.search.failed") + ": ${e.message}")
-                    }
+
+        coroutineScope.launch {
+            try {
+                nacosSearchService.performSearch(searchRequest, nacosApiService)
+            } catch (e: Exception) {
+                SwingUtilities.invokeLater {
+                    showError(NacosSearchBundle.message("error.search.failed") + ": ${e.message}")
                 }
-         }
+            }
+        }
     }
-    
+
     private fun handlePreviousPage() {
         coroutineScope.launch {
             val currentRequest = NacosSearchService.SearchRequest(
@@ -382,8 +504,14 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     }
                     is NacosSearchService.SearchState.Success -> {
                         SwingUtilities.invokeLater {
+                            val resultNamespaceId = state.request?.namespace?.namespaceId.orEmpty()
+                            val activeNamespaceId = currentNamespace?.namespaceId.orEmpty()
+                            if (resultNamespaceId != activeNamespaceId) {
+                                return@invokeLater
+                            }
                             setSearching(false)
                             paginationPanel.setLoading(false)
+                            configListPanel.setSearchQuery(searchPanel.getSearchQuery())
                             updateConfigurationList(state.configurations)
                             paginationPanel.updatePagination(
                                 NacosSearchService.PaginationState(
@@ -418,6 +546,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun updateConfigurationList(configurations: List<NacosConfiguration>) {
         currentConfigurations = configurations
         configListPanel.setConfigurations(configurations)
+        // Populate group filter with unique groups from current results
+        searchPanel.setAvailableGroups(configurations.map { it.group }.filter { it.isNotBlank() })
         if (configurations.isEmpty()) {
             configDetailPanel.clearConfiguration()
         }
@@ -622,12 +752,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     
     private fun showError(message: String) {
         SwingUtilities.invokeLater {
-            JOptionPane.showMessageDialog(
-                this,
-                message,
-                NacosSearchBundle.message("common.error"),
-                JOptionPane.ERROR_MESSAGE
-            )
+            configListPanel.showError(message)
         }
     }
     
@@ -654,7 +779,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     fun refreshAll() {
         coroutineScope.launch {
             try {
-                namespacePanel.refresh()
+                val namespaceResult = namespacePanel.refreshAndWait()
+                if (namespaceResult.isSuccess) {
+                    currentNamespace = namespaceService.getCurrentNamespace()
+                }
                 loadConfigurations()
                 currentConfiguration?.let { config ->
                     loadConfigurationDetail(config)
@@ -668,10 +796,11 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     /**
      * Cleanup resources
      */
-    fun dispose() {
+    override fun dispose() {
+        namespaceService.removeNamespaceChangeListener(this)
         coroutineScope.cancel()
     }
-    
+
     /**
      * Get the tool window
      */

@@ -5,6 +5,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.util.xmlb.XmlSerializerUtil
+import com.nanyin.nacos.search.models.NacosServerConfig
 
 /**
  * Persistent settings for Nacos plugin
@@ -15,8 +16,21 @@ import com.intellij.util.xmlb.XmlSerializerUtil
     storages = [Storage("nacos-search.xml")]
 )
 class NacosSettings : PersistentStateComponent<NacosSettings> {
-    
-    // Server configuration
+
+    // ---- Multi-server (master-detail) model ----
+    // List of all configured Nacos server environments. The active one is
+    // determined by `activeServerId`; the flat legacy fields below always
+    // mirror the active server for backward compatibility with services.
+    var servers: MutableList<NacosServerConfig> = mutableListOf(
+        NacosServerConfig(
+            id = "s_local",
+            displayName = "本地 Local",
+            serverUrl = "http://localhost:8848"
+        )
+    )
+    var activeServerId: String = "s_local"
+
+    // Server configuration (legacy flat fields — mirror of active server)
     var serverUrl: String = "http://localhost:8848"
     var username: String = ""
     var password: String = ""
@@ -79,8 +93,111 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     
     override fun loadState(state: NacosSettings) {
         XmlSerializerUtil.copyBean(state, this)
+        // Ensure servers list is initialized for older persisted states
+        if (servers.isEmpty()) {
+            servers.add(NacosServerConfig(
+                id = "default",
+                displayName = "Local",
+                serverUrl = serverUrl,
+                username = username,
+                password = password,
+                namespace = namespace,
+                authMode = authMode
+            ))
+            activeServerId = "default"
+        }
+        // Keep flat fields in sync with active server
+        syncFromActiveServer()
     }
     
+    // ---- Multi-server helpers ----
+
+    /**
+     * Returns the currently active server config, or the first server if
+     * activeServerId doesn't match any entry.
+     */
+    fun getActiveServer(): NacosServerConfig {
+        return servers.find { it.id == activeServerId } ?: servers.firstOrNull()
+            ?: NacosServerConfig(id = "default", displayName = "Local")
+    }
+
+    /**
+     * Synchronizes the flat legacy fields from the active server entry.
+     */
+    fun syncFromActiveServer() {
+        val active = getActiveServer()
+        serverUrl = active.serverUrl
+        username = active.username
+        password = active.password
+        namespace = active.namespace
+        authMode = active.authMode
+        connectionTimeoutSeconds = (active.connectionTimeoutMs / 1000).coerceAtLeast(1)
+        autoRefreshEnabled = active.autoRefreshOnOpen
+    }
+
+    /**
+     * Pushes the current flat field values back into the active server entry.
+     */
+    fun syncToActiveServer() {
+        val active = getActiveServer()
+        active.serverUrl = serverUrl
+        active.username = username
+        active.password = password
+        active.namespace = namespace
+        active.authMode = authMode
+        active.connectionTimeoutMs = getConnectionTimeoutMillis()
+        active.autoRefreshOnOpen = autoRefreshEnabled
+    }
+
+    fun setActiveServer(serverId: String) {
+        if (servers.any { it.id == serverId }) {
+            activeServerId = serverId
+            syncFromActiveServer()
+        }
+    }
+
+    fun addServer(config: NacosServerConfig, makeActive: Boolean = false) {
+        if (config.id.isEmpty()) {
+            config.id = NacosServerConfig.generateId()
+        }
+        servers.add(config)
+        if (makeActive) {
+            activeServerId = config.id
+            syncFromActiveServer()
+        }
+    }
+
+    fun removeServer(serverId: String): Boolean {
+        if (servers.size <= 1) return false
+        val removed = servers.removeIf { it.id == serverId }
+        if (removed && activeServerId == serverId) {
+            activeServerId = servers.firstOrNull()?.id ?: ""
+            syncFromActiveServer()
+        }
+        return removed
+    }
+
+    fun updateServer(serverId: String, config: NacosServerConfig) {
+        val idx = servers.indexOfFirst { it.id == serverId }
+        if (idx >= 0) {
+            config.id = serverId
+            servers[idx] = config
+            if (serverId == activeServerId) {
+                syncFromActiveServer()
+            }
+        }
+    }
+
+    fun cloneServers(): MutableList<NacosServerConfig> {
+        return servers.map { it.copy() }.toMutableList()
+    }
+
+    fun applyServers(newServers: List<NacosServerConfig>, newActiveId: String) {
+        servers = newServers.map { it.copy() }.toMutableList()
+        activeServerId = newActiveId
+        syncFromActiveServer()
+    }
+
     /**
      * Validates the current settings
      */
@@ -190,6 +307,16 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         readTimeoutSeconds = 60
         retryAttempts = 3
         retryDelaySeconds = 2
+
+        // Reset multi-server model
+        servers = mutableListOf(
+            NacosServerConfig(
+                id = "s_local",
+                displayName = "本地 Local",
+                serverUrl = "http://localhost:8848"
+            )
+        )
+        activeServerId = "s_local"
     }
     
     /**

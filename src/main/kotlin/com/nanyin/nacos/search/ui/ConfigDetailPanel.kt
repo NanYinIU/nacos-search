@@ -44,6 +44,19 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
     private lateinit var errorPanel: JPanel
     private lateinit var refreshButton: JButton
     private lateinit var copyButton: JButton
+    private lateinit var saveButton: JButton
+    private lateinit var editButton: JButton
+    private lateinit var revertButton: JButton
+    private lateinit var formatTagLabel: JBLabel
+    private lateinit var dirtyLabel: JBLabel
+    
+    // Editor status bar components (UTF-8 · LF · pos · chars · md5)
+    private lateinit var statusBar: JPanel
+    private lateinit var statusEncodingLabel: JBLabel
+    private lateinit var statusLineEndingLabel: JBLabel
+    private lateinit var statusPositionLabel: JBLabel
+    private lateinit var statusCharsLabel: JBLabel
+    private lateinit var statusMd5Label: JBLabel
     
     // Editor components with thread-safe state management
     private var editor: EditorEx? = null
@@ -68,14 +81,24 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
     private lateinit var namespaceLabel: JTextField
     private lateinit var typeLabel: JTextField
     private lateinit var sizeLabel: JTextField
+
+    // Inline metadata label (Group · namespace · type · updated) per design guide §3.3
+    private lateinit var inlineMetaLabel: JBLabel
     
     // State
     private var currentConfiguration: NacosConfiguration? = null
     private var isLoading = false
+    // Dirty-state tracking: original content snapshot for change detection
+    private var originalContent: String = ""
+    private var isDirty: Boolean = false
+    private var displayGeneration: Long = 0
     
     // Coroutine scope for async operations
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentLoadingJob: Job? = null
+
+    // Callback fired when dirty state changes (so the window can update the list row dot)
+    var onDirtyStateChanged: ((NacosConfiguration?, Boolean) -> Unit)? = null
     
     init {
         initializeComponents()
@@ -135,36 +158,152 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         // Action buttons
         refreshButton = JButton(AllIcons.Actions.Refresh).apply {
             toolTipText = NacosSearchBundle.message("config.detail.refresh")
-            preferredSize = Dimension(24, 24)
+            preferredSize = Dimension(26, 26)
+            minimumSize = Dimension(26, 26)
+            border = JBUI.Borders.empty()
+            isContentAreaFilled = false
         }
         
-        copyButton = JButton(AllIcons.Actions.Copy).apply {
+        copyButton = JButton(NacosSearchBundle.message("config.detail.action.copy")).apply {
             toolTipText = NacosSearchBundle.message("config.detail.copy")
-            preferredSize = Dimension(24, 24)
+            icon = AllIcons.Actions.Copy
+            preferredSize = Dimension(68, 26)
+            minimumSize = Dimension(60, 26)
             isEnabled = false
+        }
+
+       // Save action button (publishes content back to Nacos)
+       saveButton = JButton(NacosSearchBundle.message("config.detail.action.save.publish")).apply {
+          toolTipText = NacosSearchBundle.message("config.detail.save")
+          putClientProperty("JButton.buttonType", "primary")
+           preferredSize = Dimension(120, 26)
+            minimumSize = Dimension(100, 26)
+           isEnabled = false
+       }
+
+       // Edit button — toggles editor editable mode
+       editButton = JButton(NacosSearchBundle.message("config.detail.action.edit")).apply {
+           toolTipText = NacosSearchBundle.message("config.detail.action.edit")
+            preferredSize = Dimension(72, 26)
+            minimumSize = Dimension(60, 26)
+           isEnabled = false
+       }
+
+       // Revert button — discards unsaved edits
+       revertButton = JButton(NacosSearchBundle.message("config.detail.action.revert")).apply {
+           toolTipText = NacosSearchBundle.message("config.detail.action.revert")
+            preferredSize = Dimension(72, 26)
+            minimumSize = Dimension(60, 26)
+           isEnabled = false
+       }
+
+        // Format tag label
+        formatTagLabel = JBLabel("").apply {
+            foreground = JBColor.GRAY
+            font = font.deriveFont(Font.PLAIN, 11f)
+        }
+
+        // Dirty pill
+        dirtyLabel = JBLabel(NacosSearchBundle.message("config.detail.modified")).apply {
+            foreground = JBColor(0xe3a008, 0xb8860b)
+            font = font.deriveFont(Font.PLAIN, 10f)
+            isVisible = false
+        }
+
+        // Editor status bar labels
+        statusEncodingLabel = JBLabel(NacosSearchBundle.message("config.detail.status.encoding")).apply {
+            font = font.deriveFont(Font.PLAIN, 11f)
+            foreground = JBColor(0x6f737a, 0x9b9ea6)
+        }
+        statusLineEndingLabel = JBLabel(NacosSearchBundle.message("config.detail.status.line.ending")).apply {
+            font = font.deriveFont(Font.PLAIN, 11f)
+            foreground = JBColor(0x6f737a, 0x9b9ea6)
+        }
+        statusPositionLabel = JBLabel(NacosSearchBundle.message("config.detail.status.position", 1, 1)).apply {
+            font = font.deriveFont(Font.PLAIN, 11f)
+            foreground = JBColor(0x6f737a, 0x9b9ea6)
+        }
+        statusCharsLabel = JBLabel(NacosSearchBundle.message("config.detail.status.chars.format", 0)).apply {
+            font = font.deriveFont(Font.PLAIN, 11f)
+            foreground = JBColor(0x6f737a, 0x9b9ea6)
+        }
+        statusMd5Label = JBLabel("—").apply {
+            font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 11)
+            foreground = JBColor(0x6f737a, 0x9b9ea6)
         }
     }
     
     private fun setupLayout() {
-        border = JBUI.Borders.empty(2, 4) // Minimal padding for compact design
-        
-        // Metadata and actions row
-        val headerPanel = JPanel(BorderLayout()).apply {
-            add(metadataPanel, BorderLayout.CENTER)
-            
-            val actionPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-                add(refreshButton)
+        border = JBUI.Borders.empty()
+
+        // ===== Header: dataId title (bold) + dirty pill + metadata row =====
+        val headerPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = JBUI.Borders.empty(6, 10, 5, 10)
+
+            // Title row: dataId (bold 13px) + dirty pill on right
+            val titleRow = JPanel(BorderLayout()).apply {
+                add(dataIdLabel.apply {
+                    font = font.deriveFont(Font.BOLD, 13f)
+                    border = null
+                }, BorderLayout.CENTER)
+                add(dirtyLabel, BorderLayout.EAST)
             }
-            add(actionPanel, BorderLayout.EAST)
+            add(titleRow)
+
+            // Metadata row (group, namespace, type, size) - compact inline
+            add(metadataPanel)
         }
-        
+
+        // ===== Action bar: format tag | edit + save + revert | copy =====
+        val actionBar = JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.empty(3, 10)
+            val leftPanel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+                add(formatTagLabel)
+            }
+            // Design order: Edit / Save & Publish / Revert ... Copy
+            val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                add(refreshButton)
+                add(editButton)
+                add(saveButton)
+                add(revertButton)
+                add(copyButton)
+            }
+            add(leftPanel, BorderLayout.WEST)
+            add(rightPanel, BorderLayout.EAST)
+        }
+
         // Add cards to content panel
         contentPanel.add(emptyStatePanel, "empty")
         contentPanel.add(loadingLabel, "loading")
         contentPanel.add(errorPanel, "error")
-        
+
         add(headerPanel, BorderLayout.NORTH)
-        add(contentPanel, BorderLayout.CENTER)
+
+        // Use a vertical container for action bar + content so the action bar sits below header
+        val centerContainer = JPanel(BorderLayout())
+        centerContainer.add(actionBar, BorderLayout.NORTH)
+        centerContainer.add(contentPanel, BorderLayout.CENTER)
+        add(centerContainer, BorderLayout.CENTER)
+
+        // ===== Editor status bar (bottom): UTF-8 · LF · pos | chars · md5 =====
+        statusBar = JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.empty(2, 12)
+            val leftGroup = JPanel(FlowLayout(FlowLayout.LEFT, 14, 0)).apply {
+                add(statusEncodingLabel)
+                add(statusLineEndingLabel)
+                add(statusPositionLabel)
+            }
+            val rightGroup = JPanel(FlowLayout(FlowLayout.RIGHT, 14, 0)).apply {
+                add(statusCharsLabel)
+                add(statusMd5Label)
+            }
+            add(leftGroup, BorderLayout.WEST)
+            add(rightGroup, BorderLayout.EAST)
+        }
+        // Add a top border to the status bar for visual separation
+        statusBar.border = JBUI.Borders.empty(2, 12, 2, 12)
+        add(statusBar, BorderLayout.SOUTH)
     }
     
     private fun setupEventHandlers() {
@@ -177,27 +316,93 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         copyButton.addActionListener {
             copyContentToClipboard()
         }
+
+        saveButton.addActionListener {
+            saveConfiguration()
+        }
+
+       editButton.addActionListener {
+            enterEditMode()
+       }
+
+       revertButton.addActionListener {
+           revertEdits()
+      }
+  }
+
+
+ /**
+  * Reverts unsaved edits by reloading the original content.
+  */
+  private fun revertEdits() {
+      currentConfiguration?.let { config ->
+          exitEditMode()
+          loadConfigurationContent(config, forceRefresh = true)
+          revertButton.isEnabled = false
+          saveButton.isEnabled = false
+          updateDirtyUI(false)
+      }
+  }
+   /**
+    * Enters edit mode: makes the editor writable and hides the Edit button
+    * (the user exits via Save or Revert). Matches the design prototype which
+    * hides #editBtn while editing.
+    */
+  private fun enterEditMode() {
+      editor?.let { ed ->
+          ed.document.setReadOnly(false)
+          editButton.isVisible = false
+          checkDirtyState(ed.document.text)
+      }
+  }
+
+    /**
+     * Restores the read-only view mode: locks the editor and re-shows the Edit button.
+     */
+    private fun exitEditMode() {
+        editor?.document?.setReadOnly(true)
+        editButton.isVisible = true
+        editButton.text = NacosSearchBundle.message("config.detail.action.edit")
+    }
+
+    /**
+     * Compares current editor content against the original snapshot and
+     * updates dirty state if changed.
+     */
+    private fun checkDirtyState(currentText: String) {
+        val newDirty = currentText != originalContent
+        if (newDirty != isDirty) {
+            updateDirtyUI(newDirty)
+        }
+    }
+
+    /**
+     * Updates all dirty-state indicators: title asterisk, pill, and notifies
+     * the window so the list row dot can update.
+     */
+    private fun updateDirtyUI(dirty: Boolean) {
+        isDirty = dirty
+        dirtyLabel.isVisible = dirty
+        saveButton.isEnabled = dirty
+        revertButton.isEnabled = dirty
+        // Title asterisk: append/remove '*' from dataId label text
+        val config = currentConfiguration ?: return
+        val baseId = config.dataId
+        ApplicationManager.getApplication().invokeLater({
+            dataIdLabel.text = if (dirty && !baseId.endsWith("*")) "$baseId *" else baseId
+        }, ModalityState.defaultModalityState())
+        // Notify window for list-row dot update
+        onDirtyStateChanged?.invoke(config, dirty)
     }
     
     private fun createMetadataPanel(): JPanel {
-        return JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = JBUI.Borders.empty(4, 2) // Minimal padding
-            
-            add(createMetadataRow(NacosSearchBundle.message("config.detail.metadata.data.id"), dataIdLabel))
-            add(createMetadataRow(NacosSearchBundle.message("config.detail.metadata.namespace"), namespaceLabel))
-        }
-    }
-    
-    private fun createMetadataRow(labelText: String, valueLabel: JTextField): JPanel {
-        return JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
-            add(JBLabel(labelText).apply {
-                preferredSize = Dimension(80, 20)
-                font = font.deriveFont(Font.BOLD, 11f)
-            })
-            add(valueLabel.apply { 
+        return JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.emptyTop(3)
+            inlineMetaLabel = JBLabel().apply {
                 font = font.deriveFont(Font.PLAIN, 11f)
-            })
+                foreground = JBColor(0xa8adbd, 0x5a5d63)
+            }
+            add(inlineMetaLabel, BorderLayout.CENTER)
         }
     }
     
@@ -260,22 +465,42 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
      * Display configuration details
      */
     fun showConfiguration(configuration: NacosConfiguration) {
+        val generation = ++displayGeneration
         currentConfiguration = configuration
-        updateMetadata(configuration)
-        loadConfigurationContent(configuration)
+        updateMetadata(configuration, generation)
+        loadConfigurationContent(configuration, generation)
     }
     
-    private fun updateMetadata(configuration: NacosConfiguration) {
+    private fun updateMetadata(configuration: NacosConfiguration, generation: Long) {
         ApplicationManager.getApplication().invokeLater({
+            if (generation != displayGeneration || currentConfiguration?.getKey() != configuration.getKey()) {
+                return@invokeLater
+            }
             dataIdLabel.text = configuration.dataId
-            groupLabel.text = configuration.group
-            namespaceLabel.text = configuration.tenantId ?: ""
-            typeLabel.text = configuration.type ?: "text"
+            val nsDisplay = configuration.tenantId?.takeIf { it.isNotBlank() } ?: "public"
+            val typeDisplay = configuration.type ?: "text"
+            // Inline metadata: Group · namespace · type (compact, machine-readable values)
+            if (::inlineMetaLabel.isInitialized) {
+                inlineMetaLabel.text = NacosSearchBundle.message(
+                    "config.detail.metadata.inline.format",
+                    configuration.group,
+                    nsDisplay,
+                    typeDisplay
+                )
+            }
             sizeLabel.text = NacosSearchBundle.message("config.detail.loading.size")
+            formatTagLabel.text = configuration.getConfigType().uppercase()
+            dirtyLabel.isVisible = false
+            editButton.isEnabled = true
+            copyButton.isEnabled = true
         }, ModalityState.defaultModalityState())
     }
     
     private fun loadConfigurationContent(configuration: NacosConfiguration, forceRefresh: Boolean = false) {
+        loadConfigurationContent(configuration, ++displayGeneration, forceRefresh)
+    }
+
+    private fun loadConfigurationContent(configuration: NacosConfiguration, generation: Long, forceRefresh: Boolean = false) {
         if (isLoading) return
         
         // Cancel previous loading operation
@@ -296,18 +521,27 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
                 
                 // Check if operation was cancelled
                 if (!isActive) return@launch
+                if (generation != displayGeneration || currentConfiguration?.getKey() != configuration.getKey()) {
+                    setLoadingState(false)
+                    return@launch
+                }
                 
                 result.onSuccess { configWithContent ->
                     configWithContent?.let { config ->
+                        if (generation != displayGeneration || currentConfiguration?.getKey() != configuration.getKey()) {
+                            setLoadingState(false)
+                            return@let
+                        }
                         displayConfigurationContentSafely(config)
                         setLoadingState(false)
                         showCard("content")
                         
-                        // Update size information using proper IntelliJ threading
+                        // Update size information and status bar
                         ApplicationManager.getApplication().invokeLater({
                             val contentSize = config.content.length
                             sizeLabel.text = formatSize(contentSize)
                         }, ModalityState.defaultModalityState())
+                        updateStatusBar(config.content)
                     } ?: run {
                         setLoadingState(false)
                         showCard("error")
@@ -350,9 +584,14 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
             // Create new editor safely
             val newEditor = createEditorSafely(content, fileType)
             if (newEditor != null) {
-                editor = newEditor
-                updateEditorUI(newEditor)
-                copyButton.isEnabled = true
+               editor = newEditor
+               updateEditorUI(newEditor)
+               copyButton.isEnabled = true
+               editButton.isEnabled = true
+                editButton.isVisible = true
+                editButton.text = NacosSearchBundle.message("config.detail.action.edit")
+               saveButton.isEnabled = false
+               revertButton.isEnabled = false
             }
         }, ModalityState.defaultModalityState())
     }
@@ -366,8 +605,19 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
             
             try {
                 val document = EditorFactory.getInstance().createDocument(content)
-                val newEditor = EditorFactory.getInstance().createEditor(document, project, fileType, true) as EditorEx
-                
+                val newEditor = EditorFactory.getInstance().createEditor(document, project, fileType, false) as EditorEx
+
+                // Start in read-only mode; the Edit button toggles to writable
+                document.setReadOnly(true)
+
+                // Track content changes for dirty-state detection
+                originalContent = content
+                document.addDocumentListener(object : com.intellij.openapi.editor.event.DocumentListener {
+                    override fun documentChanged(event: com.intellij.openapi.editor.event.DocumentEvent) {
+                        checkDirtyState(document.text)
+                    }
+                })
+
                 // Register with Disposer for proper cleanup
                 Disposer.register(this) { EditorFactory.getInstance().releaseEditor(newEditor) }
                 
@@ -426,6 +676,32 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
             bytes < 1024 -> "$bytes B"
             bytes < 1024 * 1024 -> "${bytes / 1024} KB"
             else -> "${bytes / (1024 * 1024)} MB"
+        }
+    }
+
+    /**
+     * Computes a short 16-hex-char MD5 hash for the editor status bar.
+     */
+    private fun computeShortMd5(text: String): String {
+        return try {
+            val md = java.security.MessageDigest.getInstance("MD5")
+            val digest = md.digest(text.toByteArray())
+            digest.joinToString("") { "%02x".format(it) }.take(16)
+        } catch (e: Exception) {
+            "—"
+        }
+    }
+
+    /**
+     * Updates the editor status bar with current content stats.
+     */
+    private fun updateStatusBar(content: String) {
+        SwingUtilities.invokeLater {
+            val charCount = content.length
+            val lineCount = if (content.isEmpty()) 1 else content.split("\n").size
+            statusCharsLabel.text = NacosSearchBundle.message("config.detail.status.chars.format", charCount)
+            statusMd5Label.text = NacosSearchBundle.message("config.detail.status.md5", computeShortMd5(content))
+            statusPositionLabel.text = NacosSearchBundle.message("config.detail.status.position", 1, 1)
         }
     }
     
@@ -508,6 +784,50 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         }
     }
     
+    /**
+     * Save (publish) the current configuration content back to Nacos.
+     */
+    private fun saveConfiguration() {
+        val config = currentConfiguration ?: return
+        val textToSave = editor?.document?.text ?: config.content
+        if (textToSave == originalContent) return
+        coroutineScope.launch {
+            try {
+                val namespaceId = if (config.tenantId.isNullOrBlank()) null else config.tenantId
+                val result = nacosApiService.publishConfiguration(
+                    config.dataId, config.group, textToSave, config.type ?: "text", namespaceId
+                )
+                withContext(Dispatchers.Main) {
+                    if (result.isSuccess && result.getOrNull() == true) {
+                       originalContent = textToSave
+                        exitEditMode()
+                        saveButton.isEnabled = false
+                        revertButton.isEnabled = false
+                        updateDirtyUI(false)
+                        updateStatusBar(textToSave)
+                        com.intellij.openapi.ui.Messages.showInfoMessage(
+                            NacosSearchBundle.message("message.configuration.saved"),
+                            NacosSearchBundle.message("common.success")
+                        )
+                    } else {
+                        com.intellij.openapi.ui.Messages.showErrorDialog(
+                            NacosSearchBundle.message("error.config.save.failed") + ": " +
+                                (result.exceptionOrNull()?.message ?: ""),
+                            NacosSearchBundle.message("common.error")
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    com.intellij.openapi.ui.Messages.showErrorDialog(
+                        NacosSearchBundle.message("error.config.save.failed") + ": ${e.message}",
+                        NacosSearchBundle.message("common.error")
+                    )
+                }
+            }
+        }
+    }
+
     // Legacy method for backward compatibility
     private fun disposeEditor() {
         disposeEditorSafely()
@@ -519,16 +839,28 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
     fun clearConfiguration() {
         // Cancel any ongoing loading operation
         currentLoadingJob?.cancel()
+        displayGeneration++
+        setLoadingState(false)
         
         currentConfiguration = null
         disposeEditorSafely()
         showEmptyState()
+        saveButton.isEnabled = false
+        copyButton.isEnabled = false
+        editButton.isEnabled = false
+        revertButton.isEnabled = false
+        dirtyLabel.isVisible = false
+
+        // Reset status bar
+        statusCharsLabel.text = NacosSearchBundle.message("config.detail.status.chars.format", 0)
+        statusMd5Label.text = "—"
+        statusPositionLabel.text = NacosSearchBundle.message("config.detail.status.position", 1, 1)
         
         ApplicationManager.getApplication().invokeLater({
             dataIdLabel.text = ""
-            groupLabel.text = ""
-            namespaceLabel.text = ""
-            typeLabel.text = ""
+            if (::inlineMetaLabel.isInitialized) {
+                inlineMetaLabel.text = ""
+            }
             sizeLabel.text = ""
         }, ModalityState.defaultModalityState())
     }
@@ -629,7 +961,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
             
             // Update metadata with current configuration
             currentConfiguration?.let { config ->
-                updateMetadata(config)
+                updateMetadata(config, displayGeneration)
             }
         }
     }

@@ -58,32 +58,31 @@ class NacosAuthService {
      * 获取有效的accessToken
      * @return 有效的accessToken，如果获取失败返回null
      */
-    suspend fun getValidAccessToken(): String {
-            try {
-                val cacheKey = "${settings.serverUrl}_${settings.username}"
-                val cachedToken = tokenCache[cacheKey]
-                
-                // 检查缓存的token是否有效
-                if (cachedToken != null && cachedToken.isValid()) {
-                    logger.debug("Using cached access token")
-                    return cachedToken.accessToken;
-                }
-                
+    suspend fun getValidAccessToken(): String? {
+        return try {
+            val cacheKey = "${settings.serverUrl}_${settings.username}"
+            val cachedToken = tokenCache[cacheKey]
+            
+            // 检查缓存的token是否有效
+            if (cachedToken != null && cachedToken.isValid()) {
+                logger.debug("Using cached access token")
+                cachedToken.accessToken
+            } else {
                 // 缓存无效，重新登录获取token
                 logger.info("Cached token expired or invalid, requesting new token")
                 val newToken = login()
                 if (newToken != null) {
                     tokenCache[cacheKey] = newToken
                     lastTokenRefresh.set(System.currentTimeMillis())
-                    return newToken.accessToken
+                    newToken.accessToken
+                } else {
+                    null
                 }
-                
-                null
-            } catch (e: Exception) {
-                logger.warn("Failed to get valid access token", e)
-                null
             }
-        return ""
+        } catch (e: Exception) {
+            logger.warn("Failed to get valid access token", e)
+            null
+        }
     }
     
     /**

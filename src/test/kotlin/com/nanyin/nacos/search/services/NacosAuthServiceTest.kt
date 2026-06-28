@@ -47,7 +47,7 @@ class NacosAuthServiceTest {
                 override fun handle(exchange: HttpExchange) {
                     val requestBody = exchange.requestBody.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
                     when {
-                        requestBody.contains("username=valid") -> sendJsonResponse(exchange, 200, successfulLoginResponse)
+                        requestBody.contains("password=valid") -> sendJsonResponse(exchange, 200, successfulLoginResponse)
                         else -> sendJsonResponse(exchange, 200, failedLoginResponse)
                     }
                 }
@@ -134,7 +134,7 @@ class NacosAuthServiceTest {
         settings.password = "invalid"
 
         val token = authService.getValidAccessToken()
-        assertTrue(token.isEmpty())
+        assertTrue(token.isNullOrEmpty())
     }
 
     @Test
@@ -143,7 +143,7 @@ class NacosAuthServiceTest {
         settings.password = ""
 
         val token = authService.getValidAccessToken()
-        assertTrue(token.isEmpty())
+        assertTrue(token.isNullOrEmpty())
     }
 
     @Test

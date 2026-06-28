@@ -31,6 +31,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
     // private lateinit var advancedPanel: JPanel
      private lateinit var searchModeLabel: JBLabel
     private lateinit var searchLabel: JBLabel
+    private lateinit var groupFilterButton: JButton
     // Advanced search components
     private lateinit var dataIdField: JBTextField
     private lateinit var groupField: JBTextField
@@ -49,6 +50,11 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
     var onSearchRequested: ((SearchCriteria) -> Unit)? = null
     var onSearchCleared: (() -> Unit)? = null
     var onRealTimeSearch: ((String) -> Unit)? = null
+    var onGroupFilterChanged: ((String) -> Unit)? = null
+
+    // Available groups for the filter popup
+    private var availableGroups: List<String> = listOf(NacosSearchBundle.message("search.group.filter.all"))
+    private var selectedGroup: String = NacosSearchBundle.message("search.group.filter.all")
     
     init {
         initializeComponents()
@@ -61,15 +67,17 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
         searchField = JBTextField().apply {
             emptyText.text = NacosSearchBundle.message("search.placeholder")
             columns = 20
+            font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 12)
         }
         
         // Action buttons
         searchButton = JButton(AllIcons.Actions.Search).apply {
             toolTipText = NacosSearchBundle.message("search.tooltip")
-            preferredSize = Dimension(24, 24)
+            preferredSize = Dimension(28, 24)
+            minimumSize = Dimension(28, 24)
         }
         
-        clearButton = JButton(AllIcons.Actions.GC).apply {
+        clearButton = JButton(AllIcons.Actions.Close).apply {
             toolTipText = NacosSearchBundle.message("search.clear.tooltip")
             preferredSize = Dimension(24, 24)
             isEnabled = false
@@ -86,6 +94,16 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
 
         searchLabel = JBLabel(NacosSearchBundle.message("search.mode.label")).apply {
             foreground = JBColor.GRAY
+        }
+
+        // Group filter pill — compact bordered button per design guide
+        groupFilterButton = JButton(NacosSearchBundle.message("search.group.filter.label") + " " + NacosSearchBundle.message("search.group.filter.all")).apply {
+            toolTipText = NacosSearchBundle.message("tooltip.group.filter")
+            preferredSize = Dimension(90, 26)
+            margin = JBUI.insets(0, 9, 0, 9)
+            isContentAreaFilled = false
+            border = JBUI.Borders.empty(0, 9)
+            addActionListener { showGroupFilterPopup() }
         }
         
         // Advanced search components
@@ -117,29 +135,60 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
     }
     
     private fun setupLayout() {
-        border = JBUI.Borders.empty(2, 4) // Minimal padding for compact design
-        
-        // Simple search row
-        val searchRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
-            add(searchLabel.apply {
-                font = font.deriveFont(Font.BOLD, 11f)
-                preferredSize = Dimension(100, 24)
-            })
-            add(searchField.apply { 
-                preferredSize = Dimension(300, 24)
-                minimumSize = Dimension(200, 24)
-            })
-            add(searchButton.apply {
-                preferredSize = Dimension(24, 24)
-                minimumSize = Dimension(24, 24)
-            })
-            add(clearButton.apply {
-                preferredSize = Dimension(24, 24)
-                minimumSize = Dimension(24, 24)
-            })
+        border = JBUI.Borders.empty()
+        setLayout(BorderLayout(6, 0))
+
+        val searchLabelComp = JBLabel(NacosSearchBundle.message("search.label")).apply {
+            font = font.deriveFont(Font.PLAIN, 11.5f)
+            foreground = JBColor(0x6f737a, 0x9b9ea6)
+            preferredSize = Dimension(54, 24)
         }
-        
-        add(searchRow, BorderLayout.CENTER)
+
+        searchField.apply {
+            preferredSize = Dimension(200, 26)
+            minimumSize = Dimension(120, 26)
+            border = JBUI.Borders.empty(0, 22, 0, 0)
+        }
+
+        // Search icon inside the field area
+        val searchIcon = JBLabel(AllIcons.Actions.Search).apply {
+            foreground = JBColor(0x6f737a, 0x9b9ea6)
+        }
+        val fieldWrapper = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            add(searchIcon, BorderLayout.WEST)
+            add(searchField, BorderLayout.CENTER)
+        }
+
+        clearButton.apply {
+            preferredSize = Dimension(20, 20)
+            minimumSize = Dimension(20, 20)
+            border = JBUI.Borders.empty(2)
+            isContentAreaFilled = false
+        }
+
+        // Group filter pill: bordered compact button per design
+        groupFilterButton.border = JBUI.Borders.compound(
+            JBUI.Borders.customLine(JBColor(0x4e5157, 0xb9bdc9), 1),
+            JBUI.Borders.empty(0, 8)
+        )
+        groupFilterButton.isContentAreaFilled = false
+        groupFilterButton.margin = JBUI.insets(0, 8, 0, 8)
+
+        // East wrapper: clear button + group filter pill
+        val eastPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+            isOpaque = false
+            add(clearButton)
+            add(groupFilterButton)
+        }
+
+        add(searchLabelComp, BorderLayout.WEST)
+        add(fieldWrapper, BorderLayout.CENTER)
+        add(eastPanel, BorderLayout.EAST)
+
+        // Search button is hidden — Enter in field triggers search (real-time)
+        searchButton.isVisible = false
+        searchLabel.isVisible = false
     }
     
     private fun createAdvancedPanel(): JPanel {
@@ -468,6 +517,61 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
         caseSensitiveCheckBox.isEnabled = enabled
     }
     
+    /**
+     * Updates the list of available groups (called by the window after data loads).
+     */
+    fun setAvailableGroups(groups: List<String>) {
+        val allLabel = NacosSearchBundle.message("search.group.filter.all")
+        availableGroups = if (groups.isEmpty()) listOf(allLabel) else listOf(allLabel) + groups.distinct().sorted()
+        // Reset selection if the previously selected group is no longer available
+        if (selectedGroup != allLabel && selectedGroup !in groups) {
+            selectedGroup = allLabel
+            updateGroupFilterLabel()
+        }
+    }
+
+    /**
+     * Shows a popup menu of available groups above the filter button.
+     */
+    private fun showGroupFilterPopup() {
+        val popup = JPopupMenu()
+        val buttonGroup = javax.swing.ButtonGroup()
+        availableGroups.forEach { group ->
+            val item = JCheckBoxMenuItem(group).apply {
+                isSelected = group == selectedGroup
+                addActionListener {
+                    selectedGroup = group
+                    updateGroupFilterLabel()
+                    val allLabel = NacosSearchBundle.message("search.group.filter.all")
+                    val groupValue = if (group == allLabel) "" else group
+                    // Trigger search with the new group filter
+                    val query = searchField.text.trim()
+                    val criteria = SearchCriteria(
+                        query = query,
+                        group = groupValue,
+                        useRegex = true,
+                        caseSensitive = false
+                    )
+                    searchCriteria = criteria
+                    onGroupFilterChanged?.invoke(groupValue)
+                    // Always re-run the search so group filtering works even with an empty query.
+                    onSearchRequested?.invoke(criteria)
+                }
+            }
+            buttonGroup.add(item)
+            popup.add(item)
+        }
+        popup.preferredSize = Dimension(maxOf(groupFilterButton.width, 140), popup.preferredSize.height)
+        popup.show(groupFilterButton, 0, groupFilterButton.height)
+    }
+
+    /**
+     * Updates the group filter button label to show the current selection.
+     */
+    private fun updateGroupFilterLabel() {
+        groupFilterButton.text = NacosSearchBundle.message("search.group.filter.label") + " " + selectedGroup
+    }
+
     /**
      * Called when the language is changed
      */

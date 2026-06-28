@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.0.0"
+version = "1.1.0"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -61,6 +61,10 @@ intellijPlatform {
         password = providers.environmentVariable("PRIVATE_KEY_PASSWORD").orNull
     }
 
+    publishing {
+        token = providers.environmentVariable("PUBLISH_TOKEN")
+    }
+
     pluginVerification {
         ides {
             // Verify against the build target and recent stable releases.
@@ -106,6 +110,14 @@ tasks {
         """.trimIndent())
 
         changeNotes.set("""
+            <h3>1.1.0</h3>
+            <ul>
+                <li>Multi-server (environment) configuration support with master-detail settings UI</li>
+                <li>Redesigned Nacos Search settings page</li>
+                <li>UI improvements across search, namespace, config list, and detail panels</li>
+                <li>Authentication service improvements for token refresh and hybrid mode</li>
+                <li>Reactive UI updates via NacosSettingsListener</li>
+            </ul>
             <h3>1.0.0</h3>
             <ul>
                 <li>Initial release</li>

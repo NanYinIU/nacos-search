@@ -62,7 +62,10 @@ class NamespacePanel(
         
         refreshButton = JButton(AllIcons.Actions.Refresh).apply {
             toolTipText = NacosSearchBundle.message("namespace.refresh")
-            preferredSize = Dimension(24, 24)
+            preferredSize = Dimension(28, 24)
+            minimumSize = Dimension(28, 24)
+            border = JBUI.Borders.empty()
+            isContentAreaFilled = false
         }
         
         loadingLabel = JBLabel().apply {
@@ -76,33 +79,36 @@ class NamespacePanel(
     }
     
     private fun setupLayout() {
-        border = JBUI.Borders.empty(2, 4, 0, 4) // Minimal padding for compact design
-        
-        val mainPanel = JPanel(BorderLayout()).apply {
-            // Namespace label and combo row
-            val namespaceRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
-                add(JBLabel(NacosSearchBundle.message("namespace.label") + ":").apply {
-                    font = font.deriveFont(Font.BOLD, 11f)
-                    preferredSize = Dimension(100, 24)
-                })
-                add(namespaceCombo.apply {
-                    preferredSize = Dimension(180, 24)
-                    minimumSize = Dimension(150, 24)
-                })
-                add(refreshButton.apply {
-                    preferredSize = Dimension(24, 24)
-                    minimumSize = Dimension(24, 24)
-                })
-                add(loadingLabel)
-            }
-            add(namespaceRow, BorderLayout.NORTH)
-            add(statusLabel.apply {
-                border = JBUI.Borders.emptyTop(2)
-                font = font.deriveFont(Font.ITALIC, 10f)
-            }, BorderLayout.SOUTH)
+        border = JBUI.Borders.empty()
+
+        val label = JBLabel(NacosSearchBundle.message("namespace.label")).apply {
+            font = font.deriveFont(Font.PLAIN, 11.5f)
+            foreground = JBColor(0x6f737a, 0x9b9ea6)
+            preferredSize = Dimension(54, 24)
         }
-        
-        add(mainPanel, BorderLayout.CENTER)
+
+        // Compact horizontal row: combo only (refresh is an icon button inside)
+        val row = JPanel(BorderLayout(2, 0)).apply {
+            add(namespaceCombo.apply {
+                preferredSize = Dimension(160, 26)
+                minimumSize = Dimension(120, 26)
+                maximumSize = Dimension(200, 26)
+            }, BorderLayout.CENTER)
+            add(refreshButton.apply {
+                preferredSize = Dimension(28, 24)
+                minimumSize = Dimension(28, 24)
+                border = JBUI.Borders.empty()
+                isContentAreaFilled = false
+            }, BorderLayout.EAST)
+        }
+
+        add(JPanel(BorderLayout(6, 0)).apply {
+            isOpaque = false
+            add(label, BorderLayout.WEST)
+            add(row, BorderLayout.CENTER)
+        }, BorderLayout.CENTER)
+        // Status label kept but hidden in compact mode (used programmatically)
+        statusLabel.isVisible = false
     }
     
     private fun setupEventHandlers() {
@@ -120,27 +126,38 @@ class NamespacePanel(
     
     private fun loadNamespaces() {
         if (isLoading) return
-        
-        setLoadingState(true)
-        
+
         coroutineScope.launch {
-            try {
-                val result = namespaceService.loadNamespacesAsync().await()
-                result.onSuccess { loadedNamespaces ->
-                    namespaces = loadedNamespaces
-                    updateNamespaceCombo()
-                    setLoadingState(false)
-                    updateStatus(NacosSearchBundle.message("namespace.loaded.namespaces", loadedNamespaces.size))
-                }.onFailure { error ->
-                    setLoadingState(false)
-                    updateStatus(NacosSearchBundle.message("namespace.failed.load"))
-                    showError(NacosSearchBundle.message("namespace.failed.load"), error.message ?: NacosSearchBundle.message("error.unknown"))
-                }
-            } catch (e: Exception) {
+            loadNamespacesAndUpdate()
+        }
+    }
+
+    suspend fun refreshAndWait(): Result<List<NamespaceInfo>> {
+        if (isLoading) return Result.success(namespaces)
+        return loadNamespacesAndUpdate()
+    }
+
+    private suspend fun loadNamespacesAndUpdate(): Result<List<NamespaceInfo>> {
+        setLoadingState(true)
+
+        return try {
+            val result = namespaceService.loadNamespacesAsync().await()
+            result.onSuccess { loadedNamespaces ->
+                namespaces = loadedNamespaces
+                updateNamespaceCombo()
                 setLoadingState(false)
-                updateStatus(NacosSearchBundle.message("namespace.error.load"))
-                showError(NacosSearchBundle.message("namespace.error.load"), e.message ?: NacosSearchBundle.message("error.unknown"))
+                updateStatus(NacosSearchBundle.message("namespace.loaded.namespaces", loadedNamespaces.size))
+            }.onFailure { error ->
+                setLoadingState(false)
+                updateStatus(NacosSearchBundle.message("namespace.failed.load"))
+                showError(NacosSearchBundle.message("namespace.failed.load"), error.message ?: NacosSearchBundle.message("error.unknown"))
             }
+            result
+        } catch (e: Exception) {
+            setLoadingState(false)
+            updateStatus(NacosSearchBundle.message("namespace.error.load"))
+            showError(NacosSearchBundle.message("namespace.error.load"), e.message ?: NacosSearchBundle.message("error.unknown"))
+            Result.failure(e)
         }
     }
     
@@ -254,12 +271,19 @@ class NamespacePanel(
             super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
             
             if (value is NamespaceInfo) {
-                text = if (value.namespaceName.isNotEmpty()) {
-                    "${value.namespaceName} (${value.namespaceId})"
+                val countPart = if (value.configCount > 0) " · ${value.configCount}" else ""
+                val displayName = value.namespaceName.ifEmpty { value.getDisplayName() }
+                text = if (value.namespaceId.isBlank()) {
+                    // Public namespace has an empty id; render "name · count" without empty parens.
+                    "$displayName$countPart"
                 } else {
-                    value.namespaceId
+                    val shortId = if (value.namespaceId.length > 8) value.namespaceId.take(8) + "…" else value.namespaceId
+                    "$displayName ($shortId)$countPart"
                 }
-                
+
+                // Use monospace for machine-readable namespace values per design guide
+                font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 12)
+
                 toolTipText = "Namespace ID: ${value.namespaceId}"
             }
             

@@ -3,17 +3,18 @@ package com.nanyin.nacos.search.ui
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.testFramework.PlatformTestUtil
-import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NamespaceService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import org.junit.After
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
-import org.junit.Before
-import org.junit.Test
+import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.doNothing
 import org.mockito.kotlin.mock
@@ -23,7 +24,8 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import javax.swing.SwingUtilities
 
-class NamespacePanelTest : BasePlatformTestCase() {
+@TestApplication
+class NamespacePanelTest {
 
     private lateinit var mockProject: Project
     private lateinit var mockNamespaceService: NamespaceService
@@ -35,10 +37,8 @@ class NamespacePanelTest : BasePlatformTestCase() {
         NamespaceInfo("staging", "Staging Environment")
     )
 
-    @Before
-    override fun setUp() {
-        super.setUp()
-
+    @BeforeEach
+    fun setUp() {
         mockProject = mock<Project>()
         mockNamespaceService = mock<NamespaceService>()
 
@@ -47,13 +47,12 @@ class NamespacePanelTest : BasePlatformTestCase() {
         doNothing().`when`(mockNamespaceService).setCurrentNamespace(any())
     }
 
-    @After
-    override fun tearDown() {
+    @AfterEach
+    fun tearDown() {
         if (::namespacePanel.isInitialized) {
             namespacePanel.dispose()
         }
         reset(mockNamespaceService, mockProject)
-        super.tearDown()
     }
 
     @Test
@@ -85,6 +84,7 @@ class NamespacePanelTest : BasePlatformTestCase() {
         val selectedNamespace = namespacePanel.getSelectedNamespace()
         assertNotNull(selectedNamespace)
         assertEquals(targetNamespace.namespaceId, selectedNamespace?.namespaceId)
+        verify(mockNamespaceService, timeout(1000)).setCurrentNamespace(targetNamespace)
     }
 
     @Test
@@ -95,6 +95,19 @@ class NamespacePanelTest : BasePlatformTestCase() {
         namespacePanel.refresh()
         waitForUi()
 
+        verify(mockNamespaceService, timeout(1000).atLeast(2)).loadNamespacesAsync()
+    }
+
+    @Test
+    fun testRefreshAndWaitCompletesAfterNamespacesAreLoaded() = runBlocking {
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
+        waitForNamespaceLoad()
+
+        val result = namespacePanel.refreshAndWait()
+        waitForUi()
+
+        assertEquals(testNamespaces, result.getOrNull())
+        assertNotNull(namespacePanel.getSelectedNamespace())
         verify(mockNamespaceService, timeout(1000).atLeast(2)).loadNamespacesAsync()
     }
 
@@ -135,11 +148,14 @@ class NamespacePanelTest : BasePlatformTestCase() {
     @Test
     fun testNamespacePanelBasicFunctionality() {
         namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
+        waitForNamespaceLoad()
 
-        val selectedNamespace = namespacePanel.getSelectedNamespace()
-
+        assertNotNull(namespacePanel.getSelectedNamespace())
         namespacePanel.refresh()
-        assertNull(selectedNamespace)
+        waitForUi()
+
+        assertNotNull(namespacePanel.getSelectedNamespace())
+        verify(mockNamespaceService, timeout(1000).atLeast(2)).loadNamespacesAsync()
     }
 
     private fun waitForUi() {

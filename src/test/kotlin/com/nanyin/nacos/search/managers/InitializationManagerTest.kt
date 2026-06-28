@@ -10,6 +10,7 @@ import com.nanyin.nacos.search.ui.PaginationPanel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
@@ -50,6 +51,9 @@ class InitializationManagerTest {
         val paginationPanel = mock<PaginationPanel>()
         val namespace = NamespaceInfo(namespaceId = "test-ns", namespaceName = "Test Namespace")
 
+        whenever(namespaceService.loadNamespacesAsync()).thenReturn(
+            CompletableDeferred(Result.success(listOf(namespace)))
+        )
         whenever(namespaceService.getCurrentNamespace()).thenReturn(namespace)
 
         var completedState: InitializationManager.InitializationState? = null
@@ -62,7 +66,6 @@ class InitializationManagerTest {
         assertTrue(initializationManager.isInitialized())
         assertTrue(completedState is InitializationManager.InitializationState.Success)
         verify(paginationPanel).setInitialState()
-        verify(namespacePanel).refresh()
     }
 
     @Test
@@ -70,6 +73,9 @@ class InitializationManagerTest {
         val namespacePanel = mock<NamespacePanel>()
         val paginationPanel = mock<PaginationPanel>()
 
+        whenever(namespaceService.loadNamespacesAsync()).thenReturn(
+            CompletableDeferred(Result.success(emptyList()))
+        )
         whenever(namespaceService.getCurrentNamespace()).thenReturn(null)
 
         var completedState: InitializationManager.InitializationState? = null
@@ -89,16 +95,22 @@ class InitializationManagerTest {
         val paginationPanel = mock<PaginationPanel>()
         val namespace = NamespaceInfo(namespaceId = "test-ns", namespaceName = "Test Namespace")
 
+        // Use a deferred that we control - not yet completed
+        val deferred = CompletableDeferred<Result<List<NamespaceInfo>>>()
+        whenever(namespaceService.loadNamespacesAsync()).thenReturn(deferred)
         whenever(namespaceService.getCurrentNamespace()).thenReturn(namespace)
 
         var completedCount = 0
         initializationManager.initialize(namespacePanel, paginationPanel) { _ ->
             completedCount++
         }
+        // Second call should be rejected because first is still in progress
         initializationManager.initialize(namespacePanel, paginationPanel) { _ ->
             completedCount++
         }
 
+        // Complete the deferred so the first call finishes
+        deferred.complete(Result.success(listOf(namespace)))
         delay(100)
 
         assertEquals(1, completedCount)

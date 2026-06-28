@@ -12,3 +12,7 @@ build
 # Ignore IntelliJ Platform Gradle Plugin downloaded artifacts and caches
 .intellijPlatform/
 .kotlin/
+# Design mockup artifacts
+*.html.artifact.json
+nacos-search-toolwindow.html
+nacos-settings-3.html

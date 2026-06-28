@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.ui
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
+import com.intellij.openapi.util.Disposer
 import com.intellij.ui.content.ContentFactory
 
 /**
@@ -21,6 +22,9 @@ class NacosSearchToolWindowFactory : ToolWindowFactory {
             "", // No tab title needed for single content
             false // Not closeable
         )
+        
+        // Dispose the window (unregisters listeners, cancels coroutines) when the content is removed.
+        Disposer.register(content, searchWindow)
         
         toolWindow.contentManager.addContent(content)
         

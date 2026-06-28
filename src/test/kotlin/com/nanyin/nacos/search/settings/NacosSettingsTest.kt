@@ -308,12 +308,30 @@ class NacosSettingsTest {
     @Test
     fun `test state persistence`() {
         settings.serverUrl = "http://persist:8848"
+        // Also update the active server's URL since loadState() calls syncFromActiveServer()
+        settings.getActiveServer().serverUrl = "http://persist:8848"
         val state = settings.getState()
 
         val newSettings = NacosSettings()
         newSettings.loadState(state)
 
         assertEquals("http://persist:8848", newSettings.serverUrl)
+    }
+
+    @Test
+    fun `test active server sync updates runtime connection settings`() {
+        val fast = com.nanyin.nacos.search.models.NacosServerConfig(
+            id = "fast",
+            displayName = "Fast Local",
+            serverUrl = "http://localhost:8848",
+            connectionTimeoutMs = 5000,
+            autoRefreshOnOpen = false
+        )
+        settings.applyServers(listOf(fast), "fast")
+
+        assertEquals("http://localhost:8848", settings.serverUrl)
+        assertEquals(5, settings.connectionTimeoutSeconds)
+        assertFalse(settings.autoRefreshEnabled)
     }
 
     @Test

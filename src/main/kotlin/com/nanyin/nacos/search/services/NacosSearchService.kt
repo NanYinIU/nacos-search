@@ -98,6 +98,7 @@ class NacosSearchService {
 
         fun toCacheKey(): String {
             return listOf(
+                "namespace=${namespace?.namespaceId.orEmpty()}",
                 "dataId=${getProcessedDataId()}",
                 "group=$group",
                 "appName=$appName",
@@ -126,7 +127,8 @@ class NacosSearchService {
             val pageSize: Int,
             val pagesAvailable: Int,
             val source: SearchSource = SearchSource.REMOTE,
-            val fromCache: Boolean = false
+            val fromCache: Boolean = false,
+            val request: SearchRequest? = null
         ) : SearchState()
         data class Error(val message: String, val throwable: Throwable? = null) : SearchState()
     }
@@ -330,7 +332,8 @@ class NacosSearchService {
                 pageSize = request.pageSize,
                 pagesAvailable = execution.response.pagesAvailable,
                 source = execution.source,
-                fromCache = execution.source != SearchSource.REMOTE
+                fromCache = execution.source != SearchSource.REMOTE,
+                request = request
             )
             logger.info("Search completed: ${execution.configurations.size} configurations found (${execution.source})")
         } else {
@@ -347,22 +350,8 @@ class NacosSearchService {
         currentRequest: SearchRequest,
         nacosApiService: NacosApiService
     ) {
-        var nextPageNo = _paginationState.value.nextPage()
+        val nextPageNo = _paginationState.value.nextPage()
         val nextPageSize = _paginationState.value.pageSize
-        if (currentRequest.namespace != null) {
-            if (_paginationState.value.totalCount != (currentRequest.namespace.configCount)) {
-                // 刷新分页参数
-                _paginationState.value = PaginationState(
-                    currentPage = 1,
-                    pageSize = 10,
-                    totalCount = currentRequest.namespace.configCount,
-                    totalPages = currentRequest.namespace.configCount / 10
-                )
-            }
-            nextPageNo = _paginationState.value.nextPage()
-
-        }
-
         if (nextPageNo != null) {
             val newRequest = (this.currentRequest ?: currentRequest).copy(pageNo = nextPageNo, pageSize = nextPageSize)
             performSearch(newRequest, nacosApiService)

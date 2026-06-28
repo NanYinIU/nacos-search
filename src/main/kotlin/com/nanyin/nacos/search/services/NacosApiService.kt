@@ -27,7 +27,7 @@ class NacosApiService {
     private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
     
     companion object {
-        private const val CONFIG_ENDPOINT = "/nacos/v1/cs/config"
+        private const val CONFIG_ENDPOINT = "/nacos/v1/cs/configs"
         private const val CONFIG_LIST_ENDPOINT = "/nacos/v1/cs/configs"
         // 查询命名空间，第一步，
         private const val NAMESPACE_ENDPOINT = "/nacos/v1/console/namespaces"
@@ -319,10 +319,49 @@ class NacosApiService {
         }
     }
 
+    /**
+     * Publishes (creates or updates) a configuration to Nacos via POST.
+     * Uses the Nacos Open API /nacos/v1/cs/configs endpoint.
+     */
+    suspend fun publishConfiguration(
+        dataId: String,
+        group: String,
+        content: String,
+        type: String = "text",
+        namespaceId: String? = null
+    ): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val params = buildMap {
+                put("dataId", dataId)
+                put("group", group)
+                put("content", content)
+                put("type", type)
+                namespaceId?.let { put("tenant", it) }
+            }
+
+            val url = buildUrl(CONFIG_ENDPOINT, emptyMap())
+            logger.info("Publishing configuration: $dataId:$group")
+
+            val response = requestPost(url, params, buildAuthHeaders())
+            // Nacos returns "true" on success
+            val success = response.trim().equals("true", ignoreCase = true)
+            if (success) {
+                // Invalidate cache for this config
+                cacheService.invalidateNamespace(settings.serverUrl, namespaceId)
+                Result.success(true)
+            } else {
+                Result.failure(RuntimeException("Server responded: $response"))
+            }
+        } catch (e: Exception) {
+            logger.warn("Error publishing configuration", e)
+            Result.failure(e)
+        }
+    }
+
     private fun requestJson(url: String, authHeaders: Map<String, String>): String {
         return HttpRequests.request(url)
-            .connectTimeout(CONNECTION_TIMEOUT)
-            .readTimeout(READ_TIMEOUT)
+            .connectTimeout(settings.getConnectionTimeoutMillis())
+            .readTimeout(settings.getReadTimeoutMillis())
             .tuner { connection ->
                 connection.setRequestProperty("Accept", "application/json")
                 authHeaders.forEach { (key, value) ->
@@ -330,6 +369,45 @@ class NacosApiService {
                 }
             }
             .readString()
+    }
+
+    private fun requestPost(url: String, params: Map<String, String>, authHeaders: Map<String, String>): String {
+        val formData = encodeFormData(params)
+        val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.connectTimeout = settings.getConnectionTimeoutMillis()
+        connection.readTimeout = settings.getReadTimeoutMillis()
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+        connection.setRequestProperty("Accept", "application/json")
+        authHeaders.forEach { (key, value) ->
+            connection.setRequestProperty(key, value)
+        }
+        val os = connection.outputStream
+        os.write(formData.toByteArray(StandardCharsets.UTF_8))
+        os.flush()
+        os.close()
+        val responseCode = connection.responseCode
+        if (responseCode !in 200..299) {
+            val errStream = connection.errorStream
+            val errText = errStream?.bufferedReader()?.readText() ?: ""
+            throw RuntimeException("HTTP $responseCode: $errText")
+        }
+        val reader = java.io.BufferedReader(java.io.InputStreamReader(connection.inputStream, StandardCharsets.UTF_8))
+        val sb = StringBuilder()
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            sb.append(line)
+        }
+        reader.close()
+        connection.disconnect()
+        return sb.toString()
+    }
+
+    private fun encodeFormData(params: Map<String, String>): String {
+        return params.entries.joinToString("&") { (key, value) ->
+            "${URLEncoder.encode(key, StandardCharsets.UTF_8.name())}=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
+        }
     }
 
     private fun normalizeRequestKey(params: Map<String, String>): String {

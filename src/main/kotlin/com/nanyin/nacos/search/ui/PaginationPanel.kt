@@ -25,18 +25,29 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
     private val previousButton = JButton(AllIcons.Actions.Back).apply {
         isEnabled = false
         toolTipText = NacosSearchBundle.message("pagination.previous")
+        preferredSize = Dimension(24, 22)
+        minimumSize = Dimension(24, 22)
+        border = JBUI.Borders.empty()
+        isContentAreaFilled = false
     }
     
     private val nextButton = JButton(AllIcons.Actions.Forward).apply {
         isEnabled = false
         toolTipText = NacosSearchBundle.message("pagination.next")
+        preferredSize = Dimension(24, 22)
+        minimumSize = Dimension(24, 22)
+        border = JBUI.Borders.empty()
+        isContentAreaFilled = false
     }
     
-    private val pageInfoLabel = JBLabel("0 " +NacosSearchBundle.message("pagination.page"))
-    private val totalCountLabel = JBLabel("0 " + NacosSearchBundle.message("pagination.items"))
+    private val pageInfoLabel = JBLabel(NacosSearchBundle.message("pagination.page.of.format", 1, 1))
+    private val totalCountLabel = JBLabel(NacosSearchBundle.message("pagination.items.count", 0)).apply {
+        font = font.deriveFont(Font.PLAIN, 11.5f)
+        foreground = JBColor(0x6f737a, 0x9b9ea6)
+    }
     
-    private val pageSizeComboBox = JComboBox(arrayOf(10, 20, 50, 100)).apply {
-        selectedItem = 13
+    private val pageSizeComboBox = JComboBox(arrayOf(10, 20, 50)).apply {
+        selectedItem = 10
         toolTipText = NacosSearchBundle.message("tooltip.page.size")
     }
     
@@ -62,24 +73,34 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
     private fun setupLayout() {
         border = JBUI.Borders.empty(2, 4) // Minimal padding for compact design
         
-        // Simple pagination controls row
-        val paginationRow = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
-            add(totalCountLabel.apply {
-                font = font.deriveFont(Font.BOLD, 13f)
-            })
+        val leftGroup = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
+            isOpaque = false
+            add(totalCountLabel)
             add(previousButton)
             add(pageInfoLabel.apply {
-                font = font.deriveFont(Font.PLAIN, 13f)
+                font = font.deriveFont(Font.PLAIN, 11.5f)
+                foreground = JBColor(0x6f737a, 0x9b9ea6)
             })
             add(nextButton)
-            // add(JLabel("|")) // Simple separator
+        }
+        
+        val rightGroup = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 2)).apply {
+            isOpaque = false
             add(pageSizeLabel.apply {
-                font = font.deriveFont(Font.PLAIN, 13f)
+                font = font.deriveFont(Font.PLAIN, 11.5f)
+                foreground = JBColor(0x6f737a, 0x9b9ea6)
             })
-            add(pageSizeComboBox.apply {
-                preferredSize = Dimension(60, 24)
-                minimumSize = Dimension(50, 24)
-            })
+           add(pageSizeComboBox.apply {
+                preferredSize = Dimension(72, 22)
+                minimumSize = Dimension(64, 22)
+               font = font.deriveFont(Font.PLAIN, 11f)
+           })
+        }
+        
+        val paginationRow = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            add(leftGroup, BorderLayout.WEST)
+            add(rightGroup, BorderLayout.EAST)
         }
         
         add(paginationRow, BorderLayout.CENTER)
@@ -113,8 +134,8 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
             nextButton.isEnabled = false
             
             // Set initial labels
-            pageInfoLabel.text = "0 " + NacosSearchBundle.message("pagination.page.info", 1)
-            totalCountLabel.text = "0 " + NacosSearchBundle.message("pagination.items")
+            pageInfoLabel.text = NacosSearchBundle.message("pagination.page.of.format", 1, 1)
+            totalCountLabel.text = NacosSearchBundle.message("pagination.items.count", 0)
             
             // Set default page size
             pageSizeComboBox.selectedItem = 10
@@ -138,13 +159,10 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
             nextButton.isEnabled = state.hasNextPage
             
             // Update labels with better formatting
-            pageInfoLabel.text = if (state.totalPages > 0) {
-                "${NacosSearchBundle.message("pagination.page")} ${state.currentPage}"
-            } else {
-                NacosSearchBundle.message("pagination.page.info", 1)
-            }
+            val totalPages = if (state.totalPages > 0) state.totalPages else 1
+            pageInfoLabel.text = NacosSearchBundle.message("pagination.page.of.format", state.currentPage, totalPages)
             
-            totalCountLabel.text = "${state.totalCount} ${NacosSearchBundle.message("pagination.items")}"
+            totalCountLabel.text = NacosSearchBundle.message("pagination.items.count", state.totalCount)
             
             // Update page size if different
             if (pageSizeComboBox.selectedItem as Int != state.pageSize) {
@@ -163,8 +181,8 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
         SwingUtilities.invokeLater {
             previousButton.isEnabled = false
             nextButton.isEnabled = false
-            pageInfoLabel.text = "0 " +NacosSearchBundle.message("pagination.page")
-            totalCountLabel.text = "0 " + NacosSearchBundle.message("pagination.items")
+            pageInfoLabel.text = NacosSearchBundle.message("pagination.page.of.format", 1, 1)
+            totalCountLabel.text = NacosSearchBundle.message("pagination.items.count", 0)
             pageSizeComboBox.selectedItem = 10
             isVisible = false
         }
@@ -198,17 +216,16 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
     }
 
     override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
-        var totalCountNum = newNamespace?.configCount;
-        if(totalCountNum == null) {
-            totalCountNum = 0;
-        }
+        val totalCountNum = newNamespace?.configCount ?: 0
+        val pageSize = 10
+        // Ceiling division so e.g. 9 items => 1 page (integer division previously gave 0).
+        val totalPages = if (totalCountNum == 0) 0 else (totalCountNum + pageSize - 1) / pageSize
         updatePagination(NacosSearchService.PaginationState(
             currentPage = 1,
-            pageSize = 10,
+            pageSize = pageSize,
             totalCount = totalCountNum,
-            totalPages = totalCountNum / 10
+            totalPages = totalPages
         ))
-        // 重新search更新
     }
     
     /**
@@ -266,8 +283,9 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
             val currentPage = paginationState?.currentPage ?: 1
             val totalCount = paginationState?.totalCount ?: 0
             
-            pageInfoLabel.text = "$currentPage ${NacosSearchBundle.message("pagination.page")}"
-            totalCountLabel.text = "$totalCount ${NacosSearchBundle.message("pagination.items")}"
+            val totalPages = paginationState?.totalPages ?: 1
+            pageInfoLabel.text = NacosSearchBundle.message("pagination.page.of.format", currentPage, totalPages)
+            totalCountLabel.text = NacosSearchBundle.message("pagination.items.count", totalCount)
         }
     }
     

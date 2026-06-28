@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicReference
 
 @TestApplication
 class NacosApiServiceTest {
@@ -26,6 +27,8 @@ class NacosApiServiceTest {
         private lateinit var server: HttpServer
         private var serverPort: Int = 0
         private val gson = Gson()
+        private val lastPublishBody = AtomicReference("")
+        private val lastPublishQuery = AtomicReference<String?>(null)
 
         private val namespacesResponse = mapOf(
             "code" to 0,
@@ -77,9 +80,15 @@ class NacosApiServiceTest {
                     sendJsonResponse(exchange, 200, namespacesResponse)
                 }
             })
-
+            // Handle POST (publish) to /nacos/v1/cs/configs
             server.createContext("/nacos/v1/cs/configs", object : HttpHandler {
                 override fun handle(exchange: HttpExchange) {
+                    if (exchange.requestMethod == "POST") {
+                        lastPublishQuery.set(exchange.requestURI.query)
+                        lastPublishBody.set(exchange.requestBody.bufferedReader(StandardCharsets.UTF_8).readText())
+                        sendTextResponse(exchange, 200, "true")
+                        return
+                    }
                     val query = exchange.requestURI.query ?: ""
                     when {
                         query.contains("show=all") -> sendJsonResponse(exchange, 200, configDetailResponse)
@@ -98,17 +107,29 @@ class NacosApiServiceTest {
             server.stop(0)
         }
 
-        private fun sendJsonResponse(exchange: HttpExchange, statusCode: Int, body: Any) {
-            val response = gson.toJson(body)
-            val bytes = response.toByteArray(StandardCharsets.UTF_8)
-            exchange.responseHeaders.set("Content-Type", "application/json")
+        fun resetLastPublishRequest() {
+            lastPublishBody.set("")
+            lastPublishQuery.set(null)
+        }
+
+       private fun sendJsonResponse(exchange: HttpExchange, statusCode: Int, body: Any) {
+           val response = gson.toJson(body)
+           val bytes = response.toByteArray(StandardCharsets.UTF_8)
+           exchange.responseHeaders.set("Content-Type", "application/json")
+           exchange.sendResponseHeaders(statusCode, bytes.size.toLong())
+           exchange.responseBody.use { it.write(bytes) }
+       }
+
+        private fun sendTextResponse(exchange: HttpExchange, statusCode: Int, body: String) {
+            val bytes = body.toByteArray(StandardCharsets.UTF_8)
+            exchange.responseHeaders.set("Content-Type", "text/plain")
             exchange.sendResponseHeaders(statusCode, bytes.size.toLong())
             exchange.responseBody.use { it.write(bytes) }
         }
-    }
+   }
 
-    private lateinit var apiService: NacosApiService
-    private lateinit var settings: NacosSettings
+   private lateinit var apiService: NacosApiService
+   private lateinit var settings: NacosSettings
 
     @BeforeEach
     fun setUp() {
@@ -231,15 +252,14 @@ class NacosApiServiceTest {
 
         val config = apiService.getConfigurationFromItem(item)
         assertEquals("test.properties", config.dataId)
-        assertEquals("key=value", config.content)
+        // Item already has content, so it's returned directly
+        assertEquals("initial", config.content)
     }
 
     @Test
-    fun `test clear cache`() {
-        assertDoesNotThrow {
-            apiService.clearCache()
-            apiService.clearCache("test-ns")
-        }
+    fun `test clear cache`() = runBlocking {
+        apiService.clearCache()
+        apiService.clearCache("test-ns")
     }
 
     @Test
@@ -282,11 +302,43 @@ class NacosApiServiceTest {
         assertEquals("yaml", yamlConfig.getConfigType())
     }
 
-    @Test
-    fun `test settings validation`() {
-        assertTrue(settings.isValid())
+   @Test
+   fun `test settings validation`() {
+       assertTrue(settings.isValid())
 
-        settings.serverUrl = ""
-        assertFalse(settings.isValid())
+       settings.serverUrl = ""
+       assertFalse(settings.isValid())
+   }
+
+    @Test
+    fun `test publish configuration to correct endpoint`() = runBlocking {
+        resetLastPublishRequest()
+        val result = apiService.publishConfiguration(
+            dataId = "test-publish.properties",
+            group = "TEST_GROUP",
+            content = "test.key=test.value",
+            type = "properties",
+            namespaceId = "test-ns"
+        )
+        assertTrue(result.isSuccess)
+        assertTrue(result.getOrDefault(false))
+        assertEquals(
+            "dataId=test-publish.properties&group=TEST_GROUP&content=test.key%3Dtest.value&type=properties&tenant=test-ns",
+            lastPublishBody.get()
+        )
+        assertFalse(lastPublishQuery.get().orEmpty().contains("content="))
+    }
+
+    @Test
+    fun `test publish configuration to null namespace`() = runBlocking {
+        val result = apiService.publishConfiguration(
+            dataId = "public-config.properties",
+            group = "DEFAULT_GROUP",
+            content = "key=value",
+            type = "properties",
+            namespaceId = null
+        )
+        assertTrue(result.isSuccess)
+        assertTrue(result.getOrDefault(false))
     }
 }

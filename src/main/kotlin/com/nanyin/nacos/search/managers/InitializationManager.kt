@@ -103,16 +103,24 @@ class InitializationManager(
         logger.debug("Initializing namespaces")
         
         try {
-            // Refresh namespace panel to load all namespaces
+            // Load namespaces from server and await completion
+            val result = namespaceService.loadNamespacesAsync().await()
+            result.onSuccess { namespaces ->
+                logger.info("Loaded ${namespaces.size} namespaces from server")
+            }.onFailure { error ->
+                logger.warn("Failed to load namespaces from server: ${error.message}")
+            }
+            
+            // Refresh namespace panel UI after data is loaded
             namespacePanel.refresh()
             
-            // Get current namespace from service
+            // Get current namespace from service (now populated by loadNamespacesAsync)
             val currentNamespace = namespaceService.getCurrentNamespace()
             
             if (currentNamespace != null) {
                 logger.debug("Current namespace: ${currentNamespace.namespaceName} (${currentNamespace.namespaceId})")
             } else {
-                logger.warn("No current namespace found")
+                logger.warn("No current namespace found after loading")
             }
             
             return currentNamespace
