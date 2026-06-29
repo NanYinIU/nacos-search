@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.1.0"
+version = "1.1.1"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -110,7 +110,7 @@ tasks {
         """.trimIndent())
 
         changeNotes.set("""
-            <h3>1.1.0</h3>
+            <h3>1.1.1</h3>
             <ul>
                 <li>Multi-server (environment) configuration support with master-detail settings UI</li>
                 <li>Redesigned Nacos Search settings page</li>
