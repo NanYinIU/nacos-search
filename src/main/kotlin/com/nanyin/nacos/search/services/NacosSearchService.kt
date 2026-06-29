@@ -217,9 +217,7 @@ class NacosSearchService {
                 request.toApiListPageCacheKey()
             )
             if (cached != null) {
-                val configurations = cached.pageItems.map { item ->
-                    nacosApiService.getConfigurationFromItem(item, useCache = true)
-                }
+                val configurations = cached.pageItems.map { it.toMetadataConfiguration() }
                 lastCompletedRequestKey = requestKey
                 return Result.success(SearchExecutionResult(cached, configurations, SearchSource.CACHE))
             }
@@ -239,9 +237,7 @@ class NacosSearchService {
 
         if (result.isSuccess) {
             val response = result.getOrNull()!!
-            val configurations = response.pageItems.map { item ->
-                nacosApiService.getConfigurationFromItem(item, useCache = true)
-            }
+            val configurations = response.pageItems.map { it.toMetadataConfiguration() }
             lastCompletedRequestKey = requestKey
             return Result.success(SearchExecutionResult(response, configurations, SearchSource.REMOTE))
         }
@@ -253,9 +249,7 @@ class NacosSearchService {
             allowStale = true
         )
         if (stale != null) {
-            val configurations = stale.pageItems.map { item ->
-                nacosApiService.getConfigurationFromItem(item, useCache = true)
-            }
+            val configurations = stale.pageItems.map { it.toMetadataConfiguration() }
             return Result.success(SearchExecutionResult(stale, configurations, SearchSource.STALE_CACHE))
         }
 
@@ -479,4 +473,13 @@ class NacosSearchService {
         val configurations: List<NacosConfiguration>,
         val source: SearchSource
     )
+
+    private fun NacosApiService.ConfigItem.toMetadataConfiguration(): NacosConfiguration =
+        NacosConfiguration(
+            dataId = dataId,
+            group = group,
+            tenantId = tenant,
+            content = content.orEmpty(),
+            type = type
+        )
 }

@@ -51,6 +51,30 @@ class CacheServiceTest {
     }
 
     @Test
+    fun `all cached configurations can be scoped to one server`() = runBlocking {
+        val cacheService = CacheService()
+        cacheService.clearAll()
+
+        cacheService.putConfigDetail(
+            serverUrl = "http://dev-nacos:8848",
+            namespaceId = "public",
+            configuration = NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=dev", "properties"),
+            ttl = 60_000L
+        )
+        cacheService.putConfigDetail(
+            serverUrl = "http://prod-nacos:8848",
+            namespaceId = "public",
+            configuration = NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=prod", "properties"),
+            ttl = 60_000L
+        )
+
+        val devConfigs = cacheService.getAllCachedConfigurations("http://dev-nacos:8848/")
+
+        assertEquals(1, devConfigs.size)
+        assertEquals("app.name=dev", devConfigs.single().content)
+    }
+
+    @Test
     fun `list page cache expires independently from detail cache`() = runBlocking {
         val cacheService = CacheService()
         cacheService.clearAll()
@@ -99,5 +123,26 @@ class CacheServiceTest {
         assertEquals(0, stats.listPageEntries)
         assertEquals(1, stats.cacheHits)
         assertEquals(1, stats.cacheMisses)
+    }
+
+    @Test
+    fun `cache modification count changes when detail cache changes`() = runBlocking {
+        val cacheService = CacheService()
+        cacheService.clearAll()
+        val initial = cacheService.getModificationCount()
+
+        cacheService.putConfigDetail(
+            serverUrl = "http://nacos:8848",
+            namespaceId = "dev",
+            configuration = NacosConfiguration("app.yaml", "DEFAULT_GROUP", "dev", "feature=true"),
+            ttl = 60_000L
+        )
+
+        val afterPut = cacheService.getModificationCount()
+        assertEquals(initial + 1, afterPut)
+
+        cacheService.clearAll()
+
+        assertEquals(afterPut + 1, cacheService.getModificationCount())
     }
 }

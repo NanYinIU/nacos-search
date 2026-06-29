@@ -191,6 +191,18 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         onRefreshRequested?.invoke()
     }
 
+    /**
+     * Programmatically selects the given configuration and fires the selection
+     * callback. Used by @NacosValue navigation.
+     */
+    fun selectConfiguration(config: NacosConfiguration) {
+        val idx = configurations.indexOfFirst { it.getKey() == config.getKey() }
+        if (idx >= 0) {
+            configList.selectedIndex = idx
+            configList.ensureIndexIsVisible(idx)
+        }
+    }
+
     fun setConfigurations(newConfigurations: List<NacosConfiguration>) {
         setLoadingState(false)
         configurations = newConfigurations

@@ -8,8 +8,16 @@ import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.ex.EditorEx
+import com.intellij.openapi.editor.colors.EditorColorsManager
+import com.intellij.openapi.editor.markup.GutterIconRenderer
 import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.fileTypes.FileTypeManager
+import com.intellij.openapi.ui.popup.JBPopupFactory
+import com.nanyin.nacos.search.NacosIcons
+import com.nanyin.nacos.search.psi.ConfigKeyExtractor
+import com.nanyin.nacos.search.psi.NacosCodeContextExtractor
+import com.nanyin.nacos.search.psi.NacosConfigKeyElement
+import com.nanyin.nacos.search.psi.NacosConfigKeyReferenceSearcher
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.Disposable
@@ -70,6 +78,11 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         DISPOSING,
         DISPOSED
     }
+
+    private data class PendingNavigation(
+        val configKey: String,
+        val lineIndex: Int
+    )
     
     private val editorState = AtomicReference(EditorState.NONE)
     private val editorLock = ReentrantLock()
@@ -87,6 +100,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
     
     // State
     private var currentConfiguration: NacosConfiguration? = null
+    private var pendingNavigation: PendingNavigation? = null
     private var isLoading = false
     // Dirty-state tracking: original content snapshot for change detection
     private var originalContent: String = ""
@@ -104,6 +118,12 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         initializeComponents()
         setupLayout()
         setupEventHandlers()
+        // Keep the in-memory editor's color scheme in sync with the active IDE
+        // theme, so switching dark/light updates the detail panel too.
+        ApplicationManager.getApplication().messageBus.connect(this)
+            .subscribe(com.intellij.ide.ui.LafManagerListener.TOPIC, com.intellij.ide.ui.LafManagerListener {
+                editor?.let { applyThemeScheme(it) }
+            })
         showEmptyState()
     }
     
@@ -465,12 +485,145 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
      * Display configuration details
      */
     fun showConfiguration(configuration: NacosConfiguration) {
+        showConfiguration(configuration, -1)
+    }
+
+    fun showConfiguration(configuration: NacosConfiguration, lineIndex: Int) {
         val generation = ++displayGeneration
         currentConfiguration = configuration
+        pendingNavigation = lineIndex.takeIf { it >= 0 }?.let {
+            PendingNavigation(configuration.getKey(), it)
+        }
         updateMetadata(configuration, generation)
         loadConfigurationContent(configuration, generation)
     }
-    
+
+    /**
+     * Moves the caret to [lineIndex] (0-based) and scrolls it into view.
+     * Used by @NacosValue navigation to land on the defining line. Called after
+     * [showConfiguration], so the editor content is already loaded.
+     */
+    fun moveToLine(lineIndex: Int) {
+        val ed = editor ?: return
+        val document = ed.document
+        val targetLine = lineIndex.coerceIn(0, document.lineCount - 1)
+        ApplicationManager.getApplication().invokeLater {
+            val offset = document.getLineStartOffset(targetLine)
+            ed.caretModel.moveToOffset(offset)
+            ed.scrollingModel.scrollToCaret(com.intellij.openapi.editor.ScrollType.CENTER)
+        }
+    }
+
+    /**
+     * Places a gutter icon on each line that defines a configuration key.
+     * Clicking the icon opens "Find Usages" for that key, scanning the project
+     * for `${key}` placeholders in @NacosValue / @Value annotations.
+     */
+    private fun applyKeyGutterMarkers(configuration: NacosConfiguration, ed: EditorEx) {
+        val keys = ConfigKeyExtractor.extract(configuration)
+        if (keys.isEmpty()) return
+
+        // Skip during dumb mode — the FileBasedIndex is not available, so
+        // usage queries would fail. Markers are applied on the next config
+        // open once the IDE returns to smart mode (plan 9.4).
+        if (com.intellij.openapi.project.DumbService.isDumb(project)) return
+
+        val generation = displayGeneration
+        coroutineScope.launch(Dispatchers.Default) {
+            val usedKeys = NacosConfigKeyReferenceSearcher.findUsedKeys(
+                project, keys.keys,
+                configIdentity = configuration.getKey(),
+                configMd5 = configuration.md5
+            )
+            if (usedKeys.isEmpty()) return@launch
+
+            ApplicationManager.getApplication().invokeLater({
+                if (generation != displayGeneration || currentConfiguration?.getKey() != configuration.getKey()) {
+                    return@invokeLater
+                }
+                if (editor !== ed || ed.isDisposed) return@invokeLater
+
+                val document = ed.document
+                val markup = ed.markupModel
+                keys.values
+                    .asSequence()
+                    .filter { it.key in usedKeys }
+                    .filter { it.lineIndex >= 0 && it.lineIndex < document.lineCount }
+                    .forEach { loc ->
+                        val keyElement = NacosConfigKeyElement(project, configuration, loc.key, loc.value, loc.lineIndex)
+                        val highlighter = markup.addLineHighlighter(
+                            loc.lineIndex,
+                            com.intellij.openapi.editor.markup.HighlighterLayer.SELECTION,
+                            null as com.intellij.openapi.editor.markup.TextAttributes?
+                        )
+                        highlighter.gutterIconRenderer = KeyGutterRenderer(loc.key, keyElement)
+                    }
+            }, ModalityState.defaultModalityState())
+        }
+    }
+
+    /**
+     * Gutter icon shown on each configuration-key line. Clicking it triggers
+     * Find Usages via [KeyFindUsagesAction].
+     */
+    private class KeyGutterRenderer(
+        private val key: String,
+        private val element: NacosConfigKeyElement
+    ) : GutterIconRenderer() {
+        override fun getIcon() = NacosIcons.GutterCodeUsage
+        override fun getTooltipText(): String = "Find code usages of \${$key}"
+        override fun getClickAction() = KeyFindUsagesAction(element)
+        override fun getAlignment() = GutterIconRenderer.Alignment.RIGHT
+        override fun equals(other: Any?): Boolean =
+            other is KeyGutterRenderer && key == other.key && element == other.element
+        override fun hashCode(): Int = key.hashCode() * 31 + element.hashCode()
+    }
+
+    /**
+     * Action attached to the gutter icon: launches Find Usages for the
+     * [NacosConfigKeyElement], which the referencesSearch executor handles.
+     */
+    private class KeyFindUsagesAction(
+        private val keyElement: NacosConfigKeyElement
+    ) : com.intellij.openapi.actionSystem.AnAction() {
+        override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent) {
+            val elements = NacosConfigKeyReferenceSearcher
+                .findUsages(keyElement.project, keyElement.key)
+                .mapNotNull { it.element }
+                .distinctBy { "${it.containingFile?.virtualFile?.path}:${it.textOffset}" }
+                .sortedBy { usageRank(it, keyElement.config) }
+
+            when (elements.size) {
+                0 -> com.intellij.openapi.ui.Messages.showInfoMessage(
+                    keyElement.project,
+                    NacosSearchBundle.message("nacosvalue.findusages.no.references", keyElement.key),
+                    NacosSearchBundle.message("nacosvalue.findusages.title", keyElement.key)
+                )
+                1 -> (elements.single() as? com.intellij.pom.Navigatable)?.navigate(true)
+                else -> JBPopupFactory.getInstance()
+                    .createPopupChooserBuilder(elements)
+                    .setTitle(NacosSearchBundle.message("nacosvalue.findusages.title", keyElement.key))
+                    .setItemChosenCallback { (it as? com.intellij.pom.Navigatable)?.navigate(true) }
+                    .createPopup()
+                    .showInBestPositionFor(e.dataContext)
+            }
+        }
+
+        private fun usageRank(element: com.intellij.psi.PsiElement, config: NacosConfiguration): Int {
+            val literal = element as? com.intellij.psi.PsiLiteralExpression ?: return 3
+            val context = NacosCodeContextExtractor.fromLiteral(literal)
+            val namespaceMatches = context.namespaceId != null && context.namespaceId == (config.tenantId ?: "public")
+            val groupMatches = context.group != null && context.group == config.group
+            return when {
+                namespaceMatches && groupMatches -> 0
+                groupMatches -> 1
+                namespaceMatches -> 2
+                else -> 3
+            }
+        }
+    }
+
+   
     private fun updateMetadata(configuration: NacosConfiguration, generation: Long) {
         ApplicationManager.getApplication().invokeLater({
             if (generation != displayGeneration || currentConfiguration?.getKey() != configuration.getKey()) {
@@ -583,10 +736,12 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
             
             // Create new editor safely
             val newEditor = createEditorSafely(content, fileType)
-            if (newEditor != null) {
-               editor = newEditor
-               updateEditorUI(newEditor)
-               copyButton.isEnabled = true
+           if (newEditor != null) {
+              editor = newEditor
+              updateEditorUI(newEditor)
+              applyKeyGutterMarkers(configuration, newEditor)
+              consumePendingNavigation(configuration)
+              copyButton.isEnabled = true
                editButton.isEnabled = true
                 editButton.isVisible = true
                 editButton.text = NacosSearchBundle.message("config.detail.action.edit")
@@ -632,10 +787,13 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
     }
     
     private fun updateEditorUI(ed: EditorEx) {
+        // Bind the in-memory editor to the current IDE theme's color scheme so
+        // it follows dark/light instead of defaulting to a light scheme.
+        applyThemeScheme(ed)
         // Configure editor settings
         val settings = ed.settings
         settings.isLineNumbersShown = true
-        settings.isLineMarkerAreaShown = false
+        settings.isLineMarkerAreaShown = true
         settings.isFoldingOutlineShown = true
         settings.isRightMarginShown = false
         settings.isWhitespacesShown = false
@@ -648,6 +806,23 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         
         // Add to content panel
         contentPanel.add(editorPanel, "content")
+    }
+
+    /**
+     * Applies the color scheme that matches the current IDE UI theme to [ed].
+     * The in-memory editor created via EditorFactory otherwise defaults to a
+     * light scheme regardless of the active dark theme.
+     */
+    private fun applyThemeScheme(ed: EditorEx) {
+        val scheme = EditorColorsManager.getInstance().schemeForCurrentUITheme
+        ed.colorsScheme = scheme
+    }
+
+    private fun consumePendingNavigation(configuration: NacosConfiguration) {
+        val pending = pendingNavigation ?: return
+        if (pending.configKey != configuration.getKey()) return
+        pendingNavigation = null
+        moveToLine(pending.lineIndex)
     }
     
     private fun determineFileType(configuration: NacosConfiguration): FileType {
