@@ -49,7 +49,8 @@ class NacosSearchService {
         val useRegex: Boolean = false,
         val namespace: NamespaceInfo? = null,
         val pageNo: Int = 1,
-        val pageSize: Int = 10
+        val pageSize: Int = 10,
+        val serverId: String = ""
     ) {
         /**
          * Determines if this is a fuzzy search based on dataId content

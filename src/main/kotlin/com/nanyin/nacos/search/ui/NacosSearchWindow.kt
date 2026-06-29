@@ -53,6 +53,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     // UI Components
     private lateinit var namespacePanel: NamespacePanel
     private lateinit var searchPanel: SearchPanel
+    private lateinit var environmentSwitcher: EnvironmentSwitcher
     private lateinit var configListPanel: ConfigListPanel
     private lateinit var configDetailPanel: ConfigDetailPanel
     private lateinit var paginationPanel: PaginationPanel
@@ -82,6 +83,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun initializeComponents() {
         // Initialize UI components
         namespacePanel = NamespacePanel(project)
+        environmentSwitcher = EnvironmentSwitcher(project)
         searchPanel = SearchPanel(project)
         configListPanel = ConfigListPanel(project)
         configDetailPanel = ConfigDetailPanel(project)
@@ -103,13 +105,11 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun setupLayout() {
         border = JBUI.Borders.empty()
 
-        // ===== Header bar: title + icon toolbar =====
-        val headerBar = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(2, 8)
-            add(JBLabel(NacosSearchBundle.message("toolwindow.title")).apply {
-                font = font.deriveFont(java.awt.Font.BOLD, 12f)
-            }, BorderLayout.CENTER)
-            val iconBar = JPanel(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
+       // ===== Header bar: title + icon toolbar =====
+       val headerBar = JPanel(BorderLayout()).apply {
+           border = JBUI.Borders.empty(2, 8)
+           add(environmentSwitcher, BorderLayout.WEST)
+           val iconBar = JPanel(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
                 isOpaque = false
                 add(iconButton(AllIcons.Actions.Refresh, NacosSearchBundle.message("toolwindow.refresh.all"), "nacos.toolwindow.refreshAll") { refreshAll() })
                 add(iconButton(AllIcons.General.Settings, NacosSearchBundle.message("toolwindow.settings"), "nacos.toolwindow.settings") { openSettings() })
@@ -262,6 +262,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
 
     private fun handleSettingsChanged() {
+        // Switcher label reflects the new active environment immediately.
+        SwingUtilities.invokeLater { environmentSwitcher.refresh() }
         coroutineScope.launch {
             nacosApiService.clearCache()
             nacosSearchService.resetSearch()
@@ -350,7 +352,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 namespace = newNamespace,
                 pageNo = 1,
                 pageSize = paginationPanel.getCurrentPageSize(),
-                forceRefresh = true
+                forceRefresh = true,
+                serverId = settings.activeServerId
             )
             currentSearchRequest = request
             loadConfigurations()
@@ -391,9 +394,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
              useRegex = criteria.useRegex,
              namespace = searchNameSpace,
              pageNo = 1,
-             pageSize = paginationPanel.getCurrentPageSize()
+             pageSize = paginationPanel.getCurrentPageSize(),
+             serverId = settings.activeServerId
          )
-        currentNamespace = searchNameSpace;
+         currentNamespace = searchNameSpace;
          
          val processedCriteria = SearchCriteria(
              dataId = searchRequest.getProcessedDataId(),
@@ -441,7 +445,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             namespace = currentNamespace,
             useRegex = true,
             pageNo = 1,
-            pageSize = paginationPanel.getCurrentPageSize()
+            pageSize = paginationPanel.getCurrentPageSize(),
+            serverId = settings.activeServerId
         )
         currentSearchRequest = searchRequest
 
@@ -504,6 +509,12 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     }
                     is NacosSearchService.SearchState.Success -> {
                         SwingUtilities.invokeLater {
+                            // Drop results that were produced for a different environment
+                            // (e.g. an in-flight search that completes after switching servers).
+                            val requestServerId = state.request?.serverId.orEmpty()
+                            if (requestServerId.isNotEmpty() && requestServerId != settings.activeServerId) {
+                                return@invokeLater
+                            }
                             val resultNamespaceId = state.request?.namespace?.namespaceId.orEmpty()
                             val activeNamespaceId = currentNamespace?.namespaceId.orEmpty()
                             if (resultNamespaceId != activeNamespaceId) {
@@ -581,7 +592,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun handleRefreshRequested() {
         currentSearchRequest = (currentSearchRequest ?: NacosSearchService.SearchRequest(
             namespace = namespacePanel.getSelectedNamespace(),
-            pageSize = paginationPanel.getCurrentPageSize()
+            pageSize = paginationPanel.getCurrentPageSize(),
+            serverId = settings.activeServerId
         )).copy(forceRefresh = true)
         loadConfigurations()
     }
@@ -612,7 +624,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 val request = (currentSearchRequest ?: NacosSearchService.SearchRequest(
                     namespace = namespace,
                     pageNo = 1,
-                    pageSize = paginationPanel.getCurrentPageSize()
+                    pageSize = paginationPanel.getCurrentPageSize(),
+                    serverId = settings.activeServerId
                 )).copy(namespace = namespace)
                 currentSearchRequest = request
                 nacosSearchService.performSearch(request, nacosApiService)
@@ -772,7 +785,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     fun focusSearch() {
         searchPanel.focusSearchField()
     }
-    
+
     /**
      * Refresh all data
      */

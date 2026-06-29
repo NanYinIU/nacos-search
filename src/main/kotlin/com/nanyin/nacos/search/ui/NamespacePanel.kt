@@ -1,17 +1,21 @@
 package com.nanyin.nacos.search.ui
 
+import com.nanyin.nacos.search.models.NamespaceFilter
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.icons.AllIcons
-import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.ComboBox
-import com.intellij.ui.AnimatedIcon
+import com.intellij.openapi.ui.popup.JBPopup
+import com.intellij.openapi.ui.popup.JBPopupFactory
+import com.intellij.ui.CollectionListModel
+import com.intellij.ui.DocumentAdapter
 import com.intellij.ui.JBColor
+import com.intellij.ui.SearchTextField
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBList
 import com.intellij.util.ui.JBUI
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -22,10 +26,19 @@ import kotlinx.coroutines.launch
 import java.awt.*
 import java.awt.event.ActionEvent
 import java.awt.event.ActionListener
+import java.awt.event.KeyAdapter
+import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import javax.swing.*
+import javax.swing.event.DocumentEvent
 
 /**
- * Panel for namespace selection and management
+ * Panel for namespace selection and management.
+ *
+ * Replaces the previous plain combo box with a button that opens a searchable
+ * popup — necessary because a company-wide Nacos server can expose one or two
+ * hundred namespaces, and scrolling a combo becomes impractical.
  */
 class NamespacePanel(
     private val project: Project,
@@ -33,33 +46,47 @@ class NamespacePanel(
     private val languageService: LanguageService = ApplicationManager.getApplication().getService(LanguageService::class.java),
     private val dispatcher: CoroutineDispatcher = Dispatchers.Main
 ) : JPanel(BorderLayout()), LanguageAwareComponent {
-    
+
     // UI Components
-    private lateinit var namespaceCombo: ComboBox<NamespaceInfo>
+    private lateinit var namespaceButton: JButton
     private lateinit var refreshButton: JButton
     private lateinit var loadingLabel: JBLabel
     private lateinit var statusLabel: JBLabel
-    
+
     // State
     private var isLoading = false
     private var namespaces: List<NamespaceInfo> = emptyList()
-    
+    @Volatile
+    private var currentNamespace: NamespaceInfo? = null
+
+    // Active popup (kept so refresh can update it live)
+    private var activePopup: JBPopup? = null
+
     // Coroutine scope for async operations
     private val coroutineScope = CoroutineScope(dispatcher + SupervisorJob())
-    
+
     init {
         initializeComponents()
         setupLayout()
         setupEventHandlers()
         loadNamespaces()
     }
-    
+
     private fun initializeComponents() {
-        namespaceCombo = ComboBox<NamespaceInfo>().apply {
-            renderer = NamespaceComboRenderer()
+        namespaceButton = JButton().apply {
+            putClientProperty("nacos.automation.id", "nacos.toolwindow.nsSwitcher")
             isEnabled = false // Disabled until namespaces are loaded
+            isContentAreaFilled = false
+            isOpaque = false
+            border = JBUI.Borders.empty(2, 6)
+            horizontalAlignment = SwingConstants.LEFT
+            horizontalTextPosition = SwingConstants.TRAILING
+            verticalTextPosition = SwingConstants.CENTER
+            iconTextGap = 6
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            addActionListener { showSearchPopup() }
         }
-        
+
         refreshButton = JButton(AllIcons.Actions.Refresh).apply {
             toolTipText = NacosSearchBundle.message("namespace.refresh")
             preferredSize = Dimension(28, 24)
@@ -67,17 +94,17 @@ class NamespacePanel(
             border = JBUI.Borders.empty()
             isContentAreaFilled = false
         }
-        
+
         loadingLabel = JBLabel().apply {
-            icon = AnimatedIcon.Default.INSTANCE
+            icon = com.intellij.ui.AnimatedIcon.Default.INSTANCE
             isVisible = false
         }
-        
+
         statusLabel = JBLabel(NacosSearchBundle.message("namespace.loading.namespaces")).apply {
             foreground = JBColor.GRAY
         }
     }
-    
+
     private fun setupLayout() {
         border = JBUI.Borders.empty()
 
@@ -87,12 +114,11 @@ class NamespacePanel(
             preferredSize = Dimension(54, 24)
         }
 
-        // Compact horizontal row: combo only (refresh is an icon button inside)
         val row = JPanel(BorderLayout(2, 0)).apply {
-            add(namespaceCombo.apply {
+            add(namespaceButton.apply {
                 preferredSize = Dimension(160, 26)
                 minimumSize = Dimension(120, 26)
-                maximumSize = Dimension(200, 26)
+                maximumSize = Dimension(220, 26)
             }, BorderLayout.CENTER)
             add(refreshButton.apply {
                 preferredSize = Dimension(28, 24)
@@ -107,26 +133,17 @@ class NamespacePanel(
             add(label, BorderLayout.WEST)
             add(row, BorderLayout.CENTER)
         }, BorderLayout.CENTER)
-        // Status label kept but hidden in compact mode (used programmatically)
         statusLabel.isVisible = false
     }
-    
+
     private fun setupEventHandlers() {
         refreshButton.addActionListener {
             loadNamespaces()
         }
-        
-        namespaceCombo.addActionListener { _ ->
-            if (!isLoading && namespaceCombo.selectedItem != null) {
-                val selectedNamespace = namespaceCombo.selectedItem as NamespaceInfo
-                onNamespaceSelected(selectedNamespace)
-            }
-        }
     }
-    
+
     private fun loadNamespaces() {
         if (isLoading) return
-
         coroutineScope.launch {
             loadNamespacesAndUpdate()
         }
@@ -144,7 +161,7 @@ class NamespacePanel(
             val result = namespaceService.loadNamespacesAsync().await()
             result.onSuccess { loadedNamespaces ->
                 namespaces = loadedNamespaces
-                updateNamespaceCombo()
+                updateNamespaceButton()
                 setLoadingState(false)
                 updateStatus(NacosSearchBundle.message("namespace.loaded.namespaces", loadedNamespaces.size))
             }.onFailure { error ->
@@ -160,32 +177,58 @@ class NamespacePanel(
             Result.failure(e)
         }
     }
-    
-    private fun updateNamespaceCombo() {
+
+    private fun updateNamespaceButton() {
         SwingUtilities.invokeLater {
-            namespaceCombo.removeAllItems()
-            
-            namespaces.forEach { namespace ->
-                namespaceCombo.addItem(namespace)
-            }
-            
-            // Select current namespace if available
-            val currentNamespace = namespaceService.getCurrentNamespace()
-            if (currentNamespace != null) {
-                val matchingNamespace = namespaces.find { it.namespaceId == currentNamespace.namespaceId }
-                if (matchingNamespace != null) {
-                    namespaceCombo.selectedItem = matchingNamespace
+            // Restore the current selection from the service, otherwise keep
+            // whatever was already selected, otherwise default to the first.
+            val current = namespaceService.getCurrentNamespace()
+            val toSelect: NamespaceInfo? = current ?: currentNamespace
+            if (toSelect != null) {
+                val matching = namespaces.find { it.namespaceId == toSelect.namespaceId }
+                if (matching != null) {
+                    selectNamespace(matching, notify = current != null && currentNamespace == null)
+                } else if (namespaces.isNotEmpty()) {
+                    selectNamespace(namespaces.first(), notify = currentNamespace == null)
                 }
             } else if (namespaces.isNotEmpty()) {
-                // Select first namespace if no current namespace
-                namespaceCombo.selectedIndex = 0
-                onNamespaceSelected(namespaces[0])
+                selectNamespace(namespaces.first(), notify = true)
             }
-            
-            namespaceCombo.isEnabled = namespaces.isNotEmpty()
+            namespaceButton.isEnabled = namespaces.isNotEmpty()
+            // Keep an open popup's list in sync after a refresh.
+            refreshPopupIfShowing()
         }
     }
-    
+
+    /**
+     * Updates button label/icon for [ns].
+     */
+    private fun renderButton(ns: NamespaceInfo?) {
+        if (ns == null) {
+            namespaceButton.text = NacosSearchBundle.message("namespace.no.namespaces")
+            namespaceButton.icon = null
+            return
+        }
+        namespaceButton.text = formatNamespaceDisplay(ns)
+        namespaceButton.icon = AllIcons.General.ArrowDown
+        namespaceButton.toolTipText = if (ns.namespaceId.isBlank()) {
+            "Public namespace (default)"
+        } else {
+            "Namespace ID: ${ns.namespaceId}"
+        }
+    }
+
+    private fun selectNamespace(namespace: NamespaceInfo, notify: Boolean) {
+        val changed = currentNamespace?.namespaceId != namespace.namespaceId
+        currentNamespace = namespace
+        renderButton(namespace)
+        if (notify) {
+            onNamespaceSelected(namespace)
+        } else if (changed) {
+            updateStatus(NacosSearchBundle.message("namespace.selected", namespace.namespaceName))
+        }
+    }
+
     private fun onNamespaceSelected(namespace: NamespaceInfo) {
         coroutineScope.launch {
             try {
@@ -196,22 +239,146 @@ class NamespacePanel(
             }
         }
     }
-    
+
+    /**
+     * Opens the searchable namespace popup. The popup filters [namespaces]
+ * via [NamespaceFilter]; the public namespace is always pinned on top.
+     */
+    private fun showSearchPopup() {
+        if (GraphicsEnvironment.isHeadless() || ApplicationManager.getApplication().isUnitTestMode) return
+        if (namespaces.isEmpty()) return
+        activePopup?.cancel()
+
+        val searchField = SearchTextField().apply {
+            putClientProperty("nacos.automation.id", "nacos.toolwindow.nsSearch")
+            textEditor.emptyText.text = NacosSearchBundle.message("namespace.search.placeholder")
+            preferredSize = Dimension(280, 28)
+        }
+
+        val listModel = CollectionListModel(NamespaceFilter.filter(namespaces, ""))
+        val list = JBList(listModel).apply {
+            cellRenderer = NamespaceListRenderer()
+            selectionMode = ListSelectionModel.SINGLE_SELECTION
+            visibleRowCount = 12
+        }
+
+        // Pre-select the current namespace so the list opens scrolled to it.
+        currentNamespace?.let { current ->
+            val idx = listModel.items.indexOfFirst { it.namespaceId == current.namespaceId }
+            if (idx >= 0) list.selectedIndex = idx
+        }
+
+        val emptyLabel = JBLabel().apply {
+            isOpaque = false
+            foreground = JBColor.GRAY
+            border = JBUI.Borders.empty(10)
+            horizontalAlignment = SwingConstants.CENTER
+            isVisible = false
+        }
+
+        val scrollPane = com.intellij.ui.components.JBScrollPane(list).apply {
+            border = JBUI.Borders.empty()
+            preferredSize = Dimension(300, 280)
+            minimumSize = Dimension(260, 160)
+        }
+
+        val panel = JPanel(BorderLayout()).apply {
+ add(searchField, BorderLayout.NORTH)
+            add(scrollPane, BorderLayout.CENTER)
+            add(emptyLabel, BorderLayout.SOUTH)
+            border = JBUI.Borders.empty(4, 4, 0, 4)
+        }
+
+        fun applyFilter() {
+            val filtered = NamespaceFilter.filter(namespaces, searchField.text)
+            listModel.replaceAll(filtered)
+            if (filtered.isEmpty()) {
+                scrollPane.isVisible = false
+                emptyLabel.text = NacosSearchBundle.message("namespace.search.empty", searchField.text.trim())
+                emptyLabel.isVisible = true
+            } else {
+                scrollPane.isVisible = true
+                emptyLabel.isVisible = false
+            }
+            // Keep selection on the current namespace when still present, else first.
+            val current = currentNamespace
+            val idx = if (current != null) {
+                listModel.items.indexOfFirst { it.namespaceId == current.namespaceId }
+            } else -1
+            list.selectedIndex = if (idx >= 0) idx else 0
+            list.ensureIndexIsVisible(list.selectedIndex.coerceAtLeast(0))
+        }
+
+        searchField.addDocumentListener(object : DocumentAdapter() {
+            override fun textChanged(e: DocumentEvent) = applyFilter()
+        })
+
+        // Defer focusing the search field so the popup is on screen first.
+        SwingUtilities.invokeLater { searchField.requestFocusInWindow() }
+
+        val popup = JBPopupFactory.getInstance()
+            .createComponentPopupBuilder(panel, searchField)
+            .setRequestFocus(true)
+            .setResizable(false)
+            .setMovable(false)
+            .setCancelOnClickOutside(true)
+            .setCancelOnWindowDeactivation(true)
+            .createPopup() as JBPopup
+
+        fun chooseSelected() {
+            val selected = list.selectedValue
+            if (selected != null) {
+                popup.closeOk(null)
+                selectNamespace(selected, notify = true)
+            }
+        }
+
+       list.addMouseListener(object : MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) {
+                if (SwingUtilities.isLeftMouseButton(e)) chooseSelected()
+            }
+       })
+        list.addKeyListener(object : KeyAdapter() {
+            override fun keyPressed(e: KeyEvent) {
+                if (e.keyCode == KeyEvent.VK_ENTER) {
+                    e.consume()
+                    chooseSelected()
+                }
+            }
+        })
+
+        activePopup = popup
+        popup.showUnderneathOf(namespaceButton)
+    }
+
+    /**
+     * Re-applies the current popup filter when namespaces are refreshed.
+     */
+    private fun refreshPopupIfShowing() {
+        val popup = activePopup ?: return
+        if (!popup.isVisible || !popup.isDisposed) {
+            activePopup = null
+        }
+        // The popup content is rebuilt from scratch on open, so a mid-refresh
+        // update is best handled by closing and letting the user reopen. We keep
+        // it simple and just clear the reference; a new open reflects fresh data.
+    }
+
     private fun setLoadingState(loading: Boolean) {
         SwingUtilities.invokeLater {
             isLoading = loading
             loadingLabel.isVisible = loading
             refreshButton.isEnabled = !loading
-            namespaceCombo.isEnabled = !loading && namespaces.isNotEmpty()
+            namespaceButton.isEnabled = !loading && namespaces.isNotEmpty()
         }
     }
-    
+
     private fun updateStatus(message: String) {
         SwingUtilities.invokeLater {
             statusLabel.text = message
         }
     }
-    
+
     private fun showError(title: String, message: String) {
         if (GraphicsEnvironment.isHeadless() || ApplicationManager.getApplication().isUnitTestMode) {
             return
@@ -225,42 +392,61 @@ class NamespacePanel(
             )
         }
     }
-    
+
     /**
      * Get the currently selected namespace
      */
     fun getSelectedNamespace(): NamespaceInfo? {
-        return namespaceCombo.selectedItem as? NamespaceInfo
+        return currentNamespace
     }
-    
+
     /**
      * Set the selected namespace programmatically
      */
     fun setSelectedNamespace(namespace: NamespaceInfo) {
         val matchingNamespace = namespaces.find { it.namespaceId == namespace.namespaceId }
         if (matchingNamespace != null) {
-            namespaceCombo.selectedItem = matchingNamespace
+            // notify=true so listeners (and setCurrentNamespace) fire, matching
+            // the old combo action-listener behaviour relied on by callers/tests.
+            selectNamespace(matchingNamespace, notify = true)
         }
     }
-    
+
     /**
      * Refresh namespaces from server
      */
     fun refresh() {
         loadNamespaces()
     }
-    
+
     /**
      * Clean up resources
      */
     fun dispose() {
+        activePopup?.cancel()
+        activePopup = null
         coroutineScope.cancel()
     }
-    
+
     /**
-     * Custom renderer for namespace combo box
+     * Formats a namespace for display in the button and list: name, short id
+     * and optional config count, in the same style the old combo renderer used.
      */
-    private class NamespaceComboRenderer : DefaultListCellRenderer() {
+    private fun formatNamespaceDisplay(ns: NamespaceInfo): String {
+        val countPart = if (ns.configCount > 0) " \u00b7 ${ns.configCount}" else ""
+        val displayName = ns.namespaceName.ifEmpty { ns.getDisplayName() }
+        return if (ns.namespaceId.isBlank()) {
+            "$displayName$countPart"
+        } else {
+            val shortId = if (ns.namespaceId.length > 8) ns.namespaceId.take(8) + "\u2026" else ns.namespaceId
+            "$displayName ($shortId)$countPart"
+        }
+    }
+
+    /**
+     * Custom renderer for the namespace list in the popup.
+     */
+    private inner class NamespaceListRenderer : DefaultListCellRenderer() {
         override fun getListCellRendererComponent(
             list: JList<*>?,
             value: Any?,
@@ -269,88 +455,47 @@ class NamespacePanel(
             cellHasFocus: Boolean
         ): Component {
             super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
-            
             if (value is NamespaceInfo) {
-                val countPart = if (value.configCount > 0) " · ${value.configCount}" else ""
-                val displayName = value.namespaceName.ifEmpty { value.getDisplayName() }
-                text = if (value.namespaceId.isBlank()) {
-                    // Public namespace has an empty id; render "name · count" without empty parens.
-                    "$displayName$countPart"
-                } else {
-                    val shortId = if (value.namespaceId.length > 8) value.namespaceId.take(8) + "…" else value.namespaceId
-                    "$displayName ($shortId)$countPart"
-                }
-
-                // Use monospace for machine-readable namespace values per design guide
+                text = formatNamespaceDisplay(value)
                 font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 12)
-
-                toolTipText = "Namespace ID: ${value.namespaceId}"
+                toolTipText = if (value.namespaceId.isBlank()) {
+                    "Public namespace (default)"
+                } else {
+                    "Namespace ID: ${value.namespaceId}"
+                }
             }
-            
             return this
         }
     }
-    
+
     /**
      * Called when the language is changed
      */
     override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) {
-        // Refresh all UI text elements
         refreshUIText()
-        
-        // Update combo box renderer
-        updateComboRenderer()
-        
-        // Update button tooltips
-        updateButtonTooltips()
-        
-        // Revalidate and repaint the UI
         revalidate()
         repaint()
     }
-    
+
     /**
      * Get the current language service
      */
     override fun getLanguageService(): LanguageService {
         return languageService
     }
-    
+
     /**
      * Refresh all UI text elements
      */
     private fun refreshUIText() {
         SwingUtilities.invokeLater {
-            // Update loading text
             loadingLabel.text = NacosSearchBundle.message("namespace.loading.namespaces")
-            
-            // Update status text
             updateStatusText()
-            
-            // Update refresh button tooltip
             refreshButton.toolTipText = NacosSearchBundle.message("tooltip.namespace.refresh")
+            renderButton(currentNamespace)
         }
     }
-    
-    /**
-     * Update combo box renderer
-     */
-    private fun updateComboRenderer() {
-        SwingUtilities.invokeLater {
-            // Force combo box to re-render with new language
-            namespaceCombo.repaint()
-        }
-    }
-    
-    /**
-     * Update button tooltips
-     */
-    private fun updateButtonTooltips() {
-        SwingUtilities.invokeLater {
-            refreshButton.toolTipText = NacosSearchBundle.message("tooltip.namespace.refresh")
-        }
-    }
-    
+
     /**
      * Update status text based on current state
      */
