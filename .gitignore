@@ -16,3 +16,6 @@ build
 *.html.artifact.json
 nacos-search-toolwindow.html
 nacos-settings-3.html
+ 
+ # Ignore local Codex/Claude settings (may contain secrets)
+ .claude/
