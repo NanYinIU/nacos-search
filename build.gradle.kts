@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.1.1"
+version = "1.2.0"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -110,6 +110,15 @@ tasks {
         """.trimIndent())
 
         changeNotes.set("""
+            <h3>1.2.0</h3>
+            <ul>
+                <li>@NacosValue gutter icon with dual-state (resolved/unresolved) and PSI reference navigation</li>
+                <li>Reverse Find Usages for Nacos configuration keys</li>
+                <li>Fuzzy namespace search support</li>
+                <li>Code usage navigation from configuration detail to Java source code</li>
+                <li>Persistent placeholder index for fast reverse lookup</li>
+                <li>Plugin icon for JetBrains Marketplace</li>
+            </ul>
             <h3>1.1.1</h3>
             <ul>
                 <li>Multi-server (environment) configuration support with master-detail settings UI</li>
