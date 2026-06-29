@@ -1,54 +1,117 @@
-# Nacos Search Plugin
+# Nacos Search
 
-提供一个方便的界面来搜索 Nacos 配置的 IntelliJ IDEA 插件
+Nacos Search 是一个 IntelliJ IDEA 插件，用于在 IDE 内直接连接、搜索和查看 Nacos 配置。它适合需要频繁在多个 Nacos 环境、命名空间和配置项之间切换的开发场景。
 
-## 功能
+## 功能特性
 
-*   **连接到 Nacos 服务器**: 在插件设置中配置您的 Nacos 服务器地址。
-*   **多命名空间支持**: 轻松切换不同的 Nacos 命名空间。
-*   **强大的搜索功能**:
-    *   按照 `Data ID` 支持实时模糊搜索和精确搜索。
-*   **配置管理**:
-    *   查看配置列表和详细信息。
-    *   （未来的功能可能包括创建、编辑和删除配置）。
-*   **缓存机制**: 通过缓存 Nacos 配置来提高性能，并支持自动刷新缓存。
-*   **分页**: 支持对搜索结果进行分页浏览。
+- 多环境连接：在一个插件内维护多个 Nacos 地址，例如本地、测试、预发、生产，并可在工具窗口顶部快速切换。
+- 命名空间管理：加载 Nacos namespace，并支持按名称、ID、描述搜索过滤。
+- 配置搜索：按 Data ID 搜索配置，支持模糊查询和 `*` 通配符。
+- 配置详情：在 IDE 内查看配置内容、Data ID、Group、Namespace、类型、更新时间等信息。
+- 分组过滤：按 Group 缩小配置列表范围。
+- 分页浏览：适配配置数量较多的 namespace，避免一次性展示过多数据。
+- 本地缓存：缓存配置列表和配置详情，减少重复请求，提升常用场景下的响应速度。
+- 认证支持：支持 Token、Basic、Hybrid 等认证模式。
 
-## 如何使用
+### 本地 Local 配置详情
 
-1.  **安装插件**: 从 JetBrains Marketplace 安装 `Nacos Search` 插件。
-2.  **配置插件**:
-    *   打开 `Settings/Preferences` -> `Tools` -> `Nacos Settings`。
-    *   输入您的 Nacos 服务器地址（例如 `http://localhost:8848`）。
-    *   （可选）配置用户名和密码（如果您的 Nacos 服务器需要认证）。
-    *   （可选）启用缓存并设置自动刷新间隔。
-3.  **打开工具窗口**: 通过 `View` -> `Tool Windows` -> `Nacos Search` 打开插件窗口。
-4.  **开始搜索**:
-    *   在工具窗口顶部选择一个命名空间。
-    *   在搜索框中输入您的搜索条件。
-    *   搜索结果将显示在下方的列表中。
-    *   单击列表中的配置项以查看其详细信息。
+![本地 Local 配置详情](docs/images/nacos-local-config-detail.png)
+
+### 配置设置页面
+
+![Nacos Search 配置设置页面](docs/images/nacos-settings-local.png)
+
+用于展示 `Settings/Preferences -> Tools -> Nacos Search` 的多环境配置页面
+
+## 安装
+
+1. 打开 IntelliJ IDEA。
+2. 进入 `Settings/Preferences -> Plugins -> Marketplace`。
+3. 搜索 `Nacos Search`。
+4. 安装插件并重启 IDE。
+
+也可以从本项目构建插件包后，通过 `Settings/Preferences -> Plugins -> Install Plugin from Disk...` 安装。
+
+## 快速开始
+
+### 1. 配置 Nacos 环境
+
+打开 `Settings/Preferences -> Tools -> Nacos Search`，在服务器地址列表中维护连接配置。
+
+常见字段说明：
+
+- Display Name：环境显示名称，例如 `本地 Local`、`Test`、`Prod`。
+- Nacos Server URL：Nacos 服务地址，例如 `http://localhost:8848`。
+- Username / Password：Nacos 认证账号密码，可按需填写。
+- Namespace：默认 namespace。公开命名空间可留空或填写 `public`。
+- Default Group：默认分组，通常为 `DEFAULT_GROUP`。
+- Authentication：选择当前 Nacos 服务需要的认证方式。
+
+### 2. 打开工具窗口
+
+通过 `View -> Tool Windows -> Nacos Search` 打开插件窗口。
+
+工具窗口顶部会展示当前环境。点击环境名称可以在多个 Nacos 连接之间切换。
+
+### 3. 选择 namespace
+
+在 namespace 区域选择目标命名空间。namespace 较多时，可以通过搜索框按名称、ID 或描述过滤。
+
+### 4. 搜索和查看配置
+
+在搜索框输入 Data ID 或通配符表达式，例如：
+
+```text
+application
+application*
+*database
+```
+
+点击配置列表中的条目后，右侧详情面板会展示配置内容和元信息。
+
+## 使用建议
+
+- 多环境建议使用明确的 Display Name，例如 `本地 Local`、`测试 Test`、`生产 Prod`。
+- 生产环境建议使用只读账号，避免误操作。
+- namespace 不确定时，先刷新 namespace 列表，再通过搜索过滤。
+- 配置数量较多时，优先使用 Data ID 搜索和 Group 过滤，减少列表翻页成本。
+- 如果 Nacos 服务端配置较多，可以开启缓存并设置合理 TTL，降低频繁查询带来的延迟。
 
 ## 开发
 
-这是一个使用 Kotlin 和 Gradle 构建的 IntelliJ 平台插件。
+本项目是基于 Kotlin 和 IntelliJ Platform Gradle Plugin 构建的 IntelliJ IDEA 插件。
+
+### 环境要求
+
+- JDK 17
+- Gradle Wrapper
+- IntelliJ IDEA Community 2024.3.5+ 兼容平台
+
+### 常用命令
+
+```bash
+./gradlew compileKotlin compileTestKotlin
+./gradlew test
+./gradlew buildPlugin
+./gradlew runIde
+```
+
+如本机默认 JDK 不是 Java 17，可以先设置：
+
+```bash
+export JAVA_HOME=/Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home
+```
 
 ### 项目结构
 
-*   `src/main/kotlin/com/nanyin/nacos/search`:
-    *   `actions`: 包含 UI 动作，例如刷新缓存。
-    *   `listeners`: 包含事件监听器。
-    *   `managers`: 管理插件的初始化等。
-    *   `models`: 数据模型，例如 `NacosConfiguration`。
-    *   `services`: 核心服务，包括 `NacosApiService`、`NacosSearchService` 和 `CacheService`。
-    *   `settings`: 插件的设置页面。
-    *   `ui`: 所有的 UI 组件，例如工具窗口、面板等。
-
-### 构建项目
-
-```bash
-gradle buildPlugin
-```
+- `src/main/kotlin/com/nanyin/nacos/search/actions`：菜单和工具动作。
+- `src/main/kotlin/com/nanyin/nacos/search/listeners`：事件监听器。
+- `src/main/kotlin/com/nanyin/nacos/search/managers`：初始化和生命周期管理。
+- `src/main/kotlin/com/nanyin/nacos/search/models`：Nacos 配置、namespace、搜索结果等模型。
+- `src/main/kotlin/com/nanyin/nacos/search/services`：Nacos API、认证、搜索、缓存、namespace 等核心服务。
+- `src/main/kotlin/com/nanyin/nacos/search/settings`：插件配置与设置页。
+- `src/main/kotlin/com/nanyin/nacos/search/ui`：工具窗口和 Swing UI 组件。
+- `src/main/resources/messages`：中英文国际化文案。
 
 ## 许可证
 
