@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nacos Search · Gutter 跳转标记图标（双态）</title>
+<style>
+  :root {
+    --bg: oklch(98% 0.005 250);
+    --surface: oklch(100% 0 0);
+    --fg: oklch(22% 0.02 240);
+    --muted: oklch(44% 0.02 245);
+    --border: oklch(90% 0.008 240);
+    --accent: oklch(58% 0.16 250);
+    --ok: oklch(60% 0.13 150);
+    --warn: oklch(70% 0.12 75);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    padding: 56px 24px 96px;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+  h1 { font-size: 30px; letter-spacing: -0.02em; line-height: 1.2; }
+  h1 + p { color: var(--muted); margin-top: 12px; max-width: 60ch; }
+  h2 {
+    font-size: 17px;
+    letter-spacing: -0.01em;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  h2 + .sub { margin-top: -8px; margin-bottom: 18px; font-size: 13px; color: var(--muted); max-width: 60ch; }
+  section { margin-top: 56px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+
+  /* ---- faux editor ---- */
+  .editor {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  .editor .chrome {
+    display: flex; align-items: center; gap: 7px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in oklab, var(--surface) 70%, var(--bg));
+  }
+  .editor .chrome i { width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+  .editor .chrome span {
+    margin-left: 8px; font-size: 11px; letter-spacing: 0.04em; color: var(--muted);
+  }
+  .code { display: block; }
+  .row {
+    display: grid;
+    grid-template-columns: 34px 22px 1fr;
+    align-items: center;
+    min-height: 24px;
+  }
+  .ln { text-align: right; padding-right: 10px; color: color-mix(in oklab, var(--muted) 60%, transparent); user-select: none; }
+  .gutter { display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .gutter svg { display: block; }
+  .src { white-space: pre; padding-left: 4px; }
+  .tok-key { color: oklch(45% 0.13 25); }
+  .tok-ann { color: oklch(48% 0.10 300); }
+  .tok-str { color: oklch(46% 0.12 150); }
+  .tok-com { color: color-mix(in oklab, var(--muted) 75%, transparent); }
+
+  /* dark editor */
+  .editor.dark {
+    --surface: oklch(27% 0.012 260);
+    --bg: oklch(23% 0.012 260);
+    --fg: oklch(86% 0.02 250);
+    --muted: oklch(62% 0.02 250);
+    --border: oklch(34% 0.012 260);
+    background: oklch(24% 0.012 260);
+    color: var(--fg);
+  }
+  .editor.dark .tok-key { color: oklch(72% 0.12 25); }
+  .editor.dark .tok-ann { color: oklch(75% 0.10 300); }
+  .editor.dark .tok-str { color: oklch(72% 0.12 150); }
+
+  .legend { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .legend b { color: var(--fg); font-weight: 550; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+
+  /* ---- spec table ---- */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 550; }
+  td code, .src code { font-family: var(--mono); font-size: 12.5px; }
+  .state-cell { display: flex; align-items: center; gap: 10px; }
+  .chip { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); }
+  .chip.darkbg { background: oklch(24% 0.012 260); border-color: oklch(34% 0.012 260); }
+
+  /* ---- pixel grid ---- */
+  .specimens { display: flex; gap: 28px; flex-wrap: wrap; }
+  .specimen { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .px { background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px); background-size: 20px 20px; border: 1px solid var(--border); }
+  .px.darkbg { background-color: oklch(24% 0.012 260); }
+  .px.darkbg { background-image: linear-gradient(oklch(34% 0.012 260) 1px, transparent 1px), linear-gradient(90deg, oklch(34% 0.012 260) 1px, transparent 1px); }
+  .cap { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
+
+  /* ---- code block ---- */
+  pre {
+    background: oklch(24% 0.012 260);
+    color: oklch(86% 0.02 250);
+    border-radius: 10px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.7;
+    position: relative;
+  }
+  pre .c { color: oklch(60% 0.02 250); }
+  pre .k { color: oklch(75% 0.10 300); }
+  pre .s { color: oklch(72% 0.12 150); }
+  .copy {
+    position: absolute; top: 12px; right: 12px;
+    font-family: var(--font); font-size: 11px; letter-spacing: 0.04em;
+    color: oklch(86% 0.02 250);
+    background: oklch(32% 0.012 260);
+    border: 1px solid oklch(40% 0.012 260);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  }
+  .copy:hover { background: oklch(38% 0.012 260); }
+  .copy:active { transform: translateY(1px); }
+  .copy:focus-visible { outline: 2px solid oklch(72% 0.12 250); outline-offset: 2px; }
+  .copy.done { color: oklch(80% 0.13 150); border-color: oklch(55% 0.13 150); }
+  .copy.fail { color: oklch(72% 0.16 25); border-color: oklch(55% 0.16 25); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+  .file-label { font-family: var(--mono); font-size: 12px; color: var(--muted); margin: 18px 0 8px; }
+  .foot { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Nacos Search · Gutter Line Marker</div>
+    <h1>代码槽跳转标记 · 双态图标</h1>
+    <p>标注在 <code>@NacosValue</code> / <code>@Value</code> 占位符行旁的 12×12 代码槽图标。点击跳转到对应 Nacos 配置。与工具窗口图标同一视觉家族，但收敛到代码槽尺寸——去掉文档外框与折角（紧贴的代码已说明「这是配置」），并把配置 key/value 收成<b>一笔连体</b>的字形：左侧 <code>[</code> 形的 key 行 + 左杆 + value 行，末端在正中直接拐成斜向「跳转」箭头杆——配置即出口。状态差异只落在箭头头上。</p>
+  </header>
+
+  <main>
+  <!-- ============ 编辑器内真实场景 ============ -->
+  <section>
+    <h2>编辑器内的两种状态</h2>
+    <div class="grid2">
+
+      <!-- light editor -->
+      <div>
+        <div class="editor light">
+          <div class="chrome"><i></i><i></i><i></i><span>OrderConfig.java — 亮色主题</span></div>
+          <div class="code">
+            <div class="row"><span class="ln">11</span><span class="gutter"></span><span class="src"><span class="tok-ann">@NacosValue</span>(<span class="tok-str">"${order.timeout:3000}"</span>)</span></div>
+            <div class="row"><span class="ln">12</span><span class="gutter" title="可正常跳转到 Nacos 配置详情">
+              <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><g stroke="#6C707E" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M7.2 3.8H2.8V6H6L8.7 8.7"/></g><path d="M10 10L7.4 10L10 7.4Z" fill="#6C707E"/></svg>
+            </span><span class="src"><span class="tok-key">private</span> String timeout;</span></div>
+            <div class="row"><span class="ln">13</span><span class="gutter"></span><span class="src"></span></div>
+            <div class="row"><span class="ln">14</span><span class="gutter"></span><span class="src"><span class="tok-ann">@NacosValue</span>(<span class="tok-str">"${legacy.cache.ttl}"</span>)</span></div>
+            <div class="row"><span class="ln">15</span><span class="gutter" title="可点击，但未必能定位到详情">
+              <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><g stroke="#9AA0A8" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M7.2 3.8H2.8V6H6L8.7 8.7"/><path d="M10 10L7.4 10L10 7.4Z"/></g></svg>
+            </span><span class="src"><span class="tok-key">private</span> Long ttl;</span></div>
+          </div>
+        </div>
+        <div class="legend">
+          <span><span class="dot" style="background:#6C707E"></span><b>正常态</b> · 实心箭头</span>
+          <span><span class="dot" style="background:#9AA0A8"></span><b>置灰态</b> · 空心箭头</span>
+        </div>
+      </div>
+
+      <!-- dark editor -->
+      <div>
+        <div class="editor dark">
+          <div class="chrome"><i></i><i></i><i></i><span>OrderConfig.java — 暗色主题</span></div>
+          <div class="code">
+            <div class="row"><span class="ln">11</span><span class="gutter"></span><span class="src"><span class="tok-ann">@NacosValue</span>(<span class="tok-str">"${order.timeout:3000}"</span>)</span></div>
+            <div class="row"><span class="ln">12</span><span class="gutter" title="可正常跳转到 Nacos 配置详情">
+              <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><g stroke="#CED0D6" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M7.2 3.8H2.8V6H6L8.7 8.7"/></g><path d="M10 10L7.4 10L10 7.4Z" fill="#CED0D6"/></svg>
+            </span><span class="src"><span class="tok-key">private</span> String timeout;</span></div>
+            <div class="row"><span class="ln">13</span><span class="gutter"></span><span class="src"></span></div>
+            <div class="row"><span class="ln">14</span><span class="gutter"></span><span class="src"><span class="tok-ann">@NacosValue</span>(<span class="tok-str">"${legacy.cache.ttl}"</span>)</span></div>
+            <div class="row"><span class="ln">15</span><span class="gutter" title="可点击，但未必能定位到详情">
+              <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><g stroke="#787C85" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M7.2 3.8H2.8V6H6L8.7 8.7"/><path d="M10 10L7.4 10L10 7.4Z"/></g></svg>
+            </span><span class="src"><span class="tok-key">private</span> Long ttl;</span></div>
+          </div>
+        </div>
+        <div class="legend">
+          <span><span class="dot" style="background:#CED0D6"></span><b>正常态</b> · 实心箭头</span>
+          <span><span class="dot" style="background:#787C85"></span><b>置灰态</b> · 空心箭头</span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ 状态语义 ============ -->
+  <section>
+    <h2>状态语义</h2>
+    <table>
+      <thead><tr><th>状态</th><th>触发条件（来自 LineMarkerProvider）</th><th>视觉差异</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><div class="state-cell"><span class="chip"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none"><g stroke="#6C707E" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M7.2 3.8H2.8V6H6L8.7 8.7"/></g><path d="M10 10L7.4 10L10 7.4Z" fill="#6C707E"/></svg></span><b>正常态</b></div></td>
+          <td><code>dataId != null</code> 或 <code>NacosKeyResolver.hasKey()</code> 命中——配置已在缓存中，点击直达详情。</td>
+          <td>箭头<b>实心</b>，描边强灰 <code>#6C707E</code> / <code>#CED0D6</code></td>
+        </tr>
+        <tr>
+          <td><div class="state-cell"><span class="chip"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none"><g stroke="#9AA0A8" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M7.2 3.8H2.8V6H6L8.7 8.7"/><path d="M10 10L7.4 10L10 7.4Z"/></g></svg></span><b>置灰态</b></div></td>
+          <td>键未命中缓存，需走 <code>lazyLoadAndNavigate()</code> 远程兜底——可点击，但未必能定位到详情。</td>
+          <td>箭头<b>空心</b>，描边弱灰 <code>#9AA0A8</code> / <code>#787C85</code></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============ 像素网格 ============ -->
+  <section>
+    <h2>20× 像素网格</h2>
+    <p class="sub">12×12 连体字形：一笔配置线在正中拐成箭头杆，末端接实心 / 空心箭头头，标本在网格上放大 20 倍。</p>
+    <div class="specimens">
+      <div class="specimen">
+        <div class="px" style="width:240px;height:240px"><svg aria-hidden="true" width="240" height="240" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><g stroke="#6C707E" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M7.2 3.8H2.8V6H6L8.7 8.7"/></g><path d="M10 10L7.4 10L10 7.4Z" fill="#6C707E"/></svg></div>
+        <span class="cap">正常态 · light</span>
+      </div>
+      <div class="specimen">
+        <div class="px darkbg" style="width:240px;height:240px"><svg aria-hidden="true" width="240" height="240" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><g stroke="#787C85" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M7.2 3.8H2.8V6H6L8.7 8.7"/><path d="M10 10L7.4 10L10 7.4Z"/></g></svg></div>
+        <span class="cap">置灰态 · dark</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 接入 ============ -->
+  <section>
+    <h2>接入（3 步）</h2>
+
+    <div class="file-label">1 · 把四个 SVG 放进 <code>src/main/resources/icons/</code></div>
+    <pre><span class="c"># 正常态</span>
+nacosConfigGutter.svg
+nacosConfigGutter_dark.svg
+<span class="c"># 置灰态</span>
+nacosConfigGutterUnresolved.svg
+nacosConfigGutterUnresolved_dark.svg</pre>
+
+    <div class="file-label">2 · NacosIcons.kt — 注册两态图标</div>
+    <pre><button class="copy" data-copy="icons" aria-label="复制 NacosIcons.kt 代码">复制</button><code id="icons"><span class="k">object</span> NacosIcons {
+    <span class="k">val</span> ToolWindow = IconLoader.getIcon(<span class="s">"/icons/nacosSearch_20.svg"</span>, NacosIcons::<span class="k">class</span>.java)
+    <span class="c">// gutter 跳转标记 · 双态</span>
+    <span class="k">val</span> GutterConfig = IconLoader.getIcon(<span class="s">"/icons/nacosConfigGutter.svg"</span>, NacosIcons::<span class="k">class</span>.java)
+    <span class="k">val</span> GutterConfigUnresolved = IconLoader.getIcon(<span class="s">"/icons/nacosConfigGutterUnresolved.svg"</span>, NacosIcons::<span class="k">class</span>.java)
+}</code></pre>
+
+    <div class="file-label">3 · NacosValueLineMarkerProvider.kt — 按解析状态选图标</div>
+    <pre><button class="copy" data-copy="marker" aria-label="复制 LineMarkerProvider 代码">复制</button><code id="marker"><span class="c">// markerForLiteral(...) 内，原先固定用 NacosIcons.ToolWindow：</span>
+<span class="k">val</span> resolvable = codeContext.dataId != <span class="k">null</span> ||
+    NacosKeyResolver.hasKey(placeholder.key, NacosKeyResolver.currentServerUrl())
+<span class="k">val</span> icon = <span class="k">if</span> (resolvable) NacosIcons.GutterConfig <span class="k">else</span> NacosIcons.GutterConfigUnresolved
+
+<span class="k">return</span> LineMarkerInfo(
+    anchor, anchor.textRange, icon,
+    { <span class="k">if</span> (resolvable) <span class="s">"Nacos 配置：跳转到详情"</span> <span class="k">else</span> <span class="s">"Nacos 配置：尝试远程定位"</span> },
+    { _, _ -> navigateFromCode(anchor, literal, placeholder.key, codeContext) },
+    GutterIconRenderer.Alignment.RIGHT,
+    { <span class="s">"nacos.value.${placeholder.key}"</span> }
+)</code></pre>
+    <p style="color:var(--muted);font-size:13px;margin-top:14px;">提示：<code>shouldShowMarker()</code> 现在仍只决定「是否显示」；上面把同一个判定复用为「显示哪一态」。IDE 在暗色主题下会自动选用 <code>_dark</code> 文件，无需在代码里区分主题。</p>
+  </section>
+
+  </main>
+
+  <footer class="foot">12×12 代码槽规范 · 描边 1.2px · 家族色取自 IntelliJ 新 UI（<code>#6C707E</code> / <code>#CED0D6</code>）· 与 nacosSearch 工具窗口图标同源。</footer>
+
+</div>
+
+<script>
+  function flash(btn, msg, cls) {
+    var old = btn.dataset.label || btn.textContent;
+    btn.dataset.label = old;
+    btn.textContent = msg;
+    if (cls) btn.classList.add(cls);
+    setTimeout(function () {
+      btn.textContent = btn.dataset.label;
+      btn.classList.remove('done', 'fail');
+    }, 1400);
+  }
+  function legacyCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+  document.querySelectorAll('.copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var el = document.getElementById(btn.getAttribute('data-copy'));
+      if (!el) return;
+      var text = el.innerText;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(
+          function () { flash(btn, '已复制', 'done'); },
+          function () { var ok = legacyCopy(text); flash(btn, ok ? '已复制' : '复制失败', ok ? 'done' : 'fail'); }
+        );
+      } else {
+        var ok = legacyCopy(text);
+        flash(btn, ok ? '已复制' : '复制失败', ok ? 'done' : 'fail');
+      }
+    });
+  });
+</script>
+</body>
+</html>

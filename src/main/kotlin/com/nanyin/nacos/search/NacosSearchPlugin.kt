@@ -3,6 +3,7 @@ package com.nanyin.nacos.search
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.SearchService
+import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
@@ -101,18 +102,15 @@ class NacosSearchPlugin : ProjectActivity {
      */
     private suspend fun loadInitialData() {
         try {
-            logger.info("Loading initial configuration data from Nacos server")
+            logger.info("Loading initial configuration metadata from Nacos server")
             
-            val result = apiService.getAllConfigurations()
+            val result = apiService.listConfigurations(pageNo = 1, pageSize = 200, useCache = true)
             if (result.isSuccess) {
-                val configurations = result.getOrThrow()
-                
-                if (settings.cacheEnabled) {
-                    cacheService.cacheConfigurations(configurations)
-                    logger.info("Cached ${configurations.size} configurations")
-                }
-                
-                logger.info("Successfully loaded ${configurations.size} configurations")
+                val response = result.getOrThrow()
+                logger.info("Successfully loaded metadata for ${response.pageItems.size}/${response.totalCount} configurations")
+                // Warm the @NacosValue key index from persisted/opened configs so
+                // code gutter markers appear without blocking the highlighter.
+                NacosKeyResolver.ensureIndexBuilt(cacheService)
             } else {
                 logger.error("Failed to load initial data: ${result.exceptionOrNull()?.message}")
             }
@@ -173,18 +171,14 @@ class NacosSearchPlugin : ProjectActivity {
      */
     suspend fun refreshCache(): Result<Int> {
         return try {
-            logger.info("Refreshing cache from Nacos server")
+            logger.info("Refreshing Nacos list metadata cache")
             
-            val result = apiService.getAllConfigurations()
+            val result = apiService.listConfigurations(pageNo = 1, pageSize = 200, useCache = true, forceRefresh = true)
             if (result.isSuccess) {
-                val configurations = result.getOrThrow()
-                
-                if (settings.cacheEnabled) {
-                    cacheService.cacheConfigurations(configurations)
-                }
-                
-                logger.info("Cache refreshed with ${configurations.size} configurations")
-                Result.success(configurations.size)
+                val response = result.getOrThrow()
+                logger.info("List metadata cache refreshed with ${response.pageItems.size}/${response.totalCount} configurations")
+                NacosKeyResolver.ensureIndexBuilt(cacheService)
+                Result.success(response.totalCount)
             } else {
                 val error = result.exceptionOrNull() ?: Exception("Unknown error")
                 logger.error("Failed to refresh cache: ${error.message}")

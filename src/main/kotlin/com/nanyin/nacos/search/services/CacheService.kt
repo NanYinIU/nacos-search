@@ -9,6 +9,7 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Unified cache for Nacos list pages, configuration details, and namespace indexes.
@@ -23,6 +24,7 @@ class CacheService {
     private val detailCache = ConcurrentHashMap<String, CacheEntry<NacosConfiguration>>()
     private val listPageCache = ConcurrentHashMap<String, CacheEntry<NacosApiService.ConfigListResponse>>()
     private val namespaceIndexCache = ConcurrentHashMap<String, CacheEntry<List<NacosConfiguration>>>()
+    private val modificationCount = AtomicLong(0)
 
     private var cacheHits = 0L
     private var cacheMisses = 0L
@@ -118,6 +120,7 @@ class CacheService {
             detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, configuration, System.currentTimeMillis(), ttl, source)
             persistDetail(key, detailCache[key]!!)
             updateDetailKeysList()
+            markModified()
             cleanupOversizedCaches()
         }
     }
@@ -158,6 +161,7 @@ class CacheService {
                 detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, config, System.currentTimeMillis(), ttl, source)
             }
             updateDetailKeysList()
+            markModified()
             cleanupOversizedCaches()
         }
     }
@@ -176,6 +180,7 @@ class CacheService {
             namespaceIndexCache.remove(namespaceKey(serverUrl, namespaceId))
             updateDetailKeysList()
             updateListPageKeysList()
+            markModified()
         }
     }
 
@@ -205,9 +210,16 @@ class CacheService {
         }
     }
 
-    suspend fun getAllCachedConfigurations(): List<NacosConfiguration> = cacheMutex.withLock {
+    suspend fun getAllCachedConfigurations(serverUrl: String? = null): List<NacosConfiguration> = cacheMutex.withLock {
         cleanupExpiredEntriesLocked()
-        detailCache.values.map { it.data }.distinctBy { legacyKey(it) }
+        val normalizedServerUrl = serverUrl?.let { normalizeServerUrl(it) }?.takeIf { it.isNotBlank() }
+        detailCache.entries.asSequence()
+            .filter { (key, _) ->
+                normalizedServerUrl == null || key.startsWith("$normalizedServerUrl|")
+            }
+            .map { it.value.data }
+            .distinctBy { legacyKey(it) }
+            .toList()
     }
 
     suspend fun cacheConfigurations(configurations: List<NacosConfiguration>, ttl: Long = DEFAULT_TTL) {
@@ -219,10 +231,13 @@ class CacheService {
                 persistDetail(key, detailCache[key]!!)
             }
             updateDetailKeysList()
+            markModified()
             cleanupOversizedCaches()
             logger.info("Cached ${configurations.size} configurations")
         }
     }
+
+    fun getModificationCount(): Long = modificationCount.get()
 
     suspend fun isCached(dataId: String, group: String, tenantId: String? = null): Boolean {
         return getCachedConfiguration(dataId, group, tenantId) != null
@@ -254,6 +269,7 @@ class CacheService {
             properties.unsetValue(LIST_PAGE_KEYS_LIST)
             cacheHits = 0
             cacheMisses = 0
+            markModified()
             logger.info("Cache cleared")
         }
     }
@@ -386,6 +402,10 @@ class CacheService {
         trimOldest(namespaceIndexCache)
         updateDetailKeysList()
         updateListPageKeysList()
+    }
+
+    private fun markModified() {
+        modificationCount.incrementAndGet()
     }
 
     private fun <T> trimOldest(cache: ConcurrentHashMap<String, CacheEntry<T>>) {

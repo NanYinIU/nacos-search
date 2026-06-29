@@ -42,7 +42,7 @@ class RefreshCacheAction : AnAction(
                                     val count = result.getOrThrow()
                                     Messages.showInfoMessage(
                                         project,
-                                        "Successfully refreshed cache with $count configurations.",
+                                        "Successfully refreshed metadata for $count configurations. Content loads on demand.",
                                         "Cache Refreshed"
                                     )
                                 } else {

@@ -65,6 +65,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     // State
     private var currentNamespace: NamespaceInfo? = null
     private var currentConfiguration: NacosConfiguration? = null
+    // Stashed (config, line) consumed after a namespace switch reloads the list.
+    private var pendingNavigationTarget: Pair<NacosConfiguration, Int>? = null
     private var searchCriteria: SearchCriteria? = null
     private var currentSearchRequest: NacosSearchService.SearchRequest? = null
     private var currentConfigurations = listOf<NacosConfiguration>()
@@ -562,6 +564,14 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         if (configurations.isEmpty()) {
             configDetailPanel.clearConfiguration()
         }
+
+        // Consume a navigation target stashed before a namespace switch.
+        pendingNavigationTarget?.let { (targetConfig, lineIndex) ->
+            pendingNavigationTarget = null
+            configListPanel.selectConfiguration(targetConfig)
+            currentConfiguration = targetConfig
+            configDetailPanel.showConfiguration(targetConfig, lineIndex)
+        }
     }
     
     private fun setSearching(searching: Boolean) {
@@ -786,6 +796,43 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         searchPanel.focusSearchField()
     }
 
+    /**
+     * Selects [config] in the list, shows its detail, and (when [lineIndex] >= 0)
+     * positions the caret on that line. Used by @NacosValue navigation.
+     *
+     * When the target config lives in a different namespace from the one
+     * currently shown, the namespace is switched first (same connection only).
+     * The config/line is stashed and consumed once the new namespace's config
+     * list finishes loading.
+     */
+    fun navigateToConfig(config: com.nanyin.nacos.search.models.NacosConfiguration, lineIndex: Int) {
+        ApplicationManager.getApplication().invokeLater {
+            val targetNsId = config.tenantId ?: ""
+            val currentNsId = currentNamespace?.namespaceId
+
+            if (targetNsId == currentNsId) {
+                // Same namespace: select and show immediately.
+                configListPanel.selectConfiguration(config)
+                currentConfiguration = config
+                configDetailPanel.showConfiguration(config, lineIndex)
+            } else {
+                // Different namespace: stash the target and switch.
+                // The result is consumed in updateConfigurationList after the reload.
+                pendingNavigationTarget = config to lineIndex
+                val target = namespaceService.findNamespaceById(targetNsId)
+                if (target != null) {
+                    namespaceService.setCurrentNamespace(target)
+                } else {
+                    // Namespace not in the available list (e.g. not loaded yet).
+                    // Fall back: show the detail directly with the original config.
+                    pendingNavigationTarget = null
+                    currentConfiguration = config
+                    configDetailPanel.showConfiguration(config, lineIndex)
+                }
+            }
+        }
+    }
+    
     /**
      * Refresh all data
      */

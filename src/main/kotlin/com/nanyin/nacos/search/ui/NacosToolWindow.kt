@@ -348,18 +348,26 @@ class NacosToolWindow(private val project: Project, private val toolWindow: Tool
         try {
             indicator?.text = "Connecting to Nacos server..."
             
-            val result = apiService.getAllConfigurations()
+            val result = apiService.listConfigurations(pageNo = 1, pageSize = 200, useCache = true, forceRefresh = true)
             
             if (result.isSuccess) {
-                val configurations = result.getOrThrow()
+                val response = result.getOrThrow()
+                val configurations = response.pageItems.map {
+                    com.nanyin.nacos.search.models.NacosConfiguration(
+                        dataId = it.dataId,
+                        group = it.group,
+                        tenantId = it.tenant,
+                        content = it.content.orEmpty(),
+                        type = it.type
+                    )
+                }
                 
-                indicator?.text = "Caching configurations..."
-                cacheService.cacheConfigurations(configurations)
+                indicator?.text = "Updating configuration metadata..."
                 
                 withContext(Dispatchers.EDT) {
                     updateSearchResults(configurations.map { SearchResult(it, MatchType.MULTIPLE, "", 100) })
                     updateFilters(configurations)
-                    updateStatus("Refreshed ${configurations.size} configurations")
+                    updateStatus("Refreshed metadata for ${response.totalCount} configurations")
                 }
             } else {
                 withContext(Dispatchers.EDT) {

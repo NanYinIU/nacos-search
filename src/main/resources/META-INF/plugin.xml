@@ -37,6 +37,22 @@
         <!-- Project startup activity -->
         <postStartupActivity implementation="com.nanyin.nacos.search.NacosSearchPlugin"/>
 
+        <!-- @NacosValue navigation: reference contribution, line marker, reverse Find Usages -->
+        <psi.referenceContributor
+            language="JAVA"
+            implementation="com.nanyin.nacos.search.psi.NacosValueReferenceContributor"/>
+
+        <codeInsight.lineMarkerProvider
+            language="JAVA"
+            implementationClass="com.nanyin.nacos.search.psi.NacosValueLineMarkerProvider"/>
+
+        <referencesSearch
+            implementation="com.nanyin.nacos.search.psi.NacosConfigKeyReferenceSearcher"/>
+
+        <!-- Persistent index: placeholder key -> .java files for fast reverse lookup -->
+        <fileBasedIndex
+            implementation="com.nanyin.nacos.search.psi.NacosPlaceholderIndex"/>
+
         <!-- Services are now registered via @Service annotations -->
     </extensions>
 
