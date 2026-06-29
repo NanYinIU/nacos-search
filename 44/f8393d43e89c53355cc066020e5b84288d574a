@@ -1,0 +1,24 @@
+build.gradle.kts
+  s_d8210f7a327ba3::t_cd34207f6bf95b 113-121
+  s_d8210f7a327ba3::t_6fde0e7aae2aa3 12
+src/main/resources/META-INF/pluginIcon.svg
+  s_d8210f7a327ba3::t_5062252b39be49 1-13
+src/main/resources/META-INF/pluginIcon_dark.svg
+  s_d8210f7a327ba3::t_5062252b39be49 1-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "44f8393d43e89c53355cc066020e5b84288d574a",
+  "prompts": {},
+  "sessions": {
+    "s_d8210f7a327ba3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b8c1a2c-fd13-4d5b-a1f3-57f46f046ab0",
+        "model": "deepseek-v4-pro"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
