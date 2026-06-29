@@ -180,4 +180,25 @@ class NacosKeyResolverTest {
         NacosKeyResolver.rebuildBlocking(cache, activeServerUrl = null)
         assertTrue(NacosKeyResolver.hasKey("new.key", cache))
     }
+
+    @Test
+    fun `lazy load flow caches config then rebuild makes key resolvable`() = runBlocking {
+        // Simulates what NacosValueLineMarkerProvider.lazyLoadAndNavigate does:
+        // before the remote fetch the key is unknown (gray marker),
+        assertFalse(NacosKeyResolver.hasKey("db.url", cache))
+
+        // then putConfigDetail persists the freshly fetched configuration,
+        cache.putConfigDetail(
+            serverUrl = "http://localhost:8848",
+            namespaceId = null,
+            configuration = cfg("datasource.properties", "DEFAULT_GROUP", null, "db.url=jdbc:test\n", "properties"),
+            ttl = 60_000L
+        )
+
+        // and a synchronous index rebuild makes the key immediately resolvable
+        // so the gutter icon turns solid on the next highlighter pass.
+        NacosKeyResolver.rebuildBlocking(cache, activeServerUrl = "http://localhost:8848")
+        assertTrue(NacosKeyResolver.hasKey("db.url", cache))
+        assertEquals("jdbc:test", NacosKeyResolver.resolve("db.url", cache).single().location.value)
+    }
 }

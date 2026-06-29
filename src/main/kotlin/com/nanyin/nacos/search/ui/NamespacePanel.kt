@@ -32,6 +32,7 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
 import javax.swing.event.DocumentEvent
+import javax.swing.plaf.basic.BasicButtonUI
 
 /**
  * Panel for namespace selection and management.
@@ -75,10 +76,15 @@ class NamespacePanel(
     private fun initializeComponents() {
         namespaceButton = JButton().apply {
             putClientProperty("nacos.automation.id", "nacos.toolwindow.nsSwitcher")
+            putClientProperty("JButton.buttonType", "toolbar")
+            ui = BasicButtonUI()
             isEnabled = false // Disabled until namespaces are loaded
             isContentAreaFilled = false
+            isBorderPainted = false
+            isFocusPainted = false
             isOpaque = false
-            border = JBUI.Borders.empty(2, 6)
+            border = lightweightControlBorder()
+            font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 12)
             horizontalAlignment = SwingConstants.LEFT
             horizontalTextPosition = SwingConstants.TRAILING
             verticalTextPosition = SwingConstants.CENTER
@@ -89,10 +95,14 @@ class NamespacePanel(
 
         refreshButton = JButton(AllIcons.Actions.Refresh).apply {
             toolTipText = NacosSearchBundle.message("namespace.refresh")
+            putClientProperty("JButton.buttonType", "toolbar")
+            ui = BasicButtonUI()
             preferredSize = Dimension(28, 24)
             minimumSize = Dimension(28, 24)
             border = JBUI.Borders.empty()
             isContentAreaFilled = false
+            isBorderPainted = false
+            isFocusPainted = false
         }
 
         loadingLabel = JBLabel().apply {
@@ -111,20 +121,24 @@ class NamespacePanel(
         val label = JBLabel(NacosSearchBundle.message("namespace.label")).apply {
             font = font.deriveFont(Font.PLAIN, 11.5f)
             foreground = JBColor(0x6f737a, 0x9b9ea6)
-            preferredSize = Dimension(54, 24)
+            preferredSize = Dimension(FORM_LABEL_WIDTH, 24)
         }
 
         val row = JPanel(BorderLayout(2, 0)).apply {
             add(namespaceButton.apply {
-                preferredSize = Dimension(160, 26)
-                minimumSize = Dimension(120, 26)
-                maximumSize = Dimension(220, 26)
+                minimumSize = Dimension(NAMESPACE_BUTTON_MIN_WIDTH, CONTROL_HEIGHT)
+                preferredSize = Dimension(160, CONTROL_HEIGHT)
+                maximumSize = Dimension(NAMESPACE_BUTTON_MAX_WIDTH, CONTROL_HEIGHT)
             }, BorderLayout.CENTER)
             add(refreshButton.apply {
+                putClientProperty("JButton.buttonType", "toolbar")
+                ui = BasicButtonUI()
                 preferredSize = Dimension(28, 24)
                 minimumSize = Dimension(28, 24)
                 border = JBUI.Borders.empty()
                 isContentAreaFilled = false
+                isBorderPainted = false
+                isFocusPainted = false
             }, BorderLayout.EAST)
         }
 
@@ -216,6 +230,7 @@ class NamespacePanel(
         } else {
             "Namespace ID: ${ns.namespaceId}"
         }
+        updateNamespaceButtonWidth()
     }
 
     private fun selectNamespace(namespace: NamespaceInfo, notify: Boolean) {
@@ -513,5 +528,25 @@ class NamespacePanel(
                 }
             }
         }
+    }
+
+    private fun updateNamespaceButtonWidth() {
+        val naturalWidth = namespaceButton.getPreferredSize().width
+        val width = naturalWidth.coerceIn(NAMESPACE_BUTTON_MIN_WIDTH, NAMESPACE_BUTTON_MAX_WIDTH)
+        namespaceButton.minimumSize = Dimension(NAMESPACE_BUTTON_MIN_WIDTH, CONTROL_HEIGHT)
+        namespaceButton.preferredSize = Dimension(width, CONTROL_HEIGHT)
+        namespaceButton.maximumSize = Dimension(NAMESPACE_BUTTON_MAX_WIDTH, CONTROL_HEIGHT)
+        revalidate()
+        repaint()
+    }
+
+    private fun lightweightControlBorder() = JBUI.Borders.empty(0, LEADING_ICON_INSET)
+
+    companion object {
+        private const val FORM_LABEL_WIDTH = 74
+        private const val NAMESPACE_BUTTON_MIN_WIDTH = 140
+        private const val NAMESPACE_BUTTON_MAX_WIDTH = 520
+        private const val CONTROL_HEIGHT = 26
+        private const val LEADING_ICON_INSET = 16
     }
 }

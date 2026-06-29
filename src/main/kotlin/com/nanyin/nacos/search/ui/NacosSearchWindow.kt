@@ -15,6 +15,7 @@ import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.settings.NacosConfigurable
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosSettingsListener
+import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.intellij.openapi.components.service
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.Disposable
@@ -32,6 +33,7 @@ import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
 import javax.swing.*
+import javax.swing.plaf.basic.BasicButtonUI
 
 /**
 * Main window for Nacos Search plugin
@@ -116,7 +118,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 add(iconButton(AllIcons.Actions.Refresh, NacosSearchBundle.message("toolwindow.refresh.all"), "nacos.toolwindow.refreshAll") { refreshAll() })
                 add(iconButton(AllIcons.General.Settings, NacosSearchBundle.message("toolwindow.settings"), "nacos.toolwindow.settings") { openSettings() })
                 add(iconButton(AllIcons.Actions.More, NacosSearchBundle.message("toolwindow.more"), "nacos.toolwindow.more") { showMoreMenu(this) })
-                add(iconButton(AllIcons.Actions.Collapseall, NacosSearchBundle.message("toolwindow.hide"), "nacos.toolwindow.hide") { toolWindow.hide(null) })
             }
             add(iconBar, BorderLayout.EAST)
         }
@@ -125,6 +126,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         val toolbarPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
+            border = JBUI.Borders.empty(0, 8)
             add(namespacePanel)
             add(searchPanel)
         }
@@ -157,10 +159,14 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         return JButton(icon).apply {
             toolTipText = tooltip
             putClientProperty("nacos.automation.id", automationId)
+            putClientProperty("JButton.buttonType", "toolbar")
+            ui = BasicButtonUI()
             preferredSize = Dimension(28, 24)
             minimumSize = Dimension(28, 24)
             border = JBUI.Borders.empty()
             isContentAreaFilled = false
+            isBorderPainted = false
+            isFocusPainted = false
             addActionListener { action() }
         }
     }
@@ -359,6 +365,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             )
             currentSearchRequest = request
             loadConfigurations()
+
+            // Preheat the full namespace index in the background so the first
+            // content/regex/wildcard search over this namespace is instant.
+            preheatNamespaceIndex(newNamespace.namespaceId)
         } else {
             clearSearchUi()
         }
@@ -450,17 +460,12 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             pageSize = paginationPanel.getCurrentPageSize(),
             serverId = settings.activeServerId
         )
-        currentSearchRequest = searchRequest
+       currentSearchRequest = searchRequest
 
-        coroutineScope.launch {
-            try {
-                nacosSearchService.performSearch(searchRequest, nacosApiService)
-            } catch (e: Exception) {
-                SwingUtilities.invokeLater {
-                    showError(NacosSearchBundle.message("error.search.failed") + ": ${e.message}")
-                }
-            }
-        }
+        // Debounce so rapid typing only triggers one search after the user
+        // pauses. searchWithDebounce cancels the previous in-flight search and
+        // launches its own coroutine in this scope.
+        nacosSearchService.searchWithDebounce(searchRequest, nacosApiService, coroutineScope)
     }
 
     private fun handlePreviousPage() {
@@ -859,6 +864,33 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     override fun dispose() {
         namespaceService.removeNamespaceChangeListener(this)
         coroutineScope.cancel()
+    }
+
+    /**
+     * Preheat the full namespace index for [namespaceId] in the background.
+     * Best-effort: on failure the on-demand pull path in
+     * [NacosSearchService.searchWithLocalIndex] remains the fallback.
+     */
+    private fun preheatNamespaceIndex(namespaceId: String?) {
+        if (!settings.cacheEnabled) return
+        val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
+        coroutineScope.launch(Dispatchers.IO) {
+            try {
+                val result = nacosApiService.getAllConfigurations(namespaceId, useCache = true)
+                if (result.isSuccess) {
+                    val configs = result.getOrNull().orEmpty()
+                    cacheService.putNamespaceIndex(
+                        settings.serverUrl,
+                        namespaceId,
+                        configs,
+                        settings.getCacheTtlMillis()
+                    )
+                    NacosKeyResolver.ensureIndexBuilt(cacheService)
+                }
+            } catch (e: Exception) {
+                // Swallow: preheat is opportunistic.
+            }
+        }
     }
 
     /**

@@ -1,8 +1,8 @@
 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <g stroke="#CED0D6" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+  <g stroke="#548AF7" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
     <!-- 配置 key/value 一笔连体（左侧 [ 形），末端在正中拐成跳转箭头杆 -->
     <path d="M7.2 3.8H2.8V6H6L8.7 8.7"/>
   </g>
   <!-- 跳转箭头头部（实心 = 可正常跳转） -->
-  <path d="M10 10L7.4 10L10 7.4Z" fill="#CED0D6"/>
+  <path d="M10 10L7.4 10L10 7.4Z" fill="#548AF7"/>
 </svg>

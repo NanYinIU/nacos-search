@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.psi
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.openapi.project.ProjectManager
+import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiFileFactory
 import com.intellij.psi.util.PsiTreeUtil
@@ -10,9 +11,11 @@ import com.intellij.testFramework.ApplicationRule
 import com.nanyin.nacos.search.NacosIcons
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -62,12 +65,38 @@ class NacosValueLineMarkerProviderTest {
             """.trimIndent()
         )
 
-        // Key not in cache + no @NacosPropertySource dataId → no marker
-        org.junit.Assert.assertNull(marker)
-    }
+       // Key not in cache + no @NacosPropertySource dataId → no marker
+       org.junit.Assert.assertNull(marker)
+   }
 
-    @Test
-    fun `test marker is shown unresolved when dataId context exists but key is not cached`() {
+   @Test
+   fun `test no marker when dataId context exists but dataId is absent from loaded namespace`() {
+       // Cache has been populated for the current server, but the referenced
+       // dataId is NOT among the known configurations. The marker should be
+       // suppressed to avoid showing a dead-end icon.
+       runBlocking {
+           ApplicationManager.getApplication().getService(CacheService::class.java).putConfigDetail(
+               serverUrl = "http://localhost:8848",
+               namespaceId = null,
+               configuration = NacosConfiguration("other.properties", "DEFAULT_GROUP", null, "other.key=val\n", "properties")
+           )
+       }
+
+       val marker = markerFor(
+           """
+           @NacosPropertySource(dataId = "klive.room.background.config.properties")
+           class Demo {
+               @NacosValue(value = "${'$'}{some.key}")
+               private String name;
+           }
+           """.trimIndent()
+       )
+
+       assertNull(marker)
+   }
+
+   @Test
+   fun `test marker is shown unresolved when dataId context exists but key is not cached`() {
         val marker = markerFor(
             """
             @NacosPropertySource(dataId = "common.properties")
@@ -102,6 +131,92 @@ class NacosValueLineMarkerProviderTest {
 
         assertNotNull(marker)
         assertEquals(NacosIcons.GutterConfig, marker?.createGutterRenderer()?.icon)
+    }
+
+    @Test
+    fun `test marker transitions from unresolved to resolved after lazy load`() {
+        val javaText = """
+            @NacosPropertySource(dataId = "datasource.properties")
+            class Demo {
+                @NacosValue(value = "${'$'}{db.url}")
+                private String url;
+            }
+        """.trimIndent()
+
+        // Before the remote fetch: dataId context exists so a hollow marker shows,
+        // but the key is not cached yet → unresolved icon.
+        val unresolved = markerFor(javaText)
+        assertNotNull(unresolved)
+        assertEquals(NacosIcons.GutterConfigUnresolved, unresolved?.createGutterRenderer()?.icon)
+
+        // Simulate what lazyLoadAndNavigate does: fetch + cache the config, then
+        // rebuild the index synchronously.
+        runBlocking {
+            val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+            val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+            cache.putConfigDetail(
+                serverUrl = settings.serverUrl,
+                namespaceId = null,
+                configuration = NacosConfiguration("datasource.properties", "DEFAULT_GROUP", null, "db.url=jdbc:test\n", "properties")
+            )
+            NacosKeyResolver.rebuildBlocking(cache, settings.serverUrl)
+        }
+
+        // After the rebuild the key is resolvable → solid icon.
+        val resolved = markerFor(javaText)
+        assertNotNull(resolved)
+        assertEquals(NacosIcons.GutterConfig, resolved?.createGutterRenderer()?.icon)
+    }
+
+    @Test
+    fun `resolved element returns containing file instead of throwing PsiInvalidElementAccessException`() {
+        runBlocking {
+            ApplicationManager.getApplication().getService(CacheService::class.java).putConfigDetail(
+                serverUrl = "http://localhost:8848",
+                namespaceId = null,
+                configuration = NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo\n", "properties")
+            )
+        }
+
+        ApplicationManager.getApplication().runReadAction {
+            val file = PsiFileFactory.getInstance(ProjectManager.getInstance().defaultProject).createFileFromText(
+                "Demo.java",
+                com.intellij.lang.java.JavaLanguage.INSTANCE,
+                """
+                class Demo {
+                    @NacosValue(value = "${'$'}{app.name}")
+                    private String name;
+                }
+                """.trimIndent()
+            )
+            val literal = PsiTreeUtil.findChildrenOfType(file, PsiLiteralExpression::class.java)
+                .firstOrNull { PlaceholderParser.containsPlaceholder(it.value as? String) }!!
+            val ref = NacosValueReference(literal, "app.name")
+
+            val results = ref.multiResolve(false)
+            assertEquals(1, results.size)
+
+            // This is the call that used to throw PsiInvalidElementAccessException
+            // because the FakePsiElement had a null parent and no containing file.
+            val element = results.first().element as NacosConfigKeyElement
+            val containingFile = element.containingFile
+            assertNotNull("resolved element must report a containing file", containingFile)
+            assertEquals(file, containingFile)
+        }
+    }
+
+    @Test
+    fun `NacosConfigKeyElement without context returns null containing file instead of throwing`() {
+        val element = NacosConfigKeyElement(
+            project = ProjectManager.getInstance().defaultProject,
+            config = NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "k=v\n", "properties"),
+            key = "k",
+            value = "v",
+            lineIndex = 0,
+            contextElement = null
+        )
+        // No context → null, but never throws (used by ConfigDetailPanel Find Usages anchor).
+        assertNull(element.containingFile)
     }
 
     private fun markerFor(javaText: String): LineMarkerInfo<*>? = ApplicationManager.getApplication().runReadAction<LineMarkerInfo<*>?> {

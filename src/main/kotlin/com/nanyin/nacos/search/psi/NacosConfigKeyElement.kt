@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.psi
 import com.intellij.navigation.ItemPresentation
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
 import com.intellij.psi.impl.FakePsiElement
 import com.nanyin.nacos.search.NacosIcons
@@ -27,12 +28,25 @@ class NacosConfigKeyElement(
     val config: NacosConfiguration,
     val key: String,
     val value: String,
-    val lineIndex: Int
+    val lineIndex: Int,
+    private val contextElement: PsiElement? = null
 ) : FakePsiElement() {
 
     val namespaceId: String get() = config.tenantId ?: ""
     override fun getProject(): Project = project
     override fun getParent(): PsiElement? = null
+
+    /**
+     * Returns the file of the originating [contextElement] (or null). The
+     * IDE's symbol API (Psi2Symbol / SmartPointerManager) calls this to build
+     * a smart pointer for Ctrl+Click and identifier-highlight targets. A
+     * FakePsiElement with a null parent throws PsiInvalidElementAccessException
+     * from the inherited implementation, so we override to return null instead
+     * of throwing — and, when a context element is supplied (the @NacosValue
+     * literal), its containing file anchors the smart pointer so navigation
+     * and highlighting work correctly.
+     */
+    override fun getContainingFile(): PsiFile? = contextElement?.containingFile
 
     override fun getName(): String = key
 

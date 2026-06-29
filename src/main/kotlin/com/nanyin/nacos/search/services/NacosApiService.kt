@@ -84,11 +84,10 @@ class NacosApiService {
             logger.debug("Fetching configuration: $url")
             val response = requestJson(url, buildAuthHeaders())
             
-            val apiResponse = gson.fromJson(response, object : TypeToken<NacosConfiguration>() {}.type) as NacosConfiguration
+            val apiResponse = gson.fromJson(response, object : TypeToken<NacosConfiguration>() {}.type) as? NacosConfiguration
             
             if (apiResponse != null) {
-
-                var config = apiResponse;
+                val config = apiResponse
                 // Cache the configuration if cache is enabled
                 if (useCache && settings.cacheEnabled) {
                     cacheService.putConfigDetail(settings.serverUrl, namespaceId, config, settings.getCacheTtlMillis())
@@ -96,7 +95,7 @@ class NacosApiService {
                 
                 Result.success(config)
             } else {
-                //logger.warn("Failed to get configuration: ${apiResponse.getErrorMessage()}")
+                logger.warn("Configuration not found for dataId=$dataId group=$group namespaceId=$namespaceId (empty server response)")
                 Result.success(null)
             }
         } catch (e: Exception) {

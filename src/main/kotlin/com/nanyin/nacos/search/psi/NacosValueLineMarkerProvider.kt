@@ -9,7 +9,10 @@ import com.intellij.openapi.editor.markup.GutterIconRenderer
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
+import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
 import com.nanyin.nacos.search.services.NacosApiService
+import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -61,11 +64,16 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
         )
     }
 
-    private fun shouldShowMarker(key: String, codeContext: NacosCodeContext): Boolean {
-        if (NacosKeyResolver.hasKey(key, activeServerUrl = NacosKeyResolver.currentServerUrl())) return true
-        if (codeContext.dataId != null) return true
-        return false
-    }
+   private fun shouldShowMarker(key: String, codeContext: NacosCodeContext): Boolean {
+       if (NacosKeyResolver.hasKey(key, activeServerUrl = NacosKeyResolver.currentServerUrl())) return true
+       val dataId = codeContext.dataId ?: return false
+       // Only show the unresolved marker when the dataId is known to exist in
+       // the cache. When the namespace has been loaded but the dataId is
+       // absent, the config almost certainly doesn't exist in Nacos, so a
+       // dead-end marker would be misleading. Returns true optimistically on a
+       // cold/empty cache so lazy-loading still works.
+       return NacosKeyResolver.isDataIdKnown(dataId, activeServerUrl = NacosKeyResolver.currentServerUrl())
+   }
 
     private fun isResolvable(key: String): Boolean {
         return NacosKeyResolver.hasKey(key, activeServerUrl = NacosKeyResolver.currentServerUrl())
@@ -100,8 +108,11 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
     private fun lazyLoadAndNavigate(anchor: PsiElement, key: String, codeContext: NacosCodeContext) {
         val dataId = codeContext.dataId ?: return
         val group = codeContext.group ?: "DEFAULT_GROUP"
+        val project = anchor.project
         ApplicationManager.getApplication().executeOnPooledThread {
             val apiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
+            val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
+            val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
             val config = runBlocking {
                 apiService.getConfiguration(
                     dataId = dataId,
@@ -111,8 +122,34 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
                 ).getOrNull()
             } ?: return@executeOnPooledThread
 
+            // Ensure the fetched config lives in the detail cache so the key
+            // index can see it. getConfiguration() only persists when
+            // cacheEnabled is on, but the gutter marker relies on the cache to
+            // decide resolved vs. unresolved, so we write it unconditionally.
+            runBlocking {
+                cacheService.putConfigDetail(
+                    settings.serverUrl,
+                    codeContext.namespaceId,
+                    config,
+                    settings.getCacheTtlMillis()
+                )
+            }
+
+            // Rebuild the key index synchronously. We are on a pooled thread
+            // (never the highlighter/dispatch thread), so a blocking rebuild is
+            // safe and makes hasKey()/resolve() reflect the freshly cached
+            // config immediately.
+            NacosKeyResolver.rebuildBlocking(cacheService, NacosKeyResolver.currentServerUrl())
+
             val lineIndex = ConfigKeyExtractor.extract(config)[key]?.lineIndex ?: -1
-            NacosConfigNavigator.navigate(anchor.project, config, lineIndex)
+            NacosConfigNavigator.navigate(project, config, lineIndex)
+
+            // Re-run the highlighter pass so the gutter icon re-renders: the
+            // previously hollow (unresolved) marker becomes solid now that the
+            // key is resolvable.
+            ApplicationManager.getApplication().invokeLater {
+                DaemonCodeAnalyzer.getInstance(project).restart()
+            }
         }
     }
 }

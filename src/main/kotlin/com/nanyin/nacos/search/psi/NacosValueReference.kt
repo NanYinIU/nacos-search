@@ -30,10 +30,17 @@ class NacosValueReference(
             preferredGroup = codeContext.group,
             preferredNamespaceId = codeContext.namespaceId
         )
-        return hits.map { hit ->
-            object : ResolveResult {
-                override fun getElement(): PsiElement =
-                    NacosConfigKeyElement(project, hit.config, key, hit.location.value, hit.location.lineIndex)
+       return hits.map { hit ->
+           object : ResolveResult {
+               override fun getElement(): PsiElement =
+                   NacosConfigKeyElement(
+                       project,
+                       hit.config,
+                       key,
+                       hit.location.value,
+                       hit.location.lineIndex,
+                        contextElement = this@NacosValueReference.element
+                   )
                 override fun isValidResult(): Boolean = true
             }
         }.toTypedArray()

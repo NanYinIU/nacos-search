@@ -17,6 +17,8 @@ import java.awt.event.KeyEvent
 import javax.swing.*
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
+import javax.swing.plaf.basic.BasicButtonUI
+import javax.swing.plaf.basic.BasicTextFieldUI
 
 /**
  * Panel for search functionality with advanced options
@@ -24,7 +26,8 @@ import javax.swing.event.DocumentListener
 class SearchPanel(private val project: Project) : JPanel(BorderLayout()), LanguageAwareComponent {
     
     // UI Components
-    private lateinit var searchField: JBTextField
+    private lateinit var searchField: PlaceholderTextField
+    private lateinit var searchFieldPanel: JPanel
     private lateinit var searchButton: JButton
     private lateinit var clearButton: JButton
     // private lateinit var advancedToggle: JButton
@@ -64,23 +67,47 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
     
     private fun initializeComponents() {
         // Main search field
-        searchField = JBTextField().apply {
-            emptyText.text = NacosSearchBundle.message("search.placeholder")
+        searchField = PlaceholderTextField().apply {
+            putClientProperty("JTextField.Search.noBorderRing", true)
+            ui = BasicTextFieldUI()
+            placeholder = NacosSearchBundle.message("search.placeholder")
             columns = 20
             font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 12)
+            border = JBUI.Borders.empty(0, 6)
+            isOpaque = false
+            isBorderless = true
+        }
+        searchFieldPanel = JPanel(BorderLayout(6, 0)).apply {
+            isOpaque = false
+            border = lightweightControlBorder(horizontalInset = LEADING_ICON_INSET)
+            add(JBLabel(AllIcons.Actions.Search).apply {
+                foreground = JBColor(0x6f737a, 0x9b9ea6)
+                preferredSize = Dimension(16, CONTROL_HEIGHT)
+                horizontalAlignment = SwingConstants.CENTER
+            }, BorderLayout.WEST)
+            add(searchField, BorderLayout.CENTER)
         }
         
         // Action buttons
         searchButton = JButton(AllIcons.Actions.Search).apply {
+            putClientProperty("JButton.buttonType", "toolbar")
+            ui = BasicButtonUI()
             toolTipText = NacosSearchBundle.message("search.tooltip")
             preferredSize = Dimension(28, 24)
             minimumSize = Dimension(28, 24)
+            isBorderPainted = false
+            isFocusPainted = false
         }
         
         clearButton = JButton(AllIcons.Actions.Close).apply {
+            putClientProperty("JButton.buttonType", "toolbar")
+            ui = BasicButtonUI()
             toolTipText = NacosSearchBundle.message("search.clear.tooltip")
-            preferredSize = Dimension(24, 24)
+            preferredSize = Dimension(26, 26)
+            minimumSize = Dimension(26, 26)
             isEnabled = false
+            isBorderPainted = false
+            isFocusPainted = false
         }
         
 //        advancedToggle = JButton("Advanced").apply {
@@ -98,13 +125,18 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
 
         // Group filter pill — compact bordered button per design guide
         groupFilterButton = JButton(NacosSearchBundle.message("search.group.filter.label") + " " + NacosSearchBundle.message("search.group.filter.all")).apply {
+            putClientProperty("JButton.buttonType", "toolbar")
+            ui = BasicButtonUI()
             toolTipText = NacosSearchBundle.message("tooltip.group.filter")
-            preferredSize = Dimension(90, 26)
             margin = JBUI.insets(0, 9, 0, 9)
             isContentAreaFilled = false
-            border = JBUI.Borders.empty(0, 9)
+            isBorderPainted = false
+            isFocusPainted = false
+            font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 12)
+            border = lightweightControlBorder(horizontalInset = 10)
             addActionListener { showGroupFilterPopup() }
         }
+        updateGroupFilterLabel()
         
         // Advanced search components
         dataIdField = JBTextField().apply {
@@ -141,49 +173,42 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
         val searchLabelComp = JBLabel(NacosSearchBundle.message("search.label")).apply {
             font = font.deriveFont(Font.PLAIN, 11.5f)
             foreground = JBColor(0x6f737a, 0x9b9ea6)
-            preferredSize = Dimension(54, 24)
+            preferredSize = Dimension(FORM_LABEL_WIDTH, 24)
         }
 
-        searchField.apply {
+        searchFieldPanel.apply {
             preferredSize = Dimension(200, 26)
             minimumSize = Dimension(120, 26)
-            border = JBUI.Borders.empty(0, 22, 0, 0)
-        }
-
-        // Search icon inside the field area
-        val searchIcon = JBLabel(AllIcons.Actions.Search).apply {
-            foreground = JBColor(0x6f737a, 0x9b9ea6)
-        }
-        val fieldWrapper = JPanel(BorderLayout()).apply {
-            isOpaque = false
-            add(searchIcon, BorderLayout.WEST)
-            add(searchField, BorderLayout.CENTER)
+            maximumSize = Dimension(Int.MAX_VALUE, CONTROL_HEIGHT)
         }
 
         clearButton.apply {
-            preferredSize = Dimension(20, 20)
-            minimumSize = Dimension(20, 20)
-            border = JBUI.Borders.empty(2)
+            preferredSize = Dimension(26, 26)
+            minimumSize = Dimension(26, 26)
+            maximumSize = Dimension(26, 26)
+            border = JBUI.Borders.empty()
             isContentAreaFilled = false
+            isBorderPainted = false
+            isFocusPainted = false
+            horizontalAlignment = SwingConstants.CENTER
         }
 
-        // Group filter pill: bordered compact button per design
-        groupFilterButton.border = JBUI.Borders.compound(
-            JBUI.Borders.customLine(JBColor(0x4e5157, 0xb9bdc9), 1),
-            JBUI.Borders.empty(0, 8)
-        )
+        // Group filter uses the same lightweight control treatment as search and namespace.
+        groupFilterButton.border = lightweightControlBorder(horizontalInset = 10)
         groupFilterButton.isContentAreaFilled = false
-        groupFilterButton.margin = JBUI.insets(0, 8, 0, 8)
+        groupFilterButton.isBorderPainted = false
+        groupFilterButton.isFocusPainted = false
+        groupFilterButton.margin = JBUI.insets(0, 6, 0, 6)
 
         // East wrapper: clear button + group filter pill
-        val eastPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+        val eastPanel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
             isOpaque = false
             add(clearButton)
             add(groupFilterButton)
         }
 
         add(searchLabelComp, BorderLayout.WEST)
-        add(fieldWrapper, BorderLayout.CENTER)
+        add(searchFieldPanel, BorderLayout.CENTER)
         add(eastPanel, BorderLayout.EAST)
 
         // Search button is hidden — Enter in field triggers search (real-time)
@@ -570,6 +595,15 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
      */
     private fun updateGroupFilterLabel() {
         groupFilterButton.text = NacosSearchBundle.message("search.group.filter.label") + " " + selectedGroup
+        groupFilterButton.toolTipText = groupFilterButton.text
+        updateButtonWidthForText(
+            groupFilterButton,
+            GROUP_BUTTON_MIN_WIDTH,
+            GROUP_BUTTON_MAX_WIDTH,
+            CONTROL_HEIGHT
+        )
+        revalidate()
+        repaint()
     }
 
     /**
@@ -577,7 +611,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
      */
     override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) {
         // Update placeholder text
-        searchField.emptyText.text = NacosSearchBundle.message("search.placeholder")
+        searchField.placeholder = NacosSearchBundle.message("search.placeholder")
         
         // Update button tooltips
         searchButton.toolTipText = NacosSearchBundle.message("search.button.tooltip")
@@ -601,5 +635,57 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), Langua
      */
     override fun getLanguageService(): LanguageService {
         return languageService
+    }
+
+    private fun updateButtonWidthForText(button: JButton, minWidth: Int, maxWidth: Int, height: Int) {
+        val naturalWidth = button.getPreferredSize().width
+        val width = naturalWidth.coerceIn(minWidth, maxWidth)
+        button.minimumSize = Dimension(minWidth, height)
+        button.preferredSize = Dimension(width, height)
+        button.maximumSize = Dimension(maxWidth, height)
+    }
+
+    private fun lightweightControlBorder(horizontalInset: Int) = JBUI.Borders.empty(0, horizontalInset)
+
+    companion object {
+        private const val FORM_LABEL_WIDTH = 74
+        private const val GROUP_BUTTON_MIN_WIDTH = 112
+        private const val GROUP_BUTTON_MAX_WIDTH = 260
+        private const val CONTROL_HEIGHT = 26
+        private const val LEADING_ICON_INSET = 16
+    }
+
+    private class PlaceholderTextField : JTextField() {
+        var placeholder: String = ""
+            set(value) {
+                field = value
+                repaint()
+            }
+
+        var isBorderless: Boolean = false
+            set(value) {
+                field = value
+                if (value) {
+                    border = JBUI.Borders.empty(0, 6)
+                    isOpaque = false
+                }
+            }
+
+        override fun paintComponent(g: Graphics) {
+            super.paintComponent(g)
+            if (text.isNotEmpty() || placeholder.isEmpty()) return
+
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.font = font
+                g2.color = JBColor(0x6f737a, 0x8f939c)
+                val insets = insets
+                val metrics = g2.fontMetrics
+                val y = (height - metrics.height) / 2 + metrics.ascent
+                g2.drawString(placeholder, insets.left, y)
+            } finally {
+                g2.dispose()
+            }
+        }
     }
 }

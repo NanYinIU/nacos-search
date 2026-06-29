@@ -145,4 +145,51 @@ class CacheServiceTest {
 
         assertEquals(afterPut + 1, cacheService.getModificationCount())
     }
+
+    @Test
+    fun `namespace index preheat round-trips and is scoped by server and namespace`() = runBlocking {
+        val cacheService = CacheService()
+        cacheService.clearAll()
+
+        val configs = listOf(
+            NacosConfiguration("app.yaml", "DEFAULT_GROUP", "dev", "feature=true", "yaml"),
+            NacosConfiguration("db.properties", "DEFAULT_GROUP", "dev", "db.url=jdbc:test", "properties")
+        )
+
+        // Preheat: store the full namespace index (as NacosSearchPlugin does).
+        cacheService.putNamespaceIndex(
+            serverUrl = "http://nacos:8848",
+            namespaceId = "dev",
+            configurations = configs,
+            ttl = 60_000L
+        )
+
+        // searchWithLocalIndex reads it back as a single hit — no remote pull.
+        val cached = cacheService.getNamespaceIndex("http://nacos:8848", "dev")
+        assertEquals(2, cached?.size)
+
+        // A different server or namespace must not leak the preheated index.
+        assertNull(cacheService.getNamespaceIndex("http://other:8848", "dev"))
+        assertNull(cacheService.getNamespaceIndex("http://nacos:8848", "prod"))
+    }
+
+    @Test
+    fun `putNamespaceIndex also seeds individual config details for the resolver`() = runBlocking {
+        val cacheService = CacheService()
+        cacheService.clearAll()
+
+        cacheService.putNamespaceIndex(
+            serverUrl = "http://nacos:8848",
+            namespaceId = null,
+            configurations = listOf(
+                NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "timeout=30", "properties")
+            ),
+            ttl = 60_000L
+        )
+
+        // Preheating the namespace index makes individual configs resolvable
+        // by detail key, which is what NacosKeyResolver scans.
+        val detail = cacheService.getConfigDetail("http://nacos:8848", null, "app.properties", "DEFAULT_GROUP")
+        assertEquals("timeout=30", detail?.content)
+    }
 }

@@ -108,14 +108,50 @@ class NacosSearchPlugin : ProjectActivity {
             if (result.isSuccess) {
                 val response = result.getOrThrow()
                 logger.info("Successfully loaded metadata for ${response.pageItems.size}/${response.totalCount} configurations")
-                // Warm the @NacosValue key index from persisted/opened configs so
-                // code gutter markers appear without blocking the highlighter.
-                NacosKeyResolver.ensureIndexBuilt(cacheService)
+               // Warm the @NacosValue key index from persisted/opened configs so
+               // code gutter markers appear without blocking the highlighter.
+               NacosKeyResolver.ensureIndexBuilt(cacheService)
+
+                // Preheat the full namespace index in the background so the
+                // first content/regex search does not have to pull every page
+                // on demand. Best-effort: failures are logged and silently
+                // fall back to the existing on-demand pull path.
+                preheatNamespaceIndex(namespaceId = null)
             } else {
                 logger.error("Failed to load initial data: ${result.exceptionOrNull()?.message}")
             }
         } catch (e: Exception) {
             logger.error("Error loading initial data", e)
+        }
+    }
+
+    /**
+     * Preheat the namespace index for [namespaceId] by fetching all
+     * configurations and storing them as a single index entry. Runs in the
+     * background and never blocks startup or UI. On failure the caller's
+     * on-demand pull (searchWithLocalIndex) still works.
+     */
+    private fun preheatNamespaceIndex(namespaceId: String?) {
+        if (!settings.cacheEnabled) return
+        coroutineScope.launch {
+            try {
+                val result = apiService.getAllConfigurations(namespaceId, useCache = true)
+                if (result.isSuccess) {
+                    val configs = result.getOrNull().orEmpty()
+                    cacheService.putNamespaceIndex(
+                        settings.serverUrl,
+                        namespaceId,
+                        configs,
+                        settings.getCacheTtlMillis()
+                    )
+                    NacosKeyResolver.ensureIndexBuilt(cacheService)
+                    logger.info("Preheated namespace index for '${namespaceId ?: "public"}' with ${configs.size} configurations")
+                } else {
+                    logger.warn("Namespace index preheat failed for '${namespaceId ?: "public"}': ${result.exceptionOrNull()?.message}")
+                }
+            } catch (e: Exception) {
+                logger.warn("Namespace index preheat error for '${namespaceId ?: "public"}'", e)
+            }
         }
     }
     

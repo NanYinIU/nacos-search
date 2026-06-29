@@ -1,5 +1,17 @@
 package com.nanyin.nacos.search.services
 
+import com.intellij.testFramework.ApplicationRule
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import org.junit.Rule
+import org.mockito.kotlin.any
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.times
+import org.mockito.kotlin.verify
+import org.mockito.kotlin.whenever
 import com.nanyin.nacos.search.models.NamespaceInfo
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -8,6 +20,9 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class NacosSearchServiceTest {
+
+    @get:Rule
+    val applicationRule = ApplicationRule()
 
     @Test
     fun `search request normalizes wildcard and prefix fuzzy dataId`() {
@@ -59,5 +74,94 @@ class NacosSearchServiceTest {
         )
 
         assertTrue(request.toCacheKey() != request.copy(namespace = testNamespace).toCacheKey())
+    }
+
+    private fun stubApi(): NacosApiService {
+        val response = NacosApiService.ConfigListResponse(
+            totalCount = 1,
+            pageNumber = 1,
+            pagesAvailable = 1,
+            pageItems = listOf(
+                NacosApiService.ConfigItem(
+                    id = "1",
+                    dataId = "app.yaml",
+                    group = "DEFAULT_GROUP",
+                    content = "feature=true",
+                    type = "yaml",
+                    tenant = null
+                )
+            )
+        )
+        val api = mock<NacosApiService>()
+        runBlocking {
+            whenever(
+                api.listConfigurations(
+                    any(), any(), any(), any(),
+                    any(), any(), any(), any(), any(), any()
+                )
+            ).thenReturn(Result.success(response))
+        }
+        return api
+    }
+
+    @Test
+    fun `searchWithDebounce delays execution until debounce window elapses`() = runBlocking {
+        val service = NacosSearchService()
+        val api = stubApi()
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        val request = NacosSearchService.SearchRequest(
+            dataId = "app.yaml",
+            group = "DEFAULT_GROUP",
+            namespace = NamespaceInfo.createPublicNamespace()
+        )
+
+        service.searchWithDebounce(request, api, scope)
+
+        // Immediately after scheduling: the 300ms debounce delay has not
+        // elapsed, so performSearch has not run yet.
+        assertEquals(NacosSearchService.SearchState.Idle, service.searchState.value)
+
+        // Wait past the 300ms debounce window for the search to run.
+        val deadline = System.currentTimeMillis() + 3000
+        while (service.searchState.value !is NacosSearchService.SearchState.Success &&
+            System.currentTimeMillis() < deadline) {
+            delay(50)
+        }
+
+        assertTrue(service.searchState.value is NacosSearchService.SearchState.Success)
+        scope.cancel()
+    }
+
+    @Test
+    fun `searchWithDebounce cancels the previous in-flight search`() = runBlocking {
+        val service = NacosSearchService()
+        val api = stubApi()
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        val namespace = NamespaceInfo.createPublicNamespace()
+
+        // Two rapid calls with different dataIds — only the second should execute.
+        service.searchWithDebounce(
+            NacosSearchService.SearchRequest(dataId = "first.yaml", namespace = namespace),
+            api, scope
+        )
+        service.searchWithDebounce(
+            NacosSearchService.SearchRequest(dataId = "second.yaml", namespace = namespace),
+            api, scope
+        )
+
+        // Wait for the surviving (second) debounced search to complete.
+        val deadline = System.currentTimeMillis() + 3000
+        while (service.searchState.value !is NacosSearchService.SearchState.Success &&
+            System.currentTimeMillis() < deadline) {
+            delay(50)
+        }
+
+        // The cancelled (first) request must not have triggered a remote call;
+        // only the second survives.
+        verify(api, times(1)).listConfigurations(
+            any(), any(), any(), any(),
+            any(), any(), any(), any(), any(), any()
+        )
+        scope.cancel()
     }
 }

@@ -14,9 +14,23 @@
             <li>Namespace and group filtering</li>
             <li>Seamless IntelliJ IDEA integration</li>
         </ul>
-    ]]></description>
+   ]]></description>
 
-    <depends>com.intellij.modules.platform</depends>
+    <change-notes><![CDATA[
+        <b>1.3.0</b>
+        <ul>
+            <li>Fix: phantom gutter icon no longer appears when a <code>@NacosPropertySource</code> dataId does not exist in the loaded Nacos namespace. The unresolved marker is now only shown when the dataId is known to the cache (or the cache is cold).</li>
+            <li>Fix: resolved <code>NacosConfigKeyElement</code> now carries the source PSI element so "Find Usages" and navigation keep working after lazy-load.</li>
+            <li>UI: redesigned search bar, clear button, group filter pill and tool-window toolbar with a consistent lightweight toolbar-button style.</li>
+            <li>Perf: debounced search input and background namespace-index preheat so the first content/wildcard search is instant.</li>
+        </ul>
+        <b>1.2.0</b>
+        <ul>
+            <li>Added @NacosValue gutter icon with dual-state (resolved/unresolved) and PSI reference navigation.</li>
+        </ul>
+    ]]></change-notes>
+
+   <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.java</depends>
 
     <extensions defaultExtensionNs="com.intellij">

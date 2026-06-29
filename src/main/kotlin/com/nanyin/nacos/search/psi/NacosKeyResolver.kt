@@ -27,12 +27,13 @@ object NacosKeyResolver {
         val namespaceId: String get() = config.tenantId ?: ""
     }
 
-    data class KeyIndex(
-        val cacheIdentity: Int,
-        val serverUrl: String?,
-        val cacheModificationCount: Long,
-        val hitsByKey: Map<String, List<KeyHit>>
-    )
+   data class KeyIndex(
+       val cacheIdentity: Int,
+       val serverUrl: String?,
+       val cacheModificationCount: Long,
+       val hitsByKey: Map<String, List<KeyHit>>,
+       val dataIds: Set<String> = emptySet()
+   )
 
    @Volatile
    private var cachedIndex: KeyIndex? = null
@@ -57,16 +58,37 @@ object NacosKeyResolver {
             .sortedWith(hitComparator(activeNamespaceId, preferredGroup, preferredNamespaceId))
     }
 
-    fun hasKey(
-        key: String,
-        cacheService: CacheService = ApplicationManager.getApplication().getService(CacheService::class.java),
-        activeServerUrl: String? = null
-    ): Boolean {
-        if (key.isBlank()) return false
-        return currentIndex(cacheService, activeServerUrl)?.hitsByKey?.containsKey(key) ?: false
-    }
+   fun hasKey(
+       key: String,
+       cacheService: CacheService = ApplicationManager.getApplication().getService(CacheService::class.java),
+       activeServerUrl: String? = null
+   ): Boolean {
+       if (key.isBlank()) return false
+       return currentIndex(cacheService, activeServerUrl)?.hitsByKey?.containsKey(key) ?: false
+   }
 
-    /**
+   /**
+    * Returns true when [dataId] is known to exist among the cached
+    * configurations for [activeServerUrl].
+    *
+    * When no index has been built yet, or the cache is empty (cold start /
+    * namespace not yet loaded), this returns true optimistically so the
+    * unresolved gutter marker can still appear and drive a lazy remote fetch.
+    * Once the cache is populated but the dataId is absent, returns false so
+    * the LineMarkerProvider hides the dead-end marker.
+    */
+   fun isDataIdKnown(
+       dataId: String,
+       cacheService: CacheService = ApplicationManager.getApplication().getService(CacheService::class.java),
+       activeServerUrl: String? = null
+   ): Boolean {
+       if (dataId.isBlank()) return false
+       val index = currentIndex(cacheService, activeServerUrl) ?: return true
+       if (index.dataIds.isEmpty()) return true
+       return dataId in index.dataIds
+   }
+
+   /**
      * Order: active namespace first, then public, then everything else
      * (stable within a tier by dataId/group).
      */
@@ -143,19 +165,20 @@ object NacosKeyResolver {
     ): KeyIndex {
         val normalizedServerUrl = normalizeServerUrl(activeServerUrl)
         val cached = runBlocking { cacheService.getAllCachedConfigurations(normalizedServerUrl) }
-        val built = KeyIndex(
-            cacheIdentity = System.identityHashCode(cacheService),
-            serverUrl = normalizedServerUrl,
-            cacheModificationCount = cacheService.getModificationCount(),
-            hitsByKey = cached
-                .asSequence()
-                .flatMap { config ->
-                    ConfigKeyExtractor.extract(config).values.asSequence().map { loc ->
-                        loc.key to KeyHit(config, loc)
-                    }
-                }
-                .groupBy({ it.first }, { it.second })
-        )
+       val built = KeyIndex(
+           cacheIdentity = System.identityHashCode(cacheService),
+           serverUrl = normalizedServerUrl,
+           cacheModificationCount = cacheService.getModificationCount(),
+           hitsByKey = cached
+               .asSequence()
+               .flatMap { config ->
+                   ConfigKeyExtractor.extract(config).values.asSequence().map { loc ->
+                       loc.key to KeyHit(config, loc)
+                   }
+               }
+               .groupBy({ it.first }, { it.second }),
+           dataIds = cached.asSequence().map { it.dataId }.filter { it.isNotBlank() }.toSet()
+       )
         cachedIndex = built
         return built
     }
