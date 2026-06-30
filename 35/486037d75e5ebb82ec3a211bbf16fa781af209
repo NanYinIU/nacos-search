@@ -1,0 +1,19 @@
+build.gradle.kts
+  s_18c309e22b0c51::t_406cfd9098518e 112-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "35486037d75e5ebb82ec3a211bbf16fa781af209",
+  "prompts": {},
+  "sessions": {
+    "s_18c309e22b0c51": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f13e4-1c76-7be0-a67d-f48c0d075cf0",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
