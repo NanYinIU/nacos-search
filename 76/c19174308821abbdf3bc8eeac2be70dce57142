@@ -1,0 +1,61 @@
+src/main/kotlin/com/nanyin/nacos/search/NacosSearchPlugin.kt
+  s_18c309e22b0c51::t_f58b9d92e35abb 20,23,26-28,274
+src/main/kotlin/com/nanyin/nacos/search/psi/ConfigKeyExtractor.kt
+  s_18c309e22b0c51::t_87885212902d53 244-248,253-263,266-315,317-342,344
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosConfigKeyReferenceSearcher.kt
+  s_18c309e22b0c51::t_6b8ba32ab4491e 34-39
+src/main/kotlin/com/nanyin/nacos/search/services/CacheFileStorage.kt
+  s_18c309e22b0c51::t_7cded62584d2b0 1-118
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_18c309e22b0c51::t_f602147e65f96e 9-13,27-31,33,40-41,50-55,59-71,79-80,82,84-85,87-90,116,119-125,127-140,142-149,173-174,176,178-179,181-182,195-198,211,215,234-235,238-239,242-243,245-246,249-254,256-258,286-293,299-300,309,312-313,338-348,351-363,367-405,407,409,413-426,430-441,445-452,478,481,485,494-501,503-505,514-517,522-525
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_18c309e22b0c51::t_427ba04776af79 15-16,28,30,34-62,64,213-224,410-423
+src/main/kotlin/com/nanyin/nacos/search/services/NacosAuthService.kt
+  s_18c309e22b0c51::t_e12aa71189c013 74-78,103-106,232-235,237,241-246,254
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_18c309e22b0c51::t_e5124b6269c520 190-192
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceService.kt
+  s_18c309e22b0c51::t_0ac8373d68b767 140-149,271
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchWindow.kt
+  s_18c309e22b0c51::t_bd6a13d2223ae9 22,96
+src/main/kotlin/com/nanyin/nacos/search/ui/PaginationPanel.kt
+  s_18c309e22b0c51::t_e3e1a9b760149c 8,21,231-234
+src/main/resources/messages/NacosSearchBundle.properties
+  s_18c309e22b0c51::t_7a56ebb962254e 225-226,268
+src/main/resources/messages/NacosSearchBundle_zh_CN.properties
+  s_18c309e22b0c51::t_436a67bb40c91e 225-226,233,264-270,274,276-280,282-287,290-291
+src/test/kotlin/com/nanyin/nacos/search/NacosSearchPluginTest.kt
+  s_18c309e22b0c51::t_aa83e6438b42f3 1-24
+src/test/kotlin/com/nanyin/nacos/search/psi/ConfigKeyExtractorTest.kt
+  s_18c309e22b0c51::t_7cbe58f2ea1dce 117-134
+src/test/kotlin/com/nanyin/nacos/search/services/CacheFileStorageTest.kt
+  s_18c309e22b0c51::t_b00adb159e4bf3 1-95
+src/test/kotlin/com/nanyin/nacos/search/services/CacheServiceTest.kt
+  s_18c309e22b0c51::t_aee6ebcc795a68 4-5,7-11,15,121,123-127,129-131,134-141,210-361
+src/test/kotlin/com/nanyin/nacos/search/services/NacosApiServiceTest.kt
+  s_18c309e22b0c51::t_3999953f087c74 14,20-22,24-26,29,40-41,104-128,134,378-416
+src/test/kotlin/com/nanyin/nacos/search/services/NacosAuthServiceTest.kt
+  s_18c309e22b0c51::t_780cce83ef58e0 19,28,49-56,250-271,273-283
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceCancelTest.kt
+  s_18c309e22b0c51::t_886dccdcbe6a14 1-71
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceTest.kt
+  s_18c309e22b0c51::t_e1b0fbbb21f308 167
+src/test/kotlin/com/nanyin/nacos/search/ui/PaginationPanelTest.kt
+  s_18c309e22b0c51::t_ef6bc04c0b4b93 1-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "76c19174308821abbdf3bc8eeac2be70dce57142",
+  "prompts": {},
+  "sessions": {
+    "s_18c309e22b0c51": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f13e4-1c76-7be0-a67d-f48c0d075cf0",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
