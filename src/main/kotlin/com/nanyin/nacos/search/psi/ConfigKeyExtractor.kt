@@ -240,38 +240,108 @@ object ConfigKeyExtractor {
 
     // ----- json -------------------------------------------------------------
 
-    private val jsonPair = Regex(""""([^"]+)"\s*:\s*(.*)""")
-
     /**
-     * Reads `"key": value` pairs from a (possibly nested) JSON object and
-     * flattens nesting to dot-paths (`"sys": {"audit": {"switch": true}}` ->
-     * `sys.audit.switch`). Assumes pretty-printed input (one pair per line).
+     * Reads `"key": value` pairs from a (possibly nested) JSON object and flattens
+     * nesting to dot-paths (`"sys": {"audit": {"switch": true}}` -> `sys.audit.switch`).
+     * Uses a character-level scanner so it handles minified (single-line) JSON as well
+     * as pretty-printed input; the previous line-regex parser silently returned an empty
+     * map for the default `JSON.stringify` output.
      */
     private fun extractJson(content: String): Map<String, KeyLocation> {
         val result = LinkedHashMap<String, KeyLocation>()
         val path = ArrayDeque<String>()
-        content.lineSequence().forEachIndexed { index, rawLine ->
-            val trimmed = rawLine.trim()
-            if (trimmed.isEmpty()) return@forEachIndexed
+        val chars = content.toCharArray()
+        var i = 0
+        var line = 0
+        val n = chars.size
 
-            val keyMatch = jsonPair.matchEntire(trimmed)
-            if (keyMatch != null) {
-                val key = keyMatch.groupValues[1]
-                val valuePart = keyMatch.groupValues[2].trim().trimEnd(',').trim()
-                if (valuePart == "{") {
-                    path.addLast(key)
-                    return@forEachIndexed
+        fun skipWs() {
+            while (i < n) {
+                when (chars[i]) {
+                    ' ', '\t', '\r' -> i++
+                    '\n' -> { i++; line++ }
+                    else -> return
                 }
-                val fullKey = if (path.isEmpty()) key else path.joinToString(".") + "." + key
-                result[fullKey] = KeyLocation(fullKey, index, unquoteJson(valuePart))
-                return@forEachIndexed
             }
+        }
 
-            // Structural closing braces pop the nesting path.
-            if ('}' in trimmed) {
-                repeat(trimmed.count { it == '}' }) {
-                    if (path.isNotEmpty()) path.removeLast()
+        fun readString(): String {
+            // assumes chars[i] == '"'
+            val sb = StringBuilder()
+            i++ // opening quote
+            while (i < n && chars[i] != '"') {
+                if (chars[i] == '\\' && i + 1 < n) { sb.append(chars[i]); sb.append(chars[i + 1]); i += 2; continue }
+                if (chars[i] == '\n') line++
+                sb.append(chars[i]); i++
+            }
+            if (i < n) i++ // closing quote
+            return sb.toString()
+        }
+
+        // Skip a single JSON value (string, number, keyword, array, object) starting at i,
+        // tracking object/array nesting so commas and braces inside it are ignored.
+        fun skipValue(): String {
+            skipWs()
+            if (i >= n) return ""
+            val start = i
+            when (chars[i]) {
+                '"' -> { val s = readString(); return unquoteJson("\"" + s + "\"") }
+                '[', '{' -> {
+                    val open = chars[i]
+                    val close = if (open == '[') ']' else '}'
+                    var depth = 0
+                    while (i < n) {
+                        val c = chars[i]
+                        when {
+                            c == '"' -> readString().also { /* advanced */ }
+                            c == open -> depth++
+                            c == close -> { depth--; if (depth == 0) { i++; return content.substring(start, i).trim() } }
+                        }
+                        if (c == '\n') line++
+                        i++
+                    }
+                    return content.substring(start, i).trim()
                 }
+                else -> {
+                    // bare token (number / true / false / null) until delimiter
+                    while (i < n) {
+                        val c = chars[i]
+                        if (c == ',' || c == '}' || c == ']' || c == '\n' || c == ' ' || c == '\t' || c == '\r') break
+                        i++
+                    }
+                    return content.substring(start, i).trim()
+                }
+            }
+        }
+
+        // The parser only tracks object structure (array elements are skipped as opaque
+        // values), which is sufficient for the config-key use case.
+        while (i < n) {
+            val c = chars[i]
+            when {
+                c == '\n' -> { line++; i++ }
+                c == '{' || c == ',' || c == ':' || c == '[' || c == ']' || c == ' ' || c == '\t' || c == '\r' -> i++
+                c == '}' -> { if (path.isNotEmpty()) path.removeLast(); i++ }
+                c == '"' -> {
+                    val key = readString()
+                    skipWs()
+                    if (i < n && chars[i] == ':') {
+                        i++
+                        skipWs()
+                        if (i < n && chars[i] == '{') {
+                            // nested object: record nothing for the value, descend into it
+                            path.addLast(key)
+                            i++ // consume opening brace
+                        } else {
+                            val value = skipValue()
+                            val fullKey = if (path.isEmpty()) key else path.joinToString(".") + "." + key
+                            result[fullKey] = KeyLocation(fullKey, line, value)
+                        }
+                    } else {
+                        // a bare string not acting as a key; skip its value portion
+                    }
+                }
+                else -> i++
             }
         }
         return result

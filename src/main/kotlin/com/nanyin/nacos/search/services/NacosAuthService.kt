@@ -71,8 +71,11 @@ class NacosAuthService {
                 // 缓存无效，重新登录获取token
                 logger.info("Cached token expired or invalid, requesting new token")
                 val newToken = login()
-                if (newToken != null) {
-                    tokenCache[cacheKey] = newToken
+               if (newToken != null) {
+                   tokenCache[cacheKey] = newToken
+                    // Evict tokens for stale server/user combinations so switching
+                    // credentials does not leak access tokens for the app lifetime.
+                    tokenCache.keys.retainAll { it == cacheKey }
                     lastTokenRefresh.set(System.currentTimeMillis())
                     newToken.accessToken
                 } else {
@@ -97,11 +100,10 @@ class NacosAuthService {
                     return@withContext null
                 }
                 
-                val loginUrl = buildLoginUrl()
-                logger.debug("Attempting to login to: $loginUrl")
-                
-                 // val postData = "username=${URLEncoder.encode(settings.username, StandardCharsets.UTF_8.name())}&password=${URLEncoder.encode(settings.password, StandardCharsets.UTF_8.name())}"
-                val postData = "username=${settings.username}&password=${settings.password}"
+               val loginUrl = buildLoginUrl()
+               logger.debug("Attempting to login to: $loginUrl")
+               
+                val postData = "username=${URLEncoder.encode(settings.username, StandardCharsets.UTF_8.name())}&password=${URLEncoder.encode(settings.password, StandardCharsets.UTF_8.name())}"
 
                 val response = HttpRequests.post(loginUrl, "application/x-www-form-urlencoded")
                     .connectTimeout(CONNECTION_TIMEOUT)
@@ -227,17 +229,21 @@ class NacosAuthService {
     /**
      * 获取token状态信息
      */
-    fun getTokenStatus(): String {
-        val cacheKey = "${settings.serverUrl}_${settings.username}"
-        val cachedToken = tokenCache[cacheKey]
-        
+   fun getTokenStatus(): String {
+       val cacheKey = "${settings.serverUrl}_${settings.username}"
+       val cachedToken = tokenCache[cacheKey]
+       
         return when {
+            cachedToken == null -> "No token cached"
             cachedToken == null -> "No token cached"
             cachedToken.isValid() -> "Token valid (expires in ${(cachedToken.createTime + cachedToken.tokenTtl * 1000 - System.currentTimeMillis()) / 1000}s)"
             cachedToken.isExpired() -> "Token expired"
-            else -> "Token invalid"
-        }
-    }
+           else -> "Token invalid"
+       }
+   }
+
+    /** Test/inspection helper: the set of cached token keys. */
+    internal fun tokenCacheKeys(): Set<String> = tokenCache.keys.toSet()
     
     /**
      * 构建登录URL

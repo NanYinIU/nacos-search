@@ -16,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicReference
 
 @TestApplication
 class NacosAuthServiceTest {
@@ -24,6 +25,7 @@ class NacosAuthServiceTest {
         private lateinit var server: HttpServer
         private var serverPort: Int = 0
         private val gson = Gson()
+        private val lastLoginBody = AtomicReference("")
 
         private val successfulLoginResponse = mapOf(
             "accessToken" to "test-token-123",
@@ -44,13 +46,14 @@ class NacosAuthServiceTest {
             serverPort = server.address.port
 
             server.createContext("/nacos/v1/auth/login", object : HttpHandler {
-                override fun handle(exchange: HttpExchange) {
-                    val requestBody = exchange.requestBody.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-                    when {
-                        requestBody.contains("password=valid") -> sendJsonResponse(exchange, 200, successfulLoginResponse)
-                        else -> sendJsonResponse(exchange, 200, failedLoginResponse)
-                    }
-                }
+               override fun handle(exchange: HttpExchange) {
+                   val requestBody = exchange.requestBody.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+                    lastLoginBody.set(requestBody)
+                   when {
+                       requestBody.contains("password=valid") -> sendJsonResponse(exchange, 200, successfulLoginResponse)
+                       else -> sendJsonResponse(exchange, 200, failedLoginResponse)
+                   }
+               }
             })
 
             server.createContext("/nacos/v1/auth/users", object : HttpHandler {
@@ -244,8 +247,39 @@ class NacosAuthServiceTest {
         val token2 = authService.getValidAccessToken()
         assertEquals("test-token-123", token2)
 
+       settings.username = "user1"
+       val token3 = authService.getValidAccessToken()
+       assertEquals("test-token-123", token3)
+   }
+
+    @Test
+    fun `login url-encodes special characters in credentials`() = runBlocking {
+        settings.username = "a&b"
+        settings.password = "p=w0rd"
+        authService.getValidAccessToken()
+
+        val body = lastLoginBody.get()
+        // Must be exactly two form params; special chars encoded so they cannot
+        // split into extra params.
+        assertEquals("username=a%26b&password=p%3Dw0rd", body)
+    }
+
+    @Test
+    fun `switching credentials evicts stale tokens from the cache`() = runBlocking {
+        settings.serverUrl = "http://localhost:$serverPort"
+        settings.password = "valid"
+
         settings.username = "user1"
-        val token3 = authService.getValidAccessToken()
-        assertEquals("test-token-123", token3)
+        authService.getValidAccessToken()
+        val firstKey = authService.tokenCacheKeys().single()
+
+        settings.username = "user2"
+        authService.getValidAccessToken()
+        val after = authService.tokenCacheKeys()
+
+        // Only the current server+user combination may remain; the previous user's
+        // access token must not linger for the app lifetime.
+        assertEquals(1, after.size)
+        assertTrue(firstKey !in after)
     }
 }

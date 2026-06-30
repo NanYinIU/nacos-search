@@ -17,6 +17,23 @@
    ]]></description>
 
     <change-notes><![CDATA[
+        <b>1.3.1</b>
+        <ul>
+            <li>Fix: HTTP connections in <code>requestPost</code> are now always disconnected via try/finally, eliminating socket leaks on error and exception paths.</li>
+            <li>Fix: login credentials are URL-encoded so usernames/passwords containing <code>&amp;</code>, <code>=</code>, <code>+</code> no longer corrupt the login form.</li>
+            <li>Fix: <code>PaginationPanel</code> now disposes its namespace listener via the Disposable tree, preventing Swing leaks across project open/close.</li>
+            <li>Fix: <code>NacosConfigKeyReferenceSearcher</code> honors the Find Usages consumer cancel signal instead of always materializing the full reference list.</li>
+            <li>Fix: minified (single-line) JSON configurations are now parsed for gutter markers, go-to-declaration and Find Usages; the parser silently returned an empty map before.</li>
+            <li>Fix: <code>performSearch</code> cancels any pending debounced search so a late debounce coroutine can no longer overwrite a fresh page/immediate result.</li>
+            <li>Fix: stale tokens for switched server/user combinations are evicted from the auth cache instead of lingering for the app lifetime.</li>
+            <li>Fix: <code>NacosSearchPlugin</code> now implements <code>Disposable</code> so its coroutine scope is actually reclaimed on shutdown.</li>
+            <li>Perf: cache reads are lock-free and no longer run a full expiry sweep on every search; expiry reclamation moved to the background/writer path.</li>
+            <li>Perf: cache entry payloads moved from a single multi-hundred-MB state XML to per-entry files, fixing orphan blobs and slow startup.</li>
+            <li>Perf: cache loading runs in the background so IDE startup is no longer blocked on cache file I/O; single-key reads resolve from file without waiting for the full load.</li>
+            <li>Perf: <code>getAllConfigurations</code> fetches per-item content concurrently (bounded at 8) instead of sequentially.</li>
+            <li>UI: the save button label now reads "Save" instead of "Save & Publish".</li>
+            <li>i18n: fixed untranslated placeholder keys (<code>error.unknown</code>, <code>namespace.failed.select</code>), a typo in <code>config.list.dirty</code>, and unified the Chinese bundle encoding to native UTF-8.</li>
+        </ul>
         <b>1.3.0</b>
         <ul>
             <li>Fix: phantom gutter icon no longer appears when a <code>@NacosPropertySource</code> dataId does not exist in the loaded Nacos namespace. The unresolved marker is now only shown when the dataId is known to the cache (or the cache is cold).</li>

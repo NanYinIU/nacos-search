@@ -17,11 +17,14 @@ import kotlinx.coroutines.delay
  * Main plugin class that manages the Nacos Search plugin lifecycle
  */
 @Service(Service.Level.APP)
-class NacosSearchPlugin : ProjectActivity {
+class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
 
     private val logger = thisLogger()
-    private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+   private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var autoRefreshJob: Job? = null
+
+    /** Test/inspection helper: whether the plugin coroutine scope is still active. */
+    internal fun isScopeActive(): Boolean = coroutineScope.isActive
 
     // Services
     private val settings by lazy { ApplicationManager.getApplication().getService(NacosSettings::class.java) }
@@ -268,7 +271,7 @@ class NacosSearchPlugin : ProjectActivity {
     /**
      * Dispose plugin resources
      */
-    fun dispose() {
+    override fun dispose() {
         logger.info("Disposing Nacos Search Plugin")
         
         try {

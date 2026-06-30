@@ -164,4 +164,5 @@ class NacosSearchServiceTest {
         )
         scope.cancel()
     }
+
 }

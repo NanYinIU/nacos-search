@@ -137,12 +137,16 @@ class NamespaceService(private val nacosApiService: NacosApiService? = null) : P
      * Remove a namespace change listener
      * @param listener The listener to remove
      */
-    fun removeNamespaceChangeListener(listener: NamespaceChangeListener) {
-        changeListeners.remove(listener)
-        logger.debug("Removed namespace change listener: ${listener.javaClass.simpleName}")
-    }
-    
-    /**
+   fun removeNamespaceChangeListener(listener: NamespaceChangeListener) {
+       changeListeners.remove(listener)
+       logger.debug("Removed namespace change listener: ${listener.javaClass.simpleName}")
+   }
+
+    /** Test/inspection helper. */
+    internal fun isRegisteredListener(listener: NamespaceChangeListener): Boolean =
+        changeListeners.contains(listener)
+   
+   /**
      * Find namespace by ID
      * @param namespaceId The namespace ID to search for
      * @return The namespace if found, null otherwise

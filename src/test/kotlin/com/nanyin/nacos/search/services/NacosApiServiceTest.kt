@@ -11,14 +11,22 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpHandler
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.verify
+import org.mockito.kotlin.whenever
 import java.net.InetSocketAddress
+import java.net.HttpURLConnection
+import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 
 @TestApplication
 class NacosApiServiceTest {
@@ -29,6 +37,8 @@ class NacosApiServiceTest {
         private val gson = Gson()
         private val lastPublishBody = AtomicReference("")
         private val lastPublishQuery = AtomicReference<String?>(null)
+        private val activeDetail = AtomicInteger(0)
+        private val inFlightMax = AtomicInteger(0)
 
         private val namespacesResponse = mapOf(
             "code" to 0,
@@ -91,13 +101,37 @@ class NacosApiServiceTest {
                     }
                     val query = exchange.requestURI.query ?: ""
                     when {
-                        query.contains("show=all") -> sendJsonResponse(exchange, 200, configDetailResponse)
+                        // Single-config detail fetch; introduce latency to surface N+1 behavior.
+                        query.contains("show=all") -> {
+                            if (query.contains("dataId=cfg")) {
+                                val dataId = query.substringAfter("dataId=").substringBefore("&")
+                                val active = activeDetail.incrementAndGet()
+                                if (active > inFlightMax.get()) inFlightMax.set(active)
+                                Thread.sleep(50)
+                                activeDetail.decrementAndGet()
+                                sendJsonResponse(exchange, 200, mapOf(
+                                    "dataId" to dataId, "group" to "DEFAULT_GROUP", "tenant" to "concurrent-ns",
+                                    "content" to "v=1", "type" to "properties", "md5" to "m"
+                                ))
+                            } else {
+                                sendJsonResponse(exchange, 200, configDetailResponse)
+                            }
+                        }
+                        query.contains("tenant=concurrent-ns") -> {
+                            val items = (1..12).map { i ->
+                                mapOf("id" to "$i", "dataId" to "cfg$i", "group" to "DEFAULT_GROUP",
+                                      "content" to null, "type" to "properties", "tenant" to "concurrent-ns")
+                            }
+                            sendJsonResponse(exchange, 200, mapOf(
+                                "totalCount" to 12, "pageNumber" to 1, "pagesAvailable" to 1, "pageItems" to items
+                            ))
+                        }
                         else -> sendJsonResponse(exchange, 200, configListResponse)
                     }
                 }
             })
 
-            server.executor = null
+            server.executor = java.util.concurrent.Executors.newFixedThreadPool(32)
             server.start()
         }
 
@@ -340,5 +374,44 @@ class NacosApiServiceTest {
         )
         assertTrue(result.isSuccess)
         assertTrue(result.getOrDefault(false))
+    }
+
+    @Test
+    fun `requestPost disconnects connection on error response`() {
+        val connection = mock<HttpURLConnection>()
+        whenever(connection.responseCode).thenReturn(500)
+        whenever(connection.errorStream).thenReturn(ByteArrayInputStream("server error".toByteArray()))
+
+        assertThrows<RuntimeException> {
+            NacosApiService.doRequestPost(connection, "dataId=x")
+        }
+        verify(connection).disconnect()
+    }
+
+    @Test
+    fun `requestPost disconnects connection when write throws`() {
+        val connection = mock<HttpURLConnection>()
+        whenever(connection.outputStream).thenThrow(IOException("broken pipe"))
+
+        assertThrows<IOException> {
+            NacosApiService.doRequestPost(connection, "dataId=x")
+        }
+        verify(connection).disconnect()
+    }
+
+    @Test
+    fun `getAllConfigurations fetches per-item content concurrently`() = runBlocking {
+        activeDetail.set(0)
+        inFlightMax.set(0)
+        val start = System.currentTimeMillis()
+        val result = apiService.getAllConfigurations("concurrent-ns", useCache = false)
+        val elapsed = System.currentTimeMillis() - start
+        assertTrue(result.isSuccess)
+        assertEquals(12, result.getOrNull()!!.size)
+        // Sequential fetching of 12 items at 50ms each would take >= 600ms; bounded
+        // parallelism (<= 8) must finish well under that.
+        assertTrue(elapsed < 500, "expected concurrent fetch to be fast, took ${elapsed}ms")
+        // And at least two requests must have overlapped (proving parallelism, not just speed).
+        assertTrue(inFlightMax.get() >= 2, "expected overlapping detail requests, max in-flight was ${inFlightMax.get()}")
     }
 }

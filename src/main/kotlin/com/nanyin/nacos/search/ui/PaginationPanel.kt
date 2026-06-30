@@ -5,6 +5,7 @@ import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.Disposable
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
@@ -17,7 +18,7 @@ import javax.swing.*
 /**
  * Pagination panel for search results
  */
-class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, LanguageAwareComponent {
+class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, LanguageAwareComponent, Disposable {
     private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
     private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
     // private val nacosSearchService = ApplicationManager.getApplication().getService(NacosSearchService::class.java)
@@ -226,6 +227,10 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
             totalCount = totalCountNum,
             totalPages = totalPages
         ))
+    }
+
+    override fun dispose() {
+        namespaceService.removeNamespaceChangeListener(this)
     }
     
     /**

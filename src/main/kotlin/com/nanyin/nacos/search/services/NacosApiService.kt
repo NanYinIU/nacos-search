@@ -12,6 +12,8 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.util.io.HttpRequests
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
@@ -23,18 +25,43 @@ class NacosApiService {
     private val logger = thisLogger()
     private val gson = Gson()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-    private val authService = ApplicationManager.getApplication().getService(NacosAuthService::class.java)
+   private val authService = ApplicationManager.getApplication().getService(NacosAuthService::class.java)
     private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
-    
-    companion object {
+   companion object {
         private const val CONFIG_ENDPOINT = "/nacos/v1/cs/configs"
         private const val CONFIG_LIST_ENDPOINT = "/nacos/v1/cs/configs"
-        // 查询命名空间，第一步，
         private const val NAMESPACE_ENDPOINT = "/nacos/v1/console/namespaces"
-        private const val CONNECTION_TIMEOUT = 10000
-        private const val READ_TIMEOUT = 30000
+        private const val FETCH_CONCURRENCY = 8
+
+        // Testable I/O body of requestPost. Guarantees the connection is
+        // disconnected and streams closed on every path (success, error, exception).
+        internal fun doRequestPost(connection: java.net.HttpURLConnection, formData: String): String {
+            try {
+                connection.outputStream.use { os ->
+                    os.write(formData.toByteArray(StandardCharsets.UTF_8))
+                    os.flush()
+                }
+                val responseCode = connection.responseCode
+                if (responseCode !in 200..299) {
+                    val errText = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                    throw RuntimeException("HTTP $responseCode: $errText")
+                }
+                return java.io.BufferedReader(
+                    java.io.InputStreamReader(connection.inputStream, StandardCharsets.UTF_8)
+                ).use { reader ->
+                    val sb = StringBuilder()
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        sb.append(line)
+                    }
+                    sb.toString()
+                }
+            } finally {
+                connection.disconnect()
+            }
+        }
     }
-    
+
     /**
      * Tests connection to Nacos server
      */
@@ -183,8 +210,18 @@ class NacosApiService {
                 }
                 
                 val response = result.getOrNull() ?: break
-                val configs = response.pageItems.map { item ->
-                    getConfigurationFromItem(item, useCache)
+                // Fetch each item's content concurrently rather than sequentially; this
+                // turns N blocking HTTP calls per page into bounded parallelism, avoiding
+                // long IO-scheduler stalls on namespaces with many configs.
+                val configs = coroutineScope {
+                    val semaphore = kotlinx.coroutines.sync.Semaphore(FETCH_CONCURRENCY)
+                    response.pageItems.map { item ->
+                        async {
+                            semaphore.withPermit {
+                                getConfigurationFromItem(item, useCache)
+                            }
+                        }
+                    }.awaitAll()
                 }
                 allConfigs.addAll(configs)
                 pageNo++
@@ -370,38 +407,20 @@ class NacosApiService {
             .readString()
     }
 
-    private fun requestPost(url: String, params: Map<String, String>, authHeaders: Map<String, String>): String {
-        val formData = encodeFormData(params)
-        val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-        connection.requestMethod = "POST"
-        connection.connectTimeout = settings.getConnectionTimeoutMillis()
-        connection.readTimeout = settings.getReadTimeoutMillis()
-        connection.doOutput = true
-        connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-        connection.setRequestProperty("Accept", "application/json")
-        authHeaders.forEach { (key, value) ->
-            connection.setRequestProperty(key, value)
-        }
-        val os = connection.outputStream
-        os.write(formData.toByteArray(StandardCharsets.UTF_8))
-        os.flush()
-        os.close()
-        val responseCode = connection.responseCode
-        if (responseCode !in 200..299) {
-            val errStream = connection.errorStream
-            val errText = errStream?.bufferedReader()?.readText() ?: ""
-            throw RuntimeException("HTTP $responseCode: $errText")
-        }
-        val reader = java.io.BufferedReader(java.io.InputStreamReader(connection.inputStream, StandardCharsets.UTF_8))
-        val sb = StringBuilder()
-        var line: String?
-        while (reader.readLine().also { line = it } != null) {
-            sb.append(line)
-        }
-        reader.close()
-        connection.disconnect()
-        return sb.toString()
-    }
+   private fun requestPost(url: String, params: Map<String, String>, authHeaders: Map<String, String>): String {
+       val formData = encodeFormData(params)
+       val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+       connection.requestMethod = "POST"
+       connection.connectTimeout = settings.getConnectionTimeoutMillis()
+       connection.readTimeout = settings.getReadTimeoutMillis()
+       connection.doOutput = true
+       connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+       connection.setRequestProperty("Accept", "application/json")
+       authHeaders.forEach { (key, value) ->
+           connection.setRequestProperty(key, value)
+       }
+        return doRequestPost(connection, formData)
+   }
 
     private fun encodeFormData(params: Map<String, String>): String {
         return params.entries.joinToString("&") { (key, value) ->

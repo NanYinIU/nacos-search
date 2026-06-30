@@ -19,6 +19,7 @@ import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.intellij.openapi.components.service
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.options.ShowSettingsUtil
@@ -92,6 +93,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         configListPanel = ConfigListPanel(project)
         configDetailPanel = ConfigDetailPanel(project)
         paginationPanel = PaginationPanel()
+        Disposer.register(this, paginationPanel)
         
         // Initialize managers
         initializationManager = InitializationManager(

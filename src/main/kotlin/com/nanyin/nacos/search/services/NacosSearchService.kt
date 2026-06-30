@@ -187,6 +187,9 @@ class NacosSearchService {
         request: SearchRequest,
         nacosApiService: NacosApiService
     ) {
+        // Cancel any pending debounced search so a late-triggered debounce coroutine
+        // cannot overwrite this immediate/paginated result with stale input.
+        searchJob?.cancel()
         try {
             _searchState.value = SearchState.Loading
 

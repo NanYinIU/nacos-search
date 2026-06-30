@@ -114,9 +114,24 @@ class ConfigKeyExtractorTest {
     }
 
     @Test
-    fun `json nested object flattens`() {
-        val content = "{\n  \"sys\": {\n    \"audit\": {\n      \"switch\": true\n    }\n  }\n}\n"
-        val map = ConfigKeyExtractor.extract(config(content, "json"))
+   fun `json nested object flattens`() {
+       val content = "{\n  \"sys\": {\n    \"audit\": {\n      \"switch\": true\n    }\n  }\n}\n"
+       val map = ConfigKeyExtractor.extract(config(content, "json"))
+       assertEquals("true", map["sys.audit.switch"]?.value)
+   }
+
+    @Test
+    fun `json parses minified single-line object`() {
+        // Default JSON.stringify output: one line, no whitespace. The line-based
+        // regex parser silently produced an empty map for this input.
+        val map = ConfigKeyExtractor.extract(config("""{"timeout":5000,"name":"svc"}""", "json"))
+        assertEquals("5000", map["timeout"]?.value)
+        assertEquals("svc", map["name"]?.value)
+    }
+
+    @Test
+    fun `json parses minified nested object`() {
+        val map = ConfigKeyExtractor.extract(config("""{"sys":{"audit":{"switch":true}}}""", "json"))
         assertEquals("true", map["sys.audit.switch"]?.value)
     }
 

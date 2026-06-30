@@ -31,8 +31,12 @@ class NacosConfigKeyReferenceSearcher :
         val target = parameters.elementToSearch as? NacosConfigKeyElement ?: return true
         val project = target.project
         val key = target.key
-        findUsages(project, key, parameters.effectiveSearchScope as? GlobalSearchScope ?: GlobalSearchScope.projectScope(project))
-            .forEach { consumer.process(it) }
+        // Respect the QueryExecutor contract: stop as soon as the consumer declines
+        // (process() == false), so Find Usages can short-circuit instead of always
+        // materializing the full reference list.
+        for (ref in findUsages(project, key, parameters.effectiveSearchScope as? GlobalSearchScope ?: GlobalSearchScope.projectScope(project))) {
+            if (!consumer.process(ref)) return false
+        }
         return true
     }
 
