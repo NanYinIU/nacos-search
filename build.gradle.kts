@@ -109,7 +109,21 @@ tasks {
             </ul>
         """.trimIndent())
 
-        changeNotes.set("""
+       changeNotes.set("""
+            <h3>1.3.1</h3>
+            <ul>
+                <li><b>Performance</b>: lock-free cache reads, file-based persistence (per-entry files replacing a multi-hundred-MB state XML), background cache loading so IDE startup is no longer blocked, concurrent per-item content fetch (bounded at 8).</li>
+                <li><b>Fix</b>: HTTP connection leak in requestPost (try/finally disconnect); login credentials now URL-encoded; PaginationPanel disposes its listener via the Disposable tree; Find Usages honors the cancel signal; minified JSON now parsed; performSearch cancels stale debounced searches; stale tokens evicted on credential switch; NacosSearchPlugin implements Disposable; putNamespaceIndex persists seeded details.</li>
+                <li><b>UI</b>: the save button label reads "Save" instead of "Save & Publish".</li>
+                <li><b>i18n</b>: fixed untranslated placeholder keys, a config.list.dirty typo, and unified the Chinese bundle encoding to native UTF-8.</li>
+            </ul>
+            <h3>1.3.0</h3>
+            <ul>
+                <li>Fix: phantom gutter icon no longer appears when a @NacosPropertySource dataId does not exist in the loaded Nacos namespace.</li>
+                <li>Fix: resolved NacosConfigKeyElement now carries the source PSI element so Find Usages and navigation keep working after lazy-load.</li>
+                <li>UI: redesigned search bar, clear button, group filter pill and tool-window toolbar.</li>
+                <li>Perf: debounced search input and background namespace-index preheat.</li>
+            </ul>
             <h3>1.2.0</h3>
             <ul>
                 <li>@NacosValue gutter icon with dual-state (resolved/unresolved) and PSI reference navigation</li>
