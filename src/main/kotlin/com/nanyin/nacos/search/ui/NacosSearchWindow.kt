@@ -93,6 +93,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         configListPanel = ConfigListPanel(project)
         configDetailPanel = ConfigDetailPanel(project)
         paginationPanel = PaginationPanel()
+        Disposer.register(this, namespacePanel)
+        Disposer.register(this, configListPanel)
+        Disposer.register(this, configDetailPanel)
         Disposer.register(this, paginationPanel)
         
         // Initialize managers
@@ -205,6 +208,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 override fun settingsChanged() {
                     handleSettingsChanged()
                 }
+
+                override fun preferencesChanged() {
+                    handlePreferencesChanged()
+                }
             }
         )
 
@@ -269,6 +276,17 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         
         // Initialize UI with proper namespace and pagination using InitializationManager
         performInitialization()
+    }
+
+    /**
+     * Lightweight handler for preference-only changes (e.g.
+     * allowCrossNamespaceNavigation toggle). Does NOT clear caches or reload
+     * the config list — just refreshes gutter markers so the highlighter pass
+     * re-evaluates resolvability with the new setting.
+     */
+    private fun handlePreferencesChanged() {
+        SwingUtilities.invokeLater { environmentSwitcher.refresh() }
+        com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(project).restart()
     }
 
     private fun handleSettingsChanged() {
@@ -357,12 +375,14 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         clearSearchUi()
 
         if (newNamespace != null) {
-            // Fresh listing for the new namespace — no stale search criteria carried over.
+            // Prefer cached list-page data when available — avoids a forced
+            // remote API call on every namespace switch. The user can still
+            // pull fresh data via the refresh button.
             val request = NacosSearchService.SearchRequest(
                 namespace = newNamespace,
                 pageNo = 1,
                 pageSize = paginationPanel.getCurrentPageSize(),
-                forceRefresh = true,
+                forceRefresh = false,
                 serverId = settings.activeServerId
             )
             currentSearchRequest = request
@@ -377,9 +397,14 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
 
     private fun clearSearchUi() {
+        val hasPendingNav = pendingNavigationTarget != null
         val clearAction = {
             searchPanel.clearAllCriteria()
-            configDetailPanel.clearConfiguration()
+            // Preserve the detail panel when a cross-namespace navigation is
+            // in flight — navigateToConfig already showed the target config.
+            if (!hasPendingNav) {
+                configDetailPanel.clearConfiguration()
+            }
             configListPanel.setConfigurations(emptyList())
             paginationPanel.reset()
         }
@@ -387,7 +412,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         if (SwingUtilities.isEventDispatchThread()) {
             clearAction()
         } else {
-            SwingUtilities.invokeAndWait(clearAction)
+            SwingUtilities.invokeLater(clearAction)
         }
     }
    
@@ -568,16 +593,17 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         configListPanel.setConfigurations(configurations)
         // Populate group filter with unique groups from current results
         searchPanel.setAvailableGroups(configurations.map { it.group }.filter { it.isNotBlank() })
-        if (configurations.isEmpty()) {
+        if (configurations.isEmpty() && pendingNavigationTarget == null) {
             configDetailPanel.clearConfiguration()
         }
 
         // Consume a navigation target stashed before a namespace switch.
+        // The detail panel was already shown in navigateToConfig; here we
+        // only need to select the row in the freshly loaded list.
         pendingNavigationTarget?.let { (targetConfig, lineIndex) ->
             pendingNavigationTarget = null
             configListPanel.selectConfiguration(targetConfig)
             currentConfiguration = targetConfig
-            configDetailPanel.showConfiguration(targetConfig, lineIndex)
         }
     }
     
@@ -814,8 +840,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      */
     fun navigateToConfig(config: com.nanyin.nacos.search.models.NacosConfiguration, lineIndex: Int) {
         ApplicationManager.getApplication().invokeLater {
-            val targetNsId = config.tenantId ?: ""
-            val currentNsId = currentNamespace?.namespaceId
+            val targetNsId = normalizeNamespaceId(config.tenantId)
+            val currentNsId = normalizeNamespaceId(currentNamespace?.namespaceId)
 
             if (targetNsId == currentNsId) {
                 // Same namespace: select and show immediately.
@@ -823,22 +849,34 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 currentConfiguration = config
                 configDetailPanel.showConfiguration(config, lineIndex)
             } else {
-                // Different namespace: stash the target and switch.
-                // The result is consumed in updateConfigurationList after the reload.
+                // Different namespace: show the config detail immediately —
+                // we already have the NacosConfiguration object from the
+                // resolver — then switch the namespace in the background.
+                // The list will select the target once it finishes loading.
                 pendingNavigationTarget = config to lineIndex
-                val target = namespaceService.findNamespaceById(targetNsId)
+                currentConfiguration = config
+                configDetailPanel.showConfiguration(config, lineIndex)
+
+                val target = findNamespaceForNavigation(targetNsId)
                 if (target != null) {
                     namespaceService.setCurrentNamespace(target)
                 } else {
-                    // Namespace not in the available list (e.g. not loaded yet).
-                    // Fall back: show the detail directly with the original config.
                     pendingNavigationTarget = null
-                    currentConfiguration = config
-                    configDetailPanel.showConfiguration(config, lineIndex)
+                    showError("Target namespace '${targetNsId.ifBlank { "public" }}' is not available. Refresh namespaces and try again.")
                 }
             }
         }
     }
+
+    private fun normalizeNamespaceId(namespaceId: String?): String =
+        namespaceId?.takeIf { it.isNotBlank() && it != "public" } ?: ""
+
+    private fun findNamespaceForNavigation(namespaceId: String): NamespaceInfo? =
+        if (namespaceId.isBlank()) {
+            namespaceService.getPublicNamespace() ?: namespaceService.findNamespaceById("")
+        } else {
+            namespaceService.findNamespaceById(namespaceId)
+        }
     
     /**
      * Refresh all data
@@ -878,6 +916,15 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
         coroutineScope.launch(Dispatchers.IO) {
             try {
+                // Skip the heavy full-content fetch when a fresh namespace
+                // index already exists — re-preheating on every namespace
+                // switch is the primary source of background IO saturation.
+                val existing = cacheService.getNamespaceIndex(settings.serverUrl, namespaceId)
+                if (existing != null) {
+                    NacosKeyResolver.ensureIndexBuilt(cacheService)
+                    return@launch
+                }
+
                 val result = nacosApiService.getAllConfigurations(namespaceId, useCache = true)
                 if (result.isSuccess) {
                     val configs = result.getOrNull().orEmpty()

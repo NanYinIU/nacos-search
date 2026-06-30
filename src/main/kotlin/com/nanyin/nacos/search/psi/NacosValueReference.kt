@@ -5,6 +5,8 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiPolyVariantReferenceBase
 import com.intellij.psi.ResolveResult
+import com.nanyin.nacos.search.settings.NacosSettings
+import com.intellij.openapi.application.ApplicationManager
 
 /**
  * A reference from a `${...}` placeholder inside `@NacosValue` / `@Value` to the
@@ -28,7 +30,8 @@ class NacosValueReference(
             key = key,
             activeServerUrl = NacosKeyResolver.currentServerUrl(),
             preferredGroup = codeContext.group,
-            preferredNamespaceId = codeContext.namespaceId
+            preferredNamespaceId = codeContext.namespaceId,
+            allowCrossNamespace = crossNamespaceNavigationEnabled()
         )
        return hits.map { hit ->
            object : ResolveResult {
@@ -49,4 +52,14 @@ class NacosValueReference(
     override fun isReferenceTo(element: PsiElement): Boolean {
         return element is NacosConfigKeyElement && (element as NacosConfigKeyElement).key == key
     }
+
+    private fun crossNamespaceNavigationEnabled(): Boolean =
+        try {
+            ApplicationManager.getApplication()
+                ?.getService(NacosSettings::class.java)
+                ?.getActiveServer()
+                ?.allowCrossNamespaceNavigation == true
+        } catch (e: Exception) {
+            false
+        }
 }

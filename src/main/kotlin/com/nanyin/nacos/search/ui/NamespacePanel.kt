@@ -2,10 +2,12 @@ package com.nanyin.nacos.search.ui
 
 import com.nanyin.nacos.search.models.NamespaceFilter
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopup
@@ -46,7 +48,7 @@ class NamespacePanel(
     private val namespaceService: NamespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java),
     private val languageService: LanguageService = ApplicationManager.getApplication().getService(LanguageService::class.java),
     private val dispatcher: CoroutineDispatcher = Dispatchers.Main
-) : JPanel(BorderLayout()), LanguageAwareComponent {
+) : JPanel(BorderLayout()), LanguageAwareComponent, NamespaceChangeListener, Disposable {
 
     // UI Components
     private lateinit var namespaceButton: JButton
@@ -151,6 +153,7 @@ class NamespacePanel(
     }
 
     private fun setupEventHandlers() {
+        namespaceService.addNamespaceChangeListener(this)
         refreshButton.addActionListener {
             loadNamespaces()
         }
@@ -427,6 +430,17 @@ class NamespacePanel(
         }
     }
 
+    override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
+        SwingUtilities.invokeLater {
+            val matchingNamespace = newNamespace?.let { ns ->
+                namespaces.find { it.namespaceId == ns.namespaceId } ?: ns
+            }
+            currentNamespace = matchingNamespace
+            renderButton(matchingNamespace)
+            refreshPopupIfShowing()
+        }
+    }
+
     /**
      * Refresh namespaces from server
      */
@@ -437,9 +451,10 @@ class NamespacePanel(
     /**
      * Clean up resources
      */
-    fun dispose() {
+    override fun dispose() {
         activePopup?.cancel()
         activePopup = null
+        namespaceService.removeNamespaceChangeListener(this)
         coroutineScope.cancel()
     }
 

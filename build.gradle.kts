@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.3.1"
+version = "1.3.2"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -110,6 +110,14 @@ tasks {
         """.trimIndent())
 
        changeNotes.set("""
+            <h3>1.3.2</h3>
+            <ul>
+                <li><b>Navigation</b>: improved @NacosValue gutter navigation with richer cross-namespace target selection, usage labels, and source-location presentation.</li>
+                <li><b>Security</b>: Nacos passwords are now stored through IntelliJ PasswordSafe and omitted from persisted settings XML, with migration for legacy plaintext values.</li>
+                <li><b>Reliability</b>: Nacos JSON requests now retry transient IO failures and retry with connection settings that avoid malformed chunked responses from some servers and proxies.</li>
+                <li><b>UI</b>: cross-namespace config navigation preserves the selected detail view while the namespace list refreshes, and preference-only changes refresh markers without a full cache reload.</li>
+                <li><b>Tests</b>: added coverage for popup choice items, usage presentation, credential persistence, resolver behavior, gutter markers, and settings interactions.</li>
+            </ul>
             <h3>1.3.1</h3>
             <ul>
                 <li><b>Performance</b>: lock-free cache reads, file-based persistence (per-entry files replacing a multi-hundred-MB state XML), background cache loading so IDE startup is no longer blocked, concurrent per-item content fetch (bounded at 8).</li>

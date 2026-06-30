@@ -23,6 +23,7 @@ import javax.imageio.ImageIO
 import org.mockito.kotlin.mock
 import javax.swing.JButton
 import javax.swing.JComboBox
+import javax.swing.JComponent
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JTextField
@@ -224,20 +225,26 @@ class UiButtonInteractionTest {
     @Test
     fun configDetailActionButtonsFollowPrototypeSizing() {
         val panel = ConfigDetailPanel(mockProject)
-        val refreshButton = privateField<JButton>(panel, "refreshButton")
-        val copyButton = privateField<JButton>(panel, "copyButton")
-        val saveButton = privateField<JButton>(panel, "saveButton")
-        val editButton = privateField<JButton>(panel, "editButton")
-        val revertButton = privateField<JButton>(panel, "revertButton")
+        try {
+            val refreshButton = privateField<JButton>(panel, "refreshButton")
+            val copyButton = privateField<JButton>(panel, "copyButton")
+            val saveButton = privateField<JButton>(panel, "saveButton")
+            val editButton = privateField<JButton>(panel, "editButton")
+            val revertButton = privateField<JButton>(panel, "revertButton")
 
-       assertEquals(Dimension(26, 26), refreshButton.preferredSize)
-       assertEquals(Dimension(68, 26), copyButton.preferredSize)
-        assertEquals(Dimension(120, 26), saveButton.preferredSize)
-        assertEquals(Dimension(72, 26), editButton.preferredSize)
-        assertEquals(Dimension(72, 26), revertButton.preferredSize)
-        assertTrue(copyButton.text.isNotBlank())
-
-        Disposer.dispose(panel)
+            assertEquals(Dimension(26, 26), refreshButton.preferredSize)
+            assertEquals(Dimension(72, 26), copyButton.preferredSize)
+            assertEquals(Dimension(72, 26), saveButton.preferredSize)
+            assertEquals(Dimension(72, 26), editButton.preferredSize)
+            assertEquals(Dimension(72, 26), revertButton.preferredSize)
+            assertTrue(copyButton.text.isNotBlank())
+            assertEquals(null, copyButton.icon)
+            assertEquals(null, saveButton.icon)
+            assertEquals(null, editButton.icon)
+            assertEquals(null, revertButton.icon)
+        } finally {
+            Disposer.dispose(panel)
+        }
     }
 
     @Test
@@ -304,6 +311,51 @@ class UiButtonInteractionTest {
     }
 
     @Test
+    fun configDetailHeaderRowsUseSameVisualLeftEdge() {
+        val panel = ConfigDetailPanel(mockProject)
+        try {
+            val dataIdLabel = privateField<JTextField>(panel, "dataIdLabel")
+            val inlineMetaLabel = privateField<JComponent>(panel, "inlineMetaLabel")
+            val formatTagLabel = privateField<JComponent>(panel, "formatTagLabel")
+            val config = NacosConfiguration(
+                dataId = "sys.properties",
+                group = "DEFAULT_GROUP",
+                tenantId = "427adcc2-dbf8-4086-8433-8be647a86b62",
+                content = "room.enabled=true",
+                type = "properties"
+            )
+
+            runOnEdt {
+                setPrivateField(panel, "currentConfiguration", config)
+                setPrivateField(panel, "displayGeneration", 1L)
+                val updateMetadataMethod = ConfigDetailPanel::class.java.getDeclaredMethod(
+                    "updateMetadata",
+                    NacosConfiguration::class.java,
+                    Long::class.javaPrimitiveType
+                )
+                updateMetadataMethod.isAccessible = true
+                updateMetadataMethod.invoke(panel, config, 1L)
+                panel.setSize(900, 260)
+                panel.doLayoutRecursively()
+            }
+            waitForUi()
+            runOnEdt {
+                panel.setSize(900, 260)
+                panel.doLayoutRecursively()
+            }
+
+            val titleX = dataIdLabel.convertedBounds(panel).x
+            val metadataX = inlineMetaLabel.convertedBounds(panel).x
+            val formatTagX = formatTagLabel.convertedBounds(panel).x
+
+            assertEquals(titleX, metadataX)
+            assertEquals(titleX, formatTagX)
+        } finally {
+            Disposer.dispose(panel)
+        }
+    }
+
+    @Test
     fun configListRefreshButtonTriggersRefreshCallback() {
         val panel = ConfigListPanel(mockProject)
         val refreshButton = privateField<JButton>(panel, "refreshButton")
@@ -350,6 +402,12 @@ class UiButtonInteractionTest {
         return field.get(target) as T
     }
 
+    private fun setPrivateField(target: Any, name: String, value: Any?) {
+        val field = target.javaClass.getDeclaredField(name)
+        field.isAccessible = true
+        field.set(target, value)
+    }
+
     private fun runOnEdt(action: () -> Unit) {
         if (ApplicationManager.getApplication().isDispatchThread) {
             action()
@@ -379,6 +437,9 @@ class UiButtonInteractionTest {
         SwingUtilities.convertRectangle(parent, bounds, root)
 
     private fun JPanel.convertedBounds(root: JPanel): Rectangle =
+        SwingUtilities.convertRectangle(parent, bounds, root)
+
+    private fun JComponent.convertedBounds(root: JPanel): Rectangle =
         SwingUtilities.convertRectangle(parent, bounds, root)
 
     private fun Rectangle.maxX(): Int = x + width

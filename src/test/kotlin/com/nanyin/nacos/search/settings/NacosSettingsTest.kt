@@ -1,6 +1,7 @@
 package com.nanyin.nacos.search.settings
 
 import com.intellij.testFramework.junit5.TestApplication
+import com.nanyin.nacos.search.models.NacosServerConfig
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -43,6 +44,37 @@ class NacosSettingsTest {
         assertEquals(60, settings.readTimeoutSeconds)
         assertEquals(3, settings.retryAttempts)
         assertEquals(2, settings.retryDelaySeconds)
+        assertFalse(settings.getActiveServer().allowCrossNamespaceNavigation)
+    }
+
+    @Test
+    fun `getState strips passwords from the persisted snapshot`() {
+        settings.applyServers(
+            listOf(
+                NacosServerConfig(id = "s1", displayName = "One", serverUrl = "http://localhost:8848", password = "secret1"),
+                NacosServerConfig(id = "s2", displayName = "Two", serverUrl = "http://localhost:8849", password = "secret2")
+            ),
+            "s1"
+        )
+
+        val state = settings.getState()
+
+        assertEquals("", state.password)
+        assertTrue(state.servers.all { it.password.isEmpty() })
+        // The live in-memory settings still carry the password for runtime use.
+        assertEquals("secret1", settings.getActiveServer().password)
+    }
+
+    @Test
+    fun `server config cross namespace navigation defaults off and copies`() {
+        val server = NacosServerConfig.createDefault()
+
+        assertFalse(server.allowCrossNamespaceNavigation)
+
+        server.allowCrossNamespaceNavigation = true
+        val copy = server.copyConfig()
+
+        assertTrue(copy.allowCrossNamespaceNavigation)
     }
 
     @Test

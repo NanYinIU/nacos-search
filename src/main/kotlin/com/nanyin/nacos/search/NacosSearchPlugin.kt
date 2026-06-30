@@ -138,6 +138,12 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         if (!settings.cacheEnabled) return
         coroutineScope.launch {
             try {
+                val existing = cacheService.getNamespaceIndex(settings.serverUrl, namespaceId)
+                if (existing != null) {
+                    NacosKeyResolver.ensureIndexBuilt(cacheService)
+                    return@launch
+                }
+
                 val result = apiService.getAllConfigurations(namespaceId, useCache = true)
                 if (result.isSuccess) {
                     val configs = result.getOrNull().orEmpty()

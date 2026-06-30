@@ -12,7 +12,9 @@ import java.awt.Component
 import java.awt.Container
 import java.awt.Dimension
 import javax.swing.JButton
+import javax.swing.JCheckBox
 import javax.swing.JComponent
+import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JSpinner
 import javax.swing.SwingUtilities
@@ -122,6 +124,42 @@ class NacosConfigurableInteractionTest {
         assertTrue(advancedBody.isVisible)
     }
 
+    @Test
+    fun crossNamespaceNavigationAdvancedCheckboxPersistsToActiveServer() {
+        val configurable = NacosConfigurable()
+        val component = configurable.createComponent()
+        val crossNamespaceCheckBox = findCheckBoxByAutomationId(component, "nacos.settings.crossNamespaceNavigation")
+
+        assertNotNull(crossNamespaceCheckBox)
+        assertFalse(crossNamespaceCheckBox!!.isSelected)
+
+        runOnEdt {
+            crossNamespaceCheckBox.isSelected = true
+            crossNamespaceCheckBox.doClick()
+            crossNamespaceCheckBox.doClick()
+        }
+        waitForUi()
+
+        assertTrue(crossNamespaceCheckBox.isSelected)
+        assertTrue(configurable.isModified())
+
+        configurable.apply()
+
+        val draftServers = privateField<MutableList<NacosServerConfig>>(configurable, "draftServers")
+        val activeId = privateField<String>(configurable, "draftActiveId")
+        assertTrue(draftServers.first { it.id == activeId }.allowCrossNamespaceNavigation)
+    }
+
+    @Test
+    fun advancedParameterLabelsUseShortScanFriendlyText() {
+        val configurable = NacosConfigurable()
+        val component = configurable.createComponent()
+
+        assertNotNull(findLabelByText(component, "Timeout"))
+        assertNotNull(findLabelByText(component, "Auto refresh"))
+        assertNotNull(findLabelByText(component, "Cross namespace"))
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun <T> privateField(target: Any, name: String): T {
         val field = target.javaClass.getDeclaredField(name)
@@ -146,6 +184,26 @@ class NacosConfigurableInteractionTest {
 
     private fun findButtonByAutomationId(root: Component, automationId: String): JButton? {
         return findButton(root) { it.getClientProperty("nacos.automation.id") == automationId }
+    }
+
+    private fun findCheckBoxByAutomationId(root: Component, automationId: String): JCheckBox? {
+        if (root is JCheckBox && root.getClientProperty("nacos.automation.id") == automationId) return root
+        if (root is Container) {
+            root.components.forEach { child ->
+                findCheckBoxByAutomationId(child, automationId)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun findLabelByText(root: Component, text: String): JLabel? {
+        if (root is JLabel && root.text == text) return root
+        if (root is Container) {
+            root.components.forEach { child ->
+                findLabelByText(child, text)?.let { return it }
+            }
+        }
+        return null
     }
 
     private fun findButton(root: Component, predicate: (JButton) -> Boolean): JButton? {

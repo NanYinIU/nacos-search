@@ -49,22 +49,28 @@ object NacosKeyResolver {
         activeServerUrl: String? = null,
         activeNamespaceId: String? = currentNamespaceId(),
         preferredGroup: String? = null,
-        preferredNamespaceId: String? = null
+        preferredNamespaceId: String? = null,
+        allowCrossNamespace: Boolean = true
     ): List<KeyHit> {
         if (key.isBlank()) return emptyList()
         val index = currentIndex(cacheService, activeServerUrl) ?: return emptyList()
         return index.hitsByKey[key]
             .orEmpty()
+            .filter { allowCrossNamespace || sameNamespace(it.namespaceId, activeNamespaceId) }
             .sortedWith(hitComparator(activeNamespaceId, preferredGroup, preferredNamespaceId))
     }
 
    fun hasKey(
        key: String,
        cacheService: CacheService = ApplicationManager.getApplication().getService(CacheService::class.java),
-       activeServerUrl: String? = null
+       activeServerUrl: String? = null,
+       allowCrossNamespace: Boolean = true,
+       activeNamespaceId: String? = currentNamespaceId()
    ): Boolean {
        if (key.isBlank()) return false
-       return currentIndex(cacheService, activeServerUrl)?.hitsByKey?.containsKey(key) ?: false
+       val hits = currentIndex(cacheService, activeServerUrl)?.hitsByKey?.get(key) ?: return false
+       return if (allowCrossNamespace) hits.isNotEmpty()
+              else hits.any { sameNamespace(it.namespaceId, activeNamespaceId) }
    }
 
    /**
@@ -122,6 +128,12 @@ object NacosKeyResolver {
 
     private fun groupTier(hit: KeyHit, preferredGroup: String?): Int =
         if (preferredGroup != null && hit.config.group == preferredGroup) 0 else 1
+
+    private fun sameNamespace(hitNamespaceId: String?, activeNamespaceId: String?): Boolean =
+        normalizeNamespaceId(hitNamespaceId) == normalizeNamespaceId(activeNamespaceId)
+
+    private fun normalizeNamespaceId(namespaceId: String?): String =
+        namespaceId?.takeIf { it.isNotBlank() && it != "public" } ?: ""
 
     private val building = AtomicBoolean(false)
 

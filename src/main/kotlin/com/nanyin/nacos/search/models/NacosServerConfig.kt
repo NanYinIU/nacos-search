@@ -18,7 +18,8 @@ data class NacosServerConfig(
     var authMode: AuthMode = AuthMode.TOKEN,
     var defaultGroup: String = "DEFAULT_GROUP",
     var connectionTimeoutMs: Int = 30000,
-    var autoRefreshOnOpen: Boolean = true
+    var autoRefreshOnOpen: Boolean = true,
+    var allowCrossNamespaceNavigation: Boolean = false
 ) {
     fun copyConfig(): NacosServerConfig {
         return NacosServerConfig(
@@ -31,7 +32,8 @@ data class NacosServerConfig(
             authMode = authMode,
             defaultGroup = defaultGroup,
             connectionTimeoutMs = connectionTimeoutMs,
-            autoRefreshOnOpen = autoRefreshOnOpen
+            autoRefreshOnOpen = autoRefreshOnOpen,
+            allowCrossNamespaceNavigation = allowCrossNamespaceNavigation
         )
     }
 

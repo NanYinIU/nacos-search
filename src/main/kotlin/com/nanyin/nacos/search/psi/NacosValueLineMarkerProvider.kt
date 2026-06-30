@@ -12,8 +12,16 @@ import com.intellij.psi.PsiLiteralExpression
 import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.runBlocking
+import java.awt.BorderLayout
+import java.awt.Font
+import javax.swing.BorderFactory
+import javax.swing.JLabel
+import javax.swing.JList
+import javax.swing.JPanel
+import javax.swing.ListCellRenderer
 
 /**
  * Renders a gutter icon next to `@NacosValue` / `@Value` annotations whose
@@ -76,8 +84,22 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
    }
 
     private fun isResolvable(key: String): Boolean {
-        return NacosKeyResolver.hasKey(key, activeServerUrl = NacosKeyResolver.currentServerUrl())
+        return NacosKeyResolver.hasKey(
+            key,
+            activeServerUrl = NacosKeyResolver.currentServerUrl(),
+            allowCrossNamespace = crossNamespaceEnabled()
+        )
     }
+
+    private fun crossNamespaceEnabled(): Boolean =
+        try {
+            ApplicationManager.getApplication()
+                ?.getService(NacosSettings::class.java)
+                ?.getActiveServer()
+                ?.allowCrossNamespaceNavigation == true
+        } catch (e: Exception) {
+            false
+        }
 
     private fun navigateFromCode(
         anchor: PsiElement,
@@ -93,11 +115,14 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
                 if (el is com.intellij.pom.Navigatable) el.navigate(true)
             }
             results.size > 1 -> {
-                val elements = results.mapNotNull { it.element }.toTypedArray()
+                val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
+                val items = results.mapNotNull { it.element as? NacosConfigKeyElement }
+                    .map { NacosConfigChoiceItem(it, namespaceDisplayName(namespaceService, it.namespaceId)) }
                 JBPopupFactory.getInstance()
-                    .createPopupChooserBuilder(elements.toList())
+                    .createPopupChooserBuilder(items)
                     .setTitle("Choose Nacos configuration")
-                    .setItemChosenCallback { (it as? com.intellij.pom.Navigatable)?.navigate(true) }
+                    .setRenderer(NacosConfigChoiceRenderer())
+                    .setItemChosenCallback { it.navigate(true) }
                     .createPopup()
                     .showCenteredInCurrentWindow(anchor.project)
             }
@@ -113,11 +138,17 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
             val apiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
             val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+            val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
+            val namespaceId = if (settings.getActiveServer().allowCrossNamespaceNavigation) {
+                codeContext.namespaceId
+            } else {
+                namespaceService.getCurrentNamespace()?.namespaceId
+            }
             val config = runBlocking {
                 apiService.getConfiguration(
                     dataId = dataId,
                     group = group,
-                    namespaceId = codeContext.namespaceId,
+                    namespaceId = namespaceId,
                     useCache = true
                 ).getOrNull()
             } ?: return@executeOnPooledThread
@@ -129,7 +160,7 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
             runBlocking {
                 cacheService.putConfigDetail(
                     settings.serverUrl,
-                    codeContext.namespaceId,
+                    namespaceId,
                     config,
                     settings.getCacheTtlMillis()
                 )
@@ -150,6 +181,42 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
             ApplicationManager.getApplication().invokeLater {
                 DaemonCodeAnalyzer.getInstance(project).restart()
             }
+        }
+    }
+
+    private fun namespaceDisplayName(namespaceService: NamespaceService, namespaceId: String): String {
+        val normalized = namespaceId.takeIf { it.isNotBlank() && it != "public" } ?: ""
+        return namespaceService.findNamespaceById(normalized)?.getDisplayName()
+            ?: if (normalized.isBlank()) "public" else namespaceId
+    }
+
+    private class NacosConfigChoiceRenderer : JPanel(BorderLayout()), ListCellRenderer<NacosConfigChoiceItem> {
+        private val primary = JLabel()
+        private val secondary = JLabel()
+
+        init {
+            border = BorderFactory.createEmptyBorder(4, 8, 4, 8)
+            primary.font = primary.font.deriveFont(Font.PLAIN)
+            secondary.font = secondary.font.deriveFont(Font.PLAIN, secondary.font.size2D - 1f)
+            add(primary, BorderLayout.NORTH)
+            add(secondary, BorderLayout.SOUTH)
+            isOpaque = true
+        }
+
+        override fun getListCellRendererComponent(
+            list: JList<out NacosConfigChoiceItem>,
+            value: NacosConfigChoiceItem,
+            index: Int,
+            isSelected: Boolean,
+            cellHasFocus: Boolean
+        ): java.awt.Component {
+            primary.text = value.primaryText
+            secondary.text = value.secondaryText
+            background = if (isSelected) list.selectionBackground else list.background
+            foreground = if (isSelected) list.selectionForeground else list.foreground
+            primary.foreground = foreground
+            secondary.foreground = if (isSelected) list.selectionForeground else com.intellij.ui.JBColor.GRAY
+            return this
         }
     }
 }

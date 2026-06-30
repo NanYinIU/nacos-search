@@ -33,6 +33,7 @@ class NacosConfigKeyElement(
 ) : FakePsiElement() {
 
     val namespaceId: String get() = config.tenantId ?: ""
+    val namespaceDisplayName: String get() = namespaceDisplay()
     override fun getProject(): Project = project
     override fun getParent(): PsiElement? = null
 
@@ -64,12 +65,16 @@ class NacosConfigKeyElement(
         return object : ItemPresentation {
             override fun getPresentableText(): String = "$key = $value"
             override fun getLocationString(): String =
-                "${config.dataId} (${config.group})"
+                "${namespaceDisplay()} / ${config.group} / ${config.dataId}"
             override fun getIcon(unused: Boolean): Icon = NacosIcons.ToolWindow
         }
     }
 
     override fun getTextOffset(): Int = 0
 
-    override fun toString(): String = "NacosConfigKeyElement($key in ${config.dataId})"
+    override fun toString(): String =
+        "NacosConfigKeyElement($key in ${namespaceDisplay()} / ${config.group} / ${config.dataId})"
+
+    private fun namespaceDisplay(): String =
+        config.tenantId?.takeIf { it.isNotBlank() } ?: "public"
 }

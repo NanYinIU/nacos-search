@@ -211,9 +211,8 @@ class NacosSearchService {
         nacosApiService: NacosApiService
     ): Result<SearchExecutionResult> {
         val requestKey = request.toCacheKey()
-        val preferCache = !request.forceRefresh &&
-                (request.pageNo > 1 || requestKey == lastCompletedRequestKey)
-        if (preferCache && settings.cacheEnabled) {
+        val preferCache = !request.forceRefresh && settings.cacheEnabled
+        if (preferCache) {
             val cached = cacheService.getListPage(
                 settings.serverUrl,
                 request.namespace?.namespaceId,
@@ -235,7 +234,7 @@ class NacosSearchService {
             configTags = request.configTags,
             searchMode = request.getSearchMode(),
             useCache = settings.cacheEnabled,
-            forceRefresh = true
+            forceRefresh = request.forceRefresh
         )
 
         if (result.isSuccess) {

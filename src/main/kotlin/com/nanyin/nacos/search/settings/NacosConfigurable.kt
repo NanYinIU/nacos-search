@@ -62,6 +62,7 @@ class NacosConfigurable : Configurable {
     private lateinit var defaultGroupField: JBTextField
     private lateinit var connectionTimeoutSpinner: JSpinner
     private lateinit var autoRefreshCheckBox: JCheckBox
+    private lateinit var crossNamespaceNavigationCheckBox: JCheckBox
 
     // Test connection UI
     private lateinit var testConnectionButton: JButton
@@ -138,6 +139,7 @@ class NacosConfigurable : Configurable {
         server.defaultGroup = defaultGroupField.text.trim()
         server.connectionTimeoutMs = connectionTimeoutSpinner.value as Int
         server.autoRefreshOnOpen = autoRefreshCheckBox.isSelected
+        server.allowCrossNamespaceNavigation = crossNamespaceNavigationCheckBox.isSelected
         // Refresh the list display so name/host changes show immediately
         val idx = serverListModel.indexOf(server)
         if (idx >= 0) {
@@ -233,6 +235,12 @@ class NacosConfigurable : Configurable {
             addChangeListener { commitDetailFormToDraft() }
         }
         autoRefreshCheckBox = JCheckBox().apply {
+            toolTipText = NacosSearchBundle.message("settings.server.auto.refresh.tooltip")
+            addActionListener { commitDetailFormToDraft() }
+        }
+        crossNamespaceNavigationCheckBox = JCheckBox().apply {
+            putClientProperty("nacos.automation.id", "nacos.settings.crossNamespaceNavigation")
+            toolTipText = NacosSearchBundle.message("settings.server.cross.namespace.navigation.tooltip")
             addActionListener { commitDetailFormToDraft() }
         }
 
@@ -560,6 +568,12 @@ class NacosConfigurable : Configurable {
         advGbc.gridx = 1; advGbc.weightx = 1.0; advGbc.fill = GridBagConstraints.HORIZONTAL
         advBody.add(autoRefreshCheckBox, advGbc)
 
+        // Cross-namespace code navigation checkbox
+        advGbc.gridx = 0; advGbc.gridy++; advGbc.weightx = 0.0
+        advBody.add(formLabel("settings.server.cross.namespace.navigation"), advGbc)
+        advGbc.gridx = 1; advGbc.weightx = 1.0; advGbc.fill = GridBagConstraints.HORIZONTAL
+        advBody.add(crossNamespaceNavigationCheckBox, advGbc)
+
         // Default to collapsed
         advBody.isVisible = false
 
@@ -670,6 +684,7 @@ class NacosConfigurable : Configurable {
             defaultGroupField.text = server.defaultGroup
             connectionTimeoutSpinner.value = server.connectionTimeoutMs
             autoRefreshCheckBox.isSelected = server.autoRefreshOnOpen
+            crossNamespaceNavigationCheckBox.isSelected = server.allowCrossNamespaceNavigation
             updateDetailHeader(server)
         } finally {
             // Re-add listeners
@@ -721,7 +736,8 @@ class NacosConfigurable : Configurable {
                 d.password != s.password || d.namespace != s.namespace ||
                 d.authMode != s.authMode || d.defaultGroup != s.defaultGroup ||
                 d.connectionTimeoutMs != s.connectionTimeoutMs ||
-                d.autoRefreshOnOpen != s.autoRefreshOnOpen
+                d.autoRefreshOnOpen != s.autoRefreshOnOpen ||
+                d.allowCrossNamespaceNavigation != s.allowCrossNamespaceNavigation
             ) return true
         }
         return langChanged
@@ -744,6 +760,13 @@ class NacosConfigurable : Configurable {
             throw java.lang.IllegalStateException("Invalid server URL")
         }
 
+        // Capture connection-affecting fields of the active server BEFORE apply,
+        // so we can distinguish a full connection change from a preference-only
+        // change (e.g. toggling allowCrossNamespaceNavigation).
+        val oldActive = settings.getActiveServer()
+        val oldConnectionSig = connectionSignature(oldActive)
+        val oldActiveId = settings.activeServerId
+
         // Apply draft to settings
         settings.applyServers(draftServers, draftActiveId)
 
@@ -751,9 +774,17 @@ class NacosConfigurable : Configurable {
         val selectedLanguage = languageComboBox.selectedItem as LanguageService.SupportedLanguage
         languageService.setLanguage(selectedLanguage.code)
 
-        ApplicationManager.getApplication().messageBus
+        val newActive = settings.getActiveServer()
+        val connectionChanged = oldActiveId != settings.activeServerId ||
+            connectionSignature(newActive) != oldConnectionSig
+
+        val publisher = ApplicationManager.getApplication().messageBus
             .syncPublisher(NacosSettingsListener.TOPIC)
-            .settingsChanged()
+        if (connectionChanged) {
+            publisher.settingsChanged()
+        } else {
+            publisher.preferencesChanged()
+        }
     }
 
     override fun reset() {
@@ -870,4 +901,7 @@ class NacosConfigurable : Configurable {
         override fun removeUpdate(e: DocumentEvent?) = callback()
         override fun changedUpdate(e: DocumentEvent?) = callback()
     }
+
+    private fun connectionSignature(server: NacosServerConfig): String =
+        "${server.serverUrl}|${server.username}|${server.authMode}|${server.namespace}|${server.connectionTimeoutMs}"
 }

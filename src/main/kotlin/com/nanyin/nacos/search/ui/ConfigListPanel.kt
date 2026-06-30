@@ -7,6 +7,7 @@ import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.AnimatedIcon
@@ -29,7 +30,7 @@ import javax.swing.border.EmptyBorder
  * Uses a JBList with a custom cell renderer that shows the config's
  * dataId, group, and a colored file-type badge (YAML / JSON / properties).
  */
-class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), NamespaceChangeListener, LanguageAwareComponent {
+class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), NamespaceChangeListener, LanguageAwareComponent, Disposable {
 
     private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
     private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
@@ -245,7 +246,7 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     fun getPageSize(): Int = pageSize
     fun getConfigurationCount(): Int = configurations.size
 
-    fun dispose() {
+    override fun dispose() {
         namespaceService.removeNamespaceChangeListener(this)
         coroutineScope.cancel()
     }

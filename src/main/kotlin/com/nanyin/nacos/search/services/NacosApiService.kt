@@ -395,16 +395,39 @@ class NacosApiService {
     }
 
     private fun requestJson(url: String, authHeaders: Map<String, String>): String {
-        return HttpRequests.request(url)
-            .connectTimeout(settings.getConnectionTimeoutMillis())
-            .readTimeout(settings.getReadTimeoutMillis())
-            .tuner { connection ->
-                connection.setRequestProperty("Accept", "application/json")
-                authHeaders.forEach { (key, value) ->
-                    connection.setRequestProperty(key, value)
+        var lastError: Exception? = null
+        val maxAttempts = settings.retryAttempts.coerceAtLeast(1)
+        for (attempt in 1..maxAttempts) {
+            try {
+                return HttpRequests.request(url)
+                    .connectTimeout(settings.getConnectionTimeoutMillis())
+                    .readTimeout(settings.getReadTimeoutMillis())
+                    .tuner { connection ->
+                        connection.setRequestProperty("Accept", "application/json")
+                        // Discourage chunked transfer encoding: some Nacos
+                        // servers / proxies emit LF-only chunk terminators
+                        // which Java's ChunkedInputStream rejects with
+                        // "missing CR".  Connection: close makes the server
+                        // use Content-Length instead, and identity disables
+                        // compression that can compound the issue.
+                        if (attempt > 1) {
+                            connection.setRequestProperty("Connection", "close")
+                            connection.setRequestProperty("Accept-Encoding", "identity")
+                        }
+                        authHeaders.forEach { (key, value) ->
+                            connection.setRequestProperty(key, value)
+                        }
+                    }
+                    .readString()
+            } catch (e: java.io.IOException) {
+                lastError = e
+                logger.warn("requestJson attempt $attempt/$maxAttempts failed: ${e.message}")
+                if (attempt < maxAttempts) {
+                    Thread.sleep(settings.retryDelaySeconds * 1000L)
                 }
             }
-            .readString()
+        }
+        throw lastError ?: java.io.IOException("requestJson failed after $maxAttempts attempts")
     }
 
    private fun requestPost(url: String, params: Map<String, String>, authHeaders: Map<String, String>): String {

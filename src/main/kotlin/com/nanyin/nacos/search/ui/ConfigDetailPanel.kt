@@ -18,6 +18,8 @@ import com.nanyin.nacos.search.psi.ConfigKeyExtractor
 import com.nanyin.nacos.search.psi.NacosCodeContextExtractor
 import com.nanyin.nacos.search.psi.NacosConfigKeyElement
 import com.nanyin.nacos.search.psi.NacosConfigKeyReferenceSearcher
+import com.nanyin.nacos.search.psi.NacosUsageChoiceItem
+import com.nanyin.nacos.search.psi.NacosUsagePresentation
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.Disposable
@@ -40,6 +42,9 @@ import kotlin.concurrent.withLock
  * Panel for displaying configuration details with syntax highlighting
  */
 class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), Disposable, LanguageAwareComponent {
+    companion object {
+        private const val DETAIL_HORIZONTAL_INSET = 10
+    }
     
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
     private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
@@ -129,9 +134,15 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
     
     private fun initializeComponents() {
         // Metadata panel components
+        // Keep a JTextField so the dataId can be selected/copied, but use a
+        // non-UIResource empty border (a null border gets replaced by the
+        // Darcula text border on UI (re)install, which reintroduces a left
+        // inset) plus zero margin, so the text aligns flush-left with the
+        // metadata JBLabel below.
         dataIdLabel = JTextField()
         dataIdLabel.isEditable = false
-        dataIdLabel.border = null
+        dataIdLabel.border = JBUI.Borders.empty()
+        dataIdLabel.margin = Insets(0, 0, 0, 0)
         dataIdLabel.isOpaque = false
         dataIdLabel.putClientProperty("JComponent.outline", "none")
 
@@ -186,8 +197,8 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         
         copyButton = JButton(NacosSearchBundle.message("config.detail.action.copy")).apply {
             toolTipText = NacosSearchBundle.message("config.detail.copy")
-            icon = AllIcons.Actions.Copy
-            preferredSize = Dimension(68, 26)
+            icon = null
+            preferredSize = Dimension(72, 26)
             minimumSize = Dimension(60, 26)
             isEnabled = false
         }
@@ -196,8 +207,8 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
        saveButton = JButton(NacosSearchBundle.message("config.detail.action.save.publish")).apply {
           toolTipText = NacosSearchBundle.message("config.detail.save")
           putClientProperty("JButton.buttonType", "primary")
-           preferredSize = Dimension(120, 26)
-            minimumSize = Dimension(100, 26)
+           preferredSize = Dimension(72, 26)
+            minimumSize = Dimension(60, 26)
            isEnabled = false
        }
 
@@ -259,13 +270,13 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         // ===== Header: dataId title (bold) + dirty pill + metadata row =====
         val headerPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = JBUI.Borders.empty(6, 10, 5, 10)
+            border = JBUI.Borders.empty(6, DETAIL_HORIZONTAL_INSET, 5, DETAIL_HORIZONTAL_INSET)
 
             // Title row: dataId (bold 13px) + dirty pill on right
             val titleRow = JPanel(BorderLayout()).apply {
                 add(dataIdLabel.apply {
                     font = font.deriveFont(Font.BOLD, 13f)
-                    border = null
+                    border = JBUI.Borders.empty()
                 }, BorderLayout.CENTER)
                 add(dirtyLabel, BorderLayout.EAST)
             }
@@ -277,8 +288,8 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
 
         // ===== Action bar: format tag | edit + save + revert | copy =====
         val actionBar = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(3, 10)
-            val leftPanel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            border = JBUI.Borders.empty(3, DETAIL_HORIZONTAL_INSET)
+            val leftPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                 add(formatTagLabel)
             }
             // Design order: Edit / Save & Publish / Revert ... Copy
@@ -600,12 +611,16 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
                     NacosSearchBundle.message("nacosvalue.findusages.title", keyElement.key)
                 )
                 1 -> (elements.single() as? com.intellij.pom.Navigatable)?.navigate(true)
-                else -> JBPopupFactory.getInstance()
-                    .createPopupChooserBuilder(elements)
-                    .setTitle(NacosSearchBundle.message("nacosvalue.findusages.title", keyElement.key))
-                    .setItemChosenCallback { (it as? com.intellij.pom.Navigatable)?.navigate(true) }
-                    .createPopup()
-                    .showInBestPositionFor(e.dataContext)
+                else -> {
+                    val items = elements.map { NacosUsageChoiceItem(it) }
+                    JBPopupFactory.getInstance()
+                        .createPopupChooserBuilder(items)
+                        .setTitle(NacosSearchBundle.message("nacosvalue.findusages.title", keyElement.key))
+                        .setRenderer(CodeUsageRenderer())
+                        .setItemChosenCallback { it.navigate(true) }
+                        .createPopup()
+                        .showInBestPositionFor(e.dataContext)
+                }
             }
         }
 
@@ -619,6 +634,55 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
                 groupMatches -> 1
                 namespaceMatches -> 2
                 else -> 3
+            }
+        }
+
+        private class CodeUsageRenderer : JPanel(BorderLayout()), ListCellRenderer<NacosUsageChoiceItem> {
+            private val primary = JLabel()
+            private val secondary = JLabel()
+            private val location = JLabel()
+
+            init {
+                border = BorderFactory.createEmptyBorder(4, 8, 4, 8)
+                primary.font = primary.font.deriveFont(Font.PLAIN)
+                secondary.font = secondary.font.deriveFont(Font.PLAIN, secondary.font.size2D - 1f)
+                location.font = location.font.deriveFont(Font.PLAIN, location.font.size2D - 1f)
+
+                val headerRow = JPanel(BorderLayout(8, 0)).apply {
+                    isOpaque = false
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    add(primary, BorderLayout.CENTER)
+                    add(this@CodeUsageRenderer.location, BorderLayout.EAST)
+                }
+                secondary.alignmentX = Component.LEFT_ALIGNMENT
+                val textPanel = JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    isOpaque = false
+                    add(headerRow)
+                    add(secondary)
+                }
+                add(textPanel, BorderLayout.CENTER)
+                isOpaque = true
+            }
+
+            override fun getListCellRendererComponent(
+                list: JList<out NacosUsageChoiceItem>,
+                value: NacosUsageChoiceItem,
+                index: Int,
+                isSelected: Boolean,
+                cellHasFocus: Boolean
+            ): Component {
+                val presentation = value.presentation
+                primary.text = presentation.primaryText
+                secondary.text = presentation.secondaryText
+                location.text = presentation.locationText
+
+                background = if (isSelected) list.selectionBackground else list.background
+                foreground = if (isSelected) list.selectionForeground else list.foreground
+                primary.foreground = foreground
+                secondary.foreground = if (isSelected) list.selectionForeground else JBColor.GRAY
+                location.foreground = if (isSelected) list.selectionForeground else JBColor.GRAY
+                return this
             }
         }
     }

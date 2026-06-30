@@ -11,11 +11,13 @@ import com.intellij.testFramework.ApplicationRule
 import com.nanyin.nacos.search.NacosIcons
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -30,6 +32,8 @@ class NacosValueLineMarkerProviderTest {
         runBlocking {
             ApplicationManager.getApplication().getService(CacheService::class.java).clearAll()
         }
+        ApplicationManager.getApplication().getService(NacosSettings::class.java).resetToDefaults()
+        ApplicationManager.getApplication().getService(NamespaceService::class.java).setCurrentNamespace(null)
     }
 
     @Test
@@ -219,6 +223,143 @@ class NacosValueLineMarkerProviderTest {
         assertNull(element.containingFile)
     }
 
+    @Test
+    fun `Nacos config key presentation identifies namespace dataId group and key`() {
+        val element = NacosConfigKeyElement(
+            project = ProjectManager.getInstance().defaultProject,
+            config = NacosConfiguration(
+                dataId = "roombiz.properties",
+                group = "DEFAULT_GROUP",
+                tenantId = "namespace2",
+                content = "roombiz.im.check.switcher=false\n",
+                type = "properties"
+            ),
+            key = "roombiz.im.check.switcher",
+            value = "false",
+            lineIndex = 0,
+            contextElement = null
+        )
+
+        val presentation = element.presentation
+
+        assertEquals("roombiz.im.check.switcher = false", presentation.presentableText)
+        val location = presentation.locationString.orEmpty()
+        assertTrue(location.contains("namespace2"))
+        assertTrue(location.contains("roombiz.properties"))
+        assertTrue(location.contains("DEFAULT_GROUP"))
+        assertTrue(element.toString().contains("namespace2"))
+    }
+
+    @Test
+    fun `value reference only resolves current namespace when cross namespace navigation is disabled`() {
+        ApplicationManager.getApplication().getService(NacosSettings::class.java)
+            .getActiveServer().allowCrossNamespaceNavigation = false
+        ApplicationManager.getApplication().getService(NamespaceService::class.java)
+            .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("namespace1", "Namespace 1"))
+        runBlocking {
+            val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+            cache.putConfigDetail(
+                serverUrl = "http://localhost:8848",
+                namespaceId = "namespace1",
+                configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace1", "room.key=one\n", "properties"),
+                ttl = 60_000L
+            )
+            cache.putConfigDetail(
+                serverUrl = "http://localhost:8848",
+                namespaceId = "namespace2",
+                configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
+                ttl = 60_000L
+            )
+            NacosKeyResolver.rebuildBlocking(cache, "http://localhost:8848")
+        }
+
+        val results = resolveReferenceForKey("room.key")
+
+        assertEquals(1, results.size)
+        val element = results.single().element as NacosConfigKeyElement
+        assertEquals("namespace1", element.config.tenantId)
+    }
+
+    @Test
+    fun `value reference resolves other namespaces when cross namespace navigation is enabled`() {
+        ApplicationManager.getApplication().getService(NacosSettings::class.java)
+            .getActiveServer().allowCrossNamespaceNavigation = true
+        ApplicationManager.getApplication().getService(NamespaceService::class.java)
+            .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("namespace1", "Namespace 1"))
+        runBlocking {
+            val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+            cache.putConfigDetail(
+                serverUrl = "http://localhost:8848",
+                namespaceId = "namespace1",
+                configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace1", "room.key=one\n", "properties"),
+                ttl = 60_000L
+            )
+            cache.putConfigDetail(
+                serverUrl = "http://localhost:8848",
+                namespaceId = "namespace2",
+                configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
+                ttl = 60_000L
+            )
+            NacosKeyResolver.rebuildBlocking(cache, "http://localhost:8848")
+        }
+
+        val results = resolveReferenceForKey("room.key")
+
+        assertEquals(2, results.size)
+        assertEquals(listOf("namespace1", "namespace2"), results.map { (it.element as NacosConfigKeyElement).config.tenantId })
+    }
+
+    @Test
+    fun `marker is unresolved when key lives only in another namespace and cross namespace navigation is disabled`() {
+        cacheKeyInOtherNamespaceForActive("namespace1", allowCrossNamespace = false)
+
+        val marker = markerFor(
+            """
+            class Demo {
+                @NacosValue(value = "${'$'}{room.key}")
+                private String value;
+            }
+            """.trimIndent()
+        )
+
+        assertNotNull(marker)
+        assertEquals(NacosIcons.GutterConfigUnresolved, marker?.createGutterRenderer()?.icon)
+    }
+
+    @Test
+    fun `marker is resolved for cross namespace key when cross namespace navigation is enabled`() {
+        cacheKeyInOtherNamespaceForActive("namespace1", allowCrossNamespace = true)
+
+        val marker = markerFor(
+            """
+            class Demo {
+                @NacosValue(value = "${'$'}{room.key}")
+                private String value;
+            }
+            """.trimIndent()
+        )
+
+        assertNotNull(marker)
+        assertEquals(NacosIcons.GutterConfig, marker?.createGutterRenderer()?.icon)
+    }
+
+    private fun cacheKeyInOtherNamespaceForActive(activeNamespaceId: String, allowCrossNamespace: Boolean) {
+        ApplicationManager.getApplication().getService(NacosSettings::class.java)
+            .getActiveServer().allowCrossNamespaceNavigation = allowCrossNamespace
+        ApplicationManager.getApplication().getService(NamespaceService::class.java)
+            .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo(activeNamespaceId, "Namespace 1"))
+        runBlocking {
+            val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+            cache.putConfigDetail(
+                serverUrl = "http://localhost:8848",
+                namespaceId = "namespace2",
+                configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
+                ttl = 60_000L
+            )
+            NacosKeyResolver.rebuildBlocking(cache, "http://localhost:8848")
+        }
+    }
+
     private fun markerFor(javaText: String): LineMarkerInfo<*>? = ApplicationManager.getApplication().runReadAction<LineMarkerInfo<*>?> {
         val file = PsiFileFactory.getInstance(ProjectManager.getInstance().defaultProject).createFileFromText(
             "Demo.java",
@@ -230,5 +371,21 @@ class NacosValueLineMarkerProviderTest {
             .firstOrNull { PlaceholderParser.containsPlaceholder(it.value as? String) }
         assertNotNull(literal)
         NacosValueLineMarkerProvider().getLineMarkerInfo(literal!!.firstChild)
+    }
+
+    private fun resolveReferenceForKey(key: String) = ApplicationManager.getApplication().runReadAction<Array<com.intellij.psi.ResolveResult>> {
+        val file = PsiFileFactory.getInstance(ProjectManager.getInstance().defaultProject).createFileFromText(
+            "Demo.java",
+            com.intellij.lang.java.JavaLanguage.INSTANCE,
+            """
+            class Demo {
+                @NacosValue(value = "${'$'}{$key}")
+                private String value;
+            }
+            """.trimIndent()
+        )
+        val literal = PsiTreeUtil.findChildrenOfType(file, PsiLiteralExpression::class.java)
+            .first { PlaceholderParser.containsPlaceholder(it.value as? String) }
+        NacosValueReference(literal, key).multiResolve(false)
     }
 }

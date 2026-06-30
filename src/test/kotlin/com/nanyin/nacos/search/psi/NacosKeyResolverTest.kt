@@ -102,6 +102,69 @@ class NacosKeyResolverTest {
     }
 
     @Test
+    fun `cross namespace disabled only returns active namespace hits`() = runBlocking {
+        cache.cacheConfigurations(
+            listOf(
+                cfg("room.properties", "DEFAULT_GROUP", "namespace1", "room.key=one\n", "properties"),
+                cfg("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties")
+            )
+        )
+
+        val hits = NacosKeyResolver.resolve(
+            key = "room.key",
+            cacheService = cache,
+            activeNamespaceId = "namespace1",
+            allowCrossNamespace = false
+        )
+
+        assertEquals(1, hits.size)
+        assertEquals("namespace1", hits.single().config.tenantId)
+        assertEquals("one", hits.single().location.value)
+    }
+
+    @Test
+    fun `cross namespace disabled treats blank and public as same namespace`() = runBlocking {
+        cache.cacheConfigurations(
+            listOf(
+                cfg("public-empty.properties", "DEFAULT_GROUP", null, "room.key=empty\n", "properties"),
+                cfg("public-literal.properties", "DEFAULT_GROUP", "public", "room.key=literal\n", "properties"),
+                cfg("other.properties", "DEFAULT_GROUP", "namespace2", "room.key=other\n", "properties")
+            )
+        )
+
+        val hits = NacosKeyResolver.resolve(
+            key = "room.key",
+            cacheService = cache,
+            activeNamespaceId = "public",
+            allowCrossNamespace = false
+        )
+
+        assertEquals(2, hits.size)
+        assertTrue(hits.all { it.config.tenantId == null || it.config.tenantId == "public" })
+    }
+
+    @Test
+    fun `cross namespace enabled returns all namespaces with active namespace first`() = runBlocking {
+        cache.cacheConfigurations(
+            listOf(
+                cfg("room-one.properties", "DEFAULT_GROUP", "namespace1", "room.key=one\n", "properties"),
+                cfg("room-two.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties")
+            )
+        )
+
+        val hits = NacosKeyResolver.resolve(
+            key = "room.key",
+            cacheService = cache,
+            activeNamespaceId = "namespace1",
+            allowCrossNamespace = true
+        )
+
+        assertEquals(2, hits.size)
+        assertEquals("namespace1", hits.first().config.tenantId)
+        assertEquals("namespace2", hits.last().config.tenantId)
+    }
+
+    @Test
     fun `preferred group sorts before other groups for same key`() = runBlocking {
         cache.cacheConfigurations(
             listOf(

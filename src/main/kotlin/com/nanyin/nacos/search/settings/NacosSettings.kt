@@ -89,7 +89,18 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     var retryAttempts: Int = 3
     var retryDelaySeconds: Int = 2
     
-    override fun getState(): NacosSettings = this
+    override fun getState(): NacosSettings {
+        // Never persist passwords as plaintext in the component-state XML.
+        // The serializer omits String properties equal to their default (""),
+        // so blanking them on the persisted snapshot drops the attribute
+        // entirely (and silences the platform's sensitive-information error).
+        // Real secrets live in PasswordSafe via NacosCredentialStore.
+        val sanitized = NacosSettings()
+        XmlSerializerUtil.copyBean(this, sanitized)
+        sanitized.password = ""
+        sanitized.servers = servers.map { it.copy(password = "") }.toMutableList()
+        return sanitized
+    }
     
     override fun loadState(state: NacosSettings) {
         XmlSerializerUtil.copyBean(state, this)
@@ -106,8 +117,26 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             ))
             activeServerId = "default"
         }
+        // Load passwords from PasswordSafe, migrating any legacy plaintext that
+        // was read from the XML into the credential store on first run.
+        loadAndMigrateCredentials()
         // Keep flat fields in sync with active server
         syncFromActiveServer()
+    }
+
+    /**
+     * Populates each server's in-memory password from [NacosCredentialStore].
+     * When no stored credential exists but the legacy XML still carried a
+     * plaintext password, it is migrated into the credential store once.
+     */
+    private fun loadAndMigrateCredentials() {
+        for (server in servers) {
+            val stored = NacosCredentialStore.get(server.id)
+            when {
+                !stored.isNullOrEmpty() -> server.password = stored
+                server.password.isNotEmpty() -> NacosCredentialStore.set(server.id, server.password)
+            }
+        }
     }
     
     // ---- Multi-server helpers ----
@@ -193,9 +222,21 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     fun applyServers(newServers: List<NacosServerConfig>, newActiveId: String) {
+        val previousIds = servers.map { it.id }.toSet()
         servers = newServers.map { it.copy() }.toMutableList()
         activeServerId = newActiveId
         syncFromActiveServer()
+        persistCredentials(previousIds)
+    }
+
+    /**
+     * Writes each server's password to [NacosCredentialStore] and removes
+     * credentials for servers that no longer exist.
+     */
+    private fun persistCredentials(previousIds: Set<String>) {
+        val currentIds = servers.map { it.id }.toSet()
+        (previousIds - currentIds).forEach { NacosCredentialStore.remove(it) }
+        servers.forEach { NacosCredentialStore.set(it.id, it.password) }
     }
 
     /**

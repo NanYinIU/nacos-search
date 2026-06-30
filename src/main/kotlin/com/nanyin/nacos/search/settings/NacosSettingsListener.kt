@@ -8,6 +8,14 @@ import com.intellij.util.messages.Topic
 interface NacosSettingsListener {
     fun settingsChanged()
 
+    /**
+     * Fired when only non-connection preferences changed (e.g.
+     * allowCrossNamespaceNavigation, autoRefreshOnOpen, displayName).
+     * Subscribers that only care about connection-level changes can ignore
+     * this; subscribers that need to refresh UI markers should handle it.
+     */
+    fun preferencesChanged() {}
+
     companion object {
         @Topic.AppLevel
         val TOPIC: Topic<NacosSettingsListener> = Topic.create(
