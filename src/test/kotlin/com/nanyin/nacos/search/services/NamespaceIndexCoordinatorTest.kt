@@ -11,6 +11,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.assertNotEquals
 
 class NamespaceIndexCoordinatorTest {
 
@@ -18,6 +19,7 @@ class NamespaceIndexCoordinatorTest {
     val applicationRule = ApplicationRule()
 
     private val identity = AccessIdentity.of("http://test:8848", AuthMode.BASIC, "admin")
+    private val server = NacosServerSnapshot("http://test:8848", "admin", "admin", AuthMode.BASIC, false)
 
     @Before
     fun setUp() {
@@ -31,14 +33,48 @@ class NamespaceIndexCoordinatorTest {
     }
 
     @Test
+    fun `captured index request keeps original server after settings switch`() {
+        val settings = com.intellij.openapi.application.ApplicationManager.getApplication()
+            .getService(com.nanyin.nacos.search.settings.NacosSettings::class.java)
+        val originalServers = settings.servers.map { it.copy() }
+        val originalActive = settings.activeServerId
+        try {
+            settings.servers.clear()
+            settings.servers.add(
+                com.nanyin.nacos.search.models.NacosServerConfig(
+                    id = "server-a",
+                    serverUrl = "http://a:8848",
+                    username = "alice",
+                    password = "secret-a",
+                    authMode = AuthMode.BASIC
+                )
+            )
+            settings.activeServerId = "server-a"
+
+            val captured = settings.captureNamespaceIndexRequest("ns-a")
+            settings.servers[0].serverUrl = "http://b:8848"
+            settings.servers[0].username = "bob"
+
+            assertEquals("http://a:8848", captured.server.serverUrl)
+            assertEquals("alice", captured.server.username)
+            assertEquals(captured.key.identity.serverId, captured.server.serverUrl)
+            assertNotEquals(settings.getActiveServer().serverUrl, captured.server.serverUrl)
+        } finally {
+            settings.servers.clear()
+            settings.servers.addAll(originalServers)
+            settings.activeServerId = originalActive
+        }
+    }
+
+    @Test
     fun `different keys produce independent outcomes`() = runBlocking {
         val coordinator = NamespaceIndexCoordinator()
         val keyA = NamespaceIndexKey(identity, "ns-a")
         val keyB = NamespaceIndexKey(identity, "ns-b")
 
         val (outcomeA, outcomeB) = awaitAll(
-            async { coordinator.requestIndex(keyA, IndexTrigger.PSI) },
-            async { coordinator.requestIndex(keyB, IndexTrigger.PSI) }
+            async { coordinator.requestIndex(NamespaceIndexRequest(keyA, server), IndexTrigger.PSI) },
+            async { coordinator.requestIndex(NamespaceIndexRequest(keyB, server), IndexTrigger.PSI) }
         )
 
         // Both complete (or fail, since no real server), but neither is blocked by the other
@@ -52,11 +88,12 @@ class NamespaceIndexCoordinatorTest {
         val key = NamespaceIndexKey(identity, "cooldown-ns")
 
         // First request fails (no real server)
-        val first = coordinator.requestIndex(key, IndexTrigger.PSI)
+        val request = NamespaceIndexRequest(key, server)
+        val first = coordinator.requestIndex(request, IndexTrigger.PSI)
         assertTrue("Expected failure: $first", first is IndexOutcome.Failed)
 
         // Immediate second PSI request should be blocked by cooldown
-        val second = coordinator.requestIndex(key, IndexTrigger.PSI)
+        val second = coordinator.requestIndex(request, IndexTrigger.PSI)
         assertTrue("Expected stale during cooldown: $second", second is IndexOutcome.Stale)
     }
 }

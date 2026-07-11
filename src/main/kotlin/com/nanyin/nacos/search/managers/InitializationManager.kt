@@ -4,6 +4,9 @@ import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.NacosSearchService
+import com.nanyin.nacos.search.services.captureServerSnapshot
+import com.nanyin.nacos.search.settings.NacosSettings
+import com.intellij.openapi.application.ApplicationManager
 import com.nanyin.nacos.search.ui.NamespacePanel
 import com.nanyin.nacos.search.ui.PaginationPanel
 import com.intellij.openapi.diagnostic.thisLogger
@@ -21,6 +24,7 @@ class InitializationManager(
     private val coroutineScope: CoroutineScope
 ) {
     private val logger = thisLogger()
+    private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
     
     /**
      * Initialization state
@@ -142,7 +146,9 @@ class InitializationManager(
             val searchRequest = NacosSearchService.SearchRequest(
                 namespace = namespace,
                 pageNo = 1,
-                pageSize = 10
+                pageSize = 10,
+                serverId = settings.activeServerId,
+                serverSnapshot = settings.captureServerSnapshot()
             )
             
             // Perform search to load configurations

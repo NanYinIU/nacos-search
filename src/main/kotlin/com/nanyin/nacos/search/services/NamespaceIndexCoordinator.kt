@@ -30,13 +30,53 @@ enum class IndexTrigger { NAMESPACE_SWITCH, SEARCH, MANUAL_REFRESH, PSI }
 
 data class NamespaceIndexKey(val identity: AccessIdentity, val namespaceId: String)
 
-internal fun NacosSettings.namespaceIndexKey(namespaceId: String?): NamespaceIndexKey {
-    val server = getActiveServer()
-    return NamespaceIndexKey(
-        AccessIdentity.of(server.serverUrl, server.authMode, server.username),
-        namespaceId.orEmpty()
+data class NacosServerSnapshot(
+    val serverUrl: String,
+    val username: String,
+    val password: String,
+    val authMode: com.nanyin.nacos.search.settings.AuthMode,
+    val enableTokenAuth: Boolean
+) {
+    override fun toString(): String =
+        "NacosServerSnapshot(serverUrl=$serverUrl, username=$username, password=***, authMode=$authMode, enableTokenAuth=$enableTokenAuth)"
+}
+
+data class NamespaceIndexRequest(val key: NamespaceIndexKey, val server: NacosServerSnapshot)
+
+internal fun NacosSettings.captureNamespaceIndexRequest(namespaceId: String?): NamespaceIndexRequest {
+    val snapshot = captureServerSnapshot()
+    return NamespaceIndexRequest(
+        NamespaceIndexKey(
+            AccessIdentity.of(snapshot.serverUrl, snapshot.authMode, snapshot.username),
+            namespaceId.orEmpty()
+        ),
+        snapshot
     )
 }
+
+internal fun NacosSettings.captureServerSnapshot(): NacosServerSnapshot {
+    val server = getActiveServer()
+    return NacosServerSnapshot(
+        serverUrl = server.serverUrl.trim().trimEnd('/'),
+        username = server.username,
+        password = server.password,
+        authMode = server.authMode,
+        enableTokenAuth = enableTokenAuth
+    )
+}
+
+interface NamespaceIndexRequester {
+    suspend fun requestIndex(request: NamespaceIndexRequest, trigger: IndexTrigger): IndexOutcome
+}
+
+internal suspend fun NamespaceIndexRequester.requestStartupNamespaceIndex(request: NamespaceIndexRequest): IndexOutcome =
+    requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
+
+internal suspend fun NamespaceIndexRequester.requestSwitchedNamespaceIndex(request: NamespaceIndexRequest): IndexOutcome =
+    requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
+
+internal suspend fun NamespaceIndexRequester.requestManualNamespaceRefresh(request: NamespaceIndexRequest): IndexOutcome =
+    requestIndex(request, IndexTrigger.MANUAL_REFRESH)
 
 sealed interface IndexOutcome {
     data class Complete(val count: Int, val state: DatasetState) : IndexOutcome
@@ -55,7 +95,7 @@ sealed interface IndexOutcome {
  * requests use PREHEAT policy (no retry).
  */
 @Service(Service.Level.APP)
-class NamespaceIndexCoordinator {
+class NamespaceIndexCoordinator : NamespaceIndexRequester {
 
     private val logger = thisLogger()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -76,7 +116,15 @@ class NamespaceIndexCoordinator {
      * is already in flight, the caller joins it. The [trigger] determines the
      * request policy and whether PSI cooldown applies.
      */
-    suspend fun requestIndex(key: NamespaceIndexKey, trigger: IndexTrigger): IndexOutcome {
+    override suspend fun requestIndex(request: NamespaceIndexRequest, trigger: IndexTrigger): IndexOutcome {
+        val key = request.key
+        require(
+            key.identity == AccessIdentity.of(
+                request.server.serverUrl,
+                request.server.authMode,
+                request.server.username
+            )
+        ) { "Namespace index key does not match its captured server snapshot" }
         // PSI cooldown: skip if recently failed
         if (trigger == IndexTrigger.PSI) {
             val cooldownUntil = psiCooldownUntil[key]
@@ -90,7 +138,7 @@ class NamespaceIndexCoordinator {
         // Single-flight: join or start
         val deferred = flightMutex.withLock {
             inFlight[key] ?: run {
-                val job = scope.async { executeIndex(key, policy) }
+                val job = scope.async { executeIndex(request, policy) }
                 inFlight[key] = job
                 job
             }
@@ -109,9 +157,10 @@ class NamespaceIndexCoordinator {
         }
     }
 
-    private suspend fun executeIndex(key: NamespaceIndexKey, policy: RequestPolicy): IndexOutcome {
+    private suspend fun executeIndex(request: NamespaceIndexRequest, policy: RequestPolicy): IndexOutcome {
+        val key = request.key
         return try {
-            val result = apiService.loadNamespace(key.namespaceId, useCache = false)
+            val result = apiService.loadNamespace(key.namespaceId, useCache = false, server = request.server, policy = policy)
             if (result.isFailure) {
                 recordPsiFailure(key)
                 val error = result.exceptionOrNull()

@@ -11,6 +11,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.never
 import org.mockito.kotlin.whenever
 import com.nanyin.nacos.search.models.NamespaceInfo
 import kotlinx.coroutines.runBlocking
@@ -59,6 +60,28 @@ class NacosSearchServiceTest {
                 group = "DEFAULT_GROUP",
                 pageNo = 3
             ).fullNamespaceTrigger()
+        )
+    }
+
+    @Test
+    fun `ordinary paged search does not request a namespace index`() = runBlocking {
+        val coordinator = mock<NamespaceIndexRequester>()
+        val service = NacosSearchService(indexRequester = coordinator)
+        val api = stubApi()
+
+        service.performSearch(
+            NacosSearchService.SearchRequest(
+                dataId = "app.yaml",
+                group = "DEFAULT_GROUP",
+                pageNo = 2,
+                pageSize = 20
+            ),
+            api
+        )
+
+        verify(coordinator, never()).requestIndex(any(), any())
+        verify(api, times(1)).listConfigurations(
+            any(), any(), any(), any(), any(), any(), any(), any(), any(), any()
         )
     }
 

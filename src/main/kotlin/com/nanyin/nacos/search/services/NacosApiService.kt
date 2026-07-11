@@ -215,7 +215,15 @@ class NacosApiService {
     * the result distinguishes COMPLETE (no failures), PARTIAL (some failures),
     * and FAILED (list-level failure).
     */
-   suspend fun loadNamespace(namespaceId: String? = null, useCache: Boolean = true): Result<NamespaceLoadResult> {
+   suspend fun loadNamespace(namespaceId: String? = null, useCache: Boolean = true): Result<NamespaceLoadResult> =
+       loadNamespace(namespaceId, useCache, null, RequestPolicy.INTERACTIVE)
+
+   internal suspend fun loadNamespace(
+       namespaceId: String? = null,
+       useCache: Boolean = true,
+       server: NacosServerSnapshot?,
+       policy: RequestPolicy
+   ): Result<NamespaceLoadResult> {
        return try {
            val allConfigs = mutableListOf<NacosConfiguration>()
            val failures = mutableListOf<ConfigLoadFailure>()
@@ -224,7 +232,11 @@ class NacosApiService {
            val pageSize = 100
 
            do {
-               val result = listConfigurations(namespaceId, pageNo, pageSize, useCache = useCache)
+               val result = if (server == null) {
+                   listConfigurations(namespaceId, pageNo, pageSize, useCache = useCache)
+               } else {
+                   listConfigurations(server, namespaceId, pageNo, pageSize, policy)
+               }
                if (result.isFailure) {
                    return Result.success(
                        NamespaceLoadResult(DatasetCompleteness.FAILED, expectedCount, allConfigs, failures)
@@ -242,7 +254,10 @@ class NacosApiService {
                        async {
                            semaphore.withPermit {
                                try {
-                                   FetchResult.Success(getConfigurationFromItem(item, useCache))
+                                   FetchResult.Success(
+                                       if (server == null) getConfigurationFromItem(item, useCache)
+                                       else getConfigurationFromItem(server, item, policy)
+                                   )
                                } catch (ce: kotlinx.coroutines.CancellationException) {
                                    throw ce
                                } catch (e: Exception) {
@@ -269,6 +284,55 @@ class NacosApiService {
            logger.warn("Error loading namespace", e)
            Result.failure(e)
        }
+   }
+
+   private suspend fun listConfigurations(
+       server: NacosServerSnapshot,
+       namespaceId: String?,
+       pageNo: Int,
+       pageSize: Int,
+       policy: RequestPolicy
+   ): Result<ConfigListResponse> = try {
+       val params = buildMap {
+           put("pageNo", pageNo.toString())
+           put("pageSize", pageSize.toString())
+           put("dataId", "")
+           put("group", "")
+           put("appName", "")
+           put("config_tags", "")
+           put("search", "accurate")
+           namespaceId?.let { put("tenant", it) }
+       }
+       val url = buildUrl(server, CONFIG_LIST_ENDPOINT, params)
+       val response = requestJsonWithReplay(server, url, policy)
+       Result.success(gson.fromJson(response, object : TypeToken<ConfigListResponse>() {}.type) as ConfigListResponse)
+   } catch (e: Exception) {
+       logger.warn("Error listing configurations for captured server", e)
+       Result.failure(e)
+   }
+
+   private suspend fun getConfigurationFromItem(
+       server: NacosServerSnapshot,
+       item: ConfigItem,
+       policy: RequestPolicy
+   ): NacosConfiguration {
+       if (!item.content.isNullOrEmpty()) {
+           return NacosConfiguration(
+               dataId = item.dataId,
+               group = item.group,
+               tenantId = item.tenant,
+               content = item.content,
+               type = item.type
+           )
+       }
+       val params = buildMap {
+           put("dataId", item.dataId)
+           put("group", item.group)
+           put("show", "all")
+           item.tenant?.let { put("tenant", it) }
+       }
+       val response = requestJsonWithReplay(server, buildUrl(server, CONFIG_LIST_ENDPOINT, params), policy)
+       return gson.fromJson(response, object : TypeToken<NacosConfiguration>() {}.type) as NacosConfiguration
    }
 
    private sealed class FetchResult {
@@ -367,6 +431,26 @@ class NacosApiService {
         }
     }
 
+    private suspend fun buildUrl(
+        server: NacosServerSnapshot,
+        endpoint: String,
+        params: Map<String, String>
+    ): String {
+        val mutableParams = params.toMutableMap()
+        val shouldUseToken = when (server.authMode) {
+            AuthMode.TOKEN -> true
+            AuthMode.BASIC -> false
+            AuthMode.HYBRID -> server.enableTokenAuth
+        }
+        if (shouldUseToken) {
+            authService.getValidAccessToken(server)?.let { mutableParams["accessToken"] = it }
+        }
+        val queryParams = mutableParams.entries.joinToString("&") { (key, value) ->
+            "$key=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
+        }
+        return if (queryParams.isEmpty()) "${server.serverUrl}$endpoint" else "${server.serverUrl}$endpoint?$queryParams"
+    }
+
     private suspend fun buildAuthHeaders(): Map<String, String> {
         val authHeaders = mutableMapOf<String, String>()
         when (settings.authMode) {
@@ -388,6 +472,27 @@ class NacosApiService {
             AuthMode.BASIC -> addBasicAuthHeader(authHeaders)
         }
         return authHeaders
+    }
+
+    private suspend fun buildAuthHeaders(server: NacosServerSnapshot): Map<String, String> {
+        val headers = mutableMapOf<String, String>()
+        when (server.authMode) {
+            AuthMode.TOKEN -> if (server.enableTokenAuth) authService.getValidAccessToken(server)
+            AuthMode.HYBRID -> {
+                val token = if (server.enableTokenAuth) authService.getValidAccessToken(server) else null
+                if (token == null) addBasicAuthHeader(headers, server)
+            }
+            AuthMode.BASIC -> addBasicAuthHeader(headers, server)
+        }
+        return headers
+    }
+
+    private fun addBasicAuthHeader(headers: MutableMap<String, String>, server: NacosServerSnapshot) {
+        if (server.username.isNotEmpty() && server.password.isNotEmpty()) {
+            val credentials = "${server.username}:${server.password}"
+            headers["Authorization"] = "Basic " + java.util.Base64.getEncoder()
+                .encodeToString(credentials.toByteArray())
+        }
     }
 
     private fun addBasicAuthHeader(headers: MutableMap<String, String>) {
@@ -415,6 +520,19 @@ class NacosApiService {
            logger.info("Authentication failed (${e.status}), refreshing credentials")
            authService.invalidateToken()
            return executor.get(url, policy, buildAuthHeaders())
+       }
+   }
+
+   private suspend fun requestJsonWithReplay(
+       server: NacosServerSnapshot,
+       url: String,
+       policy: RequestPolicy
+   ): String {
+       try {
+           return executor.get(url, policy, buildAuthHeaders(server))
+       } catch (e: NacosRequestError.Authentication) {
+           authService.invalidateToken()
+           return executor.get(url, policy, buildAuthHeaders(server))
        }
    }
 

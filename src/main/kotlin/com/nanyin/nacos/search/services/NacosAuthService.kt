@@ -59,8 +59,12 @@ class NacosAuthService {
      * @return 有效的accessToken，如果获取失败返回null
      */
     suspend fun getValidAccessToken(): String? {
+        return getValidAccessToken(currentSettingsSnapshot())
+    }
+
+    internal suspend fun getValidAccessToken(server: NacosServerSnapshot): String? {
         return try {
-            val cacheKey = "${settings.serverUrl}_${settings.username}"
+            val cacheKey = "${server.serverUrl}_${server.username}"
             val cachedToken = tokenCache[cacheKey]
             
             // 检查缓存的token是否有效
@@ -70,7 +74,7 @@ class NacosAuthService {
             } else {
                 // 缓存无效，重新登录获取token
                 logger.info("Cached token expired or invalid, requesting new token")
-                val newToken = login()
+                val newToken = login(server)
                if (newToken != null) {
                    tokenCache[cacheKey] = newToken
                     // Evict tokens for stale server/user combinations so switching
@@ -92,18 +96,28 @@ class NacosAuthService {
      * 执行登录获取accessToken
      * @return TokenInfo对象，如果登录失败返回null
      */
-    private suspend fun login(): TokenInfo? {
+    private suspend fun login(): TokenInfo? = login(currentSettingsSnapshot())
+
+    private fun currentSettingsSnapshot(): NacosServerSnapshot = NacosServerSnapshot(
+        serverUrl = settings.serverUrl.trim().trimEnd('/'),
+        username = settings.username,
+        password = settings.password,
+        authMode = settings.authMode,
+        enableTokenAuth = settings.enableTokenAuth
+    )
+
+    private suspend fun login(server: NacosServerSnapshot): TokenInfo? {
         return withContext(Dispatchers.IO) {
             try {
-                if (settings.username.isBlank() || settings.password.isBlank()) {
+                if (server.username.isBlank() || server.password.isBlank()) {
                     logger.warn("Username or password is empty, cannot perform token authentication")
                     return@withContext null
                 }
                 
-               val loginUrl = buildLoginUrl()
+               val loginUrl = "${server.serverUrl.trimEnd('/')}/nacos/v1/auth/login"
                logger.debug("Attempting to login to: $loginUrl")
                
-                val postData = "username=${URLEncoder.encode(settings.username, StandardCharsets.UTF_8.name())}&password=${URLEncoder.encode(settings.password, StandardCharsets.UTF_8.name())}"
+                val postData = "username=${URLEncoder.encode(server.username, StandardCharsets.UTF_8.name())}&password=${URLEncoder.encode(server.password, StandardCharsets.UTF_8.name())}"
 
                 val response = HttpRequests.post(loginUrl, "application/x-www-form-urlencoded")
                     .connectTimeout(CONNECTION_TIMEOUT)

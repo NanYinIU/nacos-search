@@ -16,7 +16,9 @@ import java.util.concurrent.atomic.AtomicLong
  * Service for handling real-time fuzzy search with pagination
  */
 @Service(Service.Level.PROJECT)
-class NacosSearchService {
+class NacosSearchService(
+    private val indexRequester: NamespaceIndexRequester? = null
+) {
     private val logger = thisLogger()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
     private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
@@ -55,7 +57,8 @@ class NacosSearchService {
         val namespace: NamespaceInfo? = null,
         val pageNo: Int = 1,
         val pageSize: Int = 10,
-        val serverId: String = ""
+        val serverId: String = "",
+        val serverSnapshot: NacosServerSnapshot? = null
     ) {
         /**
          * Determines if this is a fuzzy search based on dataId content
@@ -275,7 +278,21 @@ class NacosSearchService {
         nacosApiService: NacosApiService
     ): Result<SearchExecutionResult> {
         val namespaceId = request.namespace?.namespaceId
-        val indexKey = settings.namespaceIndexKey(namespaceId)
+        val snapshot = requireNotNull(request.serverSnapshot) {
+            "Full namespace search requires a server snapshot captured with the request"
+        }
+        val indexRequest = NamespaceIndexRequest(
+            NamespaceIndexKey(
+                com.nanyin.nacos.search.models.AccessIdentity.of(
+                    snapshot.serverUrl,
+                    snapshot.authMode,
+                    snapshot.username
+                ),
+                namespaceId.orEmpty()
+            ),
+            snapshot
+        )
+        val indexKey = indexRequest.key
         val cacheServerId = indexKey.identity.serverId
         val cachedIndex = if (!request.forceRefresh && settings.cacheEnabled) {
             cacheService.getNamespaceIndex(cacheServerId, namespaceId)
@@ -287,8 +304,9 @@ class NacosSearchService {
             source = SearchSource.CACHE
             cachedIndex
         } else {
-            val coordinator = ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java)
-            val outcome = coordinator.requestIndex(indexKey, request.fullNamespaceTrigger()!!)
+            val coordinator = indexRequester
+                ?: ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java)
+            val outcome = coordinator.requestIndex(indexRequest, request.fullNamespaceTrigger()!!)
             val loadedIndex = cacheService.getNamespaceIndex(cacheServerId, namespaceId)
             if (outcome is IndexOutcome.Complete && loadedIndex != null) {
                 source = SearchSource.REMOTE

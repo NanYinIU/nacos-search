@@ -4,9 +4,10 @@ import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.SearchService
 import com.nanyin.nacos.search.services.IndexOutcome
-import com.nanyin.nacos.search.services.IndexTrigger
 import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
-import com.nanyin.nacos.search.services.namespaceIndexKey
+import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
+import com.nanyin.nacos.search.services.requestManualNamespaceRefresh
+import com.nanyin.nacos.search.services.requestStartupNamespaceIndex
 import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.intellij.openapi.application.ApplicationManager
@@ -138,19 +139,16 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
      */
     private fun preheatNamespaceIndex(namespaceId: String?) {
         if (!settings.cacheEnabled) return
+        val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
         coroutineScope.launch {
             try {
-                val indexKey = settings.namespaceIndexKey(namespaceId)
-                val existing = cacheService.getNamespaceIndex(indexKey.identity.serverId, namespaceId)
+                val existing = cacheService.getNamespaceIndex(indexRequest.key.identity.serverId, namespaceId)
                 if (existing != null) {
                     NacosKeyResolver.ensureIndexBuilt(cacheService)
                     return@launch
                 }
 
-                val outcome = indexCoordinator.requestIndex(
-                    indexKey,
-                    IndexTrigger.NAMESPACE_SWITCH
-                )
+                val outcome = indexCoordinator.requestStartupNamespaceIndex(indexRequest)
                 if (outcome is IndexOutcome.Complete) {
                     NacosKeyResolver.ensureIndexBuilt(cacheService)
                     logger.info("Preheated namespace index for '${namespaceId ?: "public"}' with ${outcome.count} configurations")
@@ -169,9 +167,8 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
     suspend fun refreshCache(namespaceId: String): Result<Int> {
         return try {
             logger.info("Refreshing full namespace cache for '${namespaceId.ifBlank { "public" }}'")
-            when (val outcome = indexCoordinator.requestIndex(
-                settings.namespaceIndexKey(namespaceId),
-                IndexTrigger.MANUAL_REFRESH
+            when (val outcome = indexCoordinator.requestManualNamespaceRefresh(
+                settings.captureNamespaceIndexRequest(namespaceId)
             )) {
                 is IndexOutcome.Complete -> {
                 NacosKeyResolver.ensureIndexBuilt(cacheService)
