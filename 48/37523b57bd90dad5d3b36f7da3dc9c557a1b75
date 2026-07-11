@@ -1,0 +1,22 @@
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinatorTest.kt
+  s_be434564ca5610::t_ec38d74750ee5c 1-22,25-29,31-62
+  s_be434564ca5610::t_d0ffdc82feb790 23-24,30
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
+  s_be434564ca5610::t_675b0aed29cc29 1-169
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "4837523b57bd90dad5d3b36f7da3dc9c557a1b75",
+  "prompts": {},
+  "sessions": {
+    "s_be434564ca5610": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5017-323f-7520-a938-16f0671f7e10",
+        "model": "glm-5.2"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
