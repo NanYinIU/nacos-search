@@ -5,7 +5,7 @@
 - **Gate:** `Pending Approval`
 - **Scope:** design and change-location review only
 - **Production UI changes:** prohibited until the user approves both this change map and the complete tool-window/settings mockups
-- **Mockups:** not included in this document task; no image was generated
+- **Mockups:** `docs/images/stability-tool-window-complete.png` and `docs/images/stability-settings-complete.png`
 - **Approval record:** pending
 
 Line numbers below are from the stability worktree on 2026-07-11. Symbols are the durable reference if later non-UI work shifts a line.
@@ -117,4 +117,9 @@ The three dataset dimensions remain independent. For example, `CACHE + STALE + C
 
 ## Approval Record
 
-Pending. Approval requires review of this change map plus complete, realistic-width mockups of the full tool window and full settings page. After approval, record the exact approval text and date here and change the gate to `Approved` before modifying production UI code.
+Pending. Approval requires review of this change map plus the complete, realistic-width mockups below:
+
+- `docs/images/stability-tool-window-complete.png`
+- `docs/images/stability-settings-complete.png`
+
+After approval, record the exact approval text and date here and change the gate to `Approved` before modifying production UI code.
