@@ -1,0 +1,27 @@
+docs/superpowers/plans/2026-07-11-stability-01-lifecycle-psi.md
+  s_be434564ca5610::t_0afb6114d93a53 1-172
+docs/superpowers/plans/2026-07-11-stability-02-network-execution.md
+  s_be434564ca5610::t_4c30eebb05fdbb 1-147
+docs/superpowers/plans/2026-07-11-stability-03-cache-model.md
+  s_be434564ca5610::t_638479dced37df 1-121
+docs/superpowers/plans/2026-07-11-stability-04-search-orchestration.md
+  s_be434564ca5610::t_edcdbf71f90696 1-161
+docs/superpowers/plans/2026-07-11-stability-release-overview.md
+  s_be434564ca5610::t_7994e7fd271927 1-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "e21547ee49660676c153ad8cecf672f890be426e",
+  "prompts": {},
+  "sessions": {
+    "s_be434564ca5610": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5017-323f-7520-a938-16f0671f7e10",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
