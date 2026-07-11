@@ -10,7 +10,7 @@ interface NacosSettingsListener {
 
     /**
      * Fired when only non-connection preferences changed (e.g.
-     * allowCrossNamespaceNavigation, autoRefreshOnOpen, displayName).
+    * allowCrossNamespaceNavigation, displayName).
      * Subscribers that only care about connection-level changes can ignore
      * this; subscribers that need to refresh UI markers should handle it.
      */

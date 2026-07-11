@@ -61,7 +61,6 @@ class NacosConfigurable : Configurable {
     private lateinit var authModeComboBox: JComboBox<AuthMode>
     private lateinit var defaultGroupField: JBTextField
     private lateinit var connectionTimeoutSpinner: JSpinner
-    private lateinit var autoRefreshCheckBox: JCheckBox
     private lateinit var crossNamespaceNavigationCheckBox: JCheckBox
 
     // Test connection UI
@@ -138,7 +137,6 @@ class NacosConfigurable : Configurable {
         server.authMode = authModeComboBox.selectedItem as AuthMode
         server.defaultGroup = defaultGroupField.text.trim()
         server.connectionTimeoutMs = connectionTimeoutSpinner.value as Int
-        server.autoRefreshOnOpen = autoRefreshCheckBox.isSelected
         server.allowCrossNamespaceNavigation = crossNamespaceNavigationCheckBox.isSelected
         // Refresh the list display so name/host changes show immediately
         val idx = serverListModel.indexOf(server)
@@ -233,10 +231,6 @@ class NacosConfigurable : Configurable {
         }
         connectionTimeoutSpinner = JSpinner(SpinnerNumberModel(30000, 1000, 120000, 1000)).apply {
             addChangeListener { commitDetailFormToDraft() }
-        }
-        autoRefreshCheckBox = JCheckBox().apply {
-            toolTipText = NacosSearchBundle.message("settings.server.auto.refresh.tooltip")
-            addActionListener { commitDetailFormToDraft() }
         }
         crossNamespaceNavigationCheckBox = JCheckBox().apply {
             putClientProperty("nacos.automation.id", "nacos.settings.crossNamespaceNavigation")
@@ -562,12 +556,6 @@ class NacosConfigurable : Configurable {
         timeoutPanel.add(JLabel("ms").apply { foreground = JBColor.GRAY }, BorderLayout.CENTER)
         advBody.add(timeoutPanel, advGbc)
 
-        // Auto-refresh checkbox
-        advGbc.gridx = 0; advGbc.gridy++; advGbc.weightx = 0.0
-        advBody.add(formLabel("settings.server.auto.refresh"), advGbc)
-        advGbc.gridx = 1; advGbc.weightx = 1.0; advGbc.fill = GridBagConstraints.HORIZONTAL
-        advBody.add(autoRefreshCheckBox, advGbc)
-
         // Cross-namespace code navigation checkbox
         advGbc.gridx = 0; advGbc.gridy++; advGbc.weightx = 0.0
         advBody.add(formLabel("settings.server.cross.namespace.navigation"), advGbc)
@@ -683,7 +671,6 @@ class NacosConfigurable : Configurable {
             authModeComboBox.selectedItem = server.authMode
             defaultGroupField.text = server.defaultGroup
             connectionTimeoutSpinner.value = server.connectionTimeoutMs
-            autoRefreshCheckBox.isSelected = server.autoRefreshOnOpen
             crossNamespaceNavigationCheckBox.isSelected = server.allowCrossNamespaceNavigation
             updateDetailHeader(server)
         } finally {
@@ -736,7 +723,6 @@ class NacosConfigurable : Configurable {
                 d.password != s.password || d.namespace != s.namespace ||
                 d.authMode != s.authMode || d.defaultGroup != s.defaultGroup ||
                 d.connectionTimeoutMs != s.connectionTimeoutMs ||
-                d.autoRefreshOnOpen != s.autoRefreshOnOpen ||
                 d.allowCrossNamespaceNavigation != s.allowCrossNamespaceNavigation
             ) return true
         }

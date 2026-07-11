@@ -30,7 +30,7 @@ class NacosSettingsTest {
         assertTrue(settings.cacheEnabled)
         assertEquals(5, settings.cacheTtlMinutes)
         assertEquals(1000, settings.maxCacheSize)
-        assertTrue(settings.autoRefreshEnabled)
+        assertFalse(settings.autoRefreshEnabled)
         assertEquals(10, settings.autoRefreshIntervalMinutes)
         assertEquals(100, settings.searchResultLimit)
         assertTrue(settings.enableRegexSearch)
@@ -115,10 +115,11 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `test validate with invalid auto refresh interval`() {
+    fun `test validate no longer checks auto refresh interval`() {
+        // Auto-refresh validation was removed — the feature is gone.
         settings.autoRefreshIntervalMinutes = 0
         val errors = settings.validate()
-        assertTrue(errors.contains("Auto refresh interval must be at least 1 minute"))
+        assertFalse(errors.contains("Auto refresh interval must be at least 1 minute"))
     }
 
     @Test
@@ -363,6 +364,8 @@ class NacosSettingsTest {
 
         assertEquals("http://localhost:8848", settings.serverUrl)
         assertEquals(5, settings.connectionTimeoutSeconds)
+        // autoRefreshEnabled is a legacy field that is no longer synced from
+        // per-server config; it defaults to false and stays false.
         assertFalse(settings.autoRefreshEnabled)
     }
 

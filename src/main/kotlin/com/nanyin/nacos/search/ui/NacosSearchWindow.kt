@@ -312,8 +312,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 paginationPanel.reset()
             }
 
-            val namespaceResult = namespacePanel.refreshAndWait()
-            if (namespaceResult.isSuccess && settings.getActiveServer().autoRefreshOnOpen) {
+           val namespaceResult = namespacePanel.refreshAndWait()
+            if (namespaceResult.isSuccess) {
                 currentNamespace = namespaceService.getCurrentNamespace()
                 loadConfigurations()
             }
@@ -361,7 +361,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 
                 // Get current namespace and load configurations when enabled for this server.
                 val currentNs = namespaceService.getCurrentNamespace()
-                if (currentNs != null && settings.getActiveServer().autoRefreshOnOpen) {
+                if (currentNs != null) {
                     currentNamespace = currentNs
                     loadConfigurations()
                 }
@@ -574,6 +574,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                             paginationPanel.setLoading(false)
                             configListPanel.setSearchQuery(searchPanel.getSearchQuery())
                             updateConfigurationList(state.configurations)
+                            configListPanel.setDataSourceStatus(state.source)
                             paginationPanel.updatePagination(
                                 NacosSearchService.PaginationState(
                                     currentPage = state.pageNumber,

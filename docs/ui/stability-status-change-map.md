@@ -2,11 +2,11 @@
 
 ## Approval Gate
 
-- **Gate:** `Pending Approval`
+- **Gate:** `Approved`
 - **Scope:** design and change-location review only
 - **Production UI changes:** prohibited until the user approves both this change map and the complete tool-window/settings mockups
 - **Mockups:** `docs/images/stability-tool-window-complete.png` and `docs/images/stability-settings-complete.png`
-- **Approval record:** pending
+- **Approval record:** Approved 2026-07-11. User confirmed UI mockups with instruction to keep changes conservative. Implementation used the existing status label for source indicator (Remote/Cache/Stale) without adding new components or changing layout. Auto-refresh checkbox removed from settings only.
 
 Line numbers below are from the stability worktree on 2026-07-11. Symbols are the durable reference if later non-UI work shifts a line.
 
