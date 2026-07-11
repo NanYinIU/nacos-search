@@ -64,6 +64,28 @@ class NacosSearchServiceTest {
     }
 
     @Test
+    fun `regex and content-paged searches route to coordinator`() {
+        assertEquals(
+            IndexTrigger.SEARCH,
+            NacosSearchService.SearchRequest(useRegex = true).fullNamespaceTrigger()
+        )
+        // Content search takes priority over paging — still routes to coordinator
+        assertEquals(
+            IndexTrigger.SEARCH,
+            NacosSearchService.SearchRequest(
+                searchContent = true,
+                pageNo = 3,
+                pageSize = 20
+            ).fullNamespaceTrigger()
+        )
+        // Plain wildcard-only search without content or regex also routes
+        assertEquals(
+            IndexTrigger.SEARCH,
+            NacosSearchService.SearchRequest(dataId = "*").fullNamespaceTrigger()
+        )
+    }
+
+    @Test
     fun `ordinary paged search does not request a namespace index`() = runBlocking {
         val coordinator = mock<NamespaceIndexRequester>()
         val service = NacosSearchService(indexRequester = coordinator)
