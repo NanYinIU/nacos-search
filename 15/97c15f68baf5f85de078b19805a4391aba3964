@@ -1,0 +1,24 @@
+src/test/kotlin/com/nanyin/nacos/search/services/network/NacosRequestExecutorTest.kt
+  s_be434564ca5610::t_4d7c8b13301512 1-2,4-17,19-29,31-43,45-60,62-77,79-91,93-108,110-125,127-142,144-156
+  s_be434564ca5610::t_0f03f6a2e3549b 3,18,30,44,61,78,92,109,126,143
+src/main/kotlin/com/nanyin/nacos/search/services/network/NacosRequestExecutor.kt
+  s_be434564ca5610::t_84c613fed8755d 1-5,7-46,53,62,70,87,90-168
+  s_be434564ca5610::t_0ea82d12358d64 6,47-52,54-55,86
+  s_be434564ca5610::t_1be5e9dba8990e 56-61,63-69,71-85,88-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "1597c15f68baf5f85de078b19805a4391aba3964",
+  "prompts": {},
+  "sessions": {
+    "s_be434564ca5610": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5017-323f-7520-a938-16f0671f7e10",
+        "model": "glm-5.2"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
