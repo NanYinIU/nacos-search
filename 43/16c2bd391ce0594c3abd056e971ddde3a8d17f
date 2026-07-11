@@ -1,0 +1,23 @@
+src/main/kotlin/com/nanyin/nacos/search/psi/ConfigReferenceStatus.kt
+  s_47437885ffde6e::t_2bd0f338226177 1-8
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolver.kt
+  s_47437885ffde6e::t_91d728777305bf 41-49
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolverTest.kt
+  s_47437885ffde6e::t_63310ba8f5b641 34-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "4316c2bd391ce0594c3abd056e971ddde3a8d17f",
+  "prompts": {},
+  "sessions": {
+    "s_47437885ffde6e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f505f-eb04-7640-9b4c-f4729d24ef69",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
