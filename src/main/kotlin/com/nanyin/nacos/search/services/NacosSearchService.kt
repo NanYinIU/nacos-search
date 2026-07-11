@@ -102,6 +102,9 @@ class NacosSearchService {
             return searchContent || isWildcardOnlySearch() || isPrefixFuzzySearch() || useRegex
         }
 
+        internal fun fullNamespaceTrigger(): IndexTrigger? =
+            if (requiresLocalIndex()) IndexTrigger.SEARCH else null
+
         fun toCacheKey(): String {
             return listOf(
                 "namespace=${namespace?.namespaceId.orEmpty()}",
@@ -201,7 +204,7 @@ class NacosSearchService {
            _searchState.value = SearchState.Loading
 
            currentRequest = request
-           val result = if (request.requiresLocalIndex()) {
+           val result = if (request.fullNamespaceTrigger() != null) {
                searchWithLocalIndex(request, nacosApiService)
            } else {
                searchWithRemoteList(request, nacosApiService)
@@ -272,8 +275,10 @@ class NacosSearchService {
         nacosApiService: NacosApiService
     ): Result<SearchExecutionResult> {
         val namespaceId = request.namespace?.namespaceId
+        val indexKey = settings.namespaceIndexKey(namespaceId)
+        val cacheServerId = indexKey.identity.serverId
         val cachedIndex = if (!request.forceRefresh && settings.cacheEnabled) {
-            cacheService.getNamespaceIndex(settings.serverUrl, namespaceId)
+            cacheService.getNamespaceIndex(cacheServerId, namespaceId)
         } else {
             null
         }
@@ -282,21 +287,21 @@ class NacosSearchService {
             source = SearchSource.CACHE
             cachedIndex
         } else {
-            val remote = nacosApiService.getAllConfigurations(namespaceId, useCache = true)
-            if (remote.isSuccess) {
+            val coordinator = ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java)
+            val outcome = coordinator.requestIndex(indexKey, request.fullNamespaceTrigger()!!)
+            val loadedIndex = cacheService.getNamespaceIndex(cacheServerId, namespaceId)
+            if (outcome is IndexOutcome.Complete && loadedIndex != null) {
                 source = SearchSource.REMOTE
-                remote.getOrNull().orEmpty().also {
-                    if (settings.cacheEnabled) {
-                        cacheService.putNamespaceIndex(settings.serverUrl, namespaceId, it, settings.getCacheTtlMillis())
-                    }
-                }
+                loadedIndex
             } else {
-                val staleIndex = cacheService.getNamespaceIndex(settings.serverUrl, namespaceId, allowStale = true)
+                val staleIndex = cacheService.getNamespaceIndex(cacheServerId, namespaceId, allowStale = true)
                 if (staleIndex != null) {
                     source = SearchSource.STALE_CACHE
                     staleIndex
                 } else {
-                    return Result.failure(remote.exceptionOrNull() ?: Exception("Unknown search error"))
+                    val error = (outcome as? IndexOutcome.Failed)?.error
+                        ?: IllegalStateException("Namespace index load did not produce a complete dataset")
+                    return Result.failure(error)
                 }
             }
         }

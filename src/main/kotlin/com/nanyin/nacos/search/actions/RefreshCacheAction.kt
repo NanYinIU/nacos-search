@@ -9,6 +9,7 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.Messages
+import com.nanyin.nacos.search.services.NamespaceService
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -30,7 +31,10 @@ class RefreshCacheAction : AnAction(
                 
                 try {
                     val plugin = ApplicationManager.getApplication().getService(com.nanyin.nacos.search.NacosSearchPlugin::class.java)
-                    val result = runBlocking { plugin.refreshCache() }
+                    val selectedNamespace = ApplicationManager.getApplication()
+                        .getService(NamespaceService::class.java)
+                        .getCurrentNamespace() ?: return
+                    val result = runBlocking { plugin.refreshCache(selectedNamespace.namespaceId) }
                     indicator.checkCanceled()
 
                     ApplicationManager.getApplication().invokeLater {
@@ -62,7 +66,8 @@ class RefreshCacheAction : AnAction(
     }
     
     override fun update(e: AnActionEvent) {
-        // Action is always enabled
-        e.presentation.isEnabled = true
+        e.presentation.isEnabled = ApplicationManager.getApplication()
+            .getService(NamespaceService::class.java)
+            .getCurrentNamespace() != null
     }
 }

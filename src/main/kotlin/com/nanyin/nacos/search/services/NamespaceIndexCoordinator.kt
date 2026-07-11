@@ -8,6 +8,7 @@ import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.DatasetState
 import com.nanyin.nacos.search.models.DataSource
 import com.nanyin.nacos.search.models.DataFreshness
+import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.RequestPolicy
 import kotlinx.coroutines.CompletableDeferred
@@ -28,6 +29,14 @@ import java.util.concurrent.atomic.AtomicLong
 enum class IndexTrigger { NAMESPACE_SWITCH, SEARCH, MANUAL_REFRESH, PSI }
 
 data class NamespaceIndexKey(val identity: AccessIdentity, val namespaceId: String)
+
+internal fun NacosSettings.namespaceIndexKey(namespaceId: String?): NamespaceIndexKey {
+    val server = getActiveServer()
+    return NamespaceIndexKey(
+        AccessIdentity.of(server.serverUrl, server.authMode, server.username),
+        namespaceId.orEmpty()
+    )
+}
 
 sealed interface IndexOutcome {
     data class Complete(val count: Int, val state: DatasetState) : IndexOutcome

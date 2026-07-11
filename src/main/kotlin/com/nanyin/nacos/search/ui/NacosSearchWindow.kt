@@ -12,6 +12,10 @@ import com.nanyin.nacos.search.bundle.NacosSearchBundle
 // import com.nanyin.nacos.search.services.NacosConfigService // Not needed
 import com.nanyin.nacos.search.services.NacosSearchService
 import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.services.IndexOutcome
+import com.nanyin.nacos.search.services.IndexTrigger
+import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
+import com.nanyin.nacos.search.services.namespaceIndexKey
 import com.nanyin.nacos.search.settings.NacosConfigurable
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosSettingsListener
@@ -49,6 +53,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     // private val nacosConfigService = project.service<NacosConfigService>() // Not needed
     private val nacosSearchService = project.service<NacosSearchService>()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+    private val indexCoordinator = ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java)
     
     // Managers
     private lateinit var initializationManager: InitializationManager
@@ -919,21 +924,18 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 // Skip the heavy full-content fetch when a fresh namespace
                 // index already exists — re-preheating on every namespace
                 // switch is the primary source of background IO saturation.
-                val existing = cacheService.getNamespaceIndex(settings.serverUrl, namespaceId)
+                val indexKey = settings.namespaceIndexKey(namespaceId)
+                val existing = cacheService.getNamespaceIndex(indexKey.identity.serverId, namespaceId)
                 if (existing != null) {
                     NacosKeyResolver.ensureIndexBuilt(cacheService)
                     return@launch
                 }
 
-                val result = nacosApiService.getAllConfigurations(namespaceId, useCache = true)
-                if (result.isSuccess) {
-                    val configs = result.getOrNull().orEmpty()
-                    cacheService.putNamespaceIndex(
-                        settings.serverUrl,
-                        namespaceId,
-                        configs,
-                        settings.getCacheTtlMillis()
-                    )
+                val outcome = indexCoordinator.requestIndex(
+                    indexKey,
+                    IndexTrigger.NAMESPACE_SWITCH
+                )
+                if (outcome is IndexOutcome.Complete) {
                     NacosKeyResolver.ensureIndexBuilt(cacheService)
                 }
             } catch (e: Exception) {

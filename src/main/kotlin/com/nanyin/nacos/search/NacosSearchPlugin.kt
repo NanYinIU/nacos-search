@@ -3,6 +3,10 @@ package com.nanyin.nacos.search
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.SearchService
+import com.nanyin.nacos.search.services.IndexOutcome
+import com.nanyin.nacos.search.services.IndexTrigger
+import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
+import com.nanyin.nacos.search.services.namespaceIndexKey
 import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.intellij.openapi.application.ApplicationManager
@@ -29,6 +33,7 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
     private val apiService by lazy { ApplicationManager.getApplication().getService(NacosApiService::class.java) }
     private val cacheService by lazy { ApplicationManager.getApplication().getService(CacheService::class.java) }
     private val searchService by lazy { ApplicationManager.getApplication().getService(SearchService::class.java) }
+    private val indexCoordinator by lazy { ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java) }
 
     override suspend fun execute(project: Project) {
         logger.info("Initializing Nacos Search Plugin")
@@ -135,25 +140,22 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         if (!settings.cacheEnabled) return
         coroutineScope.launch {
             try {
-                val existing = cacheService.getNamespaceIndex(settings.serverUrl, namespaceId)
+                val indexKey = settings.namespaceIndexKey(namespaceId)
+                val existing = cacheService.getNamespaceIndex(indexKey.identity.serverId, namespaceId)
                 if (existing != null) {
                     NacosKeyResolver.ensureIndexBuilt(cacheService)
                     return@launch
                 }
 
-                val result = apiService.getAllConfigurations(namespaceId, useCache = true)
-                if (result.isSuccess) {
-                    val configs = result.getOrNull().orEmpty()
-                    cacheService.putNamespaceIndex(
-                        settings.serverUrl,
-                        namespaceId,
-                        configs,
-                        settings.getCacheTtlMillis()
-                    )
+                val outcome = indexCoordinator.requestIndex(
+                    indexKey,
+                    IndexTrigger.NAMESPACE_SWITCH
+                )
+                if (outcome is IndexOutcome.Complete) {
                     NacosKeyResolver.ensureIndexBuilt(cacheService)
-                    logger.info("Preheated namespace index for '${namespaceId ?: "public"}' with ${configs.size} configurations")
+                    logger.info("Preheated namespace index for '${namespaceId ?: "public"}' with ${outcome.count} configurations")
                 } else {
-                    logger.warn("Namespace index preheat failed for '${namespaceId ?: "public"}': ${result.exceptionOrNull()?.message}")
+                    logger.warn("Namespace index preheat did not complete for '${namespaceId ?: "public"}': $outcome")
                 }
             } catch (e: Exception) {
                 logger.warn("Namespace index preheat error for '${namespaceId ?: "public"}'", e)
@@ -164,20 +166,19 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
    /**
     * Refresh cache from Nacos server
      */
-    suspend fun refreshCache(): Result<Int> {
+    suspend fun refreshCache(namespaceId: String): Result<Int> {
         return try {
-            logger.info("Refreshing Nacos list metadata cache")
-            
-            val result = apiService.listConfigurations(pageNo = 1, pageSize = 200, useCache = true, forceRefresh = true)
-            if (result.isSuccess) {
-                val response = result.getOrThrow()
-                logger.info("List metadata cache refreshed with ${response.pageItems.size}/${response.totalCount} configurations")
+            logger.info("Refreshing full namespace cache for '${namespaceId.ifBlank { "public" }}'")
+            when (val outcome = indexCoordinator.requestIndex(
+                settings.namespaceIndexKey(namespaceId),
+                IndexTrigger.MANUAL_REFRESH
+            )) {
+                is IndexOutcome.Complete -> {
                 NacosKeyResolver.ensureIndexBuilt(cacheService)
-                Result.success(response.totalCount)
-            } else {
-                val error = result.exceptionOrNull() ?: Exception("Unknown error")
-                logger.error("Failed to refresh cache: ${error.message}")
-                Result.failure(error)
+                    Result.success(outcome.count)
+                }
+                is IndexOutcome.Failed -> Result.failure(outcome.error)
+                else -> Result.failure(IllegalStateException("Namespace refresh did not produce a complete dataset: $outcome"))
             }
         } catch (e: Exception) {
             logger.error("Error refreshing cache", e)

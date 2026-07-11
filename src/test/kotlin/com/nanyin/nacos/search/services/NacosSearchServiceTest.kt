@@ -43,6 +43,26 @@ class NacosSearchServiceTest {
     }
 
     @Test
+    fun `only searches requiring a local index route to coordinator`() {
+        assertEquals(
+            IndexTrigger.SEARCH,
+            NacosSearchService.SearchRequest(searchContent = true).fullNamespaceTrigger()
+        )
+        assertEquals(
+            IndexTrigger.SEARCH,
+            NacosSearchService.SearchRequest(dataId = "*config").fullNamespaceTrigger()
+        )
+        assertEquals(
+            null,
+            NacosSearchService.SearchRequest(
+                dataId = "app.yaml",
+                group = "DEFAULT_GROUP",
+                pageNo = 3
+            ).fullNamespaceTrigger()
+        )
+    }
+
+    @Test
     fun `search request cache key includes filters paging and content options`() = runBlocking {
         val first = NacosSearchService.SearchRequest(
             dataId = "app",
