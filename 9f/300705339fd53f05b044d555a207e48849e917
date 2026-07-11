@@ -1,0 +1,25 @@
+src/test/kotlin/com/nanyin/nacos/search/services/NacosApiServiceTest.kt
+  s_be434564ca5610::t_316e62a6bc19f4 7,245-262
+  s_be434564ca5610::t_4a48eb8aac3e57 263
+src/main/kotlin/com/nanyin/nacos/search/models/NamespaceLoadResult.kt
+  s_be434564ca5610::t_ff252c2b24f628 1-24
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_be434564ca5610::t_658704104b7303 4-6
+  s_be434564ca5610::t_1b7d5830af7700 203-282
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "9f300705339fd53f05b044d555a207e48849e917",
+  "prompts": {},
+  "sessions": {
+    "s_be434564ca5610": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5017-323f-7520-a938-16f0671f7e10",
+        "model": "glm-5.2"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
