@@ -1,0 +1,23 @@
+src/main/kotlin/com/nanyin/nacos/search/services/network/RequestPolicy.kt
+  s_be434564ca5610::t_09d579964c698d 1-19
+src/main/kotlin/com/nanyin/nacos/search/services/network/NacosRequestError.kt
+  s_be434564ca5610::t_326c2dae1de57f 1-18
+src/test/kotlin/com/nanyin/nacos/search/services/network/RequestPolicyTest.kt
+  s_be434564ca5610::t_81a02020b2fafc 1-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "496efe763abea6fa4b238297b4556e8aa2760343",
+  "prompts": {},
+  "sessions": {
+    "s_be434564ca5610": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5017-323f-7520-a938-16f0671f7e10",
+        "model": "glm-5.2"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
