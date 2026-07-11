@@ -1,0 +1,21 @@
+src/test/kotlin/com/nanyin/nacos/search/services/CacheFileStorageTest.kt
+  s_be434564ca5610::t_4933a4058c0936 66-91
+src/main/kotlin/com/nanyin/nacos/search/services/CacheFileStorage.kt
+  s_be434564ca5610::t_e02d13263be5b9 11-12,35-45,85-103,113-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "40ccf6bc618dc63dbff8ac27235f50f6c55e3f40",
+  "prompts": {},
+  "sessions": {
+    "s_be434564ca5610": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5017-323f-7520-a938-16f0671f7e10",
+        "model": "glm-5.2"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
