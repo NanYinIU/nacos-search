@@ -1,0 +1,32 @@
+src/test/kotlin/com/nanyin/nacos/search/services/CacheServiceTest.kt
+  s_be434564ca5610::t_a9ae8b90c83ae6 7,26-33
+  s_be434564ca5610::t_1530242399386a 34
+src/main/kotlin/com/nanyin/nacos/search/NacosSearchPlugin.kt
+  s_a3520675337264::t_7a48df0aace68f 21-22,24-25,36-38,164-165,219-220,225-226
+src/main/kotlin/com/nanyin/nacos/search/actions/RefreshCacheAction.kt
+  s_be434564ca5610::t_163269168e012f 12,33-48,55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "f449f8d2fcc612c76c62d94668c8b4948cde72d6",
+  "prompts": {},
+  "sessions": {
+    "s_a3520675337264": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f507a-1d90-72d3-9744-6c254dc44dc1",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_be434564ca5610": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5017-323f-7520-a938-16f0671f7e10",
+        "model": "glm-5.2"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
