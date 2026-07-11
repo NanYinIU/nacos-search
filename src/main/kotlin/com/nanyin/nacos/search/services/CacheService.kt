@@ -66,8 +66,11 @@ class CacheService : Disposable {
         private const val DETAIL_KEYS_LIST = "nacos.cache.detail.keys"
         private const val LIST_PAGE_KEY_PREFIX = "nacos.cache.list."
         private const val LIST_PAGE_KEYS_LIST = "nacos.cache.list.keys"
-        private const val DEFAULT_TTL = 300_000L
-        private const val MAX_CACHE_SIZE = 1000
+       private const val DEFAULT_TTL = 300_000L
+       // Maximum age beyond which a stale cache entry is no longer usable.
+       // 7 days: matches the design decision from the grilling session.
+       private const val MAX_STALE_AGE_MILLIS = 7L * 24 * 60 * 60 * 1000
+       private const val MAX_CACHE_SIZE = 1000
         // Trigger the oversized-caches sweep only once the cache grows past the hard
         // cap by this margin, so per-insert writes stay O(1) instead of O(n).
         private const val CLEANUP_BUFFER = 100
@@ -582,16 +585,23 @@ class CacheService : Disposable {
         return "${configuration.dataId}:${configuration.group}:${configuration.tenantId ?: ""}"
     }
 
-    data class CacheEntry<T>(
-        val type: CacheEntryType,
-        val data: T,
-        val createdAt: Long,
-        val ttlMs: Long,
-        val source: CacheSource,
-        val stale: Boolean = false
-    ) {
-        fun isExpired(): Boolean = System.currentTimeMillis() - createdAt > ttlMs
-    }
+   data class CacheEntry<T>(
+       val type: CacheEntryType,
+       val data: T,
+       val createdAt: Long, // wall-clock epoch millis — persisted for stale-age checks
+       val ttlMs: Long,
+       val source: CacheSource,
+       val stale: Boolean = false
+   ) {
+       fun isExpired(): Boolean = System.currentTimeMillis() - createdAt > ttlMs
+       /** True when the entry is past TTL but still within the 7-day stale window. */
+       fun isStale(): Boolean {
+           val age = System.currentTimeMillis() - createdAt
+           return age > ttlMs && age <= MAX_STALE_AGE_MILLIS
+       }
+       /** True when the entry is so old it should be discarded entirely. */
+       fun isUnusable(): Boolean = System.currentTimeMillis() - createdAt > MAX_STALE_AGE_MILLIS
+   }
 
     enum class CacheEntryType {
         LIST_PAGE,

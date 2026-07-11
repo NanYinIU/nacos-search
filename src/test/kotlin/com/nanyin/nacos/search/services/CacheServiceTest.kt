@@ -95,8 +95,31 @@ class CacheServiceTest {
         assertEquals(configurations.size, cacheService.configurationSnapshot("http://nacos:8848").size)
     }
 
-    @Test
-    fun `configuration detail cache uses server namespace dataId and group`() = runBlocking {
+   @Test
+   fun `entry is fresh before TTL, stale after, unusable after seven days`() {
+       val now = System.currentTimeMillis()
+       val fresh = CacheService.CacheEntry(
+           type = CacheService.CacheEntryType.CONFIG_DETAIL,
+           data = NacosConfiguration("app", "g", null, "k=v", "properties"),
+           createdAt = now,
+           ttlMs = 300_000L,
+           source = CacheService.CacheSource.REMOTE
+       )
+       assertTrue(!fresh.isExpired())
+       assertTrue(!fresh.isStale())
+       assertTrue(!fresh.isUnusable())
+
+       val stale = fresh.copy(createdAt = now - 400_000L) // past TTL, within 7 days
+       assertTrue(stale.isExpired())
+       assertTrue(stale.isStale())
+       assertTrue(!stale.isUnusable())
+
+       val ancient = fresh.copy(createdAt = now - 8L * 24 * 60 * 60 * 1000) // past 7 days
+       assertTrue(ancient.isUnusable())
+   }
+
+   @Test
+   fun `configuration detail cache uses server namespace dataId and group`() = runBlocking {
         val cacheService = CacheService()
         cacheService.clearAll()
 
