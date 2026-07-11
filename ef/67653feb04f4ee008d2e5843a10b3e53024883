@@ -1,0 +1,23 @@
+src/main/kotlin/com/nanyin/nacos/search/services/CacheCoordinate.kt
+  s_be434564ca5610::t_9ad2b509e5617f 1-56
+src/test/kotlin/com/nanyin/nacos/search/services/CacheCoordinateTest.kt
+  s_be434564ca5610::t_05c318c7c430bc 39,42,44-45
+  s_be434564ca5610::t_4d7741c65c097e 33-34
+  s_be434564ca5610::t_655b370f413737 1-32,35-38,40-41,43,46-54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "ef67653feb04f4ee008d2e5843a10b3e53024883",
+  "prompts": {},
+  "sessions": {
+    "s_be434564ca5610": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5017-323f-7520-a938-16f0671f7e10",
+        "model": "glm-5.2"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
