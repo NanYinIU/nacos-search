@@ -1,0 +1,19 @@
+docs/superpowers/specs/2026-07-11-stability-and-small-features-design.md
+  s_be434564ca5610::t_31c62d3df4158f 1-221
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "7b07a4bcb9f9959caa8e763aaf090e57e2eeec45",
+  "prompts": {},
+  "sessions": {
+    "s_be434564ca5610": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5017-323f-7520-a938-16f0671f7e10",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
