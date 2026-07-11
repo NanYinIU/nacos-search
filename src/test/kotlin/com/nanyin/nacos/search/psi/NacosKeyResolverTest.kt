@@ -26,6 +26,11 @@ class NacosKeyResolverTest {
     private fun cfg(dataId: String, group: String, tenant: String?, content: String, type: String) =
         NacosConfiguration(dataId, group, tenant, content, type)
 
+    private suspend fun seedConfigurations(configurations: List<NacosConfiguration>) {
+        cache.cacheConfigurations(configurations)
+        NacosKeyResolver.refreshIndex(cache, null)
+    }
+
     @Test
     fun `empty cache returns no hits`() {
         assertTrue(NacosKeyResolver.resolve("anything", cache).isEmpty())
@@ -40,7 +45,7 @@ class NacosKeyResolverTest {
 
     @Test
     fun `single hit in properties`() = runBlocking {
-        cache.cacheConfigurations(
+        seedConfigurations(
             listOf(cfg("app.properties", "DEFAULT_GROUP", null, "timeout=3000\n", "properties"))
         )
         val hits = NacosKeyResolver.resolve("timeout", cache)
@@ -50,7 +55,7 @@ class NacosKeyResolverTest {
 
     @Test
     fun `multiple hits across configs`() = runBlocking {
-        cache.cacheConfigurations(
+        seedConfigurations(
             listOf(
                 cfg("application.properties", "DEFAULT_GROUP", null, "timeout=3000\n", "properties"),
                 cfg("common.yaml", "SHARED", "dev", "timeout: 5000\n", "yaml")
@@ -74,6 +79,7 @@ class NacosKeyResolverTest {
             configuration = cfg("app.properties", "DEFAULT_GROUP", null, "app.name=prod\n", "properties"),
             ttl = 60_000L
         )
+        NacosKeyResolver.refreshIndex(cache, "http://prod-nacos:8848")
 
         val hits = NacosKeyResolver.resolve(
             "app.name",
@@ -87,7 +93,7 @@ class NacosKeyResolverTest {
 
     @Test
     fun `active namespace sorts first`() = runBlocking {
-        cache.cacheConfigurations(
+        seedConfigurations(
             listOf(
                 // public
                 cfg("p.properties", "DEFAULT_GROUP", null, "k=pub\n", "properties"),
@@ -110,7 +116,7 @@ class NacosKeyResolverTest {
 
     @Test
     fun `cross namespace disabled only returns active namespace hits`() = runBlocking {
-        cache.cacheConfigurations(
+        seedConfigurations(
             listOf(
                 cfg("room.properties", "DEFAULT_GROUP", "namespace1", "room.key=one\n", "properties"),
                 cfg("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties")
@@ -131,7 +137,7 @@ class NacosKeyResolverTest {
 
     @Test
     fun `cross namespace disabled treats blank and public as same namespace`() = runBlocking {
-        cache.cacheConfigurations(
+        seedConfigurations(
             listOf(
                 cfg("public-empty.properties", "DEFAULT_GROUP", null, "room.key=empty\n", "properties"),
                 cfg("public-literal.properties", "DEFAULT_GROUP", "public", "room.key=literal\n", "properties"),
@@ -152,7 +158,7 @@ class NacosKeyResolverTest {
 
     @Test
     fun `cross namespace enabled returns all namespaces with active namespace first`() = runBlocking {
-        cache.cacheConfigurations(
+        seedConfigurations(
             listOf(
                 cfg("room-one.properties", "DEFAULT_GROUP", "namespace1", "room.key=one\n", "properties"),
                 cfg("room-two.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties")
@@ -173,7 +179,7 @@ class NacosKeyResolverTest {
 
     @Test
     fun `preferred group sorts before other groups for same key`() = runBlocking {
-        cache.cacheConfigurations(
+        seedConfigurations(
             listOf(
                 cfg("shared.properties", "SHARED_GROUP", null, "timeout=1000\n", "properties"),
                 cfg("app.properties", "APP_GROUP", null, "timeout=3000\n", "properties")
@@ -189,7 +195,7 @@ class NacosKeyResolverTest {
 
     @Test
     fun `public sorts before non active namespaces`() = runBlocking {
-        cache.cacheConfigurations(
+        seedConfigurations(
             listOf(
                 cfg("a.properties", "g", "sit", "k=sit\n", "properties"),
                 cfg("b.properties", "g", null, "k=pub\n", "properties")
@@ -203,7 +209,7 @@ class NacosKeyResolverTest {
 
     @Test
     fun `missing key returns empty`() = runBlocking {
-        cache.cacheConfigurations(
+        seedConfigurations(
             listOf(cfg("app.properties", "g", null, "a=1\n", "properties"))
         )
         assertTrue(NacosKeyResolver.resolve("nope", cache).isEmpty())
@@ -216,7 +222,7 @@ class NacosKeyResolverTest {
 
     @Test
     fun `key resolved across yaml and properties`() = runBlocking {
-        cache.cacheConfigurations(
+        seedConfigurations(
             listOf(
                 cfg("app.yaml", "g", null, "server:\n  port: 8080\n", "yaml")
             )
@@ -227,11 +233,11 @@ class NacosKeyResolverTest {
     }
 
     @Test
-    fun `rebuildBlocking produces an index that hasKey reads immediately`() = runBlocking {
-        cache.cacheConfigurations(
+    fun `refreshIndex produces an index that hasKey reads immediately`() = runBlocking {
+        seedConfigurations(
             listOf(cfg("app.properties", "g", null, "timeout=3000\n", "properties"))
         )
-        val index = NacosKeyResolver.rebuildBlocking(cache, activeServerUrl = null)
+        val index = NacosKeyResolver.refreshIndex(cache, activeServerUrl = null)
         assertEquals(1, index.hitsByKey.size)
 
         assertTrue(NacosKeyResolver.hasKey("timeout", cache))
@@ -240,14 +246,14 @@ class NacosKeyResolverTest {
     }
 
     @Test
-    fun `rebuildBlocking again after cache change reflects new keys`() = runBlocking {
-        NacosKeyResolver.rebuildBlocking(cache, activeServerUrl = null)
+    fun `refreshIndex again after cache change reflects new keys`() = runBlocking {
+        NacosKeyResolver.refreshIndex(cache, activeServerUrl = null)
         assertFalse(NacosKeyResolver.hasKey("new.key", cache))
 
-        cache.cacheConfigurations(
+        seedConfigurations(
             listOf(cfg("app.properties", "g", null, "new.key=v\n", "properties"))
         )
-        NacosKeyResolver.rebuildBlocking(cache, activeServerUrl = null)
+        NacosKeyResolver.refreshIndex(cache, activeServerUrl = null)
         assertTrue(NacosKeyResolver.hasKey("new.key", cache))
     }
 
@@ -267,7 +273,7 @@ class NacosKeyResolverTest {
 
         // and a synchronous index rebuild makes the key immediately resolvable
         // so the gutter icon turns solid on the next highlighter pass.
-        NacosKeyResolver.rebuildBlocking(cache, activeServerUrl = "http://localhost:8848")
+        NacosKeyResolver.refreshIndex(cache, activeServerUrl = "http://localhost:8848")
         assertTrue(NacosKeyResolver.hasKey("db.url", cache))
         assertEquals("jdbc:test", NacosKeyResolver.resolve("db.url", cache).single().location.value)
     }

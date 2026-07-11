@@ -8,6 +8,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -15,10 +16,72 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.util.concurrent.ConcurrentHashMap
 
 class CacheServiceTest {
     @get:Rule
     val applicationRule = ApplicationRule()
+
+    @Test
+    fun `configuration snapshot is immediately callable without a coroutine`() {
+        val cacheService = CacheService()
+
+        assertTrue(cacheService.configurationSnapshot(null).isEmpty())
+    }
+
+    @Test
+    fun `configuration snapshot excludes expired details`() = runBlocking {
+        val cacheService = CacheService()
+        cacheService.clearAll()
+        cacheService.putConfigDetail(
+            "http://nacos:8848", null,
+            NacosConfiguration("expired.properties", "DEFAULT_GROUP", null, "k=v", "properties"),
+            ttl = -1L
+        )
+
+        assertTrue(cacheService.configurationSnapshot(null).isEmpty())
+    }
+
+    @Test
+    fun `configuration snapshot scopes by normalized server url`() = runBlocking {
+        val cacheService = CacheService()
+        cacheService.clearAll()
+        cacheService.putConfigDetail(
+            "http://one:8848/", null,
+            NacosConfiguration("one.properties", "DEFAULT_GROUP", null, "k=one", "properties")
+        )
+        cacheService.putConfigDetail(
+            "http://two:8848", null,
+            NacosConfiguration("two.properties", "DEFAULT_GROUP", null, "k=two", "properties")
+        )
+
+        assertEquals(listOf("one.properties"), cacheService.configurationSnapshot(" http://one:8848/ ").map { it.dataId })
+    }
+
+    @Test
+    fun `configuration snapshot publishes namespace batches atomically`() = runBlocking {
+        val cacheService = CacheService()
+        cacheService.clearAll()
+        val configurations = (1..100).map {
+            NacosConfiguration("app$it.properties", "DEFAULT_GROUP", "dev", "k$it=v", "properties")
+        }
+        val observedSizes = ConcurrentHashMap.newKeySet<Int>()
+
+        coroutineScope {
+            val writer = launch {
+                cacheService.putNamespaceIndex("http://nacos:8848", "dev", configurations)
+            }
+           while (!writer.isCompleted) {
+               observedSizes += cacheService.configurationSnapshot("http://nacos:8848").size
+               yield()
+           }
+            writer.join()
+        }
+        observedSizes += cacheService.configurationSnapshot("http://nacos:8848").size
+
+        assertTrue(observedSizes.all { it == 0 || it == configurations.size })
+        assertEquals(configurations.size, cacheService.configurationSnapshot("http://nacos:8848").size)
+    }
 
     @Test
     fun `configuration detail cache uses server namespace dataId and group`() = runBlocking {
@@ -142,9 +205,10 @@ class CacheServiceTest {
 
     @Test
     fun `cache modification count changes when detail cache changes`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
-        val initial = cacheService.getModificationCount()
+       val cacheService = CacheService()
+       cacheService.clearAll()
+       cacheService.getCacheStats() // drain background load before asserting
+       val initial = cacheService.getModificationCount()
 
         cacheService.putConfigDetail(
             serverUrl = "http://nacos:8848",

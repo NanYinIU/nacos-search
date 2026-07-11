@@ -6,7 +6,6 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.settings.NacosSettings
-import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -147,12 +146,8 @@ object NacosKeyResolver {
     private val building = AtomicBoolean(false)
 
     /**
-     * Returns the current key index, rebuilding only when safe:
-     *  - in unit-test mode the (re)build is performed synchronously so tests
-     *    that mutate the cache and query immediately see fresh results;
-     *  - otherwise the query never blocks: a stale/missing index is returned
-     *    as-is and a background rebuild is scheduled. This keeps the
-     *    LineMarkerProvider / reference resolution off the slow path.
+     * Returns only volatile in-memory state. A stale index queues a memory-only
+     * refresh in CacheService's lifecycle-owned scope, but PSI never waits for it.
      */
     private fun currentIndex(cacheService: CacheService, activeServerUrl: String?): KeyIndex? {
         val normalizedServerUrl = normalizeServerUrl(activeServerUrl)
@@ -166,26 +161,21 @@ object NacosKeyResolver {
         ) {
             return existing
         }
-        return if (isUnitTestMode()) {
-            rebuildBlocking(cacheService, normalizedServerUrl)
-        } else {
-            scheduleAsyncRebuild(cacheService, normalizedServerUrl)
-            existing // stale, may be null on first call
-        }
+        scheduleAsyncRebuild(cacheService, normalizedServerUrl)
+        return existing // stale, may be null on first call
     }
 
     /**
-     * Synchronously (re)builds the index. Safe to call off the highlighter /
-     * dispatch thread (startup coroutines, background pool, tests). Never call
-     * this from [NacosValueLineMarkerProvider] or reference resolution on the
-     * hot path.
+     * Explicitly refreshes the derived index from CacheService's immutable,
+     * memory-only snapshot. This hook is deterministic for tests and callers
+     * that have already moved off the PSI hot path.
      */
-    fun rebuildBlocking(
+    fun refreshIndex(
         cacheService: CacheService = ApplicationManager.getApplication().getService(CacheService::class.java),
         activeServerUrl: String? = currentServerUrl()
     ): KeyIndex {
         val normalizedServerUrl = normalizeServerUrl(activeServerUrl)
-        val cached = runBlocking { cacheService.getAllCachedConfigurations(normalizedServerUrl) }
+        val cached = cacheService.configurationSnapshot(normalizedServerUrl)
        val built = KeyIndex(
            cacheIdentity = System.identityHashCode(cacheService),
            serverUrl = normalizedServerUrl,
@@ -213,18 +203,14 @@ object NacosKeyResolver {
         cacheService: CacheService = ApplicationManager.getApplication().getService(CacheService::class.java),
         activeServerUrl: String? = currentServerUrl()
     ) {
-        if (isUnitTestMode()) {
-            rebuildBlocking(cacheService, activeServerUrl)
-        } else {
-            scheduleAsyncRebuild(cacheService, normalizeServerUrl(activeServerUrl))
-        }
+        scheduleAsyncRebuild(cacheService, normalizeServerUrl(activeServerUrl))
     }
 
     private fun scheduleAsyncRebuild(cacheService: CacheService, normalizedServerUrl: String?) {
         if (!building.compareAndSet(false, true)) return
-        ApplicationManager.getApplication().executeOnPooledThread {
+        cacheService.launchSnapshotRefresh {
             try {
-                rebuildBlocking(cacheService, normalizedServerUrl)
+                refreshIndex(cacheService, normalizedServerUrl)
             } finally {
                 building.set(false)
             }
@@ -234,12 +220,9 @@ object NacosKeyResolver {
     private fun normalizeServerUrl(serverUrl: String?): String? =
         serverUrl?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
 
-    private fun isUnitTestMode(): Boolean =
-        try {
-            ApplicationManager.getApplication().isUnitTestMode
-        } catch (e: Exception) {
-            false
-        }
+    @Deprecated("Use refreshIndex; this compatibility alias no longer blocks")
+    fun rebuildBlocking(cacheService: CacheService, activeServerUrl: String?): KeyIndex =
+        refreshIndex(cacheService, activeServerUrl)
 
     private fun currentNamespaceId(): String? =
         try {
