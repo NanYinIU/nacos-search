@@ -1,0 +1,20 @@
+src/test/kotlin/com/nanyin/nacos/search/services/CacheServiceTest.kt
+  s_be434564ca5610::t_96cce046ac8086 371-373
+  s_be434564ca5610::t_6f8ef5b90bc931 30-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "9095707e40363279ff36a696395471a3e7c45c0a",
+  "prompts": {},
+  "sessions": {
+    "s_be434564ca5610": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5017-323f-7520-a938-16f0671f7e10",
+        "model": "glm-5.2"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
