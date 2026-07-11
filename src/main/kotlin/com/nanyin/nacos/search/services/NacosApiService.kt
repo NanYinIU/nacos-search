@@ -1,6 +1,9 @@
 package com.nanyin.nacos.search.services
 
 import com.nanyin.nacos.search.models.NacosApiResponse
+import com.nanyin.nacos.search.models.ConfigLoadFailure
+import com.nanyin.nacos.search.models.DatasetCompleteness
+import com.nanyin.nacos.search.models.NamespaceLoadResult
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.settings.AuthMode
@@ -197,48 +200,86 @@ class NacosApiService {
     }
     
     /**
-     * Retrieves all configurations with their content
-     * @param namespaceId Namespace ID (tenant), null for public namespace
-     * @param useCache Whether to use cache for configurations (default: true)
-     */
-    suspend fun getAllConfigurations(namespaceId: String? = null, useCache: Boolean = true): Result<List<NacosConfiguration>> {
-        return try {
-            val allConfigs = mutableListOf<NacosConfiguration>()
-            var pageNo = 1
-            val pageSize = 100
-            
-            do {
-                val result = listConfigurations(namespaceId, pageNo, pageSize, useCache = useCache)
-                if (result.isFailure) {
-                    return Result.failure(result.exceptionOrNull() ?: Exception("Unknown error"))
-                }
-                
-                val response = result.getOrNull() ?: break
-                // Fetch each item's content concurrently rather than sequentially; this
-                // turns N blocking HTTP calls per page into bounded parallelism, avoiding
-                // long IO-scheduler stalls on namespaces with many configs.
-                val configs = coroutineScope {
-                    val semaphore = kotlinx.coroutines.sync.Semaphore(FETCH_CONCURRENCY)
-                    response.pageItems.map { item ->
-                        async {
-                            semaphore.withPermit {
-                                getConfigurationFromItem(item, useCache)
-                            }
-                        }
-                    }.awaitAll()
-                }
-                allConfigs.addAll(configs)
-                pageNo++
-                
-                // Break if we got fewer results than page size (last page)
-            } while (response.pageItems.size == pageSize)
-            
-            Result.success(allConfigs)
-        } catch (e: Exception) {
-            logger.warn("Error getting all configurations", e)
-            Result.failure(e)
-        }
-    }
+    * Retrieves all configurations with their content
+    * @param namespaceId Namespace ID (tenant), null for public namespace
+    * @param useCache Whether to use cache for configurations (default: true)
+    */
+   suspend fun getAllConfigurations(namespaceId: String? = null, useCache: Boolean = true): Result<List<NacosConfiguration>> {
+       val result = loadNamespace(namespaceId, useCache)
+       return result.map { it.configurations }
+   }
+
+   /**
+    * Loads all configurations for a namespace, preserving completeness metadata.
+    * Individual detail-fetch failures are collected instead of silently swallowed;
+    * the result distinguishes COMPLETE (no failures), PARTIAL (some failures),
+    * and FAILED (list-level failure).
+    */
+   suspend fun loadNamespace(namespaceId: String? = null, useCache: Boolean = true): Result<NamespaceLoadResult> {
+       return try {
+           val allConfigs = mutableListOf<NacosConfiguration>()
+           val failures = mutableListOf<ConfigLoadFailure>()
+           var expectedCount = 0
+           var pageNo = 1
+           val pageSize = 100
+
+           do {
+               val result = listConfigurations(namespaceId, pageNo, pageSize, useCache = useCache)
+               if (result.isFailure) {
+                   return Result.success(
+                       NamespaceLoadResult(DatasetCompleteness.FAILED, expectedCount, allConfigs, failures)
+                   )
+               }
+
+               val response = result.getOrNull() ?: break
+               expectedCount = response.totalCount
+
+               // Bounded parallelism: fetch each item's content concurrently with
+               // supervisor semantics so one detail failure doesn't cancel the batch.
+               val pageResults = coroutineScope {
+                   val semaphore = kotlinx.coroutines.sync.Semaphore(FETCH_CONCURRENCY)
+                   response.pageItems.map { item ->
+                       async {
+                           semaphore.withPermit {
+                               try {
+                                   FetchResult.Success(getConfigurationFromItem(item, useCache))
+                               } catch (ce: kotlinx.coroutines.CancellationException) {
+                                   throw ce
+                               } catch (e: Exception) {
+                                   FetchResult.Failure(item.dataId, item.group, e)
+                               }
+                           }
+                       }
+                   }.awaitAll()
+               }
+               pageResults.forEach { r ->
+                   when (r) {
+                       is FetchResult.Success -> allConfigs.add(r.config)
+                       is FetchResult.Failure -> failures.add(
+                           ConfigLoadFailure(r.dataId, r.group, toRequestError(r.error))
+                       )
+                   }
+               }
+               pageNo++
+           } while (response.pageItems.size == pageSize)
+
+           val completeness = if (failures.isEmpty()) DatasetCompleteness.COMPLETE else DatasetCompleteness.PARTIAL
+           Result.success(NamespaceLoadResult(completeness, expectedCount, allConfigs, failures))
+       } catch (e: Exception) {
+           logger.warn("Error loading namespace", e)
+           Result.failure(e)
+       }
+   }
+
+   private sealed class FetchResult {
+       data class Success(val config: NacosConfiguration) : FetchResult()
+       data class Failure(val dataId: String, val group: String, val error: Throwable) : FetchResult()
+   }
+
+   private fun toRequestError(e: Throwable): NacosRequestError = when (e) {
+       is NacosRequestError -> e
+       else -> NacosRequestError.Connection(e)
+   }
     
     /**
      * Retrieves all namespaces from Nacos

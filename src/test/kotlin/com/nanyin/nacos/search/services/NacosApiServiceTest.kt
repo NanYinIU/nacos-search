@@ -4,6 +4,7 @@ import com.google.gson.Gson
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosSettings
@@ -239,6 +240,25 @@ class NacosApiServiceTest {
     fun `test get all configurations with null namespace`() = runBlocking {
         val result = apiService.getAllConfigurations(null)
         assertTrue(result.isSuccess)
+    }
+
+    @Test
+    fun `loadNamespace returns COMPLETE when all items fetched`() = runBlocking {
+        val result = apiService.loadNamespace("test-ns", useCache = false)
+        assertTrue(result.isSuccess)
+        val loadResult = result.getOrNull()!!
+        assertEquals(DatasetCompleteness.COMPLETE, loadResult.completeness)
+        assertEquals(1, loadResult.configurations.size)
+        assertTrue(loadResult.failures.isEmpty())
+    }
+
+    @Test
+    fun `loadNamespace returns FAILED when list endpoint unreachable`() = runBlocking {
+        settings.serverUrl = "http://localhost:1"
+        val failingService = NacosApiService()
+        val result = failingService.loadNamespace(null, useCache = false)
+        assertTrue(result.isSuccess)
+        assertEquals(DatasetCompleteness.FAILED, result.getOrNull()!!.completeness)
     }
 
     @Test
