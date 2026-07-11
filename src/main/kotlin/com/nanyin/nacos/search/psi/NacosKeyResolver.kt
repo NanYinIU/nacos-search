@@ -38,6 +38,15 @@ object NacosKeyResolver {
    @Volatile
    private var cachedIndex: KeyIndex? = null
 
+    internal fun resolveStatus(key: String, index: KeyIndex?): ConfigResolution {
+        if (index == null) return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
+        val hits = index.hitsByKey[key].orEmpty()
+        return ConfigResolution(
+            if (hits.isEmpty()) ConfigReferenceStatus.UNRESOLVED else ConfigReferenceStatus.RESOLVED,
+            hits
+        )
+    }
+
     /**
      * Resolves [key] against every cached configuration.
      *

@@ -32,6 +32,13 @@ class NacosKeyResolverTest {
     }
 
     @Test
+    fun `missing snapshot is unavailable rather than unresolved`() {
+        val result = NacosKeyResolver.resolveStatus("db.url", null)
+        assertEquals(ConfigReferenceStatus.UNAVAILABLE, result.status)
+        assertTrue(result.hits.isEmpty())
+    }
+
+    @Test
     fun `single hit in properties`() = runBlocking {
         cache.cacheConfigurations(
             listOf(cfg("app.properties", "DEFAULT_GROUP", null, "timeout=3000\n", "properties"))
