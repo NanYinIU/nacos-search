@@ -9,7 +9,7 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.Messages
-import kotlinx.coroutines.*
+import kotlinx.coroutines.runBlocking
 
 /**
  * Action to refresh the Nacos configuration cache
@@ -30,45 +30,29 @@ class RefreshCacheAction : AnAction(
                 
                 try {
                     val plugin = ApplicationManager.getApplication().getService(com.nanyin.nacos.search.NacosSearchPlugin::class.java)
-                    
-                    // Use coroutine scope for proper async handling
-                    val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-                    scope.launch {
-                        try {
-                            val result = plugin.refreshCache()
-                            
-                            ApplicationManager.getApplication().invokeLater {
-                                if (result.isSuccess) {
-                                    val count = result.getOrThrow()
-                                    Messages.showInfoMessage(
-                                        project,
-                                        "Successfully refreshed metadata for $count configurations. Content loads on demand.",
-                                        "Cache Refreshed"
-                                    )
-                                } else {
-                                    val error = result.exceptionOrNull()?.message ?: "Unknown error"
-                                    Messages.showErrorDialog(
-                                        project,
-                                        "Failed to refresh cache: $error",
-                                        "Refresh Failed"
-                                    )
-                                }
-                            }
-                        } catch (e: Exception) {
-                            ApplicationManager.getApplication().invokeLater {
-                                Messages.showErrorDialog(
-                                    project,
-                                    "Error refreshing cache: ${e.message}",
-                                    "Refresh Error"
-                                )
-                            }
+                    val result = runBlocking { plugin.refreshCache() }
+                    indicator.checkCanceled()
+
+                    ApplicationManager.getApplication().invokeLater {
+                        if (result.isSuccess) {
+                            Messages.showInfoMessage(
+                                project,
+                                "Successfully refreshed metadata for ${result.getOrThrow()} configurations. Content loads on demand.",
+                                "Cache Refreshed"
+                            )
+                        } else {
+                            Messages.showErrorDialog(
+                                project,
+                                "Failed to refresh cache: ${result.exceptionOrNull()?.message ?: "Unknown error"}",
+                                "Refresh Failed"
+                            )
                         }
                     }
                 } catch (e: Exception) {
                     ApplicationManager.getApplication().invokeLater {
                         Messages.showErrorDialog(
                             project,
-                            "Error initializing refresh: ${e.message}",
+                            "Error refreshing cache: ${e.message}",
                             "Refresh Error"
                         )
                     }

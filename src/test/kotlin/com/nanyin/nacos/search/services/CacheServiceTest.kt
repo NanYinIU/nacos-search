@@ -4,6 +4,7 @@ import com.intellij.testFramework.ApplicationRule
 import com.intellij.ide.util.PropertiesComponent
 import com.google.gson.Gson
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.intellij.openapi.util.Disposer
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -21,6 +22,15 @@ import java.util.concurrent.ConcurrentHashMap
 class CacheServiceTest {
     @get:Rule
     val applicationRule = ApplicationRule()
+
+    @Test
+    fun `CacheService is Disposable and dispose cancels its scope`() {
+        val cacheService = CacheService()
+        assertTrue(cacheService is com.intellij.openapi.Disposable)
+        Disposer.dispose(cacheService)
+        // Snapshot still readable after dispose (volatile read, no coroutine needed)
+        assertTrue(cacheService.configurationSnapshot(null).isEmpty())
+    }
 
     @Test
     fun `configuration snapshot is immediately callable without a coroutine`() {

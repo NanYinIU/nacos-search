@@ -11,7 +11,6 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import kotlinx.coroutines.*
-import kotlinx.coroutines.delay
 
 /**
  * Main plugin class that manages the Nacos Search plugin lifecycle
@@ -19,12 +18,11 @@ import kotlinx.coroutines.delay
 @Service(Service.Level.APP)
 class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
 
-    private val logger = thisLogger()
-   private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var autoRefreshJob: Job? = null
+   private val logger = thisLogger()
+  private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    /** Test/inspection helper: whether the plugin coroutine scope is still active. */
-    internal fun isScopeActive(): Boolean = coroutineScope.isActive
+   /** Test/inspection helper: whether the plugin coroutine scope is still active. */
+   internal fun isScopeActive(): Boolean = coroutineScope.isActive
 
     // Services
     private val settings by lazy { ApplicationManager.getApplication().getService(NacosSettings::class.java) }
@@ -35,10 +33,9 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
     override suspend fun execute(project: Project) {
         logger.info("Initializing Nacos Search Plugin")
 
-        try {
-            initializePlugin()
-            setupAutoRefresh()
-            logger.info("Nacos Search Plugin initialized successfully")
+       try {
+           initializePlugin()
+           logger.info("Nacos Search Plugin initialized successfully")
         } catch (e: Exception) {
             logger.error("Failed to initialize Nacos Search Plugin", e)
         }
@@ -164,55 +161,8 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         }
     }
     
-    /**
-     * Setup automatic cache refresh if enabled
-     */
-    private fun setupAutoRefresh() {
-        if (!settings.autoRefreshEnabled || !settings.cacheEnabled) {
-            logger.info("Auto refresh is disabled")
-            return
-        }
-        
-        val intervalMinutes = settings.autoRefreshIntervalMinutes
-        if (intervalMinutes <= 0) {
-            logger.warn("Invalid auto refresh interval: $intervalMinutes minutes")
-            return
-        }
-        
-        // Stop existing job if running
-        stopAutoRefresh()
-        
-        autoRefreshJob = coroutineScope.launch {
-            while (isActive) {
-                try {
-                    delay(intervalMinutes * 60 * 1000L) // Convert minutes to milliseconds
-                    logger.debug("Running auto refresh")
-                    refreshCache()
-                } catch (e: CancellationException) {
-                    logger.info("Auto refresh cancelled")
-                    break
-                } catch (e: Exception) {
-                    logger.error("Error during auto refresh", e)
-                }
-            }
-        }
-        
-        logger.info("Auto refresh scheduled every $intervalMinutes minutes")
-    }
-    
-    /**
-     * Stop automatic cache refresh
-     */
-    private fun stopAutoRefresh() {
-        autoRefreshJob?.let { job ->
-            job.cancel()
-            autoRefreshJob = null
-            logger.info("Auto refresh stopped")
-        }
-    }
-    
-    /**
-     * Refresh cache from Nacos server
+   /**
+    * Refresh cache from Nacos server
      */
     suspend fun refreshCache(): Result<Int> {
         return try {
@@ -266,23 +216,14 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         )
     }
     
-    /**
-     * Restart auto refresh with new settings
-     */
-    fun restartAutoRefresh() {
-        logger.info("Restarting auto refresh with updated settings")
-        setupAutoRefresh()
-    }
-    
-    /**
-     * Dispose plugin resources
+   /**
+    * Dispose plugin resources
      */
     override fun dispose() {
         logger.info("Disposing Nacos Search Plugin")
         
-        try {
-            stopAutoRefresh()
-            coroutineScope.cancel()
+       try {
+           coroutineScope.cancel()
             logger.info("Plugin disposed successfully")
         } catch (e: Exception) {
             logger.error("Error disposing plugin", e)
