@@ -46,7 +46,10 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     var cacheEnabled: Boolean = true
     var cacheTtlMinutes: Int = 5
     var maxCacheSize: Int = 1000
-    var autoRefreshEnabled: Boolean = true
+    // Legacy fields retained for backward-compatible deserialization of old
+    // settings files. They are never read at runtime — periodic refresh was
+    // removed; users trigger refreshes manually or via namespace-switch preheat.
+    var autoRefreshEnabled: Boolean = false
     var autoRefreshIntervalMinutes: Int = 10
     
     // Aliases for test compatibility
@@ -161,7 +164,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         namespace = active.namespace
         authMode = active.authMode
         connectionTimeoutSeconds = (active.connectionTimeoutMs / 1000).coerceAtLeast(1)
-        autoRefreshEnabled = active.autoRefreshOnOpen
+        // autoRefreshEnabled intentionally not synced — legacy field only
     }
 
     /**
@@ -175,7 +178,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         active.namespace = namespace
         active.authMode = authMode
         active.connectionTimeoutMs = getConnectionTimeoutMillis()
-        active.autoRefreshOnOpen = autoRefreshEnabled
+        // autoRefreshOnOpen intentionally not written from legacy field
     }
 
     fun setActiveServer(serverId: String) {
@@ -263,10 +266,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             if (maxCacheSize < 1) {
                 errors.add("Max cache size must be at least 1")
             }
-            
-            if (autoRefreshEnabled && autoRefreshIntervalMinutes < 1) {
-                errors.add("Auto refresh interval must be at least 1 minute")
-            }
         }
         
         if (searchResultLimit < 1) {
@@ -327,7 +326,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         cacheEnabled = true
         cacheTtlMinutes = 5
         maxCacheSize = 1000
-        autoRefreshEnabled = true
+        autoRefreshEnabled = false
         autoRefreshIntervalMinutes = 10
         
         searchResultLimit = 100

@@ -30,21 +30,23 @@ class NacosValueLineMarkerProviderTest {
     @Before
     fun setUp() {
         runBlocking {
-            ApplicationManager.getApplication().getService(CacheService::class.java).clearAll()
+            val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+            cache.clearAll()
+            NacosKeyResolver.refreshIndex(cache, "http://localhost:8848")
         }
         ApplicationManager.getApplication().getService(NacosSettings::class.java).resetToDefaults()
         ApplicationManager.getApplication().getService(NamespaceService::class.java).setCurrentNamespace(null)
     }
 
+    private fun cacheAndRefresh(configuration: NacosConfiguration) = runBlocking {
+        val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+        cache.putConfigDetail("http://localhost:8848", null, configuration)
+        NacosKeyResolver.refreshIndex(cache, "http://localhost:8848")
+    }
+
     @Test
     fun `test marker is provided for supported annotation literal`() {
-        runBlocking {
-            ApplicationManager.getApplication().getService(CacheService::class.java).putConfigDetail(
-                serverUrl = "http://localhost:8848",
-                namespaceId = null,
-                configuration = NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo", "properties")
-            )
-        }
+        cacheAndRefresh(NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo", "properties"))
         val marker = markerFor(
             """
             class Demo {
@@ -78,13 +80,7 @@ class NacosValueLineMarkerProviderTest {
        // Cache has been populated for the current server, but the referenced
        // dataId is NOT among the known configurations. The marker should be
        // suppressed to avoid showing a dead-end icon.
-       runBlocking {
-           ApplicationManager.getApplication().getService(CacheService::class.java).putConfigDetail(
-               serverUrl = "http://localhost:8848",
-               namespaceId = null,
-               configuration = NacosConfiguration("other.properties", "DEFAULT_GROUP", null, "other.key=val\n", "properties")
-           )
-       }
+       cacheAndRefresh(NacosConfiguration("other.properties", "DEFAULT_GROUP", null, "other.key=val\n", "properties"))
 
        val marker = markerFor(
            """
@@ -117,13 +113,7 @@ class NacosValueLineMarkerProviderTest {
 
     @Test
     fun `test marker is provided for short nacos annotation name when cached definition exists`() {
-        runBlocking {
-            ApplicationManager.getApplication().getService(CacheService::class.java).putConfigDetail(
-                serverUrl = "http://localhost:8848",
-                namespaceId = null,
-                configuration = NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "missing.name=demo", "properties")
-            )
-        }
+        cacheAndRefresh(NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "missing.name=demo", "properties"))
         val marker = markerFor(
             """
             class Demo {
@@ -163,7 +153,7 @@ class NacosValueLineMarkerProviderTest {
                 namespaceId = null,
                 configuration = NacosConfiguration("datasource.properties", "DEFAULT_GROUP", null, "db.url=jdbc:test\n", "properties")
             )
-            NacosKeyResolver.rebuildBlocking(cache, settings.serverUrl)
+            NacosKeyResolver.refreshIndex(cache, settings.serverUrl)
         }
 
         // After the rebuild the key is resolvable → solid icon.
@@ -174,13 +164,7 @@ class NacosValueLineMarkerProviderTest {
 
     @Test
     fun `resolved element returns containing file instead of throwing PsiInvalidElementAccessException`() {
-        runBlocking {
-            ApplicationManager.getApplication().getService(CacheService::class.java).putConfigDetail(
-                serverUrl = "http://localhost:8848",
-                namespaceId = null,
-                configuration = NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo\n", "properties")
-            )
-        }
+        cacheAndRefresh(NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo\n", "properties"))
 
         ApplicationManager.getApplication().runReadAction {
             val file = PsiFileFactory.getInstance(ProjectManager.getInstance().defaultProject).createFileFromText(
@@ -270,7 +254,7 @@ class NacosValueLineMarkerProviderTest {
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
                 ttl = 60_000L
             )
-            NacosKeyResolver.rebuildBlocking(cache, "http://localhost:8848")
+            NacosKeyResolver.refreshIndex(cache, "http://localhost:8848")
         }
 
         val results = resolveReferenceForKey("room.key")
@@ -300,7 +284,7 @@ class NacosValueLineMarkerProviderTest {
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
                 ttl = 60_000L
             )
-            NacosKeyResolver.rebuildBlocking(cache, "http://localhost:8848")
+            NacosKeyResolver.refreshIndex(cache, "http://localhost:8848")
         }
 
         val results = resolveReferenceForKey("room.key")
@@ -356,7 +340,7 @@ class NacosValueLineMarkerProviderTest {
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
                 ttl = 60_000L
             )
-            NacosKeyResolver.rebuildBlocking(cache, "http://localhost:8848")
+            NacosKeyResolver.refreshIndex(cache, "http://localhost:8848")
         }
     }
 

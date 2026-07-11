@@ -156,7 +156,6 @@ class NacosConfigurableInteractionTest {
         val component = configurable.createComponent()
 
         assertNotNull(findLabelByText(component, "Timeout"))
-        assertNotNull(findLabelByText(component, "Auto refresh"))
         assertNotNull(findLabelByText(component, "Cross namespace"))
     }
 

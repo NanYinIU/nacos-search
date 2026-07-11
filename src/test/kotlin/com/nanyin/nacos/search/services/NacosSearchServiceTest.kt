@@ -11,6 +11,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.never
 import org.mockito.kotlin.whenever
 import com.nanyin.nacos.search.models.NamespaceInfo
 import kotlinx.coroutines.runBlocking
@@ -40,6 +41,70 @@ class NacosSearchServiceTest {
         assertEquals("app.yaml", exact.getProcessedDataId())
         assertEquals("accurate", exact.getSearchMode())
         assertFalse(exact.requiresLocalIndex())
+    }
+
+    @Test
+    fun `only searches requiring a local index route to coordinator`() {
+        assertEquals(
+            IndexTrigger.SEARCH,
+            NacosSearchService.SearchRequest(searchContent = true).fullNamespaceTrigger()
+        )
+        assertEquals(
+            IndexTrigger.SEARCH,
+            NacosSearchService.SearchRequest(dataId = "*config").fullNamespaceTrigger()
+        )
+        assertEquals(
+            null,
+            NacosSearchService.SearchRequest(
+                dataId = "app.yaml",
+                group = "DEFAULT_GROUP",
+                pageNo = 3
+            ).fullNamespaceTrigger()
+        )
+    }
+
+    @Test
+    fun `regex and content-paged searches route to coordinator`() {
+        assertEquals(
+            IndexTrigger.SEARCH,
+            NacosSearchService.SearchRequest(useRegex = true).fullNamespaceTrigger()
+        )
+        // Content search takes priority over paging — still routes to coordinator
+        assertEquals(
+            IndexTrigger.SEARCH,
+            NacosSearchService.SearchRequest(
+                searchContent = true,
+                pageNo = 3,
+                pageSize = 20
+            ).fullNamespaceTrigger()
+        )
+        // Plain wildcard-only search without content or regex also routes
+        assertEquals(
+            IndexTrigger.SEARCH,
+            NacosSearchService.SearchRequest(dataId = "*").fullNamespaceTrigger()
+        )
+    }
+
+    @Test
+    fun `ordinary paged search does not request a namespace index`() = runBlocking {
+        val coordinator = mock<NamespaceIndexRequester>()
+        val service = NacosSearchService(indexRequester = coordinator)
+        val api = stubApi()
+
+        service.performSearch(
+            NacosSearchService.SearchRequest(
+                dataId = "app.yaml",
+                group = "DEFAULT_GROUP",
+                pageNo = 2,
+                pageSize = 20
+            ),
+            api
+        )
+
+        verify(coordinator, never()).requestIndex(any(), any())
+        verify(api, times(1)).listConfigurations(
+            any(), any(), any(), any(), any(), any(), any(), any(), any(), any()
+        )
     }
 
     @Test

@@ -238,6 +238,22 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         updateStatus(message)
     }
 
+    /**
+     * Compact one-line status indicator appended to the existing status label.
+     * Shows data source (Remote / Cache / Stale cache) without layout changes.
+     */
+    fun setDataSourceStatus(source: com.nanyin.nacos.search.services.NacosSearchService.SearchSource) {
+        val label = when (source) {
+            com.nanyin.nacos.search.services.NacosSearchService.SearchSource.REMOTE ->
+                NacosSearchBundle.message("config.list.status.source.remote")
+            com.nanyin.nacos.search.services.NacosSearchService.SearchSource.CACHE ->
+                NacosSearchBundle.message("config.list.status.source.cache")
+            com.nanyin.nacos.search.services.NacosSearchService.SearchSource.STALE_CACHE ->
+                NacosSearchBundle.message("config.list.status.source.stale")
+        }
+        updateStatus(label)
+    }
+
     fun setPage(page: Int) {
         currentPage = page
     }

@@ -64,6 +64,32 @@ class CacheFileStorageTest {
     }
 
     @Test
+    fun `storeDetail writes atomically and leaves no temp file`() = kotlinx.coroutines.runBlocking {
+        val storage = CacheFileStorage(baseDir)
+        storage.storeDetail("server|ns|app.yaml|DEFAULT_GROUP", detailEntry)
+
+        // After a successful store, no .tmp files should remain
+        val tmpFiles = baseDir.resolve("details").toFile().listFiles { _, name -> name.endsWith(".tmp") }
+        assertTrue(tmpFiles?.isEmpty() ?: true, "temp files should not remain after atomic write")
+
+        // The target file should exist and be readable
+        val loaded = storage.loadDetail("server|ns|app.yaml|DEFAULT_GROUP")
+        assertNotNull(loaded)
+    }
+
+    @Test
+    fun `overwrite via atomic move replaces existing entry`() = kotlinx.coroutines.runBlocking {
+        val storage = CacheFileStorage(baseDir)
+        val key = "server|ns|app.yaml|DEFAULT_GROUP"
+        storage.storeDetail(key, detailEntry)
+        val updated = detailEntry.copy(data = config.copy(content = "feature=false"))
+        storage.storeDetail(key, updated)
+
+        val loaded = storage.loadDetail(key)
+        assertEquals("feature=false", loaded!!.data.content)
+    }
+
+    @Test
     fun `removeDetail deletes the file`() = kotlinx.coroutines.runBlocking {
         val storage = CacheFileStorage(baseDir)
         val key = "k|1"

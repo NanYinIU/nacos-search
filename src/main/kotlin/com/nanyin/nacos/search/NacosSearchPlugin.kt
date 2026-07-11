@@ -3,6 +3,11 @@ package com.nanyin.nacos.search
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.SearchService
+import com.nanyin.nacos.search.services.IndexOutcome
+import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
+import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
+import com.nanyin.nacos.search.services.requestManualNamespaceRefresh
+import com.nanyin.nacos.search.services.requestStartupNamespaceIndex
 import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.intellij.openapi.application.ApplicationManager
@@ -11,7 +16,6 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import kotlinx.coroutines.*
-import kotlinx.coroutines.delay
 
 /**
  * Main plugin class that manages the Nacos Search plugin lifecycle
@@ -19,26 +23,25 @@ import kotlinx.coroutines.delay
 @Service(Service.Level.APP)
 class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
 
-    private val logger = thisLogger()
-   private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var autoRefreshJob: Job? = null
+   private val logger = thisLogger()
+  private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    /** Test/inspection helper: whether the plugin coroutine scope is still active. */
-    internal fun isScopeActive(): Boolean = coroutineScope.isActive
+   /** Test/inspection helper: whether the plugin coroutine scope is still active. */
+   internal fun isScopeActive(): Boolean = coroutineScope.isActive
 
     // Services
     private val settings by lazy { ApplicationManager.getApplication().getService(NacosSettings::class.java) }
     private val apiService by lazy { ApplicationManager.getApplication().getService(NacosApiService::class.java) }
     private val cacheService by lazy { ApplicationManager.getApplication().getService(CacheService::class.java) }
     private val searchService by lazy { ApplicationManager.getApplication().getService(SearchService::class.java) }
+    private val indexCoordinator by lazy { ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java) }
 
     override suspend fun execute(project: Project) {
         logger.info("Initializing Nacos Search Plugin")
 
-        try {
-            initializePlugin()
-            setupAutoRefresh()
-            logger.info("Nacos Search Plugin initialized successfully")
+       try {
+           initializePlugin()
+           logger.info("Nacos Search Plugin initialized successfully")
         } catch (e: Exception) {
             logger.error("Failed to initialize Nacos Search Plugin", e)
         }
@@ -136,27 +139,21 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
      */
     private fun preheatNamespaceIndex(namespaceId: String?) {
         if (!settings.cacheEnabled) return
+        val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
         coroutineScope.launch {
             try {
-                val existing = cacheService.getNamespaceIndex(settings.serverUrl, namespaceId)
+                val existing = cacheService.getNamespaceIndex(indexRequest.key.identity.serverId, namespaceId)
                 if (existing != null) {
                     NacosKeyResolver.ensureIndexBuilt(cacheService)
                     return@launch
                 }
 
-                val result = apiService.getAllConfigurations(namespaceId, useCache = true)
-                if (result.isSuccess) {
-                    val configs = result.getOrNull().orEmpty()
-                    cacheService.putNamespaceIndex(
-                        settings.serverUrl,
-                        namespaceId,
-                        configs,
-                        settings.getCacheTtlMillis()
-                    )
+                val outcome = indexCoordinator.requestStartupNamespaceIndex(indexRequest)
+                if (outcome is IndexOutcome.Complete) {
                     NacosKeyResolver.ensureIndexBuilt(cacheService)
-                    logger.info("Preheated namespace index for '${namespaceId ?: "public"}' with ${configs.size} configurations")
+                    logger.info("Preheated namespace index for '${namespaceId ?: "public"}' with ${outcome.count} configurations")
                 } else {
-                    logger.warn("Namespace index preheat failed for '${namespaceId ?: "public"}': ${result.exceptionOrNull()?.message}")
+                    logger.warn("Namespace index preheat did not complete for '${namespaceId ?: "public"}': $outcome")
                 }
             } catch (e: Exception) {
                 logger.warn("Namespace index preheat error for '${namespaceId ?: "public"}'", e)
@@ -164,70 +161,21 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         }
     }
     
-    /**
-     * Setup automatic cache refresh if enabled
+   /**
+    * Refresh cache from Nacos server
      */
-    private fun setupAutoRefresh() {
-        if (!settings.autoRefreshEnabled || !settings.cacheEnabled) {
-            logger.info("Auto refresh is disabled")
-            return
-        }
-        
-        val intervalMinutes = settings.autoRefreshIntervalMinutes
-        if (intervalMinutes <= 0) {
-            logger.warn("Invalid auto refresh interval: $intervalMinutes minutes")
-            return
-        }
-        
-        // Stop existing job if running
-        stopAutoRefresh()
-        
-        autoRefreshJob = coroutineScope.launch {
-            while (isActive) {
-                try {
-                    delay(intervalMinutes * 60 * 1000L) // Convert minutes to milliseconds
-                    logger.debug("Running auto refresh")
-                    refreshCache()
-                } catch (e: CancellationException) {
-                    logger.info("Auto refresh cancelled")
-                    break
-                } catch (e: Exception) {
-                    logger.error("Error during auto refresh", e)
-                }
-            }
-        }
-        
-        logger.info("Auto refresh scheduled every $intervalMinutes minutes")
-    }
-    
-    /**
-     * Stop automatic cache refresh
-     */
-    private fun stopAutoRefresh() {
-        autoRefreshJob?.let { job ->
-            job.cancel()
-            autoRefreshJob = null
-            logger.info("Auto refresh stopped")
-        }
-    }
-    
-    /**
-     * Refresh cache from Nacos server
-     */
-    suspend fun refreshCache(): Result<Int> {
+    suspend fun refreshCache(namespaceId: String): Result<Int> {
         return try {
-            logger.info("Refreshing Nacos list metadata cache")
-            
-            val result = apiService.listConfigurations(pageNo = 1, pageSize = 200, useCache = true, forceRefresh = true)
-            if (result.isSuccess) {
-                val response = result.getOrThrow()
-                logger.info("List metadata cache refreshed with ${response.pageItems.size}/${response.totalCount} configurations")
+            logger.info("Refreshing full namespace cache for '${namespaceId.ifBlank { "public" }}'")
+            when (val outcome = indexCoordinator.requestManualNamespaceRefresh(
+                settings.captureNamespaceIndexRequest(namespaceId)
+            )) {
+                is IndexOutcome.Complete -> {
                 NacosKeyResolver.ensureIndexBuilt(cacheService)
-                Result.success(response.totalCount)
-            } else {
-                val error = result.exceptionOrNull() ?: Exception("Unknown error")
-                logger.error("Failed to refresh cache: ${error.message}")
-                Result.failure(error)
+                    Result.success(outcome.count)
+                }
+                is IndexOutcome.Failed -> Result.failure(outcome.error)
+                else -> Result.failure(IllegalStateException("Namespace refresh did not produce a complete dataset: $outcome"))
             }
         } catch (e: Exception) {
             logger.error("Error refreshing cache", e)
@@ -266,23 +214,14 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         )
     }
     
-    /**
-     * Restart auto refresh with new settings
-     */
-    fun restartAutoRefresh() {
-        logger.info("Restarting auto refresh with updated settings")
-        setupAutoRefresh()
-    }
-    
-    /**
-     * Dispose plugin resources
+   /**
+    * Dispose plugin resources
      */
     override fun dispose() {
         logger.info("Disposing Nacos Search Plugin")
         
-        try {
-            stopAutoRefresh()
-            coroutineScope.cancel()
+       try {
+           coroutineScope.cancel()
             logger.info("Plugin disposed successfully")
         } catch (e: Exception) {
             logger.error("Error disposing plugin", e)

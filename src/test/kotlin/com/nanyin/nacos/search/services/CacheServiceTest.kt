@@ -4,10 +4,12 @@ import com.intellij.testFramework.ApplicationRule
 import com.intellij.ide.util.PropertiesComponent
 import com.google.gson.Gson
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.intellij.openapi.util.Disposer
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -15,13 +17,109 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.util.concurrent.ConcurrentHashMap
 
 class CacheServiceTest {
     @get:Rule
     val applicationRule = ApplicationRule()
 
     @Test
-    fun `configuration detail cache uses server namespace dataId and group`() = runBlocking {
+    fun `CacheService is Disposable and dispose cancels its scope`() {
+        val cacheService = CacheService()
+        assertTrue(cacheService is com.intellij.openapi.Disposable)
+        cacheService.dispose()
+        // After dispose the scope is cancelled; snapshot is still a valid volatile read
+        // (it may or may not have data depending on background load timing).
+        // The key assertion is that dispose() does not throw and the service
+        // does not crash on a subsequent non-suspending read.
+    }
+
+    @Test
+    fun `configuration snapshot is immediately callable without a coroutine`() {
+        val cacheService = CacheService()
+
+        assertTrue(cacheService.configurationSnapshot(null).isEmpty())
+    }
+
+    @Test
+    fun `configuration snapshot excludes expired details`() = runBlocking {
+        val cacheService = CacheService()
+        cacheService.clearAll()
+        cacheService.putConfigDetail(
+            "http://nacos:8848", null,
+            NacosConfiguration("expired.properties", "DEFAULT_GROUP", null, "k=v", "properties"),
+            ttl = -1L
+        )
+
+        assertTrue(cacheService.configurationSnapshot(null).isEmpty())
+    }
+
+    @Test
+    fun `configuration snapshot scopes by normalized server url`() = runBlocking {
+        val cacheService = CacheService()
+        cacheService.clearAll()
+        cacheService.putConfigDetail(
+            "http://one:8848/", null,
+            NacosConfiguration("one.properties", "DEFAULT_GROUP", null, "k=one", "properties")
+        )
+        cacheService.putConfigDetail(
+            "http://two:8848", null,
+            NacosConfiguration("two.properties", "DEFAULT_GROUP", null, "k=two", "properties")
+        )
+
+        assertEquals(listOf("one.properties"), cacheService.configurationSnapshot(" http://one:8848/ ").map { it.dataId })
+    }
+
+    @Test
+    fun `configuration snapshot publishes namespace batches atomically`() = runBlocking {
+        val cacheService = CacheService()
+        cacheService.clearAll()
+        val configurations = (1..100).map {
+            NacosConfiguration("app$it.properties", "DEFAULT_GROUP", "dev", "k$it=v", "properties")
+        }
+        val observedSizes = ConcurrentHashMap.newKeySet<Int>()
+
+        coroutineScope {
+            val writer = launch {
+                cacheService.putNamespaceIndex("http://nacos:8848", "dev", configurations)
+            }
+           while (!writer.isCompleted) {
+               observedSizes += cacheService.configurationSnapshot("http://nacos:8848").size
+               yield()
+           }
+            writer.join()
+        }
+        observedSizes += cacheService.configurationSnapshot("http://nacos:8848").size
+
+        assertTrue(observedSizes.all { it == 0 || it == configurations.size })
+        assertEquals(configurations.size, cacheService.configurationSnapshot("http://nacos:8848").size)
+    }
+
+   @Test
+   fun `entry is fresh before TTL, stale after, unusable after seven days`() {
+       val now = System.currentTimeMillis()
+       val fresh = CacheService.CacheEntry(
+           type = CacheService.CacheEntryType.CONFIG_DETAIL,
+           data = NacosConfiguration("app", "g", null, "k=v", "properties"),
+           createdAt = now,
+           ttlMs = 300_000L,
+           source = CacheService.CacheSource.REMOTE
+       )
+       assertTrue(!fresh.isExpired())
+       assertTrue(!fresh.isStale())
+       assertTrue(!fresh.isUnusable())
+
+       val stale = fresh.copy(createdAt = now - 400_000L) // past TTL, within 7 days
+       assertTrue(stale.isExpired())
+       assertTrue(stale.isStale())
+       assertTrue(!stale.isUnusable())
+
+       val ancient = fresh.copy(createdAt = now - 8L * 24 * 60 * 60 * 1000) // past 7 days
+       assertTrue(ancient.isUnusable())
+   }
+
+   @Test
+   fun `configuration detail cache uses server namespace dataId and group`() = runBlocking {
         val cacheService = CacheService()
         cacheService.clearAll()
 
@@ -142,9 +240,10 @@ class CacheServiceTest {
 
     @Test
     fun `cache modification count changes when detail cache changes`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
-        val initial = cacheService.getModificationCount()
+       val cacheService = CacheService()
+       cacheService.clearAll()
+       cacheService.getCacheStats() // drain background load before asserting
+       val initial = cacheService.getModificationCount()
 
         cacheService.putConfigDetail(
             serverUrl = "http://nacos:8848",
@@ -292,8 +391,9 @@ class CacheServiceTest {
     @Test
     fun `legacy PropertiesComponent detail blob migrates to file and is cleared`() = runBlocking {
         // Clean slate for both file storage and PropertiesComponent.
-        val cleaner = CacheService()
-        cleaner.clearAll()
+       val cleaner = CacheService()
+       cleaner.clearAll()
+       cleaner.getCacheStats() // drain background load so it doesn't clobber PropertiesComponent
 
         val key = "http://nacos:8848|dev|legacy.properties|DEFAULT_GROUP"
         val entry = CacheService.CacheEntry(

@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.services
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.intellij.ide.util.PropertiesComponent
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.nanyin.nacos.search.models.NacosConfiguration
@@ -11,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
@@ -20,7 +22,7 @@ import java.util.concurrent.atomic.AtomicLong
  * Unified cache for Nacos list pages, configuration details, and namespace indexes.
  */
 @Service(Service.Level.APP)
-class CacheService {
+class CacheService : Disposable {
     private val logger = thisLogger()
     private val gson = Gson()
     private val cacheMutex = Mutex()
@@ -33,6 +35,8 @@ class CacheService {
     private val cacheStorage = CacheFileStorage()
 
     private val detailCache = ConcurrentHashMap<String, CacheEntry<NacosConfiguration>>()
+    @Volatile
+    private var detailSnapshot: Map<String, CacheEntry<NacosConfiguration>> = emptyMap()
     private val listPageCache = ConcurrentHashMap<String, CacheEntry<NacosApiService.ConfigListResponse>>()
     private val namespaceIndexCache = ConcurrentHashMap<String, CacheEntry<List<NacosConfiguration>>>()
     private val modificationCount = AtomicLong(0)
@@ -40,13 +44,33 @@ class CacheService {
     private val cacheHits = AtomicLong(0)
     private val cacheMisses = AtomicLong(0)
 
+    /** Runs memory-only derived-state work in this application service's lifecycle scope. */
+    fun launchSnapshotRefresh(refresh: () -> Unit) {
+        serviceScope.launch(Dispatchers.Default) { refresh() }
+    }
+
+    /** A non-suspending, immutable view for EDT/PSI callers. Never waits for persistence loading. */
+    fun configurationSnapshot(serverUrl: String?): List<NacosConfiguration> {
+        val normalizedServerUrl = serverUrl?.let(::normalizeServerUrl)?.takeIf { it.isNotBlank() }
+        return detailSnapshot.asSequence()
+            .filter { (key, entry) ->
+                (normalizedServerUrl == null || key.startsWith("$normalizedServerUrl|")) && !entry.isExpired()
+            }
+            .map { it.value.data }
+            .distinctBy(::legacyKey)
+            .toList()
+    }
+
     companion object {
         private const val DETAIL_KEY_PREFIX = "nacos.cache.detail."
         private const val DETAIL_KEYS_LIST = "nacos.cache.detail.keys"
         private const val LIST_PAGE_KEY_PREFIX = "nacos.cache.list."
         private const val LIST_PAGE_KEYS_LIST = "nacos.cache.list.keys"
-        private const val DEFAULT_TTL = 300_000L
-        private const val MAX_CACHE_SIZE = 1000
+       private const val DEFAULT_TTL = 300_000L
+       // Maximum age beyond which a stale cache entry is no longer usable.
+       // 7 days: matches the design decision from the grilling session.
+       private const val MAX_STALE_AGE_MILLIS = 7L * 24 * 60 * 60 * 1000
+       private const val MAX_CACHE_SIZE = 1000
         // Trigger the oversized-caches sweep only once the cache grows past the hard
         // cap by this margin, so per-insert writes stay O(1) instead of O(n).
         private const val CLEANUP_BUFFER = 100
@@ -69,6 +93,10 @@ class CacheService {
                 loadCompleted.complete(Unit)
             }
         }
+    }
+
+    override fun dispose() {
+        serviceScope.cancel()
     }
 
     suspend fun getListPage(
@@ -136,6 +164,7 @@ class CacheService {
                 return null
             }
             detailCache[key] = fromFile
+            if (loadCompleted.isCompleted) publishDetailSnapshot()
             cacheHits.incrementAndGet()
             return fromFile.data
         }
@@ -158,13 +187,14 @@ class CacheService {
     ) {
         cacheMutex.withLock {
             val key = detailKey(serverUrl, namespaceId, configuration.dataId, configuration.group)
-            detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, configuration, System.currentTimeMillis(), ttl, source)
-            persistDetail(key, detailCache[key]!!)
-            updateDetailKeysList()
-            markModified()
-            cleanupOversizedCaches()
-        }
-    }
+           detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, configuration, System.currentTimeMillis(), ttl, source)
+           persistDetail(key, detailCache[key]!!)
+           updateDetailKeysList()
+           cleanupOversizedCaches()
+           publishDetailSnapshot()
+           markModified()
+       }
+   }
 
     suspend fun getNamespaceIndex(
         serverUrl: String,
@@ -197,11 +227,12 @@ class CacheService {
                detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, config, System.currentTimeMillis(), ttl, source)
                 persistDetail(key, detailCache[key]!!)
             }
-            updateDetailKeysList()
-            markModified()
-            cleanupOversizedCaches()
-        }
-    }
+           updateDetailKeysList()
+           cleanupOversizedCaches()
+           publishDetailSnapshot()
+           markModified()
+       }
+   }
 
     suspend fun invalidateNamespace(serverUrl: String, namespaceId: String?) {
         cacheMutex.withLock {
@@ -214,12 +245,13 @@ class CacheService {
                 listPageCache.remove(key)
                 cacheStorage.removeListPage(key)
             }
-            namespaceIndexCache.remove(namespaceKey(serverUrl, namespaceId))
-            updateDetailKeysList()
-            updateListPageKeysList()
-            markModified()
-        }
-    }
+           namespaceIndexCache.remove(namespaceKey(serverUrl, namespaceId))
+           updateDetailKeysList()
+           updateListPageKeysList()
+           publishDetailSnapshot()
+           markModified()
+       }
+   }
 
     suspend fun clearAll() = clearCache()
 
@@ -248,18 +280,7 @@ class CacheService {
 
     suspend fun getAllCachedConfigurations(serverUrl: String? = null): List<NacosConfiguration> {
         loadCompleted.await()
-        // Lock-free snapshot over the weakly-consistent ConcurrentHashMap iterator.
-        // Expired entries are excluded from the result but NOT removed here; reclamation
-        // is delegated to the background/writer cleanup path so the search hot path
-        // (and the runBlocking call in NacosKeyResolver) never blocks on cleanup I/O.
-        val normalizedServerUrl = serverUrl?.let { normalizeServerUrl(it) }?.takeIf { it.isNotBlank() }
-        return detailCache.entries.asSequence()
-            .filter { (key, entry) ->
-                (normalizedServerUrl == null || key.startsWith("$normalizedServerUrl|")) && !entry.isExpired()
-            }
-            .map { it.value.data }
-            .distinctBy { legacyKey(it) }
-            .toList()
+        return configurationSnapshot(serverUrl)
     }
 
     suspend fun cacheConfigurations(configurations: List<NacosConfiguration>, ttl: Long = DEFAULT_TTL) {
@@ -270,12 +291,13 @@ class CacheService {
                 detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, config, now, ttl, CacheSource.REMOTE)
                 persistDetail(key, detailCache[key]!!)
             }
-            updateDetailKeysList()
-            markModified()
-            cleanupOversizedCaches()
-            logger.info("Cached ${configurations.size} configurations")
-        }
-    }
+           updateDetailKeysList()
+           cleanupOversizedCaches()
+           publishDetailSnapshot()
+           logger.info("Cached ${configurations.size} configurations")
+           markModified()
+       }
+   }
 
     fun getModificationCount(): Long = modificationCount.get()
 
@@ -309,16 +331,18 @@ class CacheService {
             cacheStorage.clearAll()
             properties.unsetValue(DETAIL_KEYS_LIST)
             properties.unsetValue(LIST_PAGE_KEYS_LIST)
-            cacheHits.set(0)
-            cacheMisses.set(0)
-            markModified()
-            logger.info("Cache cleared")
-        }
+           cacheHits.set(0)
+           cacheMisses.set(0)
+           publishDetailSnapshot()
+           markModified()
+           logger.info("Cache cleared")
+       }
     }
 
     suspend fun cleanupExpiredEntries() {
         cacheMutex.withLock {
             cleanupExpiredEntriesLocked()
+            publishDetailSnapshot()
         }
     }
 
@@ -345,6 +369,8 @@ class CacheService {
             loadDetailsFromPersistence()
             loadListPagesFromPersistence()
             migrateLegacyBlobs()
+            publishDetailSnapshot()
+            markModified()
         }
     }
 
@@ -511,6 +537,10 @@ class CacheService {
         modificationCount.incrementAndGet()
     }
 
+    private fun publishDetailSnapshot() {
+        detailSnapshot = detailCache.toMap()
+    }
+
     private suspend fun <T> trimOldest(
         cache: ConcurrentHashMap<String, CacheEntry<T>>,
         removeFile: suspend (String) -> Unit
@@ -555,16 +585,23 @@ class CacheService {
         return "${configuration.dataId}:${configuration.group}:${configuration.tenantId ?: ""}"
     }
 
-    data class CacheEntry<T>(
-        val type: CacheEntryType,
-        val data: T,
-        val createdAt: Long,
-        val ttlMs: Long,
-        val source: CacheSource,
-        val stale: Boolean = false
-    ) {
-        fun isExpired(): Boolean = System.currentTimeMillis() - createdAt > ttlMs
-    }
+   data class CacheEntry<T>(
+       val type: CacheEntryType,
+       val data: T,
+       val createdAt: Long, // wall-clock epoch millis — persisted for stale-age checks
+       val ttlMs: Long,
+       val source: CacheSource,
+       val stale: Boolean = false
+   ) {
+       fun isExpired(): Boolean = System.currentTimeMillis() - createdAt > ttlMs
+       /** True when the entry is past TTL but still within the 7-day stale window. */
+       fun isStale(): Boolean {
+           val age = System.currentTimeMillis() - createdAt
+           return age > ttlMs && age <= MAX_STALE_AGE_MILLIS
+       }
+       /** True when the entry is so old it should be discarded entirely. */
+       fun isUnusable(): Boolean = System.currentTimeMillis() - createdAt > MAX_STALE_AGE_MILLIS
+   }
 
     enum class CacheEntryType {
         LIST_PAGE,

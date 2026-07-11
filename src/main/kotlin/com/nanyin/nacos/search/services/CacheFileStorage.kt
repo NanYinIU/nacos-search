@@ -8,6 +8,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 
 /**
@@ -30,14 +32,17 @@ internal class CacheFileStorage(
     private val detailsDir: Path = baseDir.resolve("details")
     private val listPagesDir: Path = baseDir.resolve("listpages")
 
-    init {
-        try {
-            Files.createDirectories(detailsDir)
-            Files.createDirectories(listPagesDir)
-        } catch (e: Exception) {
-            logger.warn("Failed to create cache storage directories under $baseDir", e)
-        }
-    }
+   init {
+       try {
+           Files.createDirectories(detailsDir)
+           Files.createDirectories(listPagesDir)
+           // Clean up leftover .tmp files from interrupted writes
+           cleanupTempFiles(detailsDir)
+           cleanupTempFiles(listPagesDir)
+       } catch (e: Exception) {
+           logger.warn("Failed to create cache storage directories under $baseDir", e)
+       }
+   }
 
     suspend fun loadDetail(key: String): CacheService.CacheEntry<NacosConfiguration>? =
         load(detailsDir, key, object : TypeToken<CacheService.CacheEntry<NacosConfiguration>>() {}.type)
@@ -77,14 +82,25 @@ internal class CacheFileStorage(
             }
         }
 
-    private suspend fun <T> store(dir: Path, key: String, entry: CacheService.CacheEntry<T>) =
-        withContext(Dispatchers.IO) {
-            try {
-                Files.writeString(dir.resolve(fileName(key)), gson.toJson(entry))
-            } catch (e: Exception) {
-                logger.warn("Failed to persist cache entry: $key", e)
-            }
-        }
+   private suspend fun <T> store(dir: Path, key: String, entry: CacheService.CacheEntry<T>) =
+       withContext(Dispatchers.IO) {
+           try {
+               val target = dir.resolve(fileName(key))
+               val tmp = dir.resolve(fileName(key) + ".tmp")
+               // Atomic write: serialize to a sibling .tmp file, then atomically move
+               // it over the target. This prevents partial writes from corrupting
+               // the cache if the IDE crashes or the process is interrupted.
+               Files.writeString(tmp, gson.toJson(entry), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)
+               try {
+                   Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+               } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
+                   // Fallback for filesystems that don't support atomic move (rare).
+                   Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING)
+               }
+           } catch (e: Exception) {
+               logger.warn("Failed to persist cache entry: $key", e)
+           }
+       }
 
     private suspend fun remove(dir: Path, key: String) = withContext(Dispatchers.IO) {
         try {
@@ -94,15 +110,25 @@ internal class CacheFileStorage(
         }
     }
 
-    private fun deleteDirContents(dir: Path) {
-        try {
-            Files.newDirectoryStream(dir).use { stream ->
-                stream.forEach { file -> runCatching { Files.deleteIfExists(file) } }
-            }
-        } catch (e: Exception) {
-            logger.warn("Failed to clear cache directory: $dir", e)
-        }
-    }
+   private fun deleteDirContents(dir: Path) {
+       try {
+           Files.newDirectoryStream(dir).use { stream ->
+               stream.forEach { file -> runCatching { Files.deleteIfExists(file) } }
+           }
+       } catch (e: Exception) {
+           logger.warn("Failed to clear cache directory: $dir", e)
+       }
+   }
+
+   private fun cleanupTempFiles(dir: Path) {
+       try {
+           Files.newDirectoryStream(dir, "*.tmp").use { stream ->
+               stream.forEach { file -> runCatching { Files.deleteIfExists(file) } }
+           }
+       } catch (e: Exception) {
+           logger.warn("Failed to clean temp files in $dir", e)
+       }
+   }
 
     private fun sha256Hex(input: String): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8))
