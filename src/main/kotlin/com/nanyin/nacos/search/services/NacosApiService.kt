@@ -5,12 +5,14 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosSettings
+import com.nanyin.nacos.search.services.network.NacosRequestError
+import com.nanyin.nacos.search.services.network.NacosRequestExecutor
+import com.nanyin.nacos.search.services.network.RequestPolicy
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.util.io.HttpRequests
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -25,12 +27,14 @@ class NacosApiService {
     private val logger = thisLogger()
     private val gson = Gson()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-   private val authService = ApplicationManager.getApplication().getService(NacosAuthService::class.java)
-    private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
-   companion object {
-        private const val CONFIG_ENDPOINT = "/nacos/v1/cs/configs"
-        private const val CONFIG_LIST_ENDPOINT = "/nacos/v1/cs/configs"
-        private const val NAMESPACE_ENDPOINT = "/nacos/v1/console/namespaces"
+  private val authService = ApplicationManager.getApplication().getService(NacosAuthService::class.java)
+    private val executor = NacosRequestExecutor()
+
+   private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
+  companion object {
+       private const val CONFIG_ENDPOINT = "/nacos/v1/cs/configs"
+       private const val CONFIG_LIST_ENDPOINT = "/nacos/v1/cs/configs"
+       private const val NAMESPACE_ENDPOINT = "/nacos/v1/console/namespaces"
         private const val FETCH_CONCURRENCY = 8
 
         // Testable I/O body of requestPost. Guarantees the connection is
@@ -64,15 +68,15 @@ class NacosApiService {
 
     /**
      * Tests connection to Nacos server
-     */
-    suspend fun testConnection(): Result<Boolean> = withContext(Dispatchers.IO) {
-        try {
-            val url = "${settings.serverUrl}$NAMESPACE_ENDPOINT"
-            logger.info("Testing connection to: $url")
-            val response = requestJson(url, buildAuthHeaders())
-            
-            val apiResponse = gson.fromJson(response, NacosApiResponse::class.java)
-            Result.success(apiResponse.isSuccess())
+    */
+   suspend fun testConnection(): Result<Boolean> = withContext(Dispatchers.IO) {
+       try {
+           val url = "${settings.serverUrl}$NAMESPACE_ENDPOINT"
+           logger.info("Testing connection to: $url")
+           val response = requestJsonWithReplay(url, RequestPolicy.DIAGNOSTIC)
+
+           val apiResponse = gson.fromJson(response, NacosApiResponse::class.java)
+           Result.success(apiResponse.isSuccess())
         } catch (e: Exception) {
             logger.warn("Connection test failed", e)
             Result.failure(e)
@@ -107,11 +111,11 @@ class NacosApiService {
                 namespaceId?.let { put("tenant", it) }
             }
             
-            val url = buildUrl(CONFIG_LIST_ENDPOINT, params)
-            logger.debug("Fetching configuration: $url")
-            val response = requestJson(url, buildAuthHeaders())
-            
-            val apiResponse = gson.fromJson(response, object : TypeToken<NacosConfiguration>() {}.type) as? NacosConfiguration
+           val url = buildUrl(CONFIG_LIST_ENDPOINT, params)
+           logger.debug("Fetching configuration: $url")
+           val response = requestJsonWithReplay(url, RequestPolicy.INTERACTIVE)
+
+           val apiResponse = gson.fromJson(response, object : TypeToken<NacosConfiguration>() {}.type) as? NacosConfiguration
             
             if (apiResponse != null) {
                 val config = apiResponse
@@ -175,11 +179,11 @@ class NacosApiService {
                 }
             }
 
-            val url = buildUrl(CONFIG_LIST_ENDPOINT, params)
-            logger.debug("Listing configurations: $url")
-            val response = requestJson(url, buildAuthHeaders())
-            
-            val apiResponse = gson.fromJson(response, object : TypeToken<ConfigListResponse>() {}.type) as ConfigListResponse
+           val url = buildUrl(CONFIG_LIST_ENDPOINT, params)
+           logger.debug("Listing configurations: $url")
+           val response = requestJsonWithReplay(url, RequestPolicy.INTERACTIVE)
+
+           val apiResponse = gson.fromJson(response, object : TypeToken<ConfigListResponse>() {}.type) as ConfigListResponse
             if (useCache && settings.cacheEnabled) {
                 cacheService.putListPage(settings.serverUrl, namespaceId, requestKey, apiResponse, settings.getCacheTtlMillis())
             }
@@ -241,11 +245,11 @@ class NacosApiService {
      */
     suspend fun getNamespaces(): Result<List<NamespaceInfo>> = withContext(Dispatchers.IO) {
         try {
-            val url = buildUrl(NAMESPACE_ENDPOINT, emptyMap())
-            logger.debug("Fetching namespaces: $url")
-            val response = requestJson(url, buildAuthHeaders())
-            
-            val apiResponse = gson.fromJson(response, object : TypeToken<NacosApiResponse<List<Map<String, Any>>>>() {}.type) as NacosApiResponse<List<Map<String, Any>>>
+           val url = buildUrl(NAMESPACE_ENDPOINT, emptyMap())
+           logger.debug("Fetching namespaces: $url")
+           val response = requestJsonWithReplay(url, RequestPolicy.DIAGNOSTIC)
+
+           val apiResponse = gson.fromJson(response, object : TypeToken<NacosApiResponse<List<Map<String, Any>>>>() {}.type) as NacosApiResponse<List<Map<String, Any>>>
             
             if (apiResponse.data != null) {
                 val namespaces = apiResponse.data.mapNotNull { namespaceMap ->
@@ -355,8 +359,26 @@ class NacosApiService {
         }
     }
 
-    /**
-     * Publishes (creates or updates) a configuration to Nacos via POST.
+   /**
+    * Executes a GET request through the executor with auth replay on 401.
+    * If the first attempt returns [NacosRequestError.Authentication], the
+    * auth service's token is invalidated and the request replays once within
+    * the same budget. Malformed JSON is classified as [NacosRequestError.Protocol].
+    */
+   private suspend fun requestJsonWithReplay(url: String, policy: RequestPolicy): String {
+       val headers = buildAuthHeaders()
+       try {
+           return executor.get(url, policy, headers)
+       } catch (e: NacosRequestError.Authentication) {
+           // Token may be stale; invalidate and replay once.
+           logger.info("Authentication failed (${e.status}), refreshing credentials")
+           authService.invalidateToken()
+           return executor.get(url, policy, buildAuthHeaders())
+       }
+   }
+
+   /**
+    * Publishes (creates or updates) a configuration to Nacos via POST.
      * Uses the Nacos Open API /nacos/v1/cs/configs endpoint.
      */
     suspend fun publishConfiguration(
@@ -392,43 +414,7 @@ class NacosApiService {
             logger.warn("Error publishing configuration", e)
             Result.failure(e)
         }
-    }
-
-    private fun requestJson(url: String, authHeaders: Map<String, String>): String {
-        var lastError: Exception? = null
-        val maxAttempts = settings.retryAttempts.coerceAtLeast(1)
-        for (attempt in 1..maxAttempts) {
-            try {
-                return HttpRequests.request(url)
-                    .connectTimeout(settings.getConnectionTimeoutMillis())
-                    .readTimeout(settings.getReadTimeoutMillis())
-                    .tuner { connection ->
-                        connection.setRequestProperty("Accept", "application/json")
-                        // Discourage chunked transfer encoding: some Nacos
-                        // servers / proxies emit LF-only chunk terminators
-                        // which Java's ChunkedInputStream rejects with
-                        // "missing CR".  Connection: close makes the server
-                        // use Content-Length instead, and identity disables
-                        // compression that can compound the issue.
-                        if (attempt > 1) {
-                            connection.setRequestProperty("Connection", "close")
-                            connection.setRequestProperty("Accept-Encoding", "identity")
-                        }
-                        authHeaders.forEach { (key, value) ->
-                            connection.setRequestProperty(key, value)
-                        }
-                    }
-                    .readString()
-            } catch (e: java.io.IOException) {
-                lastError = e
-                logger.warn("requestJson attempt $attempt/$maxAttempts failed: ${e.message}")
-                if (attempt < maxAttempts) {
-                    Thread.sleep(settings.retryDelaySeconds * 1000L)
-                }
-            }
-        }
-        throw lastError ?: java.io.IOException("requestJson failed after $maxAttempts attempts")
-    }
+   }
 
    private fun requestPost(url: String, params: Map<String, String>, authHeaders: Map<String, String>): String {
        val formData = encodeFormData(params)

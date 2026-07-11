@@ -209,7 +209,16 @@ class NacosAuthService {
             logger.warn("Error during logout", e)
         }
     }
-    
+
+    /**
+     * Invalidates all cached tokens so the next request re-authenticates.
+     * Called after a 401/403 to force a credential refresh.
+     */
+    fun invalidateToken() {
+        tokenCache.clear()
+        logger.info("Invalidated all cached tokens")
+    }
+
     /**
      * 检查当前是否有有效的token
      */
