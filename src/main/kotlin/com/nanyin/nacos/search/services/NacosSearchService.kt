@@ -10,6 +10,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Service for handling real-time fuzzy search with pagination
@@ -32,7 +33,11 @@ class NacosSearchService {
     private val _paginationState = MutableStateFlow(PaginationState())
     val paginationState: StateFlow<PaginationState> = _paginationState.asStateFlow()
     private var currentRequest: SearchRequest? = null
-    private var lastCompletedRequestKey: String? = null
+   private var lastCompletedRequestKey: String? = null
+
+   // Latest-request-wins: every search increments this; late results from
+   // older generations are silently dropped instead of overwriting current state.
+   private val requestGeneration = AtomicLong(0)
 
     /**
      * Search request data class
@@ -162,15 +167,16 @@ class NacosSearchService {
     /**
      * Performs debounced search
      */
-    fun searchWithDebounce(
-        request: SearchRequest,
-        nacosApiService: NacosApiService,
-        coroutineScope: CoroutineScope
-    ) {
-        // Cancel previous search
-        searchJob?.cancel()
-        
-        searchJob = coroutineScope.launch {
+   fun searchWithDebounce(
+       request: SearchRequest,
+       nacosApiService: NacosApiService,
+       coroutineScope: CoroutineScope
+   ) {
+       // Cancel previous search and advance generation
+       searchJob?.cancel()
+       requestGeneration.incrementAndGet()
+
+       searchJob = coroutineScope.launch {
             try {
                 delay(searchDelayMs)
                 performSearch(request, nacosApiService)
@@ -183,28 +189,31 @@ class NacosSearchService {
     /**
      * Performs immediate search without debouncing
      */
-    suspend fun performSearch(
-        request: SearchRequest,
-        nacosApiService: NacosApiService
-    ) {
-        // Cancel any pending debounced search so a late-triggered debounce coroutine
-        // cannot overwrite this immediate/paginated result with stale input.
-        searchJob?.cancel()
-        try {
-            _searchState.value = SearchState.Loading
+   suspend fun performSearch(
+       request: SearchRequest,
+       nacosApiService: NacosApiService
+   ) {
+       // Cancel pending debounce and capture a generation so this request's
+       // result is only published if it is still the latest request.
+       searchJob?.cancel()
+       val generation = requestGeneration.incrementAndGet()
+       try {
+           _searchState.value = SearchState.Loading
 
-            currentRequest = request
-            val result = if (request.requiresLocalIndex()) {
-                searchWithLocalIndex(request, nacosApiService)
-            } else {
-                searchWithRemoteList(request, nacosApiService)
-            }
-            publishResult(result, request)
-        } catch (e: Exception) {
-            _searchState.value = SearchState.Error("搜索过程中发生错误: ${e.message}", e)
-            logger.warn("Search error", e)
-        }
-    }
+           currentRequest = request
+           val result = if (request.requiresLocalIndex()) {
+               searchWithLocalIndex(request, nacosApiService)
+           } else {
+               searchWithRemoteList(request, nacosApiService)
+           }
+           publishIfCurrent(generation, result, request)
+       } catch (e: Exception) {
+           if (generation == requestGeneration.get()) {
+               _searchState.value = SearchState.Error("搜索过程中发生错误: ${e.message}", e)
+           }
+           logger.warn("Search error", e)
+       }
+   }
 
     private suspend fun searchWithRemoteList(
         request: SearchRequest,
@@ -313,8 +322,14 @@ class NacosSearchService {
         return Result.success(SearchExecutionResult(response, fromIndex, source))
     }
 
-    private fun publishResult(result: Result<SearchExecutionResult>, request: SearchRequest) {
-        if (result.isSuccess) {
+   private fun publishIfCurrent(
+       generation: Long,
+       result: Result<SearchExecutionResult>,
+       request: SearchRequest
+   ) {
+       // Drop results from superseded requests
+       if (generation != requestGeneration.get()) return
+       if (result.isSuccess) {
             val execution = result.getOrNull()!!
             _paginationState.value = PaginationState(
                 currentPage = execution.response.pageNumber,
