@@ -1,0 +1,20 @@
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_be434564ca5610::t_ae480f9684005b 13,36-40,192-201,203-216,325-332
+  s_be434564ca5610::t_1eac42b7984b2c 170-179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "0eb44b16571e7eb72487c2d14a5fc8fddac05ce6",
+  "prompts": {},
+  "sessions": {
+    "s_be434564ca5610": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5017-323f-7520-a938-16f0671f7e10",
+        "model": "glm-5.2"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
