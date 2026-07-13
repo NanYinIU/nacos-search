@@ -28,7 +28,7 @@ class NacosPlaceholderIndex : FileBasedIndexExtension<String, PlaceholderMarker>
 
     override fun getName(): ID<String, PlaceholderMarker> = INDEX_ID
 
-    override fun getVersion(): Int = 1
+    override fun getVersion(): Int = 2
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -98,7 +98,13 @@ private object StringKeyDescriptor : KeyDescriptor<String> {
 
 private object MarkerExternalizer : DataExternalizer<PlaceholderMarker> {
     override fun save(out: DataOutput, value: PlaceholderMarker) {
-        // Singleton — nothing to persist.
+        out.writeByte(MARKER)
     }
-    override fun read(input: DataInput): PlaceholderMarker = PlaceholderMarker
+
+    override fun read(input: DataInput): PlaceholderMarker {
+        check(input.readUnsignedByte() == MARKER) { "Invalid placeholder marker" }
+        return PlaceholderMarker
+    }
+
+    private const val MARKER = 1
 }

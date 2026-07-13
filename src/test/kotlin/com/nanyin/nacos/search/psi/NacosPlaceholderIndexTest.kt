@@ -2,8 +2,32 @@ package com.nanyin.nacos.search.psi
 
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
 
 class NacosPlaceholderIndexTest {
+
+    @Test
+    fun `marker serialization writes data and round trips`() {
+        val externalizer = NacosPlaceholderIndex().valueExternalizer
+        val bytes = ByteArrayOutputStream().also { buffer ->
+            DataOutputStream(buffer).use { output ->
+                externalizer.save(output, PlaceholderMarker)
+            }
+        }.toByteArray()
+
+        assertTrue(bytes.isNotEmpty(), "empty index values are normalized to null by the platform")
+
+        val restored = DataInputStream(ByteArrayInputStream(bytes)).use(externalizer::read)
+        assertSame(PlaceholderMarker, restored)
+    }
+
+    @Test
+    fun `index version invalidates the previous empty marker format`() {
+        assertEquals(2, NacosPlaceholderIndex().version)
+    }
 
     @Test
     fun `extracts key from Value annotation`() {

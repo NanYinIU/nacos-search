@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.3.2"
+version = "1.3.4"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -110,6 +110,17 @@ tasks {
         """.trimIndent())
 
        changeNotes.set("""
+            <h3>1.3.4</h3>
+            <ul>
+                <li><b>UI</b>: optimized the Nacos Search sidebar icon for clearer display in the IDE tool window.</li>
+                <li><b>Reliability</b>: fixed the persistent placeholder index value format so IntelliJ no longer reports an equals/hashCode contract violation while indexing Java files.</li>
+                <li><b>Migration</b>: bumped the placeholder index version so IDEs automatically rebuild data written with the previous empty-marker format.</li>
+                <li><b>Tests</b>: added regression coverage for non-empty marker serialization, round-trip identity, and index version invalidation.</li>
+            </ul>
+            <h3>1.3.3</h3>
+            <ul>
+                <li>优化侧边栏图标显示。</li>
+            </ul>
             <h3>1.3.2</h3>
             <ul>
                 <li><b>Navigation</b>: improved @NacosValue gutter navigation with richer cross-namespace target selection, usage labels, and source-location presentation.</li>
