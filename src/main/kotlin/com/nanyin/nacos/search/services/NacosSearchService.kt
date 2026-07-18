@@ -281,17 +281,7 @@ class NacosSearchService(
         val snapshot = requireNotNull(request.serverSnapshot) {
             "Full namespace search requires a server snapshot captured with the request"
         }
-        val indexRequest = NamespaceIndexRequest(
-            NamespaceIndexKey(
-                com.nanyin.nacos.search.models.AccessIdentity.of(
-                    snapshot.serverUrl,
-                    snapshot.authMode,
-                    snapshot.username
-                ),
-                namespaceId.orEmpty()
-            ),
-            snapshot
-        )
+        val indexRequest = settings.captureNamespaceIndexRequest(namespaceId, snapshot)
         val indexKey = indexRequest.key
         val cacheServerId = indexKey.identity.serverId
         val cachedIndex = if (!request.forceRefresh && settings.cacheEnabled) {

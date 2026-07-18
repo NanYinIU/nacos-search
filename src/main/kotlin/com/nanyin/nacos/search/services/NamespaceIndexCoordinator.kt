@@ -41,16 +41,26 @@ data class NacosServerSnapshot(
         "NacosServerSnapshot(serverUrl=$serverUrl, username=$username, password=***, authMode=$authMode, enableTokenAuth=$enableTokenAuth)"
 }
 
-data class NamespaceIndexRequest(val key: NamespaceIndexKey, val server: NacosServerSnapshot)
+data class NamespaceIndexRequest(
+    val key: NamespaceIndexKey,
+    val server: NacosServerSnapshot,
+    val cacheTtlMillis: Long
+)
 
-internal fun NacosSettings.captureNamespaceIndexRequest(namespaceId: String?): NamespaceIndexRequest {
-    val snapshot = captureServerSnapshot()
+internal fun NacosSettings.captureNamespaceIndexRequest(namespaceId: String?): NamespaceIndexRequest =
+    captureNamespaceIndexRequest(namespaceId, captureServerSnapshot())
+
+internal fun NacosSettings.captureNamespaceIndexRequest(
+    namespaceId: String?,
+    snapshot: NacosServerSnapshot
+): NamespaceIndexRequest {
     return NamespaceIndexRequest(
         NamespaceIndexKey(
             AccessIdentity.of(snapshot.serverUrl, snapshot.authMode, snapshot.username),
             namespaceId.orEmpty()
         ),
-        snapshot
+        snapshot,
+        getCacheTtlMillis()
     )
 }
 
@@ -95,7 +105,15 @@ sealed interface IndexOutcome {
  * requests use PREHEAT policy (no retry).
  */
 @Service(Service.Level.APP)
-class NamespaceIndexCoordinator : NamespaceIndexRequester {
+class NamespaceIndexCoordinator internal constructor(
+    private val apiService: NacosApiService,
+    private val cacheService: CacheService
+) : NamespaceIndexRequester {
+
+    constructor() : this(
+        ApplicationManager.getApplication().getService(NacosApiService::class.java),
+        ApplicationManager.getApplication().getService(CacheService::class.java)
+    )
 
     private val logger = thisLogger()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -107,9 +125,6 @@ class NamespaceIndexCoordinator : NamespaceIndexRequester {
     // PSI cooldown: tracks the last failure time per key
     private val psiCooldownUntil = ConcurrentHashMap<NamespaceIndexKey, Long>()
     private val psiCooldownMs = 5L * 60 * 1000 // 5 minutes
-
-    private val apiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
-    private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
 
     /**
      * Requests a full namespace index load for [key]. If an identical request
@@ -125,6 +140,7 @@ class NamespaceIndexCoordinator : NamespaceIndexRequester {
                 request.server.username
             )
         ) { "Namespace index key does not match its captured server snapshot" }
+        require(request.cacheTtlMillis > 0) { "Namespace index cache TTL must be positive" }
         // PSI cooldown: skip if recently failed
         if (trigger == IndexTrigger.PSI) {
             val cooldownUntil = psiCooldownUntil[key]
@@ -177,7 +193,8 @@ class NamespaceIndexCoordinator : NamespaceIndexRequester {
                     cacheService.putNamespaceIndex(
                         key.identity.serverId,
                         key.namespaceId,
-                        loadResult.configurations
+                        loadResult.configurations,
+                        request.cacheTtlMillis
                     )
                     clearPsiCooldown(key)
                     IndexOutcome.Complete(

@@ -15,7 +15,8 @@ import org.mockito.kotlin.whenever
 class NamespaceIndexRoutingTest {
     private val request = NamespaceIndexRequest(
         NamespaceIndexKey(AccessIdentity.of("http://a:8848", AuthMode.BASIC, "alice"), "ns-a"),
-        NacosServerSnapshot("http://a:8848", "alice", "secret", AuthMode.BASIC, false)
+        NacosServerSnapshot("http://a:8848", "alice", "secret", AuthMode.BASIC, false),
+        300_000L
     )
     private val outcome = IndexOutcome.Complete(
         1,
