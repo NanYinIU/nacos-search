@@ -1,0 +1,31 @@
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexRoutingTest.kt
+  s_30db8c767f053f::t_0aa28fac4ec57e 18-19
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinatorTest.kt
+  s_30db8c767f053f::t_3b42af3c86dbb2 132
+  s_30db8c767f053f::t_0aa28fac4ec57e 140-141,155
+  s_30db8c767f053f::t_cdfe9abfc7ad98 5-8,19-21,76,93-130
+  s_30db8c767f053f::t_3ab25e0f1998fc 77-92,131
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
+  s_30db8c767f053f::t_0aa28fac4ec57e 44-48,62-63,108-116,143,196-197
+  s_30db8c767f053f::t_8f2d288fc8df31 50-52,55
+  s_30db8c767f053f::t_20e29fbcc5a1e8 53-54,56
+  s_30db8c767f053f::t_d2e332a35f6a74 49
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_30db8c767f053f::t_20e29fbcc5a1e8 284
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "a7e4a9a582279220eb7074494f84f8bf60492ce5",
+  "prompts": {},
+  "sessions": {
+    "s_30db8c767f053f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f741f-8255-7c63-b5f4-a3d6803fa282",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": null
+    }
+  }
+}
