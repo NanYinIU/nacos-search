@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.MatchType
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
@@ -14,11 +15,13 @@ class SearchServiceTest {
 
     private lateinit var searchService: SearchService
     private lateinit var cacheService: CacheService
+    private lateinit var settings: NacosSettings
 
     @BeforeEach
     fun setUp() {
         searchService = SearchService()
         cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
+        settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         runBlocking {
             cacheService.clearCache()
         }
@@ -39,6 +42,14 @@ class SearchServiceTest {
         )
     }
 
+    private suspend fun cache(configuration: NacosConfiguration) {
+        cacheService.putConfigDetail(
+            settings.captureAccessIdentity(),
+            configuration.tenantId,
+            configuration
+        )
+    }
+
     @Test
     fun `test searchConfigurations with blank query`() = runBlocking {
         val results = searchService.searchConfigurations("")
@@ -47,8 +58,8 @@ class SearchServiceTest {
 
     @Test
     fun `test searchConfigurations by data id`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("test.properties", content = "key=value"))
-        cacheService.cacheConfiguration(createConfig("other.yaml", content = "key: value"))
+        cache(createConfig("test.properties", content = "key=value"))
+        cache(createConfig("other.yaml", content = "key: value"))
 
         val results = searchService.searchConfigurations("test")
         assertEquals(1, results.size)
@@ -57,7 +68,7 @@ class SearchServiceTest {
 
     @Test
     fun `test searchConfigurations by group`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("test.properties", group = "CUSTOM_GROUP", content = "key=value"))
+        cache(createConfig("test.properties", group = "CUSTOM_GROUP", content = "key=value"))
 
         val results = searchService.searchConfigurations("custom")
         assertEquals(1, results.size)
@@ -66,7 +77,7 @@ class SearchServiceTest {
 
     @Test
     fun `test searchConfigurations by tenant`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("test.properties", tenantId = "private", content = "key=value"))
+        cache(createConfig("test.properties", tenantId = "private", content = "key=value"))
 
         val results = searchService.searchConfigurations("private")
         assertEquals(1, results.size)
@@ -75,7 +86,7 @@ class SearchServiceTest {
 
     @Test
     fun `test searchConfigurations by content`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("test.properties", content = "database.host=localhost"))
+        cache(createConfig("test.properties", content = "database.host=localhost"))
 
         val results = searchService.searchConfigurations("database")
         assertTrue(results.isNotEmpty())
@@ -84,8 +95,8 @@ class SearchServiceTest {
 
     @Test
     fun `test searchConfigurations with group filter`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("config1.properties", group = "GROUP_A", content = "key=value"))
-        cacheService.cacheConfiguration(createConfig("config2.properties", group = "GROUP_B", content = "key=value"))
+        cache(createConfig("config1.properties", group = "GROUP_A", content = "key=value"))
+        cache(createConfig("config2.properties", group = "GROUP_B", content = "key=value"))
 
         val results = searchService.searchConfigurations("config", groupFilter = "GROUP_A")
         assertEquals(1, results.size)
@@ -94,8 +105,8 @@ class SearchServiceTest {
 
     @Test
     fun `test searchConfigurations with tenant filter`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("config1.properties", tenantId = "tenant_a", content = "key=value"))
-        cacheService.cacheConfiguration(createConfig("config2.properties", tenantId = "tenant_b", content = "key=value"))
+        cache(createConfig("config1.properties", tenantId = "tenant_a", content = "key=value"))
+        cache(createConfig("config2.properties", tenantId = "tenant_b", content = "key=value"))
 
         val results = searchService.searchConfigurations("config", tenantFilter = "tenant_a")
         assertEquals(1, results.size)
@@ -104,8 +115,8 @@ class SearchServiceTest {
 
     @Test
     fun `test searchConfigurations content only`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("test.properties", content = "database.host=localhost"))
-        cacheService.cacheConfiguration(createConfig("database.yaml", content = "other"))
+        cache(createConfig("test.properties", content = "database.host=localhost"))
+        cache(createConfig("database.yaml", content = "other"))
 
         val results = searchService.searchConfigurations("database", contentOnly = true)
         assertEquals(1, results.size)
@@ -114,7 +125,7 @@ class SearchServiceTest {
 
     @Test
     fun `test searchConfigurations multiple matches`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("test.properties", content = "test value"))
+        cache(createConfig("test.properties", content = "test value"))
 
         val results = searchService.searchConfigurations("test")
         assertTrue(results.any { it.matchType == MatchType.MULTIPLE })
@@ -122,8 +133,8 @@ class SearchServiceTest {
 
     @Test
     fun `test searchByDataId`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("test.properties", content = "key=value"))
-        cacheService.cacheConfiguration(createConfig("other.yaml", content = "key: value"))
+        cache(createConfig("test.properties", content = "key=value"))
+        cache(createConfig("other.yaml", content = "key: value"))
 
         val results = searchService.searchByDataId("test")
         assertEquals(1, results.size)
@@ -133,7 +144,7 @@ class SearchServiceTest {
 
     @Test
     fun `test searchByGroup`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("test.properties", group = "CUSTOM", content = "key=value"))
+        cache(createConfig("test.properties", group = "CUSTOM", content = "key=value"))
 
         val results = searchService.searchByGroup("custom")
         assertEquals(1, results.size)
@@ -142,7 +153,7 @@ class SearchServiceTest {
 
     @Test
     fun `test searchByContent`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("test.properties", content = "database.host=localhost"))
+        cache(createConfig("test.properties", content = "database.host=localhost"))
 
         val results = searchService.searchByContent("database")
         assertEquals(1, results.size)
@@ -151,7 +162,7 @@ class SearchServiceTest {
 
     @Test
     fun `test searchByRegex with valid pattern`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("test.properties", content = "key=value123"))
+        cache(createConfig("test.properties", content = "key=value123"))
 
         val results = searchService.searchByRegex("value\\d+")
         assertEquals(1, results.size)
@@ -166,8 +177,8 @@ class SearchServiceTest {
 
     @Test
     fun `test getSearchSuggestions`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("test.properties", content = "key=value"))
-        cacheService.cacheConfiguration(createConfig("testing.yaml", group = "TEST_GROUP", content = "key: value"))
+        cache(createConfig("test.properties", content = "key=value"))
+        cache(createConfig("testing.yaml", group = "TEST_GROUP", content = "key: value"))
 
         val suggestions = searchService.getSearchSuggestions("test", limit = 10)
         assertTrue(suggestions.isNotEmpty())
@@ -184,8 +195,8 @@ class SearchServiceTest {
 
     @Test
     fun `test getAvailableGroups`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("config1.properties", group = "GROUP_B", content = "key=value"))
-        cacheService.cacheConfiguration(createConfig("config2.properties", group = "GROUP_A", content = "key=value"))
+        cache(createConfig("config1.properties", group = "GROUP_B", content = "key=value"))
+        cache(createConfig("config2.properties", group = "GROUP_A", content = "key=value"))
 
         val groups = searchService.getAvailableGroups()
         assertEquals(listOf("GROUP_A", "GROUP_B"), groups)
@@ -193,8 +204,8 @@ class SearchServiceTest {
 
     @Test
     fun `test getAvailableTenants`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("config1.properties", tenantId = "tenant_b", content = "key=value"))
-        cacheService.cacheConfiguration(createConfig("config2.properties", tenantId = "tenant_a", content = "key=value"))
+        cache(createConfig("config1.properties", tenantId = "tenant_b", content = "key=value"))
+        cache(createConfig("config2.properties", tenantId = "tenant_a", content = "key=value"))
 
         val tenants = searchService.getAvailableTenants()
         assertEquals(listOf("tenant_a", "tenant_b"), tenants)
@@ -202,8 +213,8 @@ class SearchServiceTest {
 
     @Test
     fun `test search result sorting`() = runBlocking {
-        cacheService.cacheConfiguration(createConfig("test.properties", content = "key=value"))
-        cacheService.cacheConfiguration(createConfig("other.yaml", group = "test", content = "key: value"))
+        cache(createConfig("test.properties", content = "key=value"))
+        cache(createConfig("other.yaml", group = "test", content = "key: value"))
 
         val results = searchService.searchConfigurations("test")
         val dataIdResults = results.filter { it.matchType == MatchType.DATA_ID }

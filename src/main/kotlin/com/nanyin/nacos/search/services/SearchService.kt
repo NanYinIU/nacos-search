@@ -6,6 +6,7 @@ import com.nanyin.nacos.search.models.SearchResult
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
+import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.regex.Pattern
@@ -17,6 +18,7 @@ import java.util.regex.Pattern
 class SearchService {
     private val logger = thisLogger()
     private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
+    private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
     
     companion object {
         private const val HIGHLIGHT_START = "<mark>"
@@ -39,7 +41,7 @@ class SearchService {
         
         logger.debug("Searching for: '$query' with filters - group: $groupFilter, tenant: $tenantFilter")
         
-        val configurations = cacheService.getAllCachedConfigurations()
+        val configurations = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
         val filteredConfigs = applyFilters(configurations, groupFilter, tenantFilter)
         
         val results = mutableListOf<SearchResult>()
@@ -57,7 +59,7 @@ class SearchService {
      * Searches configurations by data ID
      */
     suspend fun searchByDataId(query: String): List<SearchResult> = withContext(Dispatchers.Default) {
-        val configurations = cacheService.getAllCachedConfigurations()
+        val configurations = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
         val results = mutableListOf<SearchResult>()
         
         configurations.forEach { config ->
@@ -75,7 +77,7 @@ class SearchService {
      * Searches configurations by group
      */
     suspend fun searchByGroup(query: String): List<SearchResult> = withContext(Dispatchers.Default) {
-        val configurations = cacheService.getAllCachedConfigurations()
+        val configurations = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
         val results = mutableListOf<SearchResult>()
         
         configurations.forEach { config ->
@@ -93,7 +95,7 @@ class SearchService {
      * Searches configurations by content
      */
     suspend fun searchByContent(query: String): List<SearchResult> = withContext(Dispatchers.Default) {
-        val configurations = cacheService.getAllCachedConfigurations()
+        val configurations = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
         val results = mutableListOf<SearchResult>()
         
         configurations.forEach { config ->
@@ -117,7 +119,7 @@ class SearchService {
     ): List<SearchResult> = withContext(Dispatchers.Default) {
         try {
             val regex = Pattern.compile(pattern, Pattern.CASE_INSENSITIVE)
-            val configurations = cacheService.getAllCachedConfigurations()
+            val configurations = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
             val filteredConfigs = applyFilters(configurations, groupFilter, tenantFilter)
             val results = mutableListOf<SearchResult>()
             
@@ -139,7 +141,7 @@ class SearchService {
     suspend fun getSearchSuggestions(query: String, limit: Int = 10): List<String> = withContext(Dispatchers.Default) {
         if (query.length < 2) return@withContext emptyList()
         
-        val configurations = cacheService.getAllCachedConfigurations()
+        val configurations = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
         val suggestions = mutableSetOf<String>()
         
         configurations.forEach { config ->
@@ -168,7 +170,7 @@ class SearchService {
      * Gets unique groups from cached configurations
      */
     suspend fun getAvailableGroups(): List<String> = withContext(Dispatchers.Default) {
-        val configurations = cacheService.getAllCachedConfigurations()
+        val configurations = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
         configurations.map { it.group }.distinct().sorted()
     }
     
@@ -176,7 +178,7 @@ class SearchService {
      * Gets unique tenants from cached configurations
      */
     suspend fun getAvailableTenants(): List<String> = withContext(Dispatchers.Default) {
-        val configurations = cacheService.getAllCachedConfigurations()
+        val configurations = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
         configurations.mapNotNull { it.tenantId }.distinct().sorted()
     }
     

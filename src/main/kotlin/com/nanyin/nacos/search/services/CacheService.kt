@@ -7,6 +7,7 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.AccessIdentity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +23,11 @@ import java.util.concurrent.atomic.AtomicLong
  * Unified cache for Nacos list pages, configuration details, and namespace indexes.
  */
 @Service(Service.Level.APP)
-class CacheService : Disposable {
+class CacheService internal constructor(
+    private val currentTimeMillis: () -> Long
+) : Disposable {
+    constructor() : this(System::currentTimeMillis)
+
     private val logger = thisLogger()
     private val gson = Gson()
     private val cacheMutex = Mutex()
@@ -39,6 +44,7 @@ class CacheService : Disposable {
     private var detailSnapshot: Map<String, CacheEntry<NacosConfiguration>> = emptyMap()
     private val listPageCache = ConcurrentHashMap<String, CacheEntry<NacosApiService.ConfigListResponse>>()
     private val namespaceIndexCache = ConcurrentHashMap<String, CacheEntry<List<NacosConfiguration>>>()
+    private val namespaceIndexAuthority = ConcurrentHashMap<String, Boolean>()
     private val modificationCount = AtomicLong(0)
 
     private val cacheHits = AtomicLong(0)
@@ -52,13 +58,78 @@ class CacheService : Disposable {
     /** A non-suspending, immutable view for EDT/PSI callers. Never waits for persistence loading. */
     fun configurationSnapshot(serverUrl: String?): List<NacosConfiguration> {
         val normalizedServerUrl = serverUrl?.let(::normalizeServerUrl)?.takeIf { it.isNotBlank() }
+        return configurationSnapshotForPrefix(normalizedServerUrl)
+    }
+
+    fun configurationSnapshot(identity: AccessIdentity): List<NacosConfiguration> =
+        configurationSnapshotForPrefix(identityPrefix(identity))
+
+    private fun configurationSnapshotForPrefix(keyPrefix: String?): List<NacosConfiguration> {
+        val now = currentTimeMillis()
         return detailSnapshot.asSequence()
             .filter { (key, entry) ->
-                (normalizedServerUrl == null || key.startsWith("$normalizedServerUrl|")) && !entry.isExpired()
+                (keyPrefix == null || key.startsWith("$keyPrefix|")) && !entry.isExpired(now)
             }
             .map { it.value.data }
             .distinctBy(::legacyKey)
             .toList()
+    }
+
+    /** Immutable detail view used by code navigation, including stale targets. */
+    fun configurationNavigationSnapshot(serverUrl: String?): List<CachedConfiguration> {
+        val normalizedServerUrl = serverUrl?.let(::normalizeServerUrl)?.takeIf { it.isNotBlank() }
+        return configurationNavigationSnapshotForPrefix(normalizedServerUrl)
+    }
+
+    fun configurationNavigationSnapshot(identity: AccessIdentity): List<CachedConfiguration> =
+        configurationNavigationSnapshotForPrefix(identityPrefix(identity))
+
+    private fun configurationNavigationSnapshotForPrefix(keyPrefix: String?): List<CachedConfiguration> {
+        val now = currentTimeMillis()
+        return detailSnapshot.asSequence()
+            .filter { (key, _) -> keyPrefix == null || key.startsWith("$keyPrefix|") }
+            .map { (_, entry) -> entry.toCachedConfiguration(now) }
+            .distinctBy { legacyKey(it.configuration) }
+            .toList()
+    }
+
+    fun configDetailState(
+        serverUrl: String,
+        namespaceId: String?,
+        dataId: String,
+        group: String
+    ): CachedConfiguration? = detailSnapshot[detailKey(serverUrl, namespaceId, dataId, group)]
+        ?.toCachedConfiguration(currentTimeMillis())
+
+    fun configDetailState(
+        identity: AccessIdentity,
+        namespaceId: String?,
+        dataId: String,
+        group: String
+    ): CachedConfiguration? = detailSnapshot[detailKey(identity, namespaceId, dataId, group)]
+        ?.toCachedConfiguration(currentTimeMillis())
+
+    /** Non-blocking completeness/freshness view for gutter absence checks. */
+    fun namespaceIndexState(serverUrl: String, namespaceId: String?): NamespaceIndexState? {
+        val key = namespaceKey(serverUrl, namespaceId)
+        val entry = namespaceIndexCache[key] ?: return null
+        return entry.toNamespaceIndexState(namespaceIndexAuthority[key] == true)
+    }
+
+    fun namespaceIndexState(identity: AccessIdentity, namespaceId: String?): NamespaceIndexState? {
+        val key = namespaceKey(identity, namespaceId)
+        val entry = namespaceIndexCache[key] ?: return null
+        return entry.toNamespaceIndexState(namespaceIndexAuthority[key] == true)
+    }
+
+    private fun CacheEntry<List<NacosConfiguration>>.toNamespaceIndexState(
+        authoritativeForAbsence: Boolean
+    ): NamespaceIndexState {
+        return NamespaceIndexState(
+            dataIds = data.asSequence().map { it.dataId }.filter { it.isNotBlank() }.toSet(),
+            freshness = freshness(currentTimeMillis()),
+            authoritativeForAbsence = authoritativeForAbsence
+        )
     }
 
     companion object {
@@ -67,9 +138,9 @@ class CacheService : Disposable {
         private const val LIST_PAGE_KEY_PREFIX = "nacos.cache.list."
         private const val LIST_PAGE_KEYS_LIST = "nacos.cache.list.keys"
        private const val DEFAULT_TTL = 300_000L
-       // Maximum age beyond which a stale cache entry is no longer usable.
-       // 7 days: matches the design decision from the grilling session.
-       private const val MAX_STALE_AGE_MILLIS = 7L * 24 * 60 * 60 * 1000
+       // Age at which a stale detail requires a forced single-detail refresh.
+       // It remains navigable and is still bounded by capacity/manual cleanup.
+       private const val DEEP_STALE_AGE_MILLIS = 7L * 24 * 60 * 60 * 1000
        private const val MAX_CACHE_SIZE = 1000
         // Trigger the oversized-caches sweep only once the cache grows past the hard
         // cap by this margin, so per-insert writes stay O(1) instead of O(n).
@@ -108,7 +179,7 @@ class CacheService : Disposable {
         loadCompleted.await()
         val key = listPageKey(serverUrl, namespaceId, requestKey)
         val entry = listPageCache[key] ?: run { cacheMisses.incrementAndGet(); return null }
-        if (!entry.isExpired() || allowStale) {
+        if (!entry.isExpired(currentTimeMillis()) || allowStale) {
             cacheHits.incrementAndGet()
             return entry.data
         }
@@ -128,7 +199,7 @@ class CacheService : Disposable {
     ) {
         cacheMutex.withLock {
             val key = listPageKey(serverUrl, namespaceId, requestKey)
-            listPageCache[key] = CacheEntry(CacheEntryType.LIST_PAGE, response, System.currentTimeMillis(), ttl, source)
+            listPageCache[key] = CacheEntry(CacheEntryType.LIST_PAGE, response, currentTimeMillis(), ttl, source)
             persistListPage(key, listPageCache[key]!!)
             updateListPageKeysList()
             cleanupOversizedCaches()
@@ -143,9 +214,24 @@ class CacheService : Disposable {
         allowStale: Boolean = false
     ): NacosConfiguration? {
         val key = detailKey(serverUrl, namespaceId, dataId, group)
+        return getConfigDetailByKey(key, allowStale)
+    }
+
+    suspend fun getConfigDetail(
+        identity: AccessIdentity,
+        namespaceId: String?,
+        dataId: String,
+        group: String,
+        allowStale: Boolean = false
+    ): NacosConfiguration? {
+        val key = detailKey(identity, namespaceId, dataId, group)
+        return getConfigDetailByKey(key, allowStale)
+    }
+
+    private suspend fun getConfigDetailByKey(key: String, allowStale: Boolean): NacosConfiguration? {
         val entry = detailCache[key]
         if (entry != null) {
-            if (!entry.isExpired() || allowStale) {
+            if (!entry.isExpired(currentTimeMillis()) || allowStale) {
                 cacheHits.incrementAndGet()
                 return entry.data
             }
@@ -158,8 +244,7 @@ class CacheService : Disposable {
         // and re-check so the result reflects any entry loaded concurrently.
         val fromFile = cacheStorage.loadDetail(key)
         if (fromFile != null) {
-            if (fromFile.isExpired()) {
-                cacheStorage.removeDetail(key)
+            if (fromFile.isExpired(currentTimeMillis()) && !allowStale) {
                 cacheMisses.incrementAndGet()
                 return null
             }
@@ -170,7 +255,7 @@ class CacheService : Disposable {
         }
         loadCompleted.await()
         val loadedLate = detailCache[key]
-        if (loadedLate != null && (!loadedLate.isExpired() || allowStale)) {
+        if (loadedLate != null && (!loadedLate.isExpired(currentTimeMillis()) || allowStale)) {
             cacheHits.incrementAndGet()
             return loadedLate.data
         }
@@ -185,9 +270,37 @@ class CacheService : Disposable {
         ttl: Long = DEFAULT_TTL,
         source: CacheSource = CacheSource.REMOTE
     ) {
+        putConfigDetailByKey(
+            detailKey(serverUrl, namespaceId, configuration.dataId, configuration.group),
+            configuration,
+            ttl,
+            source
+        )
+    }
+
+    suspend fun putConfigDetail(
+        identity: AccessIdentity,
+        namespaceId: String?,
+        configuration: NacosConfiguration,
+        ttl: Long = DEFAULT_TTL,
+        source: CacheSource = CacheSource.REMOTE
+    ) {
+        putConfigDetailByKey(
+            detailKey(identity, namespaceId, configuration.dataId, configuration.group),
+            configuration,
+            ttl,
+            source
+        )
+    }
+
+    private suspend fun putConfigDetailByKey(
+        key: String,
+        configuration: NacosConfiguration,
+        ttl: Long,
+        source: CacheSource
+    ) {
         cacheMutex.withLock {
-            val key = detailKey(serverUrl, namespaceId, configuration.dataId, configuration.group)
-           detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, configuration, System.currentTimeMillis(), ttl, source)
+           detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, configuration, currentTimeMillis(), ttl, source)
            persistDetail(key, detailCache[key]!!)
            updateDetailKeysList()
            cleanupOversizedCaches()
@@ -196,6 +309,80 @@ class CacheService : Disposable {
        }
    }
 
+    suspend fun removeConfigDetail(
+        serverUrl: String,
+        namespaceId: String?,
+        dataId: String,
+        group: String
+    ) {
+        removeConfigDetailByKey(detailKey(serverUrl, namespaceId, dataId, group))
+    }
+
+    suspend fun removeConfigDetail(
+        identity: AccessIdentity,
+        namespaceId: String?,
+        dataId: String,
+        group: String
+    ) {
+        removeConfigDetailByKey(detailKey(identity, namespaceId, dataId, group))
+    }
+
+    private suspend fun removeConfigDetailByKey(key: String) {
+        cacheMutex.withLock {
+            if (detailCache.remove(key) == null) return@withLock
+            cacheStorage.removeDetail(key)
+            updateDetailKeysList()
+            publishDetailSnapshot()
+            markModified()
+        }
+    }
+
+    /** Upserts a partial batch without claiming that the Namespace snapshot is complete. */
+    suspend fun putNamespaceDetails(
+        serverUrl: String,
+        namespaceId: String?,
+        configurations: List<NacosConfiguration>,
+        ttl: Long = DEFAULT_TTL,
+        source: CacheSource = CacheSource.REMOTE
+    ) {
+        putNamespaceDetailsByIdentity(null, serverUrl, namespaceId, configurations, ttl, source)
+    }
+
+    suspend fun putNamespaceDetails(
+        identity: AccessIdentity,
+        namespaceId: String?,
+        configurations: List<NacosConfiguration>,
+        ttl: Long = DEFAULT_TTL,
+        source: CacheSource = CacheSource.REMOTE
+    ) {
+        putNamespaceDetailsByIdentity(identity, identity.serverId, namespaceId, configurations, ttl, source)
+    }
+
+    private suspend fun putNamespaceDetailsByIdentity(
+        identity: AccessIdentity?,
+        serverUrl: String,
+        namespaceId: String?,
+        configurations: List<NacosConfiguration>,
+        ttl: Long,
+        source: CacheSource
+    ) {
+        if (configurations.isEmpty()) return
+        cacheMutex.withLock {
+            val now = currentTimeMillis()
+            configurations.forEach { config ->
+                val key = identity?.let { detailKey(it, namespaceId, config.dataId, config.group) }
+                    ?: detailKey(serverUrl, namespaceId, config.dataId, config.group)
+                val entry = CacheEntry(CacheEntryType.CONFIG_DETAIL, config, now, ttl, source)
+                detailCache[key] = entry
+                persistDetail(key, entry)
+            }
+            updateDetailKeysList()
+            cleanupOversizedCaches()
+            publishDetailSnapshot()
+            markModified()
+        }
+    }
+
     suspend fun getNamespaceIndex(
         serverUrl: String,
         namespaceId: String?,
@@ -203,8 +390,21 @@ class CacheService : Disposable {
     ): List<NacosConfiguration>? {
         loadCompleted.await()
         val key = namespaceKey(serverUrl, namespaceId)
+        return getNamespaceIndexByKey(key, allowStale)
+    }
+
+    suspend fun getNamespaceIndex(
+        identity: AccessIdentity,
+        namespaceId: String?,
+        allowStale: Boolean = false
+    ): List<NacosConfiguration>? {
+        loadCompleted.await()
+        return getNamespaceIndexByKey(namespaceKey(identity, namespaceId), allowStale)
+    }
+
+    private fun getNamespaceIndexByKey(key: String, allowStale: Boolean): List<NacosConfiguration>? {
         val entry = namespaceIndexCache[key] ?: run { cacheMisses.incrementAndGet(); return null }
-        if (!entry.isExpired() || allowStale) {
+        if (!entry.isExpired(currentTimeMillis()) || allowStale) {
             cacheHits.incrementAndGet()
             return entry.data
         }
@@ -219,12 +419,51 @@ class CacheService : Disposable {
         ttl: Long = DEFAULT_TTL,
         source: CacheSource = CacheSource.REMOTE
     ) {
+        putNamespaceIndexByIdentity(null, serverUrl, namespaceId, configurations, ttl, source)
+    }
+
+    suspend fun putNamespaceIndex(
+        identity: AccessIdentity,
+        namespaceId: String?,
+        configurations: List<NacosConfiguration>,
+        ttl: Long = DEFAULT_TTL,
+        source: CacheSource = CacheSource.REMOTE
+    ) {
+        putNamespaceIndexByIdentity(identity, identity.serverId, namespaceId, configurations, ttl, source)
+    }
+
+    private suspend fun putNamespaceIndexByIdentity(
+        identity: AccessIdentity?,
+        serverUrl: String,
+        namespaceId: String?,
+        configurations: List<NacosConfiguration>,
+        ttl: Long,
+        source: CacheSource
+    ) {
         cacheMutex.withLock {
-            namespaceIndexCache[namespaceKey(serverUrl, namespaceId)] =
-                CacheEntry(CacheEntryType.NAMESPACE_INDEX, configurations, System.currentTimeMillis(), ttl, source)
+            val now = currentTimeMillis()
+            val namespacePrefix = identity?.let { "${identityPrefix(it)}|${normalizeNamespace(namespaceId)}|" }
+                ?: "${normalizeServerUrl(serverUrl)}|${normalizeNamespace(namespaceId)}|"
+            val replacementKeys = configurations
+                .mapTo(mutableSetOf()) { config ->
+                    identity?.let { detailKey(it, namespaceId, config.dataId, config.group) }
+                        ?: detailKey(serverUrl, namespaceId, config.dataId, config.group)
+                }
+            detailCache.keys
+                .filter { it.startsWith(namespacePrefix) && it !in replacementKeys }
+                .forEach { key ->
+                    detailCache.remove(key)
+                    cacheStorage.removeDetail(key)
+                }
+            val indexKey = identity?.let { namespaceKey(it, namespaceId) }
+                ?: namespaceKey(serverUrl, namespaceId)
+            namespaceIndexCache[indexKey] =
+                CacheEntry(CacheEntryType.NAMESPACE_INDEX, configurations, now, ttl, source)
+            namespaceIndexAuthority[indexKey] = true
            configurations.forEach { config ->
-               val key = detailKey(serverUrl, namespaceId, config.dataId, config.group)
-               detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, config, System.currentTimeMillis(), ttl, source)
+               val key = identity?.let { detailKey(it, namespaceId, config.dataId, config.group) }
+                   ?: detailKey(serverUrl, namespaceId, config.dataId, config.group)
+               detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, config, now, ttl, source)
                 persistDetail(key, detailCache[key]!!)
             }
            updateDetailKeysList()
@@ -234,9 +473,38 @@ class CacheService : Disposable {
        }
    }
 
-    suspend fun invalidateNamespace(serverUrl: String, namespaceId: String?) {
+    suspend fun markNamespaceIndexNonAuthoritative(serverUrl: String, namespaceId: String?) {
+        markNamespaceIndexNonAuthoritative(namespaceKey(serverUrl, namespaceId))
+    }
+
+    suspend fun markNamespaceIndexNonAuthoritative(identity: AccessIdentity, namespaceId: String?) {
+        markNamespaceIndexNonAuthoritative(namespaceKey(identity, namespaceId))
+    }
+
+    private suspend fun markNamespaceIndexNonAuthoritative(indexKey: String) {
         cacheMutex.withLock {
-            val namespacePrefix = "${normalizeServerUrl(serverUrl)}|${normalizeNamespace(namespaceId)}|"
+            if (namespaceIndexCache.containsKey(indexKey)) {
+                namespaceIndexAuthority[indexKey] = false
+            }
+        }
+    }
+
+    suspend fun invalidateNamespace(serverUrl: String, namespaceId: String?) {
+        invalidateNamespaceByPrefix(
+            "${normalizeServerUrl(serverUrl)}|${normalizeNamespace(namespaceId)}|",
+            namespaceKey(serverUrl, namespaceId)
+        )
+    }
+
+    suspend fun invalidateNamespace(identity: AccessIdentity, namespaceId: String?) {
+        invalidateNamespaceByPrefix(
+            "${identityPrefix(identity)}|${normalizeNamespace(namespaceId)}|",
+            namespaceKey(identity, namespaceId)
+        )
+    }
+
+    private suspend fun invalidateNamespaceByPrefix(namespacePrefix: String, indexKey: String) {
+        cacheMutex.withLock {
             detailCache.keys.filter { it.startsWith(namespacePrefix) }.forEach { key ->
                 detailCache.remove(key)
                 cacheStorage.removeDetail(key)
@@ -245,7 +513,8 @@ class CacheService : Disposable {
                 listPageCache.remove(key)
                 cacheStorage.removeListPage(key)
             }
-           namespaceIndexCache.remove(namespaceKey(serverUrl, namespaceId))
+           namespaceIndexCache.remove(indexKey)
+           namespaceIndexAuthority.remove(indexKey)
            updateDetailKeysList()
            updateListPageKeysList()
            publishDetailSnapshot()
@@ -270,7 +539,7 @@ class CacheService : Disposable {
             cacheMisses.incrementAndGet()
             return null
         }
-        if (!found.value.isExpired()) {
+        if (!found.value.isExpired(currentTimeMillis())) {
             cacheHits.incrementAndGet()
             return found.value.data
         }
@@ -283,9 +552,14 @@ class CacheService : Disposable {
         return configurationSnapshot(serverUrl)
     }
 
+    suspend fun getAllCachedConfigurations(identity: AccessIdentity): List<NacosConfiguration> {
+        loadCompleted.await()
+        return configurationSnapshot(identity)
+    }
+
     suspend fun cacheConfigurations(configurations: List<NacosConfiguration>, ttl: Long = DEFAULT_TTL) {
         cacheMutex.withLock {
-            val now = System.currentTimeMillis()
+            val now = currentTimeMillis()
             configurations.forEach { config ->
                 val key = detailKey("", config.tenantId, config.dataId, config.group)
                 detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, config, now, ttl, CacheSource.REMOTE)
@@ -300,6 +574,8 @@ class CacheService : Disposable {
    }
 
     fun getModificationCount(): Long = modificationCount.get()
+
+    internal fun cacheTimeMillis(): Long = currentTimeMillis()
 
     suspend fun isCached(dataId: String, group: String, tenantId: String? = null): Boolean {
         return getCachedConfiguration(dataId, group, tenantId) != null
@@ -328,6 +604,7 @@ class CacheService : Disposable {
             detailCache.clear()
             listPageCache.clear()
             namespaceIndexCache.clear()
+            namespaceIndexAuthority.clear()
             cacheStorage.clearAll()
             properties.unsetValue(DETAIL_KEYS_LIST)
             properties.unsetValue(LIST_PAGE_KEYS_LIST)
@@ -445,11 +722,7 @@ class CacheService : Disposable {
                 entry = loadDetailFromLegacyBlob(key)
             }
             if (entry == null) return@forEach
-            if (!entry.isExpired()) {
-                detailCache[key] = entry
-            } else {
-                cacheStorage.removeDetail(key)
-            }
+            detailCache[key] = entry
         }
     }
 
@@ -502,16 +775,14 @@ class CacheService : Disposable {
     }
 
     private suspend fun cleanupExpiredEntriesLocked() {
-        detailCache.entries.filter { it.value.isExpired() }.forEach { (key, _) ->
-            detailCache.remove(key)
-            cacheStorage.removeDetail(key)
-        }
-        listPageCache.entries.filter { it.value.isExpired() }.forEach { (key, _) ->
+        val now = currentTimeMillis()
+        listPageCache.entries.filter { it.value.isExpired(now) }.forEach { (key, _) ->
             listPageCache.remove(key)
             cacheStorage.removeListPage(key)
         }
-        namespaceIndexCache.entries.filter { it.value.isExpired() }.forEach { (key, _) ->
+        namespaceIndexCache.entries.filter { it.value.isExpired(now) }.forEach { (key, _) ->
             namespaceIndexCache.remove(key)
+            namespaceIndexAuthority.remove(key)
         }
         updateDetailKeysList()
         updateListPageKeysList()
@@ -541,6 +812,14 @@ class CacheService : Disposable {
         detailSnapshot = detailCache.toMap()
     }
 
+    private fun CacheEntry<NacosConfiguration>.toCachedConfiguration(now: Long): CachedConfiguration =
+        CachedConfiguration(
+            data,
+            freshness(now),
+            freshUntilMillis = createdAt + ttlMs,
+            deepStaleAtMillis = createdAt + DEEP_STALE_AGE_MILLIS
+        )
+
     private suspend fun <T> trimOldest(
         cache: ConcurrentHashMap<String, CacheEntry<T>>,
         removeFile: suspend (String) -> Unit
@@ -556,7 +835,7 @@ class CacheService : Disposable {
     }
 
     private fun averageAge(): Long {
-        val now = System.currentTimeMillis()
+        val now = currentTimeMillis()
         val createdAtValues = detailCache.values.map { it.createdAt } +
                 listPageCache.values.map { it.createdAt } +
                 namespaceIndexCache.values.map { it.createdAt }
@@ -567,6 +846,9 @@ class CacheService : Disposable {
         return "${normalizeServerUrl(serverUrl)}|${normalizeNamespace(namespaceId)}|$dataId|$group"
     }
 
+    private fun detailKey(identity: AccessIdentity, namespaceId: String?, dataId: String, group: String): String =
+        CacheCoordinate.Detail(identity, identity.serverId, namespaceId.orEmpty(), dataId, group).storageKey()
+
     private fun listPageKey(serverUrl: String, namespaceId: String?, requestKey: String): String {
         return "${normalizeServerUrl(serverUrl)}|${normalizeNamespace(namespaceId)}|$requestKey"
     }
@@ -574,6 +856,12 @@ class CacheService : Disposable {
     private fun namespaceKey(serverUrl: String, namespaceId: String?): String {
         return "${normalizeServerUrl(serverUrl)}|${normalizeNamespace(namespaceId)}"
     }
+
+    private fun namespaceKey(identity: AccessIdentity, namespaceId: String?): String =
+        CacheCoordinate.NamespaceIndex(identity, identity.serverId, namespaceId.orEmpty()).storageKey()
+
+    private fun identityPrefix(identity: AccessIdentity): String =
+        "${identity.serverId}|${identity.authMode}|${identity.principal}"
 
     private fun normalizeServerUrl(serverUrl: String): String = serverUrl.trim().trimEnd('/')
 
@@ -593,15 +881,37 @@ class CacheService : Disposable {
        val source: CacheSource,
        val stale: Boolean = false
    ) {
-       fun isExpired(): Boolean = System.currentTimeMillis() - createdAt > ttlMs
-       /** True when the entry is past TTL but still within the 7-day stale window. */
-       fun isStale(): Boolean {
-           val age = System.currentTimeMillis() - createdAt
-           return age > ttlMs && age <= MAX_STALE_AGE_MILLIS
+       fun isExpired(now: Long = System.currentTimeMillis()): Boolean = now - createdAt > ttlMs
+       fun freshness(now: Long = System.currentTimeMillis()): DetailFreshness {
+           val age = now - createdAt
+           return when {
+               age <= ttlMs -> DetailFreshness.FRESH
+               age <= DEEP_STALE_AGE_MILLIS -> DetailFreshness.STALE
+               else -> DetailFreshness.DEEP_STALE
+           }
        }
-       /** True when the entry is so old it should be discarded entirely. */
-       fun isUnusable(): Boolean = System.currentTimeMillis() - createdAt > MAX_STALE_AGE_MILLIS
+       fun isStale(now: Long = System.currentTimeMillis()): Boolean = freshness(now) == DetailFreshness.STALE
+       fun isDeepStale(now: Long = System.currentTimeMillis()): Boolean = freshness(now) == DetailFreshness.DEEP_STALE
    }
+
+    data class CachedConfiguration(
+        val configuration: NacosConfiguration,
+        val freshness: DetailFreshness,
+        val freshUntilMillis: Long,
+        val deepStaleAtMillis: Long
+    )
+
+    data class NamespaceIndexState(
+        val dataIds: Set<String>,
+        val freshness: DetailFreshness,
+        val authoritativeForAbsence: Boolean
+    )
+
+    enum class DetailFreshness {
+        FRESH,
+        STALE,
+        DEEP_STALE
+    }
 
     enum class CacheEntryType {
         LIST_PAGE,

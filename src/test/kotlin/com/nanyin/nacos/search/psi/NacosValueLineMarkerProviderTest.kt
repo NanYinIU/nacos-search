@@ -12,6 +12,7 @@ import com.nanyin.nacos.search.NacosIcons
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NamespaceService
+import com.nanyin.nacos.search.services.captureAccessIdentity
 import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -29,19 +30,21 @@ class NacosValueLineMarkerProviderTest {
 
     @Before
     fun setUp() {
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        settings.resetToDefaults()
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
             cache.clearAll()
-            NacosKeyResolver.refreshIndex(cache, "http://localhost:8848")
+            NacosKeyResolver.refreshIndex(cache, settings.serverUrl, settings.captureAccessIdentity())
         }
-        ApplicationManager.getApplication().getService(NacosSettings::class.java).resetToDefaults()
         ApplicationManager.getApplication().getService(NamespaceService::class.java).setCurrentNamespace(null)
     }
 
     private fun cacheAndRefresh(configuration: NacosConfiguration) = runBlocking {
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
-        cache.putConfigDetail("http://localhost:8848", null, configuration)
-        NacosKeyResolver.refreshIndex(cache, "http://localhost:8848")
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        cache.putConfigDetail(settings.captureAccessIdentity(), null, configuration)
+        NacosKeyResolver.refreshIndex(cache, settings.serverUrl, settings.captureAccessIdentity())
     }
 
     @Test
@@ -61,6 +64,58 @@ class NacosValueLineMarkerProviderTest {
     }
 
     @Test
+    fun `test stale resolved key uses stale gutter icon`() = runBlocking {
+        val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        cache.putConfigDetail(
+            settings.captureAccessIdentity(),
+            null,
+            NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo", "properties"),
+            ttl = -1L
+        )
+        NacosKeyResolver.refreshIndex(cache, settings.serverUrl, settings.captureAccessIdentity())
+
+        val marker = markerFor(
+            """
+            class Demo {
+                @org.springframework.beans.factory.annotation.Value("${'$'}{app.name}")
+                private String name;
+            }
+            """.trimIndent()
+        )
+
+        assertNotNull(marker)
+        assertEquals(NacosIcons.GutterConfigStale, marker?.createGutterRenderer()?.icon)
+    }
+
+    @Test
+    fun `stale gutter observation requests background refresh without blocking PSI`() = runBlocking {
+        val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        cache.putConfigDetail(
+            settings.captureAccessIdentity(),
+            null,
+            NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo", "properties"),
+            ttl = -1L
+        )
+        NacosKeyResolver.refreshIndex(cache, settings.serverUrl, settings.captureAccessIdentity())
+        var observed = false
+        val provider = NacosValueLineMarkerProvider { _, _ -> observed = true }
+
+        markerFor(
+            """
+            class Demo {
+                @org.springframework.beans.factory.annotation.Value("${'$'}{app.name}")
+                private String name;
+            }
+            """.trimIndent(),
+            provider
+        )
+
+        assertTrue(observed)
+    }
+
+    @Test
     fun `test no marker is shown when key is not cached and no dataId context exists`() {
         val marker = markerFor(
             """
@@ -77,10 +132,17 @@ class NacosValueLineMarkerProviderTest {
 
    @Test
    fun `test no marker when dataId context exists but dataId is absent from loaded namespace`() {
-       // Cache has been populated for the current server, but the referenced
-       // dataId is NOT among the known configurations. The marker should be
-       // suppressed to avoid showing a dead-end icon.
-       cacheAndRefresh(NacosConfiguration("other.properties", "DEFAULT_GROUP", null, "other.key=val\n", "properties"))
+       // Only a fresh COMPLETE Namespace snapshot can prove absence.
+       runBlocking {
+           val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+           val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+           cache.putNamespaceIndex(
+               settings.captureAccessIdentity(),
+               null,
+               listOf(NacosConfiguration("other.properties", "DEFAULT_GROUP", null, "other.key=val\n", "properties"))
+           )
+           NacosKeyResolver.refreshIndex(cache, settings.serverUrl, settings.captureAccessIdentity())
+       }
 
        val marker = markerFor(
            """
@@ -149,11 +211,11 @@ class NacosValueLineMarkerProviderTest {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
             cache.putConfigDetail(
-                serverUrl = settings.serverUrl,
+                identity = settings.captureAccessIdentity(),
                 namespaceId = null,
                 configuration = NacosConfiguration("datasource.properties", "DEFAULT_GROUP", null, "db.url=jdbc:test\n", "properties")
             )
-            NacosKeyResolver.refreshIndex(cache, settings.serverUrl)
+            NacosKeyResolver.refreshIndex(cache, settings.serverUrl, settings.captureAccessIdentity())
         }
 
         // After the rebuild the key is resolvable → solid icon.
@@ -242,19 +304,20 @@ class NacosValueLineMarkerProviderTest {
             .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("namespace1", "Namespace 1"))
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+            val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
             cache.putConfigDetail(
-                serverUrl = "http://localhost:8848",
+                identity = settings.captureAccessIdentity(),
                 namespaceId = "namespace1",
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace1", "room.key=one\n", "properties"),
                 ttl = 60_000L
             )
             cache.putConfigDetail(
-                serverUrl = "http://localhost:8848",
+                identity = settings.captureAccessIdentity(),
                 namespaceId = "namespace2",
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
                 ttl = 60_000L
             )
-            NacosKeyResolver.refreshIndex(cache, "http://localhost:8848")
+            NacosKeyResolver.refreshIndex(cache, settings.serverUrl, settings.captureAccessIdentity())
         }
 
         val results = resolveReferenceForKey("room.key")
@@ -272,19 +335,20 @@ class NacosValueLineMarkerProviderTest {
             .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("namespace1", "Namespace 1"))
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+            val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
             cache.putConfigDetail(
-                serverUrl = "http://localhost:8848",
+                identity = settings.captureAccessIdentity(),
                 namespaceId = "namespace1",
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace1", "room.key=one\n", "properties"),
                 ttl = 60_000L
             )
             cache.putConfigDetail(
-                serverUrl = "http://localhost:8848",
+                identity = settings.captureAccessIdentity(),
                 namespaceId = "namespace2",
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
                 ttl = 60_000L
             )
-            NacosKeyResolver.refreshIndex(cache, "http://localhost:8848")
+            NacosKeyResolver.refreshIndex(cache, settings.serverUrl, settings.captureAccessIdentity())
         }
 
         val results = resolveReferenceForKey("room.key")
@@ -294,7 +358,7 @@ class NacosValueLineMarkerProviderTest {
     }
 
     @Test
-    fun `marker is unresolved when key lives only in another namespace and cross namespace navigation is disabled`() {
+    fun `marker is hidden when cross namespace target has no actionable dataId`() {
         cacheKeyInOtherNamespaceForActive("namespace1", allowCrossNamespace = false)
 
         val marker = markerFor(
@@ -306,8 +370,7 @@ class NacosValueLineMarkerProviderTest {
             """.trimIndent()
         )
 
-        assertNotNull(marker)
-        assertEquals(NacosIcons.GutterConfigUnresolved, marker?.createGutterRenderer()?.icon)
+        assertNull(marker)
     }
 
     @Test
@@ -334,17 +397,21 @@ class NacosValueLineMarkerProviderTest {
             .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo(activeNamespaceId, "Namespace 1"))
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+            val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
             cache.putConfigDetail(
-                serverUrl = "http://localhost:8848",
+                identity = settings.captureAccessIdentity(),
                 namespaceId = "namespace2",
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
                 ttl = 60_000L
             )
-            NacosKeyResolver.refreshIndex(cache, "http://localhost:8848")
+            NacosKeyResolver.refreshIndex(cache, settings.serverUrl, settings.captureAccessIdentity())
         }
     }
 
-    private fun markerFor(javaText: String): LineMarkerInfo<*>? = ApplicationManager.getApplication().runReadAction<LineMarkerInfo<*>?> {
+    private fun markerFor(
+        javaText: String,
+        provider: NacosValueLineMarkerProvider = NacosValueLineMarkerProvider { _, _ -> }
+    ): LineMarkerInfo<*>? = ApplicationManager.getApplication().runReadAction<LineMarkerInfo<*>?> {
         val file = PsiFileFactory.getInstance(ProjectManager.getInstance().defaultProject).createFileFromText(
             "Demo.java",
             com.intellij.lang.java.JavaLanguage.INSTANCE,
@@ -354,7 +421,7 @@ class NacosValueLineMarkerProviderTest {
         val literal = PsiTreeUtil.findChildrenOfType(file, PsiLiteralExpression::class.java)
             .firstOrNull { PlaceholderParser.containsPlaceholder(it.value as? String) }
         assertNotNull(literal)
-        NacosValueLineMarkerProvider().getLineMarkerInfo(literal!!.firstChild)
+        provider.getLineMarkerInfo(literal!!.firstChild)
     }
 
     private fun resolveReferenceForKey(key: String) = ApplicationManager.getApplication().runReadAction<Array<com.intellij.psi.ResolveResult>> {

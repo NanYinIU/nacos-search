@@ -18,6 +18,7 @@ import com.nanyin.nacos.search.psi.ConfigKeyExtractor
 import com.nanyin.nacos.search.psi.NacosCodeContextExtractor
 import com.nanyin.nacos.search.psi.NacosConfigKeyElement
 import com.nanyin.nacos.search.psi.NacosConfigKeyReferenceSearcher
+import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.nanyin.nacos.search.psi.NacosUsageChoiceItem
 import com.nanyin.nacos.search.psi.NacosUsagePresentation
 import com.intellij.openapi.project.Project
@@ -28,7 +29,11 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
+import com.nanyin.nacos.search.services.NavigationIndexRefreshService
+import com.nanyin.nacos.search.services.captureAccessIdentity
+import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.ActionEvent
@@ -38,10 +43,34 @@ import javax.swing.*
 import kotlin.concurrent.withLock
 
 
+internal fun interface ConfigurationDetailLoader {
+    suspend fun load(configuration: NacosConfiguration, forceRefresh: Boolean): Result<NacosConfiguration?>
+}
+
 /**
  * Panel for displaying configuration details with syntax highlighting
  */
-class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), Disposable, LanguageAwareComponent {
+class ConfigDetailPanel internal constructor(
+    private val project: Project,
+    private val detailLoader: ConfigurationDetailLoader,
+    private val cacheService: CacheService,
+    private val settings: NacosSettings
+) : JPanel(BorderLayout()), Disposable, LanguageAwareComponent {
+    constructor(project: Project) : this(
+        project,
+        ConfigurationDetailLoader { configuration, forceRefresh ->
+            ApplicationManager.getApplication().getService(NacosApiService::class.java).getConfiguration(
+                dataId = configuration.dataId,
+                group = configuration.group,
+                namespaceId = configuration.tenantId,
+                useCache = true,
+                forceRefresh = forceRefresh
+            )
+        },
+        ApplicationManager.getApplication().getService(CacheService::class.java),
+        ApplicationManager.getApplication().getService(NacosSettings::class.java)
+    )
+
     companion object {
         private const val DETAIL_HORIZONTAL_INSET = 10
     }
@@ -62,6 +91,7 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
     private lateinit var revertButton: JButton
     private lateinit var formatTagLabel: JBLabel
     private lateinit var dirtyLabel: JBLabel
+    private lateinit var freshnessLabel: JBLabel
     
     // Editor status bar components (UTF-8 · LF · pos · chars · md5)
     private lateinit var statusBar: JPanel
@@ -240,6 +270,11 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
             font = font.deriveFont(Font.PLAIN, 10f)
             isVisible = false
         }
+        freshnessLabel = JBLabel().apply {
+            foreground = JBColor(0xe08800, 0xf2c55c)
+            font = font.deriveFont(Font.PLAIN, 10f)
+            isVisible = false
+        }
 
         // Editor status bar labels
         statusEncodingLabel = JBLabel(NacosSearchBundle.message("config.detail.status.encoding")).apply {
@@ -278,7 +313,10 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
                     font = font.deriveFont(Font.BOLD, 13f)
                     border = JBUI.Borders.empty()
                 }, BorderLayout.CENTER)
-                add(dirtyLabel, BorderLayout.EAST)
+                add(JPanel(FlowLayout(FlowLayout.RIGHT, 6, 0)).apply {
+                    add(freshnessLabel)
+                    add(dirtyLabel)
+                }, BorderLayout.EAST)
             }
             add(titleRow)
 
@@ -506,7 +544,32 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
             PendingNavigation(configuration.getKey(), it)
         }
         updateMetadata(configuration, generation)
-        loadConfigurationContent(configuration, generation)
+        val accessIdentity = settings.captureAccessIdentity()
+        val cachedState = cacheService.configDetailState(
+            accessIdentity,
+            configuration.tenantId,
+            configuration.dataId,
+            configuration.group
+        )
+        val freshness = cachedState?.freshness
+        val cachedFirst = freshness != null && freshness != CacheService.DetailFreshness.FRESH
+        if (cachedFirst) {
+            displayConfigurationContentSafely(configuration)
+            showCard("content")
+        }
+        if (freshness == CacheService.DetailFreshness.STALE) {
+            hideFreshnessStatus()
+            return
+        }
+        if (freshness == CacheService.DetailFreshness.DEEP_STALE) {
+            showFreshnessStatus("config.detail.cache.refreshing")
+        }
+        loadConfigurationContent(
+            configuration,
+            generation,
+            forceRefresh = freshness == CacheService.DetailFreshness.DEEP_STALE,
+            keepCachedVisible = cachedFirst
+        )
     }
 
     /**
@@ -717,24 +780,23 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
         loadConfigurationContent(configuration, ++displayGeneration, forceRefresh)
     }
 
-    private fun loadConfigurationContent(configuration: NacosConfiguration, generation: Long, forceRefresh: Boolean = false) {
+    private fun loadConfigurationContent(
+        configuration: NacosConfiguration,
+        generation: Long,
+        forceRefresh: Boolean = false,
+        keepCachedVisible: Boolean = false
+    ) {
         if (isLoading) return
         
         // Cancel previous loading operation
         currentLoadingJob?.cancel()
         
         setLoadingState(true)
-        showCard("loading")
+        if (!keepCachedVisible) showCard("loading")
         
         currentLoadingJob = coroutineScope.launch {
             try {
-                val result = nacosApiService.getConfiguration(
-                    dataId = configuration.dataId,
-                    group = configuration.group,
-                    namespaceId = configuration.tenantId,
-                    useCache = true,
-                    forceRefresh = forceRefresh
-                )
+                val result = detailLoader.load(configuration, forceRefresh)
                 
                 // Check if operation was cancelled
                 if (!isActive) return@launch
@@ -750,8 +812,11 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
                             return@let
                         }
                         displayConfigurationContentSafely(config)
+                        currentConfiguration = config
                         setLoadingState(false)
                         showCard("content")
+                        hideFreshnessStatus()
+                        refreshNavigationState()
                         
                         // Update size information and status bar
                         ApplicationManager.getApplication().invokeLater({
@@ -761,22 +826,47 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
                         updateStatusBar(config.content)
                     } ?: run {
                         setLoadingState(false)
-                        showCard("error")
+                        if (keepCachedVisible) {
+                            cacheService.removeConfigDetail(
+                                settings.captureAccessIdentity(),
+                                configuration.tenantId,
+                                configuration.dataId,
+                                configuration.group
+                            )
+                            showFreshnessStatus("config.detail.cache.deleted")
+                            refreshNavigationState()
+                        } else {
+                            showCard("error")
+                        }
                     }
                 }.onFailure { error ->
                     if (isActive) {
-                        setLoadingState(false)
-                        showCard("error")
-                        showError("Failed to load configuration", error.message ?: "Unknown error")
+                        handleLoadFailure(
+                            keepCachedVisible,
+                            "Failed to load configuration",
+                            error.message ?: "Unknown error"
+                        )
                     }
                 }
             } catch (e: Exception) {
                 if (isActive) {
-                    setLoadingState(false)
-                    showCard("error")
-                    showError("Error loading configuration", e.message ?: "Unknown error")
+                    handleLoadFailure(
+                        keepCachedVisible,
+                        "Error loading configuration",
+                        e.message ?: "Unknown error"
+                    )
                 }
             }
+        }
+    }
+
+    private fun handleLoadFailure(keepCachedVisible: Boolean, title: String, message: String) {
+        setLoadingState(false)
+        if (keepCachedVisible) {
+            showFreshnessStatus("config.detail.cache.refresh.failed")
+        } else {
+            showCard("error")
+            showError(title, message)
         }
     }
     
@@ -972,6 +1062,25 @@ class ConfigDetailPanel(private val project: Project) : JPanel(BorderLayout()), 
             val cardLayout = contentPanel.layout as CardLayout
             cardLayout.show(contentPanel, cardName)
         }, ModalityState.defaultModalityState())
+    }
+
+    private fun showFreshnessStatus(messageKey: String) {
+        ApplicationManager.getApplication().invokeLater {
+            freshnessLabel.text = NacosSearchBundle.message(messageKey)
+            freshnessLabel.isVisible = true
+        }
+    }
+
+    private fun hideFreshnessStatus() {
+        ApplicationManager.getApplication().invokeLater {
+            freshnessLabel.isVisible = false
+        }
+    }
+
+    private fun refreshNavigationState() {
+        ApplicationManager.getApplication()
+            .getService(NavigationIndexRefreshService::class.java)
+            .refresh(settings.captureAccessIdentity(), project)
     }
     
     private fun showEmptyState() {

@@ -6,6 +6,8 @@ import com.nanyin.nacos.search.services.SearchService
 import com.nanyin.nacos.search.services.IndexOutcome
 import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
 import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
+import com.nanyin.nacos.search.services.captureAccessIdentity
+import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.requestManualNamespaceRefresh
 import com.nanyin.nacos.search.services.requestStartupNamespaceIndex
 import com.nanyin.nacos.search.psi.NacosKeyResolver
@@ -65,7 +67,7 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         if (settings.cacheEnabled) {
             coroutineScope.launch {
                 try {
-                    val cachedConfigs = cacheService.getAllCachedConfigurations()
+                    val cachedConfigs = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
                     logger.info("Loaded ${cachedConfigs.size} configurations from cache")
                 } catch (e: Exception) {
                     logger.error("Error loading cached configurations", e)
@@ -85,7 +87,7 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
                         loadInitialData()
                     } else {
                         try {
-                            val cachedConfigs = cacheService.getAllCachedConfigurations()
+                            val cachedConfigs = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
                             if (cachedConfigs.isEmpty()) {
                                 loadInitialData()
                             }
@@ -116,7 +118,8 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
                 logger.info("Successfully loaded metadata for ${response.pageItems.size}/${response.totalCount} configurations")
                // Warm the @NacosValue key index from persisted/opened configs so
                // code gutter markers appear without blocking the highlighter.
-               NacosKeyResolver.ensureIndexBuilt(cacheService)
+               val identity = settings.captureAccessIdentity()
+               NacosKeyResolver.ensureIndexBuilt(cacheService, identity)
 
                 // Preheat the full namespace index in the background so the
                 // first content/regex search does not have to pull every page
@@ -142,15 +145,19 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
         coroutineScope.launch {
             try {
-                val existing = cacheService.getNamespaceIndex(indexRequest.key.identity.serverId, namespaceId)
+                val existing = cacheService.getNamespaceIndex(indexRequest.key.identity, namespaceId)
                 if (existing != null) {
-                    NacosKeyResolver.ensureIndexBuilt(cacheService)
+                    NacosKeyResolver.ensureIndexBuilt(cacheService, indexRequest.key.identity)
                     return@launch
                 }
 
                 val outcome = indexCoordinator.requestStartupNamespaceIndex(indexRequest)
+                if (outcome is IndexOutcome.Complete || outcome is IndexOutcome.Partial) {
+                    ApplicationManager.getApplication()
+                        .getService(NavigationIndexRefreshService::class.java)
+                        .refresh(indexRequest.key.identity, null)
+                }
                 if (outcome is IndexOutcome.Complete) {
-                    NacosKeyResolver.ensureIndexBuilt(cacheService)
                     logger.info("Preheated namespace index for '${namespaceId ?: "public"}' with ${outcome.count} configurations")
                 } else {
                     logger.warn("Namespace index preheat did not complete for '${namespaceId ?: "public"}': $outcome")
@@ -167,12 +174,23 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
     suspend fun refreshCache(namespaceId: String): Result<Int> {
         return try {
             logger.info("Refreshing full namespace cache for '${namespaceId.ifBlank { "public" }}'")
-            when (val outcome = indexCoordinator.requestManualNamespaceRefresh(
-                settings.captureNamespaceIndexRequest(namespaceId)
-            )) {
+            val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
+            when (val outcome = indexCoordinator.requestManualNamespaceRefresh(indexRequest)) {
                 is IndexOutcome.Complete -> {
-                NacosKeyResolver.ensureIndexBuilt(cacheService)
+                    ApplicationManager.getApplication()
+                        .getService(NavigationIndexRefreshService::class.java)
+                        .refresh(indexRequest.key.identity, null)
                     Result.success(outcome.count)
+                }
+                is IndexOutcome.Partial -> {
+                    ApplicationManager.getApplication()
+                        .getService(NavigationIndexRefreshService::class.java)
+                        .refresh(indexRequest.key.identity, null)
+                    Result.failure(
+                        IllegalStateException(
+                            "Namespace refresh loaded ${outcome.loaded}/${outcome.expected} configurations"
+                        )
+                    )
                 }
                 is IndexOutcome.Failed -> Result.failure(outcome.error)
                 else -> Result.failure(IllegalStateException("Namespace refresh did not produce a complete dataset: $outcome"))
@@ -200,7 +218,7 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
      */
     suspend fun getStatistics(): com.nanyin.nacos.search.PluginStatistics {
         val cachedCount = if (settings.cacheEnabled) {
-            cacheService.getAllCachedConfigurations().size
+            cacheService.getAllCachedConfigurations(settings.captureAccessIdentity()).size
         } else {
             0
         }

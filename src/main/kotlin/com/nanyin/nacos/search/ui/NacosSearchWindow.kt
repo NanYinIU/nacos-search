@@ -18,6 +18,7 @@ import com.nanyin.nacos.search.services.NamespaceIndexRequest
 import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
 import com.nanyin.nacos.search.services.captureServerSnapshot
 import com.nanyin.nacos.search.services.requestSwitchedNamespaceIndex
+import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.settings.NacosConfigurable
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosSettingsListener
@@ -939,15 +940,17 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 // Skip the heavy full-content fetch when a fresh namespace
                 // index already exists — re-preheating on every namespace
                 // switch is the primary source of background IO saturation.
-                val existing = cacheService.getNamespaceIndex(indexRequest.key.identity.serverId, namespaceId)
+                val existing = cacheService.getNamespaceIndex(indexRequest.key.identity, namespaceId)
                 if (existing != null) {
-                    NacosKeyResolver.ensureIndexBuilt(cacheService)
+                    NacosKeyResolver.ensureIndexBuilt(cacheService, indexRequest.key.identity)
                     return@launch
                 }
 
                 val outcome = indexCoordinator.requestSwitchedNamespaceIndex(indexRequest)
-                if (outcome is IndexOutcome.Complete) {
-                    NacosKeyResolver.ensureIndexBuilt(cacheService)
+                if (outcome is IndexOutcome.Complete || outcome is IndexOutcome.Partial) {
+                    ApplicationManager.getApplication()
+                        .getService(NavigationIndexRefreshService::class.java)
+                        .refresh(indexRequest.key.identity, project)
                 }
             } catch (e: Exception) {
                 // Swallow: preheat is opportunistic.

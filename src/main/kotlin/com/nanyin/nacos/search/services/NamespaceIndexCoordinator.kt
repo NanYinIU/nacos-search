@@ -50,6 +50,11 @@ data class NamespaceIndexRequest(
 internal fun NacosSettings.captureNamespaceIndexRequest(namespaceId: String?): NamespaceIndexRequest =
     captureNamespaceIndexRequest(namespaceId, captureServerSnapshot())
 
+internal fun NacosSettings.captureAccessIdentity(): AccessIdentity {
+    val server = getActiveServer()
+    return AccessIdentity.of(server.serverUrl, server.authMode, server.username)
+}
+
 internal fun NacosSettings.captureNamespaceIndexRequest(
     namespaceId: String?,
     snapshot: NacosServerSnapshot
@@ -178,6 +183,7 @@ class NamespaceIndexCoordinator internal constructor(
         return try {
             val result = apiService.loadNamespace(key.namespaceId, useCache = false, server = request.server, policy = policy)
             if (result.isFailure) {
+                cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
                 recordPsiFailure(key)
                 val error = result.exceptionOrNull()
                 return IndexOutcome.Failed(
@@ -191,7 +197,7 @@ class NamespaceIndexCoordinator internal constructor(
             when (loadResult.completeness) {
                 DatasetCompleteness.COMPLETE -> {
                     cacheService.putNamespaceIndex(
-                        key.identity.serverId,
+                        key.identity,
                         key.namespaceId,
                         loadResult.configurations,
                         request.cacheTtlMillis
@@ -204,8 +210,14 @@ class NamespaceIndexCoordinator internal constructor(
                 }
                 DatasetCompleteness.PARTIAL -> {
                     // Partial: write successful details but do not refresh index timestamps
+                    cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
                     if (loadResult.configurations.isNotEmpty()) {
-                        cacheService.cacheConfigurations(loadResult.configurations)
+                        cacheService.putNamespaceDetails(
+                            key.identity,
+                            key.namespaceId,
+                            loadResult.configurations,
+                            request.cacheTtlMillis
+                        )
                     }
                     IndexOutcome.Partial(
                         loadResult.configurations.size,
@@ -214,11 +226,13 @@ class NamespaceIndexCoordinator internal constructor(
                     )
                 }
                 DatasetCompleteness.FAILED -> {
+                    cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
                     recordPsiFailure(key)
                     IndexOutcome.Failed(NacosRequestError.Connection(RuntimeException("Namespace list failed")))
                 }
             }
         } catch (e: Exception) {
+            cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
             recordPsiFailure(key)
             val error = if (e is NacosRequestError) e else NacosRequestError.Connection(e)
             IndexOutcome.Failed(error)

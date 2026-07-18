@@ -28,7 +28,7 @@ class NacosKeyResolverTest {
 
     private suspend fun seedConfigurations(configurations: List<NacosConfiguration>) {
         cache.cacheConfigurations(configurations)
-        NacosKeyResolver.refreshIndex(cache, null)
+        NacosKeyResolver.refreshIndex(cache, activeServerUrl = null)
     }
 
     @Test
@@ -41,6 +41,140 @@ class NacosKeyResolverTest {
         val result = NacosKeyResolver.resolveStatus("db.url", null)
         assertEquals(ConfigReferenceStatus.UNAVAILABLE, result.status)
         assertTrue(result.hits.isEmpty())
+    }
+
+    @Test
+    fun `resolved key remains navigable as stale and deep-stale`() = runBlocking {
+        var now = 3_000_000L
+        val timedCache = CacheService { now }
+        timedCache.clearAll()
+        timedCache.putConfigDetail(
+            serverUrl = "http://localhost:8848",
+            namespaceId = "dev",
+            configuration = cfg(
+                "app.properties",
+                "DEFAULT_GROUP",
+                "dev",
+                "feature.enabled=true\n",
+                "properties"
+            ),
+            ttl = 100L
+        )
+
+        var resolution = NacosKeyResolver.resolveStatus(
+            "feature.enabled",
+            NacosKeyResolver.refreshIndex(timedCache, "http://localhost:8848")
+        )
+        assertEquals(ConfigReferenceStatus.RESOLVED, resolution.status)
+        assertEquals(CacheService.DetailFreshness.FRESH, resolution.hits.single().freshness)
+
+        now += 101L
+        resolution = NacosKeyResolver.resolveStatus(
+            "feature.enabled",
+            NacosKeyResolver.refreshIndex(timedCache, "http://localhost:8848")
+        )
+        assertEquals(ConfigReferenceStatus.STALE, resolution.status)
+        assertEquals(CacheService.DetailFreshness.STALE, resolution.hits.single().freshness)
+
+        now = 3_000_000L + 8L * 24 * 60 * 60 * 1000
+        resolution = NacosKeyResolver.resolveStatus(
+            "feature.enabled",
+            NacosKeyResolver.refreshIndex(timedCache, "http://localhost:8848")
+        )
+        assertEquals(ConfigReferenceStatus.STALE, resolution.status)
+        assertEquals(CacheService.DetailFreshness.DEEP_STALE, resolution.hits.single().freshness)
+    }
+
+    @Test
+    fun `current resolution changes when TTL elapses without a cache write`() = runBlocking {
+        var now = 4_000_000L
+        val timedCache = CacheService { now }
+        timedCache.clearAll()
+        timedCache.putConfigDetail(
+            "http://localhost:8848",
+            "dev",
+            cfg("app.properties", "DEFAULT_GROUP", "dev", "timeout=30\n", "properties"),
+            ttl = 100L
+        )
+        NacosKeyResolver.refreshIndex(timedCache, "http://localhost:8848")
+
+        assertEquals(
+            ConfigReferenceStatus.RESOLVED,
+            NacosKeyResolver.resolveCurrentState(
+                "timeout",
+                timedCache,
+                "http://localhost:8848"
+            ).status
+        )
+
+        now += 101L
+
+        val stale = NacosKeyResolver.resolveCurrentState(
+            "timeout",
+            timedCache,
+            "http://localhost:8848"
+        )
+        assertEquals(ConfigReferenceStatus.STALE, stale.status)
+        assertEquals(CacheService.DetailFreshness.STALE, stale.hits.single().freshness)
+    }
+
+    @Test
+    fun `only a fresh complete namespace can prove a dataId absent`() = runBlocking {
+        var now = 5_000_000L
+        val timedCache = CacheService { now }
+        timedCache.clearAll()
+        timedCache.putConfigDetail(
+            "http://localhost:8848",
+            "dev",
+            cfg("other.properties", "DEFAULT_GROUP", "dev", "other=true\n", "properties"),
+            ttl = 100L
+        )
+        NacosKeyResolver.refreshIndex(timedCache, "http://localhost:8848")
+
+        assertTrue(
+            NacosKeyResolver.isDataIdKnown(
+                "target.properties",
+                timedCache,
+                "http://localhost:8848",
+                activeNamespaceId = "dev"
+            )
+        )
+
+        timedCache.putNamespaceIndex(
+            "http://localhost:8848",
+            "dev",
+            listOf(cfg("other.properties", "DEFAULT_GROUP", "dev", "other=true\n", "properties")),
+            ttl = 100L
+        )
+        NacosKeyResolver.refreshIndex(timedCache, "http://localhost:8848")
+        assertFalse(
+            NacosKeyResolver.isDataIdKnown(
+                "target.properties",
+                timedCache,
+                "http://localhost:8848",
+                activeNamespaceId = "dev"
+            )
+        )
+
+        timedCache.markNamespaceIndexNonAuthoritative("http://localhost:8848", "dev")
+        assertTrue(
+            NacosKeyResolver.isDataIdKnown(
+                "target.properties",
+                timedCache,
+                "http://localhost:8848",
+                activeNamespaceId = "dev"
+            )
+        )
+
+        now += 101L
+        assertTrue(
+            NacosKeyResolver.isDataIdKnown(
+                "target.properties",
+                timedCache,
+                "http://localhost:8848",
+                activeNamespaceId = "dev"
+            )
+        )
     }
 
     @Test
@@ -274,7 +408,10 @@ class NacosKeyResolverTest {
         // and a synchronous index rebuild makes the key immediately resolvable
         // so the gutter icon turns solid on the next highlighter pass.
         NacosKeyResolver.refreshIndex(cache, activeServerUrl = "http://localhost:8848")
-        assertTrue(NacosKeyResolver.hasKey("db.url", cache))
-        assertEquals("jdbc:test", NacosKeyResolver.resolve("db.url", cache).single().location.value)
+        assertTrue(NacosKeyResolver.hasKey("db.url", cache, activeServerUrl = "http://localhost:8848"))
+        assertEquals(
+            "jdbc:test",
+            NacosKeyResolver.resolve("db.url", cache, activeServerUrl = "http://localhost:8848").single().location.value
+        )
     }
 }

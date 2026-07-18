@@ -4,6 +4,7 @@ import com.nanyin.nacos.search.models.MatchType
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.SearchResult
 import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.services.captureAccessIdentity
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.SearchService
 import com.nanyin.nacos.search.settings.NacosSettings
@@ -318,7 +319,7 @@ class NacosToolWindow(private val project: Project, private val toolWindow: Tool
                     try {
                         indicator.text = "Fetching configurations from cache..."
                         
-                        val cachedConfigs = cacheService.getAllCachedConfigurations()
+                        val cachedConfigs = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
                         if (cachedConfigs.isNotEmpty()) {
                             withContext(Dispatchers.EDT) {
                                 updateSearchResults(cachedConfigs.map { SearchResult(it, MatchType.MULTIPLE, "", 100) })
@@ -445,7 +446,7 @@ class NacosToolWindow(private val project: Project, private val toolWindow: Tool
         val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         scope.launch {
             try {
-                val allConfigs = cacheService.getAllCachedConfigurations()
+                val allConfigs = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
                 val results = allConfigs.map { SearchResult(it, MatchType.MULTIPLE, "", 100) }
                 
                 withContext(Dispatchers.EDT) {

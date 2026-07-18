@@ -7,6 +7,7 @@ import com.intellij.psi.PsiPolyVariantReferenceBase
 import com.intellij.psi.ResolveResult
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.intellij.openapi.application.ApplicationManager
+import com.nanyin.nacos.search.services.captureAccessIdentity
 
 /**
  * A reference from a `${...}` placeholder inside `@NacosValue` / `@Value` to the
@@ -28,10 +29,12 @@ class NacosValueReference(
         val project: Project = element.project ?: return emptyArray()
         val hits = NacosKeyResolver.resolve(
             key = key,
-            activeServerUrl = NacosKeyResolver.currentServerUrl(),
             preferredGroup = codeContext.group,
             preferredNamespaceId = codeContext.namespaceId,
-            allowCrossNamespace = crossNamespaceNavigationEnabled()
+            allowCrossNamespace = crossNamespaceNavigationEnabled(),
+            activeIdentity = ApplicationManager.getApplication()
+                .getService(NacosSettings::class.java)
+                .captureAccessIdentity()
         )
        return hits.map { hit ->
            object : ResolveResult {

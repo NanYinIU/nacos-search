@@ -9,10 +9,13 @@ import com.intellij.openapi.editor.markup.GutterIconRenderer
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
-import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.NamespaceService
+import com.nanyin.nacos.search.services.NamespaceIndexRefreshService
+import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
+import com.nanyin.nacos.search.services.captureAccessIdentity
 import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.runBlocking
 import java.awt.BorderLayout
@@ -30,7 +33,10 @@ import javax.swing.ListCellRenderer
  * there, falling back to the standard "go to declaration" list when multiple
  * definitions exist.
  */
-class NacosValueLineMarkerProvider : LineMarkerProvider {
+class NacosValueLineMarkerProvider internal constructor(
+    private val refreshObserver: (com.intellij.openapi.project.Project, NacosCodeContext) -> Unit
+) : LineMarkerProvider {
+    constructor() : this(::requestBackgroundRefresh)
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
         val literal = literalForLeaf(element) ?: return null
@@ -48,22 +54,21 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
 
         if (!NacosValueReferenceContributor.isInSupportedAnnotation(literal)) return null
         val codeContext = NacosCodeContextExtractor.fromLiteral(literal)
+        val resolution = currentResolution(placeholder.key)
+        if (resolution.status != ConfigReferenceStatus.RESOLVED) {
+            refreshObserver(anchor.project, codeContext)
+        }
 
         // Only show the marker if the key is in the cache or a dataId context
         // is available for remote lookup fallback.
-        if (!shouldShowMarker(placeholder.key, codeContext)) return null
+        if (!shouldShowMarker(resolution, codeContext)) return null
 
-        // Resolvability picks the visual state: solid arrow when the key is
-        // already cached, hollow "unresolved" when only a dataId hint exists.
-        val resolvable = isResolvable(placeholder.key)
-        val icon = if (resolvable) NacosIcons.GutterConfig else NacosIcons.GutterConfigUnresolved
-        val tooltipKey =
-            if (resolvable) "nacosvalue.marker.tooltip.resolved" else "nacosvalue.marker.tooltip.unresolved"
+        val presentation = markerPresentation(resolution.status)
         return LineMarkerInfo(
             anchor,
             anchor.textRange,
-            icon,
-            { NacosSearchBundle.message(tooltipKey) },
+            presentation.icon,
+            { NacosSearchBundle.message(presentation.tooltipKey) },
             { _, _ ->
                 navigateFromCode(anchor, literal, placeholder.key, codeContext)
             },
@@ -72,24 +77,34 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
         )
     }
 
-   private fun shouldShowMarker(key: String, codeContext: NacosCodeContext): Boolean {
-       if (NacosKeyResolver.hasKey(key, activeServerUrl = NacosKeyResolver.currentServerUrl())) return true
+   private fun shouldShowMarker(resolution: ConfigResolution, codeContext: NacosCodeContext): Boolean {
+       if (resolution.hits.isNotEmpty()) return true
        val dataId = codeContext.dataId ?: return false
-       // Only show the unresolved marker when the dataId is known to exist in
-       // the cache. When the namespace has been loaded but the dataId is
-       // absent, the config almost certainly doesn't exist in Nacos, so a
-       // dead-end marker would be misleading. Returns true optimistically on a
-       // cold/empty cache so lazy-loading still works.
-       return NacosKeyResolver.isDataIdKnown(dataId, activeServerUrl = NacosKeyResolver.currentServerUrl())
+       return NacosKeyResolver.isDataIdKnown(
+           dataId,
+           activeNamespaceId = effectiveNamespaceId(codeContext),
+           activeIdentity = currentAccessIdentity()
+       )
    }
 
-    private fun isResolvable(key: String): Boolean {
-        return NacosKeyResolver.hasKey(
+    private fun currentResolution(key: String): ConfigResolution =
+        NacosKeyResolver.resolveCurrentState(
             key,
-            activeServerUrl = NacosKeyResolver.currentServerUrl(),
-            allowCrossNamespace = crossNamespaceEnabled()
+            allowCrossNamespace = crossNamespaceEnabled(),
+            activeIdentity = currentAccessIdentity()
         )
-    }
+
+    private fun currentAccessIdentity() =
+        ApplicationManager.getApplication().getService(NacosSettings::class.java).captureAccessIdentity()
+
+    private fun effectiveNamespaceId(codeContext: NacosCodeContext): String? =
+        if (crossNamespaceEnabled()) {
+            codeContext.namespaceId
+        } else {
+            ApplicationManager.getApplication()
+                .getService(NamespaceService::class.java)
+                .getCurrentNamespace()?.namespaceId
+        }
 
     private fun crossNamespaceEnabled(): Boolean =
         try {
@@ -144,6 +159,21 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
             } else {
                 namespaceService.getCurrentNamespace()?.namespaceId
             }
+            val accessIdentity = settings.captureAccessIdentity()
+            val cached = runBlocking {
+                cacheService.getConfigDetail(
+                    accessIdentity,
+                    namespaceId,
+                    dataId,
+                    group,
+                    allowStale = true
+                )
+            }
+            if (cached != null) {
+                val lineIndex = ConfigKeyExtractor.extract(cached)[key]?.lineIndex ?: -1
+                NacosConfigNavigator.navigate(project, cached, lineIndex)
+                return@executeOnPooledThread
+            }
             val config = runBlocking {
                 apiService.getConfiguration(
                     dataId = dataId,
@@ -159,7 +189,7 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
             // decide resolved vs. unresolved, so we write it unconditionally.
             runBlocking {
                 cacheService.putConfigDetail(
-                    settings.serverUrl,
+                    accessIdentity,
                     namespaceId,
                     config,
                     settings.getCacheTtlMillis()
@@ -170,17 +200,13 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
             // (never the highlighter/dispatch thread), so a blocking rebuild is
             // safe and makes hasKey()/resolve() reflect the freshly cached
             // config immediately.
-            NacosKeyResolver.rebuildBlocking(cacheService, NacosKeyResolver.currentServerUrl())
+            ApplicationManager.getApplication()
+                .getService(NavigationIndexRefreshService::class.java)
+                .refresh(accessIdentity, project)
 
             val lineIndex = ConfigKeyExtractor.extract(config)[key]?.lineIndex ?: -1
             NacosConfigNavigator.navigate(project, config, lineIndex)
 
-            // Re-run the highlighter pass so the gutter icon re-renders: the
-            // previously hollow (unresolved) marker becomes solid now that the
-            // key is resolvable.
-            ApplicationManager.getApplication().invokeLater {
-                DaemonCodeAnalyzer.getInstance(project).restart()
-            }
         }
     }
 
@@ -188,6 +214,49 @@ class NacosValueLineMarkerProvider : LineMarkerProvider {
         val normalized = namespaceId.takeIf { it.isNotBlank() && it != "public" } ?: ""
         return namespaceService.findNamespaceById(normalized)?.getDisplayName()
             ?: if (normalized.isBlank()) "public" else namespaceId
+    }
+
+    companion object {
+        private data class MarkerPresentation(
+            val icon: javax.swing.Icon,
+            val tooltipKey: String
+        )
+
+        private fun markerPresentation(status: ConfigReferenceStatus): MarkerPresentation = when (status) {
+            ConfigReferenceStatus.RESOLVED -> MarkerPresentation(
+                NacosIcons.GutterConfig,
+                "nacosvalue.marker.tooltip.resolved"
+            )
+            ConfigReferenceStatus.STALE -> MarkerPresentation(
+                NacosIcons.GutterConfigStale,
+                "nacosvalue.marker.tooltip.stale"
+            )
+            ConfigReferenceStatus.UNRESOLVED, ConfigReferenceStatus.UNAVAILABLE -> MarkerPresentation(
+                NacosIcons.GutterConfigUnresolved,
+                "nacosvalue.marker.tooltip.unresolved"
+            )
+        }
+
+        private fun requestBackgroundRefresh(
+            project: com.intellij.openapi.project.Project,
+            codeContext: NacosCodeContext
+        ) {
+            try {
+                val application = ApplicationManager.getApplication()
+                val settings = application.getService(NacosSettings::class.java)
+                if (!settings.cacheEnabled) return
+                val namespaceId = if (settings.getActiveServer().allowCrossNamespaceNavigation) {
+                    codeContext.namespaceId
+                } else {
+                    application.getService(NamespaceService::class.java)
+                        .getCurrentNamespace()?.namespaceId
+                }
+                application.getService(NamespaceIndexRefreshService::class.java)
+                    .requestIfNeeded(settings.captureNamespaceIndexRequest(namespaceId), project)
+            } catch (_: Exception) {
+                // Gutter calculation is best-effort and must never fail PSI analysis.
+            }
+        }
     }
 
     private class NacosConfigChoiceRenderer : JPanel(BorderLayout()), ListCellRenderer<NacosConfigChoiceItem> {

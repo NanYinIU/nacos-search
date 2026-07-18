@@ -102,7 +102,7 @@ class NacosApiService {
     ): Result<NacosConfiguration?> = withContext(Dispatchers.IO) {
         try {
             if (useCache && !forceRefresh && settings.cacheEnabled) {
-                cacheService.getConfigDetail(settings.serverUrl, namespaceId, dataId, group)?.let { cachedConfig ->
+                cacheService.getConfigDetail(settings.captureAccessIdentity(), namespaceId, dataId, group)?.let { cachedConfig ->
                     logger.debug("Returning cached configuration for $dataId:$group")
                     return@withContext Result.success(cachedConfig)
                 }
@@ -124,7 +124,12 @@ class NacosApiService {
                 val config = apiResponse
                 // Cache the configuration if cache is enabled
                 if (useCache && settings.cacheEnabled) {
-                    cacheService.putConfigDetail(settings.serverUrl, namespaceId, config, settings.getCacheTtlMillis())
+                    cacheService.putConfigDetail(
+                        settings.captureAccessIdentity(),
+                        namespaceId,
+                        config,
+                        settings.getCacheTtlMillis()
+                    )
                 }
                 
                 Result.success(config)
@@ -133,6 +138,10 @@ class NacosApiService {
                 Result.success(null)
             }
         } catch (e: Exception) {
+            if (e is NacosRequestError.Client && e.status == 404) {
+                logger.info("Configuration not found for dataId=$dataId group=$group namespaceId=$namespaceId")
+                return@withContext Result.success(null)
+            }
             logger.warn("Error getting configuration", e)
             Result.failure(e)
         }
@@ -395,7 +404,7 @@ class NacosApiService {
             cacheService.clearAll()
             logger.debug("Cleared all configuration cache")
         } else {
-            cacheService.invalidateNamespace(settings.serverUrl, namespace)
+            cacheService.invalidateNamespace(settings.captureAccessIdentity(), namespace)
             logger.debug("Cleared cache for namespace: $namespace")
         }
     }
@@ -564,7 +573,7 @@ class NacosApiService {
             val success = response.trim().equals("true", ignoreCase = true)
             if (success) {
                 // Invalidate cache for this config
-                cacheService.invalidateNamespace(settings.serverUrl, namespaceId)
+                cacheService.invalidateNamespace(settings.captureAccessIdentity(), namespaceId)
                 Result.success(true)
             } else {
                 Result.failure(RuntimeException("Server responded: $response"))
@@ -638,7 +647,12 @@ class NacosApiService {
                 type = item.type
             )
             if (useCache && settings.cacheEnabled) {
-                cacheService.putConfigDetail(settings.serverUrl, item.tenant, configuration, settings.getCacheTtlMillis())
+                cacheService.putConfigDetail(
+                    settings.captureAccessIdentity(),
+                    item.tenant,
+                    configuration,
+                    settings.getCacheTtlMillis()
+                )
             }
             return configuration
         }

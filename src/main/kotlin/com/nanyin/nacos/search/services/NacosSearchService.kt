@@ -283,9 +283,8 @@ class NacosSearchService(
         }
         val indexRequest = settings.captureNamespaceIndexRequest(namespaceId, snapshot)
         val indexKey = indexRequest.key
-        val cacheServerId = indexKey.identity.serverId
         val cachedIndex = if (!request.forceRefresh && settings.cacheEnabled) {
-            cacheService.getNamespaceIndex(cacheServerId, namespaceId)
+            cacheService.getNamespaceIndex(indexKey.identity, namespaceId)
         } else {
             null
         }
@@ -297,12 +296,17 @@ class NacosSearchService(
             val coordinator = indexRequester
                 ?: ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java)
             val outcome = coordinator.requestIndex(indexRequest, request.fullNamespaceTrigger()!!)
-            val loadedIndex = cacheService.getNamespaceIndex(cacheServerId, namespaceId)
+            if (outcome is IndexOutcome.Complete || outcome is IndexOutcome.Partial) {
+                ApplicationManager.getApplication()
+                    .getService(NavigationIndexRefreshService::class.java)
+                    .refresh(indexKey.identity, null)
+            }
+            val loadedIndex = cacheService.getNamespaceIndex(indexKey.identity, namespaceId)
             if (outcome is IndexOutcome.Complete && loadedIndex != null) {
                 source = SearchSource.REMOTE
                 loadedIndex
             } else {
-                val staleIndex = cacheService.getNamespaceIndex(cacheServerId, namespaceId, allowStale = true)
+                val staleIndex = cacheService.getNamespaceIndex(indexKey.identity, namespaceId, allowStale = true)
                 if (staleIndex != null) {
                     source = SearchSource.STALE_CACHE
                     staleIndex
