@@ -1,0 +1,28 @@
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_30db8c767f053f::t_0aa28fac4ec57e 293-294
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinatorTest.kt
+  s_30db8c767f053f::t_3ab25e0f1998fc 77-92,131
+  s_30db8c767f053f::t_0aa28fac4ec57e 140-141,155
+  s_30db8c767f053f::t_cdfe9abfc7ad98 5-8,19-21,76,93-130
+  s_30db8c767f053f::t_3b42af3c86dbb2 132
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
+  s_30db8c767f053f::t_0aa28fac4ec57e 44-48,57-58,103-111,138,191-192
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexRoutingTest.kt
+  s_30db8c767f053f::t_0aa28fac4ec57e 18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "57b9f0b8178a1b0f192768ca81a9f293daca86e3",
+  "prompts": {},
+  "sessions": {
+    "s_30db8c767f053f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f741f-8255-7c63-b5f4-a3d6803fa282",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
