@@ -1,0 +1,23 @@
+src/main/resources/META-INF/plugin.xml
+  s_30db8c767f053f::t_1009771519259a 20-26
+build.gradle.kts
+  s_30db8c767f053f::t_1009771519259a 12,113-119
+README.md
+  s_30db8c767f053f::t_1009771519259a 133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "fe0dd574b3d69c9208f151e1667bb07e814998e8",
+  "prompts": {},
+  "sessions": {
+    "s_30db8c767f053f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f741f-8255-7c63-b5f4-a3d6803fa282",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
