@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.3.4"
+version = "1.3.5"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -110,6 +110,13 @@ tasks {
         """.trimIndent())
 
        changeNotes.set("""
+            <h3>1.3.5</h3>
+            <ul>
+                <li><b>Cache</b>: full-namespace index writes now honor the configured TTL, while expired configuration details remain available for stale-while-revalidate navigation.</li>
+                <li><b>Navigation</b>: added fresh, stale, and unresolved gutter states; stale targets remain navigable, and details older than seven days trigger a forced background refresh.</li>
+                <li><b>Reliability</b>: added event-driven, single-flight namespace refreshes; only a fresh complete index can prove a dataId absent, while partial or failed refreshes preserve usable stale targets.</li>
+                <li><b>Security</b>: navigation and local search caches are isolated by server, authentication mode, user, and namespace.</li>
+            </ul>
             <h3>1.3.4</h3>
             <ul>
                 <li><b>UI</b>: optimized the Nacos Search sidebar icon for clearer display in the IDE tool window.</li>
