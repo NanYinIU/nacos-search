@@ -1,0 +1,49 @@
+src/main/kotlin/com/nanyin/nacos/search/models/NacosConfiguration.kt
+  s_22264a491c1bd3::t_0bd37b8d4c1fe4 27-31,76
+src/main/kotlin/com/nanyin/nacos/search/services/operations/PublishController.kt
+  s_2733a4bbf61d05::t_931e656cc6d8c7 1-159
+src/main/kotlin/com/nanyin/nacos/search/services/operations/PublishTypes.kt
+  s_22264a491c1bd3::t_3ad65e4d132339 1-80
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V1ProtocolAdapter.kt
+  s_2733a4bbf61d05::t_208f01a53bd38f 65-66,85,104-105,193-238
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V3ProtocolAdapter.kt
+  s_22264a491c1bd3::t_31971830d7b2f6 95-130,204-215
+src/test/kotlin/com/nanyin/nacos/search/services/operations/ConnectionDiagnosticTest.kt
+  s_2733a4bbf61d05::t_3bd9760883ddae 153-154,172-173
+src/test/kotlin/com/nanyin/nacos/search/services/operations/DualStackBrowsingTest.kt
+  s_2733a4bbf61d05::t_2e754d3fcc4ef5 152-154,174-176
+src/test/kotlin/com/nanyin/nacos/search/services/operations/GenerationResolverTest.kt
+  s_2733a4bbf61d05::t_18cf338d5bb9a5 232-233,251-252
+src/test/kotlin/com/nanyin/nacos/search/services/operations/OperationGatewayTest.kt
+  s_2733a4bbf61d05::t_175ce80790514a 93-95
+src/test/kotlin/com/nanyin/nacos/search/services/operations/PublishControllerTest.kt
+  s_22264a491c1bd3::t_294df564a8a953 1-241
+src/test/kotlin/com/nanyin/nacos/search/services/operations/V1PublishContractTest.kt
+  s_22264a491c1bd3::t_2f35655d0081c8 1-108
+src/test/kotlin/com/nanyin/nacos/search/services/operations/V3PublishContractTest.kt
+  s_22264a491c1bd3::t_b1093a2575f0ce 1-114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "38fb50946401f9141e2b3f687e66e6e24dcc470d",
+  "prompts": {},
+  "sessions": {
+    "s_22264a491c1bd3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8a12-0657-7881-b146-36292a508d49",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_2733a4bbf61d05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8a0e-cc27-7f22-8fb7-61d370cefc7e",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
