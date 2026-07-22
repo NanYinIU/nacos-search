@@ -1,0 +1,41 @@
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V3ProtocolAdapter.kt
+  s_6863e05fd812b4::t_3975d6184f23a7 29,132-165,215-237,311-352,420-449,454-455
+src/test/kotlin/com/nanyin/nacos/search/services/operations/OperationGatewayHistoryTest.kt
+  s_6863e05fd812b4::t_b709493d648d76 1-197
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V1ProtocolAdapter.kt
+  s_6863e05fd812b4::t_738248a2c2cbce 126,147-171,380-433,555-584,588
+src/main/kotlin/com/nanyin/nacos/search/services/operations/HistoryMemoryCache.kt
+  s_6863e05fd812b4::t_dc9b3800ef2f60 1-84
+src/main/kotlin/com/nanyin/nacos/search/services/operations/OperationGateway.kt
+  s_6863e05fd812b4::t_58a3c61be1a822 18-19,60-110
+src/main/kotlin/com/nanyin/nacos/search/services/operations/HistoryTypes.kt
+  s_6863e05fd812b4::t_92dbae060733c9 1-91
+src/test/kotlin/com/nanyin/nacos/search/services/operations/V3HistoryAdapterTest.kt
+  s_6863e05fd812b4::t_135a81d5600d0e 1-180
+src/test/kotlin/com/nanyin/nacos/search/services/operations/HistoryMemoryCacheTest.kt
+  s_6863e05fd812b4::t_a4b2c2ce533516 1-130
+src/test/kotlin/com/nanyin/nacos/search/services/operations/HistoryDiffRequestTest.kt
+  s_6863e05fd812b4::t_a3d6d66656b76e 1-46
+src/test/kotlin/com/nanyin/nacos/search/services/operations/V1HistoryAdapterTest.kt
+  s_6863e05fd812b4::t_7d99e3914cb5ab 1-173
+src/test/kotlin/com/nanyin/nacos/search/services/operations/HistoryEpochFencingTest.kt
+  s_6863e05fd812b4::t_2780f4e666b5fe 1-150
+src/main/kotlin/com/nanyin/nacos/search/services/operations/HistoryDiffPresenter.kt
+  s_6863e05fd812b4::t_635c5639823c3e 1-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "3534f613e87ecc954ebc14e526a3cf7bdce00427",
+  "prompts": {},
+  "sessions": {
+    "s_6863e05fd812b4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8a54-1003-70d0-a60a-778dc23a862c",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
