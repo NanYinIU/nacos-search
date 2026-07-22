@@ -1,0 +1,83 @@
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchWindow.kt
+  s_88ffb34c081052::t_7c41d807deca89 430
+  s_88ffb34c081052::t_30357cd1b2522c 428-429,436-438,448-449
+src/main/resources/messages/NacosSearchBundle.properties
+  s_88ffb34c081052::t_d509b602e8ecc5 305
+src/test/kotlin/com/nanyin/nacos/search/ui/NamespacePanelTest.kt
+  s_88ffb34c081052::t_f8f0daa78d2a78 91-103
+  s_88ffb34c081052::t_ba0aae1aa23f32 90
+src/main/kotlin/com/nanyin/nacos/search/ui/NamespacePanel.kt
+  s_88ffb34c081052::t_2759c66f3a835c 373-390,469-477
+  s_88ffb34c081052::t_0555a434638bb1 478-479
+src/test/kotlin/com/nanyin/nacos/search/settings/AccessSafetyTest.kt
+  s_88ffb34c081052::t_94248705b45528 6-7,142-161,164
+  s_88ffb34c081052::t_518575e3ef98c9 162,165-185
+  s_88ffb34c081052::t_e74e7a9ede31b8 163
+src/main/kotlin/com/nanyin/nacos/search/models/NacosServerConfig.kt
+  s_88ffb34c081052::t_d509b602e8ecc5 18-19,34
+src/test/kotlin/com/nanyin/nacos/search/services/operations/V1ProtocolAdapterTest.kt
+  s_88ffb34c081052::t_6a57ffd5d0f358 1-12,14-16,40-101,118-134,136-155
+  s_88ffb34c081052::t_30357cd1b2522c 102-104,106,108-109,111-112,114-117,135
+  s_88ffb34c081052::t_94248705b45528 13,17-37,39
+  s_88ffb34c081052::t_7c41d807deca89 105,107,110,113
+  s_88ffb34c081052::t_52890c9a541ff8 38
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_88ffb34c081052::t_175bd542a122f4 498,526,546
+  s_88ffb34c081052::t_518575e3ef98c9 622-626
+  s_88ffb34c081052::t_2759c66f3a835c 9,17-24,40-42,50-59,103-105,137-144,219-226,432-434,685-698
+  s_88ffb34c081052::t_ded01c6396b95e 699
+src/main/kotlin/com/nanyin/nacos/search/services/operations/OperationGateway.kt
+  s_88ffb34c081052::t_2759c66f3a835c 26-27,29,36,43-44,46,53
+  s_88ffb34c081052::t_30357cd1b2522c 76,90,93,95-101
+  s_88ffb34c081052::t_e63bb2a58fd367 1-25,28,30-35,37-42,45,47-52,54-75,77-89,91-92,94,102-177
+src/main/kotlin/com/nanyin/nacos/search/settings/AccessSafety.kt
+  s_88ffb34c081052::t_33f35b7d545dbb 7-8,86,105-112,115-118,124,133
+  s_88ffb34c081052::t_518575e3ef98c9 99-104
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
+  s_88ffb34c081052::t_30357cd1b2522c 14,51-53,56-57,59,75-76,78-80,87-88,181-183,219-232
+  s_88ffb34c081052::t_33f35b7d545dbb 7,67
+  s_88ffb34c081052::t_7c41d807deca89 58,92-96
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V1ProtocolAdapter.kt
+  s_88ffb34c081052::t_30357cd1b2522c 18,167,170-175
+  s_88ffb34c081052::t_33f35b7d545dbb 1-17,19-166,168-169,176-281
+src/main/kotlin/com/nanyin/nacos/search/models/EnvironmentProfile.kt
+  s_88ffb34c081052::t_d509b602e8ecc5 88
+src/main/resources/messages/NacosSearchBundle_zh_CN.properties
+  s_88ffb34c081052::t_d509b602e8ecc5 305
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_88ffb34c081052::t_30357cd1b2522c 315
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosConfigurable.kt
+  s_88ffb34c081052::t_d509b602e8ecc5 4,62,139,228-230,499,678
+src/main/kotlin/com/nanyin/nacos/search/models/AccessIdentity.kt
+  s_88ffb34c081052::t_33f35b7d545dbb 5-7,20,35,45
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosSettings.kt
+  s_88ffb34c081052::t_d509b602e8ecc5 323
+  s_88ffb34c081052::t_33f35b7d545dbb 570-571
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinatorTest.kt
+  s_88ffb34c081052::t_30357cd1b2522c 7-8,12-13,139-182
+  s_88ffb34c081052::t_a058397260a79b 183
+  s_88ffb34c081052::t_7c91f201274d56 184-185
+src/test/kotlin/com/nanyin/nacos/search/services/NacosApiServiceV1AnonymousTest.kt
+  s_88ffb34c081052::t_518575e3ef98c9 16,54-67
+  s_88ffb34c081052::t_f8f0daa78d2a78 1-15,17-50,53,68-108
+  s_88ffb34c081052::t_906b1f7002ebea 51-52
+src/test/kotlin/com/nanyin/nacos/search/services/operations/OperationGatewayTest.kt
+  s_88ffb34c081052::t_c744daf0216652 1-24,31-94
+  s_88ffb34c081052::t_906b1f7002ebea 25-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ea6443135314233da64b9cb9239b88a266eea44c",
+  "prompts": {},
+  "sessions": {
+    "s_88ffb34c081052": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f899a-4a48-7701-ae7e-11293559ea7c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
