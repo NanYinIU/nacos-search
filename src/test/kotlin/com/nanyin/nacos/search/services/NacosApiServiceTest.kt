@@ -7,6 +7,7 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.settings.AuthMode
+import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpHandler
@@ -40,6 +41,7 @@ class NacosApiServiceTest {
         private val lastPublishQuery = AtomicReference<String?>(null)
         private val activeDetail = AtomicInteger(0)
         private val inFlightMax = AtomicInteger(0)
+        private val requestCount = AtomicInteger(0)
 
         private val namespacesResponse = mapOf(
             "code" to 0,
@@ -88,12 +90,14 @@ class NacosApiServiceTest {
 
             server.createContext("/nacos/v1/console/namespaces", object : HttpHandler {
                 override fun handle(exchange: HttpExchange) {
+                    requestCount.incrementAndGet()
                     sendJsonResponse(exchange, 200, namespacesResponse)
                 }
             })
             // Handle POST (publish) to /nacos/v1/cs/configs
             server.createContext("/nacos/v1/cs/configs", object : HttpHandler {
                 override fun handle(exchange: HttpExchange) {
+                    requestCount.incrementAndGet()
                     if (exchange.requestMethod == "POST") {
                         lastPublishQuery.set(exchange.requestURI.query)
                         lastPublishBody.set(exchange.requestBody.bufferedReader(StandardCharsets.UTF_8).readText())
@@ -224,6 +228,28 @@ class NacosApiServiceTest {
     fun `test get configuration with null namespace`() = runBlocking {
         val result = apiService.getConfiguration("test.properties", "DEFAULT_GROUP", null)
         assertTrue(result.isSuccess)
+    }
+
+    @Test
+    fun `invalid endpoint or incomplete credentials fails closed before cache or transport`() = runBlocking {
+        val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+        cache.clearAll()
+        cache.putConfigDetail(
+            settings.captureAccessIdentity(),
+            "test-ns",
+            NacosConfiguration("test.properties", "DEFAULT_GROUP", "test-ns", "cached=value")
+        )
+        settings.serverUrl = "http://localhost:$serverPort/nacos"
+        settings.username = "nacos"
+        settings.password = ""
+        val before = requestCount.get()
+
+        val result = apiService.getConfiguration("test.properties", "DEFAULT_GROUP", "test-ns")
+
+        assertTrue(result.isFailure)
+        assertInstanceOf(ConfigurationRequired::class.java, result.exceptionOrNull())
+        assertEquals(before, requestCount.get())
+        cache.clearAll()
     }
 
     @Test

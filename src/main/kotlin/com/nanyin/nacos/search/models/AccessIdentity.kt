@@ -11,16 +11,45 @@ import com.nanyin.nacos.search.settings.AuthMode
  * the cache, while switching the username or auth mode does.
  */
 data class AccessIdentity(
-    val serverId: String,
+    val profileId: String,
+    val accessRevision: Long,
+    val canonicalEndpoint: String,
+    val resolvedGeneration: Long,
     val authMode: AuthMode,
     val principal: String
 ) {
+    /** Compatibility name for callers written before profiles were introduced. */
+    val serverId: String get() = profileId
+
     companion object {
         fun of(serverId: String, authMode: AuthMode, username: String): AccessIdentity {
             val normalizedServer = serverId.trim().trimEnd('/').ifBlank { "<default>" }
             val normalizedPrincipal = username.trim().ifBlank { "<anonymous>" }
-            return AccessIdentity(normalizedServer, authMode, normalizedPrincipal)
+            return AccessIdentity(
+                profileId = normalizedServer,
+                accessRevision = 0,
+                canonicalEndpoint = normalizedServer,
+                resolvedGeneration = 0,
+                authMode = authMode,
+                principal = normalizedPrincipal
+            )
         }
+
+        fun ofProfile(
+            profileId: String,
+            accessRevision: Long,
+            canonicalEndpoint: String,
+            resolvedGeneration: Long,
+            authMode: AuthMode,
+            principal: String
+        ): AccessIdentity = AccessIdentity(
+            profileId = profileId.trim().ifBlank { "<default>" },
+            accessRevision = accessRevision,
+            canonicalEndpoint = canonicalEndpoint.trim().trimEnd('/').ifBlank { "<invalid>" },
+            resolvedGeneration = resolvedGeneration,
+            authMode = authMode,
+            principal = principal.trim().ifBlank { "<anonymous>" }
+        )
     }
 }
 

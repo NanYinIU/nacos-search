@@ -10,6 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
@@ -36,7 +37,7 @@ class NacosSearchServiceCancelTest {
             whenever(
                 api.listConfigurations(
                     any(), any(), any(), any(),
-                    any(), any(), any(), any(), any(), any()
+                    any(), any(), any(), any(), any(), any(), anyOrNull()
                 )
             ).thenReturn(Result.success(response))
         }
@@ -63,7 +64,7 @@ class NacosSearchServiceCancelTest {
         // coroutine must not have issued a second listing call.
         verify(api, times(1)).listConfigurations(
             any(), any(), any(), any(),
-            any(), any(), any(), any(), any(), any()
+            any(), any(), any(), any(), any(), any(), anyOrNull()
         )
 
         scope.cancel()

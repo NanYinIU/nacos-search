@@ -5,6 +5,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.util.xmlb.XmlSerializerUtil
+import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosServerConfig
 
 /**
@@ -29,6 +30,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         )
     )
     var activeServerId: String = "s_local"
+
+    // ---- Profile migration model ----
+    // Profiles are application-wide and reusable by every project. Selection and
+    // namespace are intentionally kept in NacosProjectSession instead.
+    var profiles: MutableList<EnvironmentProfile> = mutableListOf()
+    var profileMigrationCompleted: Boolean = false
+    var migratedDefaultProfileId: String = ""
+    var migratedDefaultNamespaceId: String = "public"
 
     // Server configuration (legacy flat fields — mirror of active server)
     var serverUrl: String = "http://localhost:8848"
@@ -123,6 +132,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         // Load passwords from PasswordSafe, migrating any legacy plaintext that
         // was read from the XML into the credential store on first run.
         loadAndMigrateCredentials()
+        migrateLegacyProfiles()
         // Keep flat fields in sync with active server
         syncFromActiveServer()
     }
@@ -226,10 +236,102 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
 
     fun applyServers(newServers: List<NacosServerConfig>, newActiveId: String) {
         val previousIds = servers.map { it.id }.toSet()
+        val previousPasswords = servers.associate { it.id to it.password }
         servers = newServers.map { it.copy() }.toMutableList()
         activeServerId = newActiveId
         syncFromActiveServer()
         persistCredentials(previousIds)
+        updateProfilesFromServers(previousPasswords)
+    }
+
+    /** Returns an immutable profile-migration result for a newly opened project. */
+    fun migrationDefaults(): LegacyMigrationResult {
+        migrateLegacyProfiles()
+        return LegacyMigrationResult(profiles.toList(), migratedDefaultProfileId, migratedDefaultNamespaceId)
+    }
+
+    fun getProfile(profileId: String): EnvironmentProfile? {
+        migrateLegacyProfiles()
+        return profiles.firstOrNull { it.id == profileId }
+    }
+
+    fun getActiveProfile(): EnvironmentProfile? = getProfile(activeServerId)
+
+    /** Captures a complete immutable context before cache reads or network I/O. */
+    fun captureOperationContext(profileId: String? = null): Result<NacosOperationContext> {
+        migrateLegacyProfiles()
+        val selectedProfileId = profileId?.trim().takeUnless { it.isNullOrBlank() } ?: activeServerId
+        val configuredProfile = getProfile(selectedProfileId)
+        val persistedProfile = configuredProfile ?: if (profileId == null) {
+            // Compatibility boundary for callers that still use the historic
+            // app-wide active server. Project-selected operations never take
+            // this fallback.
+            EnvironmentProfile.fromLegacy(getActiveServer())
+        } else {
+            return Result.failure(ConfigurationRequired(listOf("Select a Nacos environment profile")))
+        }
+        if (profileId != null) {
+            // Project-owned selections must be resolved exclusively from the
+            // global profile and its versioned credential slot. They must not
+            // inherit the mutable app-wide legacy active-server fields.
+            return OperationContextResolver.resolve(
+                persistedProfile,
+                NacosCredentialStore.get(persistedProfile.credentialSlotId)
+            )
+        }
+        if (configuredProfile == null) {
+            // An unmigrated legacy active server has no corresponding profile
+            // yet, so its server entry (not unrelated flat fields) is the only
+            // deterministic source for this one compatibility operation.
+            return OperationContextResolver.resolve(persistedProfile, getActiveServer().password)
+        }
+        // Flat fields remain a compatibility bridge for callers that predate
+        // profiles. Capture their values into the immutable operation context,
+        // never by mutating the profile while an operation is in flight.
+        val profile = persistedProfile.withUpdated(
+            canonicalEndpoint = com.nanyin.nacos.search.models.CanonicalNacosEndpoint.parse(serverUrl)
+                .getOrNull()?.value.orEmpty(),
+            authMode = authMode,
+            principal = username.trim()
+        )
+        val secret = password.ifEmpty {
+            NacosCredentialStore.get(profile.credentialSlotId).orEmpty().ifEmpty { getActiveServer().password }
+        }
+        return OperationContextResolver.resolve(profile, secret)
+    }
+
+    private fun migrateLegacyProfiles() {
+        if (profileMigrationCompleted && profiles.isNotEmpty()) return
+        val result = LegacyProfileMigrator().migrate(servers, activeServerId, namespace)
+        profiles = result.profiles.toMutableList()
+        migratedDefaultProfileId = result.defaultProfileId
+        migratedDefaultNamespaceId = result.defaultNamespaceId
+        profileMigrationCompleted = true
+    }
+
+    private fun updateProfilesFromServers(previousPasswords: Map<String, String> = emptyMap()) {
+        val existing = profiles.associateBy { it.id }
+        profiles = servers.map { server ->
+            val migrated = EnvironmentProfile.fromLegacy(server)
+            val previous = existing[server.id]
+            val credentialChanged = previous != null &&
+                (previousPasswords[server.id] ?: NacosCredentialStore.get(previous.credentialSlotId).orEmpty()) != server.password
+            val credentialVersion = if (credentialChanged) previous!!.credentialSlotVersion + 1 else previous?.credentialSlotVersion ?: 1
+            val credentialSlotId = "${server.id}:v$credentialVersion"
+            val updated = previous?.withUpdated(
+                canonicalEndpoint = migrated.canonicalEndpoint,
+                authMode = migrated.authMode,
+                principal = migrated.principal,
+                credentialSlotId = credentialSlotId,
+                credentialSlotVersion = credentialVersion
+            ) ?: migrated.copy(credentialSlotId = credentialSlotId, credentialSlotVersion = credentialVersion)
+            NacosCredentialStore.set(updated.credentialSlotId, server.password)
+            if (credentialChanged) NacosCredentialStore.remove(previous!!.credentialSlotId)
+            updated.copy(displayName = server.displayName)
+        }.toMutableList()
+        migratedDefaultProfileId = activeServerId
+        migratedDefaultNamespaceId = namespace.ifBlank { "public" }
+        profileMigrationCompleted = true
     }
 
     /**
@@ -250,12 +352,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         
         if (serverUrl.isBlank()) {
             errors.add("Server URL cannot be empty")
-        } else {
-            try {
-                java.net.URL(serverUrl)
-            } catch (e: Exception) {
-                errors.add("Invalid server URL format")
-            }
+        } else if (!isValidServerUrl(serverUrl)) {
+            errors.add("Invalid server URL format")
         }
         
         if (cacheEnabled) {
@@ -302,16 +400,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
      * Validates a server URL
      */
     fun isValidServerUrl(url: String): Boolean {
-        if (url.isBlank()) {
-            return false
-        }
-        
-        return try {
-            val urlObj = java.net.URL(url)
-            urlObj.protocol in listOf("http", "https")
-        } catch (e: Exception) {
-            false
-        }
+        return com.nanyin.nacos.search.models.CanonicalNacosEndpoint.parse(url).isSuccess
     }
     
     /**
@@ -357,6 +446,10 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             )
         )
         activeServerId = "s_local"
+        profiles = mutableListOf()
+        profileMigrationCompleted = false
+        migratedDefaultProfileId = ""
+        migratedDefaultNamespaceId = "public"
     }
     
     /**

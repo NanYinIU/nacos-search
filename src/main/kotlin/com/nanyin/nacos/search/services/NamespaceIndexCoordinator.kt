@@ -9,6 +9,7 @@ import com.nanyin.nacos.search.models.DatasetState
 import com.nanyin.nacos.search.models.DataSource
 import com.nanyin.nacos.search.models.DataFreshness
 import com.nanyin.nacos.search.settings.NacosSettings
+import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.RequestPolicy
 import kotlinx.coroutines.CompletableDeferred
@@ -35,7 +36,8 @@ data class NacosServerSnapshot(
     val username: String,
     val password: String,
     val authMode: com.nanyin.nacos.search.settings.AuthMode,
-    val enableTokenAuth: Boolean
+    val enableTokenAuth: Boolean,
+    val identity: AccessIdentity = AccessIdentity.of("", AuthMode.TOKEN, "")
 ) {
     override fun toString(): String =
         "NacosServerSnapshot(serverUrl=$serverUrl, username=$username, password=***, authMode=$authMode, enableTokenAuth=$enableTokenAuth)"
@@ -50,9 +52,16 @@ data class NamespaceIndexRequest(
 internal fun NacosSettings.captureNamespaceIndexRequest(namespaceId: String?): NamespaceIndexRequest =
     captureNamespaceIndexRequest(namespaceId, captureServerSnapshot())
 
-internal fun NacosSettings.captureAccessIdentity(): AccessIdentity {
-    val server = getActiveServer()
-    return AccessIdentity.of(server.serverUrl, server.authMode, server.username)
+internal fun NacosSettings.captureAccessIdentity(profileId: String? = null): AccessIdentity {
+    return captureOperationContext(profileId)
+        .getOrNull()?.identity ?: AccessIdentity.ofProfile(
+        profileId = "<configuration-required>",
+        accessRevision = -1,
+        canonicalEndpoint = "<invalid>",
+        resolvedGeneration = -1,
+        authMode = AuthMode.TOKEN,
+        principal = ""
+    )
 }
 
 internal fun NacosSettings.captureNamespaceIndexRequest(
@@ -61,7 +70,7 @@ internal fun NacosSettings.captureNamespaceIndexRequest(
 ): NamespaceIndexRequest {
     return NamespaceIndexRequest(
         NamespaceIndexKey(
-            AccessIdentity.of(snapshot.serverUrl, snapshot.authMode, snapshot.username),
+            snapshot.identity,
             namespaceId.orEmpty()
         ),
         snapshot,
@@ -69,15 +78,20 @@ internal fun NacosSettings.captureNamespaceIndexRequest(
     )
 }
 
-internal fun NacosSettings.captureServerSnapshot(): NacosServerSnapshot {
-    val server = getActiveServer()
-    return NacosServerSnapshot(
-        serverUrl = server.serverUrl.trim().trimEnd('/'),
-        username = server.username,
-        password = server.password,
-        authMode = server.authMode,
-        enableTokenAuth = enableTokenAuth
-    )
+internal fun NacosSettings.captureServerSnapshot(profileId: String? = null): NacosServerSnapshot {
+    val context = captureOperationContext(profileId).getOrNull()
+    return if (context == null) {
+        NacosServerSnapshot("", "", "", AuthMode.TOKEN, false, captureAccessIdentity(profileId))
+    } else {
+        NacosServerSnapshot(
+            serverUrl = context.endpoint.value,
+            username = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty(),
+            password = context.credential.secret,
+            authMode = context.authMode,
+            enableTokenAuth = context.authMode != AuthMode.BASIC,
+            identity = context.identity
+        )
+    }
 }
 
 interface NamespaceIndexRequester {
@@ -138,12 +152,16 @@ class NamespaceIndexCoordinator internal constructor(
      */
     override suspend fun requestIndex(request: NamespaceIndexRequest, trigger: IndexTrigger): IndexOutcome {
         val key = request.key
+        val snapshotIdentity = request.server.identity
         require(
-            key.identity == AccessIdentity.of(
-                request.server.serverUrl,
-                request.server.authMode,
-                request.server.username
-            )
+            if (snapshotIdentity.canonicalEndpoint != "<default>") {
+                key.identity == snapshotIdentity
+            } else {
+                key.identity.canonicalEndpoint == com.nanyin.nacos.search.models.CanonicalNacosEndpoint
+                    .parse(request.server.serverUrl).getOrNull()?.value &&
+                    key.identity.authMode == request.server.authMode &&
+                    key.identity.principal == request.server.username.trim().ifBlank { "<anonymous>" }
+            }
         ) { "Namespace index key does not match its captured server snapshot" }
         require(request.cacheTtlMillis > 0) { "Namespace index cache TTL must be positive" }
         // PSI cooldown: skip if recently failed

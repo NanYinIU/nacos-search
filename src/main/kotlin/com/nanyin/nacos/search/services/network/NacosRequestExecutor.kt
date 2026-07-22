@@ -116,6 +116,10 @@ object DefaultHttpTransport : NacosRequestExecutor.HttpTransport {
                 .connectTimeout(request.connectTimeoutMs)
                 .readTimeout(request.readTimeoutMs)
                 .tuner { connection ->
+                    // A redirect can silently cross an origin boundary. Endpoint
+                    // validation establishes the origin up front, so transport must
+                    // never follow a later redirect.
+                    (connection as? java.net.HttpURLConnection)?.instanceFollowRedirects = false
                     connection.setRequestProperty("Accept", "application/json")
                     if (request.attempt > 1) {
                         connection.setRequestProperty("Connection", "close")

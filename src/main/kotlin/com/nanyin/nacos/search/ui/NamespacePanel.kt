@@ -5,6 +5,8 @@ import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.LanguageService
+import com.nanyin.nacos.search.settings.NacosProjectSession
+import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
@@ -50,6 +52,9 @@ class NamespacePanel(
     private val dispatcher: CoroutineDispatcher = Dispatchers.Main
 ) : JPanel(BorderLayout()), LanguageAwareComponent, NamespaceChangeListener, Disposable {
 
+    private val projectSession: NacosProjectSession? = project.getService(NacosProjectSession::class.java)
+    private val settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+
     // UI Components
     private lateinit var namespaceButton: JButton
     private lateinit var refreshButton: JButton
@@ -64,6 +69,9 @@ class NamespacePanel(
 
     // Active popup (kept so refresh can update it live)
     private var activePopup: JBPopup? = null
+
+    /** Local callback: namespace selection belongs to this project, not the app service. */
+    var onSelectionChanged: ((NamespaceInfo) -> Unit)? = null
 
     // Coroutine scope for async operations
     private val coroutineScope = CoroutineScope(dispatcher + SupervisorJob())
@@ -153,7 +161,6 @@ class NamespacePanel(
     }
 
     private fun setupEventHandlers() {
-        namespaceService.addNamespaceChangeListener(this)
         refreshButton.addActionListener {
             loadNamespaces()
         }
@@ -175,8 +182,14 @@ class NamespacePanel(
         setLoadingState(true)
 
         return try {
-            val result = namespaceService.loadNamespacesAsync().await()
-            result.onSuccess { loadedNamespaces ->
+            val result = projectSession?.let { session ->
+                session.seedIfNew(settings.migrationDefaults())
+                namespaceService.loadNamespacesAsync(
+                    settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
+                )
+            } ?: namespaceService.loadNamespacesAsync()
+            val loaded = result.await()
+            loaded.onSuccess { loadedNamespaces ->
                 namespaces = loadedNamespaces
                 updateNamespaceButton()
                 setLoadingState(false)
@@ -186,7 +199,7 @@ class NamespacePanel(
                 updateStatus(NacosSearchBundle.message("namespace.failed.load"))
                 showError(NacosSearchBundle.message("namespace.failed.load"), error.message ?: NacosSearchBundle.message("error.unknown"))
             }
-            result
+            loaded
         } catch (e: Exception) {
             setLoadingState(false)
             updateStatus(NacosSearchBundle.message("namespace.error.load"))
@@ -197,14 +210,17 @@ class NamespacePanel(
 
     private fun updateNamespaceButton() {
         SwingUtilities.invokeLater {
-            // Restore the current selection from the service, otherwise keep
-            // whatever was already selected, otherwise default to the first.
-            val current = namespaceService.getCurrentNamespace()
-            val toSelect: NamespaceInfo? = current ?: currentNamespace
+            // Restore this project's selection, otherwise keep the local
+            // selection, otherwise default to the first. Never adopt another
+            // project's app-wide NamespaceService state.
+            projectSession?.seedIfNew(settings.migrationDefaults())
+            val projectSelection = projectSession?.sessionState?.namespaceId
+                ?.let { selectedId -> namespaces.find { it.namespaceId == selectedId } }
+            val toSelect: NamespaceInfo? = projectSelection ?: currentNamespace
             if (toSelect != null) {
                 val matching = namespaces.find { it.namespaceId == toSelect.namespaceId }
                 if (matching != null) {
-                    selectNamespace(matching, notify = current != null && currentNamespace == null)
+                    selectNamespace(matching, notify = currentNamespace == null)
                 } else if (namespaces.isNotEmpty()) {
                     selectNamespace(namespaces.first(), notify = currentNamespace == null)
                 }
@@ -250,7 +266,10 @@ class NamespacePanel(
     private fun onNamespaceSelected(namespace: NamespaceInfo) {
         coroutineScope.launch {
             try {
-                namespaceService.setCurrentNamespace(namespace)
+                projectSession?.seedIfNew(settings.migrationDefaults())
+                val profileId = projectSession?.sessionState?.selectedProfileId.orEmpty().ifBlank { settings.activeServerId }
+                projectSession?.select(profileId, namespace.namespaceId)
+                onSelectionChanged?.invoke(namespace)
                 updateStatus(NacosSearchBundle.message("namespace.selected", namespace.namespaceName))
             } catch (e: Exception) {
                 updateStatus(NacosSearchBundle.message("namespace.failed.select"))
@@ -424,21 +443,15 @@ class NamespacePanel(
     fun setSelectedNamespace(namespace: NamespaceInfo) {
         val matchingNamespace = namespaces.find { it.namespaceId == namespace.namespaceId }
         if (matchingNamespace != null) {
-            // notify=true so listeners (and setCurrentNamespace) fire, matching
-            // the old combo action-listener behaviour relied on by callers/tests.
+            // notify=true so this project's window receives the selection.
             selectNamespace(matchingNamespace, notify = true)
         }
     }
 
     override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
-        SwingUtilities.invokeLater {
-            val matchingNamespace = newNamespace?.let { ns ->
-                namespaces.find { it.namespaceId == ns.namespaceId } ?: ns
-            }
-            currentNamespace = matchingNamespace
-            renderButton(matchingNamespace)
-            refreshPopupIfShowing()
-        }
+        // Intentionally ignored. This callback represents the legacy
+        // application-wide NamespaceService and must not override this
+        // project's persisted selection.
     }
 
     /**
@@ -454,7 +467,6 @@ class NamespacePanel(
     override fun dispose() {
         activePopup?.cancel()
         activePopup = null
-        namespaceService.removeNamespaceChangeListener(this)
         coroutineScope.cancel()
     }
 

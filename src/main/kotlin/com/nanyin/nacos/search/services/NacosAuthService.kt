@@ -1,6 +1,7 @@
 package com.nanyin.nacos.search.services
 
 import com.nanyin.nacos.search.settings.NacosSettings
+import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.intellij.openapi.application.ApplicationManager
@@ -62,6 +63,22 @@ class NacosAuthService {
         return getValidAccessToken(currentSettingsSnapshot())
     }
 
+    /**
+     * Acquires a token using only an already-captured operation context. This
+     * deliberately avoids consulting mutable application settings while an
+     * operation is in flight.
+     */
+    internal suspend fun getValidAccessToken(context: NacosOperationContext): String? =
+        getValidAccessToken(
+            NacosServerSnapshot(
+                serverUrl = context.endpoint.value,
+                username = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty(),
+                password = context.credential.secret,
+                authMode = context.authMode,
+                enableTokenAuth = true
+            )
+        )
+
     internal suspend fun getValidAccessToken(server: NacosServerSnapshot): String? {
         return try {
             val cacheKey = "${server.serverUrl}_${server.username}"
@@ -99,7 +116,8 @@ class NacosAuthService {
     private suspend fun login(): TokenInfo? = login(currentSettingsSnapshot())
 
     private fun currentSettingsSnapshot(): NacosServerSnapshot = NacosServerSnapshot(
-        serverUrl = settings.serverUrl.trim().trimEnd('/'),
+        serverUrl = com.nanyin.nacos.search.models.CanonicalNacosEndpoint
+            .parse(settings.serverUrl).getOrNull()?.value.orEmpty(),
         username = settings.username,
         password = settings.password,
         authMode = settings.authMode,
@@ -123,6 +141,7 @@ class NacosAuthService {
                     .connectTimeout(CONNECTION_TIMEOUT)
                     .readTimeout(READ_TIMEOUT)
                     .tuner { connection ->
+                        (connection as? java.net.HttpURLConnection)?.instanceFollowRedirects = false
                         // 设置请求头
                         connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
                         connection.setRequestProperty("Content-Length", postData.length.toString())
@@ -231,6 +250,12 @@ class NacosAuthService {
     fun invalidateToken() {
         tokenCache.clear()
         logger.info("Invalidated all cached tokens")
+    }
+
+    internal fun invalidateToken(context: NacosOperationContext) {
+        val principal = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty()
+        tokenCache.remove("${context.endpoint.value}_$principal")
+        logger.info("Invalidated token for captured access context")
     }
 
     /**

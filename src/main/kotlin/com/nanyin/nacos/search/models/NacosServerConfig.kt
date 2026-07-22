@@ -38,13 +38,7 @@ data class NacosServerConfig(
     }
 
     fun isValidUrl(): Boolean {
-        if (serverUrl.isBlank()) return false
-        return try {
-            val url = java.net.URL(serverUrl)
-            url.protocol in listOf("http", "https")
-        } catch (e: Exception) {
-            false
-        }
+        return CanonicalNacosEndpoint.parse(serverUrl).isSuccess
     }
 
     companion object {

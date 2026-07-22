@@ -7,6 +7,8 @@ import com.nanyin.nacos.search.models.NamespaceLoadResult
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.settings.AuthMode
+import com.nanyin.nacos.search.settings.ConfigurationRequired
+import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
@@ -74,9 +76,12 @@ class NacosApiService {
     */
    suspend fun testConnection(): Result<Boolean> = withContext(Dispatchers.IO) {
        try {
-           val url = "${settings.serverUrl}$NAMESPACE_ENDPOINT"
+           val context = operationContextOrFailure() ?: return@withContext Result.failure(
+               ConfigurationRequired(listOf("Connection configuration is incomplete"))
+           )
+           val url = "${context.endpoint.value}$NAMESPACE_ENDPOINT"
            logger.info("Testing connection to: $url")
-           val response = requestJsonWithReplay(url, RequestPolicy.DIAGNOSTIC)
+           val response = executor.get(url, RequestPolicy.DIAGNOSTIC, diagnosticHeaders(context))
 
            val apiResponse = gson.fromJson(response, NacosApiResponse::class.java)
            Result.success(apiResponse.isSuccess())
@@ -98,11 +103,15 @@ class NacosApiService {
         group: String,
         namespaceId: String? = null,
         useCache: Boolean = true,
-        forceRefresh: Boolean = false
+        forceRefresh: Boolean = false,
+        operationContext: NacosOperationContext? = null
     ): Result<NacosConfiguration?> = withContext(Dispatchers.IO) {
         try {
+            val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
+                ConfigurationRequired(listOf("Connection configuration is incomplete"))
+            )
             if (useCache && !forceRefresh && settings.cacheEnabled) {
-                cacheService.getConfigDetail(settings.captureAccessIdentity(), namespaceId, dataId, group)?.let { cachedConfig ->
+                cacheService.getConfigDetail(context.identity, namespaceId, dataId, group)?.let { cachedConfig ->
                     logger.debug("Returning cached configuration for $dataId:$group")
                     return@withContext Result.success(cachedConfig)
                 }
@@ -114,9 +123,8 @@ class NacosApiService {
                 namespaceId?.let { put("tenant", it) }
             }
             
-           val url = buildUrl(CONFIG_LIST_ENDPOINT, params)
-           logger.debug("Fetching configuration: $url")
-           val response = requestJsonWithReplay(url, RequestPolicy.INTERACTIVE)
+           logger.debug("Fetching configuration from captured endpoint: ${context.endpoint.value}")
+           val response = requestJsonWithReplay(context, CONFIG_LIST_ENDPOINT, params, RequestPolicy.INTERACTIVE)
 
            val apiResponse = gson.fromJson(response, object : TypeToken<NacosConfiguration>() {}.type) as? NacosConfiguration
             
@@ -125,7 +133,7 @@ class NacosApiService {
                 // Cache the configuration if cache is enabled
                 if (useCache && settings.cacheEnabled) {
                     cacheService.putConfigDetail(
-                        settings.captureAccessIdentity(),
+                        context.identity,
                         namespaceId,
                         config,
                         settings.getCacheTtlMillis()
@@ -169,9 +177,13 @@ class NacosApiService {
         configTags: String = "",
         searchMode: String = "accurate",
         useCache: Boolean = true,
-        forceRefresh: Boolean = false
+        forceRefresh: Boolean = false,
+        operationContext: NacosOperationContext? = null
     ): Result<ConfigListResponse> = withContext(Dispatchers.IO) {
         try {
+            val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
+                ConfigurationRequired(listOf("Connection configuration is incomplete"))
+            )
             val params = buildMap {
                 put("pageNo", pageNo.toString())
                 put("pageSize", pageSize.toString())
@@ -185,19 +197,18 @@ class NacosApiService {
             val requestKey = normalizeRequestKey(params.filterKeys { it != "tenant" })
 
             if (useCache && !forceRefresh && settings.cacheEnabled) {
-                cacheService.getListPage(settings.serverUrl, namespaceId, requestKey)?.let { cachedResponse ->
+                cacheService.getListPage(context.identity, namespaceId, requestKey)?.let { cachedResponse ->
                     logger.debug("Returning cached list page for $requestKey")
                     return@withContext Result.success(cachedResponse)
                 }
             }
 
-           val url = buildUrl(CONFIG_LIST_ENDPOINT, params)
-           logger.debug("Listing configurations: $url")
-           val response = requestJsonWithReplay(url, RequestPolicy.INTERACTIVE)
+           logger.debug("Listing configurations from captured endpoint: ${context.endpoint.value}")
+           val response = requestJsonWithReplay(context, CONFIG_LIST_ENDPOINT, params, RequestPolicy.INTERACTIVE)
 
            val apiResponse = gson.fromJson(response, object : TypeToken<ConfigListResponse>() {}.type) as ConfigListResponse
             if (useCache && settings.cacheEnabled) {
-                cacheService.putListPage(settings.serverUrl, namespaceId, requestKey, apiResponse, settings.getCacheTtlMillis())
+                cacheService.putListPage(context.identity, namespaceId, requestKey, apiResponse, settings.getCacheTtlMillis())
             }
             
             // Return the full response with pagination info
@@ -213,8 +224,12 @@ class NacosApiService {
     * @param namespaceId Namespace ID (tenant), null for public namespace
     * @param useCache Whether to use cache for configurations (default: true)
     */
-   suspend fun getAllConfigurations(namespaceId: String? = null, useCache: Boolean = true): Result<List<NacosConfiguration>> {
-       val result = loadNamespace(namespaceId, useCache)
+   suspend fun getAllConfigurations(
+       namespaceId: String? = null,
+       useCache: Boolean = true,
+       operationContext: NacosOperationContext? = null
+   ): Result<List<NacosConfiguration>> {
+       val result = loadNamespace(namespaceId, useCache, operationContext)
        return result.map { it.configurations }
    }
 
@@ -224,16 +239,28 @@ class NacosApiService {
     * the result distinguishes COMPLETE (no failures), PARTIAL (some failures),
     * and FAILED (list-level failure).
     */
-   suspend fun loadNamespace(namespaceId: String? = null, useCache: Boolean = true): Result<NamespaceLoadResult> =
-       loadNamespace(namespaceId, useCache, null, RequestPolicy.INTERACTIVE)
+   suspend fun loadNamespace(
+       namespaceId: String? = null,
+       useCache: Boolean = true,
+       operationContext: NacosOperationContext? = null
+   ): Result<NamespaceLoadResult> =
+       loadNamespace(namespaceId, useCache, null, RequestPolicy.INTERACTIVE, operationContext)
 
    internal suspend fun loadNamespace(
        namespaceId: String? = null,
        useCache: Boolean = true,
        server: NacosServerSnapshot?,
-       policy: RequestPolicy
+       policy: RequestPolicy,
+       operationContext: NacosOperationContext? = null
    ): Result<NamespaceLoadResult> {
        return try {
+           val capturedContext = operationContext ?: if (server == null) operationContextOrFailure() else null
+           if (server == null && capturedContext == null) {
+               return Result.failure(ConfigurationRequired(listOf("Connection configuration is incomplete")))
+           }
+           if (server != null && isIncomplete(server)) {
+               return Result.failure(ConfigurationRequired(listOf("Captured connection configuration is incomplete")))
+           }
            val allConfigs = mutableListOf<NacosConfiguration>()
            val failures = mutableListOf<ConfigLoadFailure>()
            var expectedCount = 0
@@ -242,7 +269,7 @@ class NacosApiService {
 
            do {
                val result = if (server == null) {
-                   listConfigurations(namespaceId, pageNo, pageSize, useCache = useCache)
+                   listConfigurations(namespaceId, pageNo, pageSize, useCache = useCache, operationContext = capturedContext)
                } else {
                    listConfigurations(server, namespaceId, pageNo, pageSize, policy)
                }
@@ -264,7 +291,7 @@ class NacosApiService {
                            semaphore.withPermit {
                                try {
                                    FetchResult.Success(
-                                       if (server == null) getConfigurationFromItem(item, useCache)
+                                       if (server == null) getConfigurationFromItem(item, useCache, capturedContext)
                                        else getConfigurationFromItem(server, item, policy)
                                    )
                                } catch (ce: kotlinx.coroutines.CancellationException) {
@@ -357,11 +384,13 @@ class NacosApiService {
     /**
      * Retrieves all namespaces from Nacos
      */
-    suspend fun getNamespaces(): Result<List<NamespaceInfo>> = withContext(Dispatchers.IO) {
+    suspend fun getNamespaces(operationContext: NacosOperationContext? = null): Result<List<NamespaceInfo>> = withContext(Dispatchers.IO) {
         try {
-           val url = buildUrl(NAMESPACE_ENDPOINT, emptyMap())
-           logger.debug("Fetching namespaces: $url")
-           val response = requestJsonWithReplay(url, RequestPolicy.DIAGNOSTIC)
+           val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
+               ConfigurationRequired(listOf("Connection configuration is incomplete"))
+           )
+           logger.debug("Fetching namespaces from captured endpoint: ${context.endpoint.value}")
+           val response = requestJsonWithReplay(context, NAMESPACE_ENDPOINT, emptyMap(), RequestPolicy.DIAGNOSTIC)
 
            val apiResponse = gson.fromJson(response, object : TypeToken<NacosApiResponse<List<Map<String, Any>>>>() {}.type) as NacosApiResponse<List<Map<String, Any>>>
             
@@ -391,6 +420,7 @@ class NacosApiService {
             }
         } catch (e: Exception) {
             logger.warn("Error getting namespaces", e)
+            if (e is ConfigurationRequired) return@withContext Result.failure(e)
             // Return public namespace as fallback
             Result.success(listOf(NamespaceInfo.createPublicNamespace()))
         }
@@ -409,35 +439,34 @@ class NacosApiService {
         }
     }
     
-    private suspend fun buildUrl(endpoint: String, params: Map<String, String>): String {
-        val baseUrl = settings.serverUrl.trimEnd('/')
+    private data class CapturedRequest(val url: String, val headers: Map<String, String>)
+
+    /** Builds request material solely from an immutable operation context. */
+    private suspend fun buildCapturedRequest(
+        context: NacosOperationContext,
+        endpoint: String,
+        params: Map<String, String>
+    ): CapturedRequest {
         val mutableParams = params.toMutableMap()
-        
-        // 根据认证模式决定是否添加accessToken
-        val shouldUseToken = when (settings.authMode) {
-            AuthMode.TOKEN -> true
-            AuthMode.BASIC -> false
-            AuthMode.HYBRID -> settings.enableTokenAuth
+        val headers = mutableMapOf<String, String>()
+        val token = when (context.authMode) {
+            AuthMode.TOKEN, AuthMode.HYBRID -> authService.getValidAccessToken(context)
+            AuthMode.BASIC -> null
         }
-        
-        if (shouldUseToken) {
-            val accessToken = authService.getValidAccessToken()
-            if (accessToken != null) {
-                mutableParams["accessToken"] = accessToken
-                logger.debug("Added accessToken to request parameters")
-            } else {
-                logger.debug("No valid accessToken available")
-            }
+        if (token != null) {
+            mutableParams["accessToken"] = token
+        } else if (context.authMode == AuthMode.BASIC || context.authMode == AuthMode.HYBRID) {
+            addBasicAuthHeader(headers, context)
         }
-        
         val queryParams = mutableParams.entries.joinToString("&") { (key, value) ->
             "$key=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
         }
-        return if (queryParams.isNotEmpty()) {
-            "$baseUrl$endpoint?$queryParams"
+        val url = if (queryParams.isEmpty()) {
+            "${context.endpoint.value}$endpoint"
         } else {
-            "$baseUrl$endpoint"
+            "${context.endpoint.value}$endpoint?$queryParams"
         }
+        return CapturedRequest(url, headers)
     }
 
     private suspend fun buildUrl(
@@ -458,29 +487,6 @@ class NacosApiService {
             "$key=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
         }
         return if (queryParams.isEmpty()) "${server.serverUrl}$endpoint" else "${server.serverUrl}$endpoint?$queryParams"
-    }
-
-    private suspend fun buildAuthHeaders(): Map<String, String> {
-        val authHeaders = mutableMapOf<String, String>()
-        when (settings.authMode) {
-            AuthMode.TOKEN -> {
-                val token = if (settings.enableTokenAuth) authService.getValidAccessToken() else null
-                if (token == null) {
-                    logger.warn("No valid access token available in TOKEN mode")
-                }
-            }
-            AuthMode.HYBRID -> {
-                val token = if (settings.enableTokenAuth) authService.getValidAccessToken() else null
-                if (token == null) {
-                    addBasicAuthHeader(authHeaders)
-                    logger.debug("Using Basic authentication as fallback in HYBRID mode")
-                } else {
-                    logger.debug("Using token authentication in HYBRID mode")
-                }
-            }
-            AuthMode.BASIC -> addBasicAuthHeader(authHeaders)
-        }
-        return authHeaders
     }
 
     private suspend fun buildAuthHeaders(server: NacosServerSnapshot): Map<String, String> {
@@ -504,9 +510,9 @@ class NacosApiService {
         }
     }
 
-    private fun addBasicAuthHeader(headers: MutableMap<String, String>) {
-        if (settings.username.isNotEmpty() && settings.password.isNotEmpty()) {
-            val credentials = "${settings.username}:${settings.password}"
+    private fun addBasicAuthHeader(headers: MutableMap<String, String>, context: NacosOperationContext) {
+        if (context.identity.principal != "<anonymous>" && context.credential.secret.isNotEmpty()) {
+            val credentials = "${context.identity.principal}:${context.credential.secret}"
             val encodedCredentials = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())
             headers["Authorization"] = "Basic $encodedCredentials"
         } else {
@@ -520,15 +526,21 @@ class NacosApiService {
     * auth service's token is invalidated and the request replays once within
     * the same budget. Malformed JSON is classified as [NacosRequestError.Protocol].
     */
-   private suspend fun requestJsonWithReplay(url: String, policy: RequestPolicy): String {
-       val headers = buildAuthHeaders()
+   private suspend fun requestJsonWithReplay(
+       context: NacosOperationContext,
+       endpoint: String,
+       params: Map<String, String>,
+       policy: RequestPolicy
+   ): String {
+       val request = buildCapturedRequest(context, endpoint, params)
        try {
-           return executor.get(url, policy, headers)
+           return executor.get(request.url, policy, request.headers)
        } catch (e: NacosRequestError.Authentication) {
            // Token may be stale; invalidate and replay once.
            logger.info("Authentication failed (${e.status}), refreshing credentials")
-           authService.invalidateToken()
-           return executor.get(url, policy, buildAuthHeaders())
+           authService.invalidateToken(context)
+           val replay = buildCapturedRequest(context, endpoint, params)
+           return executor.get(replay.url, policy, replay.headers)
        }
    }
 
@@ -554,9 +566,13 @@ class NacosApiService {
         group: String,
         content: String,
         type: String = "text",
-        namespaceId: String? = null
+        namespaceId: String? = null,
+        operationContext: NacosOperationContext? = null
     ): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
+            val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
+                ConfigurationRequired(listOf("Connection configuration is incomplete"))
+            )
             val params = buildMap {
                 put("dataId", dataId)
                 put("group", group)
@@ -565,15 +581,15 @@ class NacosApiService {
                 namespaceId?.let { put("tenant", it) }
             }
 
-            val url = buildUrl(CONFIG_ENDPOINT, emptyMap())
+            val request = buildCapturedRequest(context, CONFIG_ENDPOINT, emptyMap())
             logger.info("Publishing configuration: $dataId:$group")
 
-            val response = requestPost(url, params, buildAuthHeaders())
+            val response = requestPost(request.url, params, request.headers)
             // Nacos returns "true" on success
             val success = response.trim().equals("true", ignoreCase = true)
             if (success) {
                 // Invalidate cache for this config
-                cacheService.invalidateNamespace(settings.captureAccessIdentity(), namespaceId)
+                cacheService.invalidateNamespace(context.identity, namespaceId)
                 Result.success(true)
             } else {
                 Result.failure(RuntimeException("Server responded: $response"))
@@ -588,6 +604,7 @@ class NacosApiService {
        val formData = encodeFormData(params)
        val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
        connection.requestMethod = "POST"
+       connection.instanceFollowRedirects = false
        connection.connectTimeout = settings.getConnectionTimeoutMillis()
        connection.readTimeout = settings.getReadTimeoutMillis()
        connection.doOutput = true
@@ -609,6 +626,21 @@ class NacosApiService {
         return params.entries
             .sortedBy { it.key }
             .joinToString("|") { (key, value) -> "$key=$value" }
+    }
+
+    /** Guards every operation before cache reads, token lookup, or remote transport. */
+    private fun operationContextOrFailure() = settings.captureOperationContext().getOrNull()
+
+    private fun diagnosticHeaders(context: com.nanyin.nacos.search.settings.NacosOperationContext): Map<String, String> {
+        if (context.identity.principal == "<anonymous>" || context.credential.secret.isBlank()) return emptyMap()
+        val credentials = "${context.identity.principal}:${context.credential.secret}"
+        return mapOf("Authorization" to "Basic " + java.util.Base64.getEncoder().encodeToString(credentials.toByteArray()))
+    }
+
+    private fun isIncomplete(server: NacosServerSnapshot): Boolean {
+        val endpointValid = com.nanyin.nacos.search.models.CanonicalNacosEndpoint.parse(server.serverUrl).isSuccess
+        val credentialsComplete = server.username.isBlank() == server.password.isBlank()
+        return !endpointValid || !credentialsComplete
     }
 
     
@@ -636,8 +668,11 @@ class NacosApiService {
      */
     suspend fun getConfigurationFromItem(
         item: ConfigItem,
-        useCache: Boolean = true
+        useCache: Boolean = true,
+        operationContext: NacosOperationContext? = null
     ): NacosConfiguration {
+        val context = operationContext ?: operationContextOrFailure()
+            ?: throw ConfigurationRequired(listOf("Connection configuration is incomplete"))
         if (!item.content.isNullOrEmpty()) {
             val configuration = NacosConfiguration(
                 dataId = item.dataId,
@@ -648,7 +683,7 @@ class NacosApiService {
             )
             if (useCache && settings.cacheEnabled) {
                 cacheService.putConfigDetail(
-                    settings.captureAccessIdentity(),
+                    context.identity,
                     item.tenant,
                     configuration,
                     settings.getCacheTtlMillis()
@@ -657,7 +692,7 @@ class NacosApiService {
             return configuration
         }
 
-        val fullConfig = getConfiguration(item.dataId, item.group, item.tenant, useCache)
+        val fullConfig = getConfiguration(item.dataId, item.group, item.tenant, useCache, operationContext = context)
         return fullConfig.getOrNull() ?: NacosConfiguration(
             dataId = item.dataId,
             group = item.group,

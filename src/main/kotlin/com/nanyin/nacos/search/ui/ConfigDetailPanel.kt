@@ -34,6 +34,7 @@ import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.captureAccessIdentity
 import com.nanyin.nacos.search.settings.NacosSettings
+import com.nanyin.nacos.search.settings.NacosProjectSession
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.ActionEvent
@@ -64,7 +65,13 @@ class ConfigDetailPanel internal constructor(
                 group = configuration.group,
                 namespaceId = configuration.tenantId,
                 useCache = true,
-                forceRefresh = forceRefresh
+                forceRefresh = forceRefresh,
+                operationContext = project.getService(NacosProjectSession::class.java)
+                    ?.let { session ->
+                        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+                        session.seedIfNew(settings.migrationDefaults())
+                        settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
+                    }
             )
         },
         ApplicationManager.getApplication().getService(CacheService::class.java),
@@ -77,6 +84,11 @@ class ConfigDetailPanel internal constructor(
     
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
     private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
+    private fun selectedOperationContext() = project.getService(NacosProjectSession::class.java)
+        ?.let { session ->
+            session.seedIfNew(settings.migrationDefaults())
+            settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
+        }
     
     // UI Components
     private lateinit var metadataPanel: JPanel
@@ -1143,7 +1155,8 @@ class ConfigDetailPanel internal constructor(
             try {
                 val namespaceId = if (config.tenantId.isNullOrBlank()) null else config.tenantId
                 val result = nacosApiService.publishConfiguration(
-                    config.dataId, config.group, textToSave, config.type ?: "text", namespaceId
+                    config.dataId, config.group, textToSave, config.type ?: "text", namespaceId,
+                    selectedOperationContext()
                 )
                 withContext(Dispatchers.Main) {
                     if (result.isSuccess && result.getOrNull() == true) {

@@ -22,6 +22,8 @@ import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.settings.NacosConfigurable
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosSettingsListener
+import com.nanyin.nacos.search.settings.NacosProjectSession
+import com.nanyin.nacos.search.settings.NacosUpgradeSummary
 import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.intellij.openapi.components.service
 import com.intellij.openapi.application.ApplicationManager
@@ -56,6 +58,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     // private val nacosConfigService = project.service<NacosConfigService>() // Not needed
     private val nacosSearchService = project.service<NacosSearchService>()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+    private val projectSession = project.service<NacosProjectSession>()
     private val indexCoordinator = ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java)
     
     // Managers
@@ -85,8 +88,17 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     
     // Coroutine scope for async operations
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    private fun selectedProfileId(): String {
+        projectSession.seedIfNew(settings.migrationDefaults())
+        return projectSession.sessionState.selectedProfileId
+    }
+
+    private fun selectedOperationContext() = settings.captureOperationContext(selectedProfileId()).getOrNull()
     
     init {
+        projectSession.seedIfNew(settings.migrationDefaults())
+        NacosUpgradeSummary.showOnce(project, projectSession, settings)
         initializeComponents()
         setupLayout()
         setupEventHandlers()
@@ -208,8 +220,15 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
     
     private fun setupEventHandlers() {
-        // Reload the configuration list whenever the selected namespace changes.
-        namespaceService.addNamespaceChangeListener(this)
+        // NamespacePanel owns the project-local selection; do not subscribe to
+        // the app-wide NamespaceService, which would leak another project's
+        // selection into this window.
+        namespacePanel.onSelectionChanged = { selected ->
+            coroutineScope.launch { onNamespaceChanged(currentNamespace, selected) }
+        }
+        environmentSwitcher.onSelectionChanged = {
+            handleProjectEnvironmentSelectionChanged()
+        }
         ApplicationManager.getApplication().messageBus.connect(this).subscribe(
             NacosSettingsListener.TOPIC,
             object : NacosSettingsListener {
@@ -282,8 +301,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // Search service state observation
         setupSearchServiceObservers()
         
-        // Initialize UI with proper namespace and pagination using InitializationManager
-        performInitialization()
+        // NamespacePanel performs project-scoped initialization itself. The
+        // legacy InitializationManager reads app-wide selection state, so it
+        // must not run from a project window.
     }
 
     /**
@@ -315,7 +335,26 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
 
            val namespaceResult = namespacePanel.refreshAndWait()
             if (namespaceResult.isSuccess) {
-                currentNamespace = namespaceService.getCurrentNamespace()
+                currentNamespace = namespacePanel.getSelectedNamespace()
+                loadConfigurations()
+            }
+        }
+    }
+
+    private fun handleProjectEnvironmentSelectionChanged() {
+        coroutineScope.launch {
+            nacosSearchService.resetSearch()
+            currentNamespace = null
+            currentConfiguration = null
+            currentSearchRequest = null
+            SwingUtilities.invokeLater {
+                searchPanel.clearAllCriteria()
+                configDetailPanel.clearConfiguration()
+                configListPanel.setConfigurations(emptyList())
+                paginationPanel.reset()
+            }
+            namespacePanel.refreshAndWait().onSuccess {
+                currentNamespace = namespacePanel.getSelectedNamespace()
                 loadConfigurations()
             }
         }
@@ -361,7 +400,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 namespacePanel.refresh()
                 
                 // Get current namespace and load configurations when enabled for this server.
-                val currentNs = namespaceService.getCurrentNamespace()
+                val currentNs = namespacePanel.getSelectedNamespace()
                 if (currentNs != null) {
                     currentNamespace = currentNs
                     loadConfigurations()
@@ -391,15 +430,21 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 pageNo = 1,
                 pageSize = paginationPanel.getCurrentPageSize(),
                 forceRefresh = false,
-                serverId = settings.activeServerId,
-                serverSnapshot = settings.captureServerSnapshot()
+                serverId = selectedProfileId(),
+                serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
+                operationContext = selectedOperationContext()
             )
             currentSearchRequest = request
             loadConfigurations()
 
             // Preheat the full namespace index in the background so the first
             // content/regex/wildcard search over this namespace is instant.
-            preheatNamespaceIndex(settings.captureNamespaceIndexRequest(newNamespace.namespaceId))
+            preheatNamespaceIndex(
+                settings.captureNamespaceIndexRequest(
+                    newNamespace.namespaceId,
+                    settings.captureServerSnapshot(selectedProfileId())
+                )
+            )
         } else {
             clearSearchUi()
         }
@@ -443,8 +488,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
              namespace = searchNameSpace,
              pageNo = 1,
              pageSize = paginationPanel.getCurrentPageSize(),
-             serverId = settings.activeServerId,
-             serverSnapshot = settings.captureServerSnapshot()
+             serverId = selectedProfileId(),
+             serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
+             operationContext = selectedOperationContext()
          )
          currentNamespace = searchNameSpace;
          
@@ -495,8 +541,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             useRegex = true,
             pageNo = 1,
             pageSize = paginationPanel.getCurrentPageSize(),
-            serverId = settings.activeServerId,
-            serverSnapshot = settings.captureServerSnapshot()
+            serverId = selectedProfileId(),
+            serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
+            operationContext = selectedOperationContext()
         )
        currentSearchRequest = searchRequest
 
@@ -510,8 +557,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         coroutineScope.launch {
             val currentRequest = NacosSearchService.SearchRequest(
                  namespace = namespacePanel.getSelectedNamespace(),
-                 serverId = settings.activeServerId,
-                 serverSnapshot = settings.captureServerSnapshot()
+                 serverId = selectedProfileId(),
+                 serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
+                 operationContext = selectedOperationContext()
              )
             nacosSearchService.previousPage(currentSearchRequest ?: currentRequest, nacosApiService)
         }
@@ -521,8 +569,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         coroutineScope.launch {
             val currentRequest = NacosSearchService.SearchRequest(
                  namespace = namespacePanel.getSelectedNamespace(),
-                 serverId = settings.activeServerId,
-                 serverSnapshot = settings.captureServerSnapshot()
+                 serverId = selectedProfileId(),
+                 serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
+                 operationContext = selectedOperationContext()
              )
             nacosSearchService.nextPage(currentSearchRequest ?: currentRequest, nacosApiService)
         }
@@ -533,8 +582,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             val currentRequest = NacosSearchService.SearchRequest(
                  namespace = namespacePanel.getSelectedNamespace(),
                  pageSize = pageSize,
-                 serverId = settings.activeServerId,
-                 serverSnapshot = settings.captureServerSnapshot()
+                 serverId = selectedProfileId(),
+                 serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
+                 operationContext = selectedOperationContext()
              )
             currentSearchRequest = (currentSearchRequest ?: currentRequest).copy(pageNo = 1, pageSize = pageSize)
             nacosSearchService.changePageSize(currentSearchRequest ?: currentRequest, pageSize, nacosApiService)
@@ -563,7 +613,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                             // Drop results that were produced for a different environment
                             // (e.g. an in-flight search that completes after switching servers).
                             val requestServerId = state.request?.serverId.orEmpty()
-                            if (requestServerId.isNotEmpty() && requestServerId != settings.activeServerId) {
+                            if (requestServerId.isNotEmpty() && requestServerId != selectedProfileId()) {
                                 return@invokeLater
                             }
                             val resultNamespaceId = state.request?.namespace?.namespaceId.orEmpty()
@@ -654,8 +704,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         currentSearchRequest = (currentSearchRequest ?: NacosSearchService.SearchRequest(
             namespace = namespacePanel.getSelectedNamespace(),
             pageSize = paginationPanel.getCurrentPageSize(),
-            serverId = settings.activeServerId,
-            serverSnapshot = settings.captureServerSnapshot()
+            serverId = selectedProfileId(),
+            serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
+            operationContext = selectedOperationContext()
         )).copy(forceRefresh = true)
         loadConfigurations()
     }
@@ -687,8 +738,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     namespace = namespace,
                     pageNo = 1,
                     pageSize = paginationPanel.getCurrentPageSize(),
-                    serverId = settings.activeServerId,
-                    serverSnapshot = settings.captureServerSnapshot()
+                    serverId = selectedProfileId(),
+                    serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
+                    operationContext = selectedOperationContext()
                 )).copy(namespace = namespace)
                 currentSearchRequest = request
                 nacosSearchService.performSearch(request, nacosApiService)
@@ -706,9 +758,13 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         _criteria: SearchCriteria
     ): List<NacosConfiguration> {
         return withContext(Dispatchers.IO) {
-            val listConfigurations = nacosApiService.listConfigurations(namespace.namespaceId)
+            val context = selectedOperationContext()
+            val listConfigurations = nacosApiService.listConfigurations(
+                namespace.namespaceId,
+                operationContext = context
+            )
             val configurations = listConfigurations.getOrNull()?.pageItems?.map { item ->
-                nacosApiService.getConfigurationFromItem(item, useCache = true)
+                nacosApiService.getConfigurationFromItem(item, useCache = true, operationContext = context)
             }
             if(configurations == null) {
                 emptyList<NacosConfiguration>()
@@ -785,7 +841,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     val configResult = nacosApiService.getConfiguration(
                         config.dataId,
                         config.group,
-                        currentNamespace?.namespaceId
+                        currentNamespace?.namespaceId,
+                        operationContext = selectedOperationContext()
                     )
                     
                     val configDetail = configResult.getOrNull()
@@ -879,7 +936,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
 
                 val target = findNamespaceForNavigation(targetNsId)
                 if (target != null) {
-                    namespaceService.setCurrentNamespace(target)
+                    namespacePanel.setSelectedNamespace(target)
                 } else {
                     pendingNavigationTarget = null
                     showError("Target namespace '${targetNsId.ifBlank { "public" }}' is not available. Refresh namespaces and try again.")
@@ -906,7 +963,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             try {
                 val namespaceResult = namespacePanel.refreshAndWait()
                 if (namespaceResult.isSuccess) {
-                    currentNamespace = namespaceService.getCurrentNamespace()
+                    currentNamespace = namespacePanel.getSelectedNamespace()
                 }
                 loadConfigurations()
                 currentConfiguration?.let { config ->
@@ -922,7 +979,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      * Cleanup resources
      */
     override fun dispose() {
-        namespaceService.removeNamespaceChangeListener(this)
         coroutineScope.cancel()
     }
 

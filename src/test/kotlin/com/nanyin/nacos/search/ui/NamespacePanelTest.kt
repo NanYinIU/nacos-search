@@ -4,7 +4,6 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
-import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NamespaceService
 import kotlinx.coroutines.CompletableDeferred
@@ -17,8 +16,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
-import org.mockito.kotlin.argumentCaptor
-import org.mockito.kotlin.doNothing
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.reset
 import org.mockito.kotlin.timeout
@@ -46,7 +43,6 @@ class NamespacePanelTest {
 
         whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(CompletableDeferred(Result.success(testNamespaces)))
         whenever(mockNamespaceService.getCurrentNamespace()).thenReturn(null)
-        doNothing().`when`(mockNamespaceService).setCurrentNamespace(any())
     }
 
     @AfterEach
@@ -80,13 +76,15 @@ class NamespacePanelTest {
         val targetNamespace = testNamespaces[1]
         waitForNamespaceLoad()
 
+        var observed: NamespaceInfo? = null
+        namespacePanel.onSelectionChanged = { observed = it }
         namespacePanel.setSelectedNamespace(targetNamespace)
         waitForUi()
 
         val selectedNamespace = namespacePanel.getSelectedNamespace()
         assertNotNull(selectedNamespace)
         assertEquals(targetNamespace.namespaceId, selectedNamespace?.namespaceId)
-        verify(mockNamespaceService, timeout(1000)).setCurrentNamespace(targetNamespace)
+        assertEquals(targetNamespace, observed)
     }
 
     @Test
@@ -128,7 +126,7 @@ class NamespacePanelTest {
     }
 
     @Test
-    fun testCurrentNamespaceRestoration() {
+    fun testProjectPanelDoesNotRestoreGlobalNamespaceState() {
         val currentNamespace = testNamespaces[1]
         whenever(mockNamespaceService.getCurrentNamespace()).thenReturn(currentNamespace)
 
@@ -137,24 +135,21 @@ class NamespacePanelTest {
 
         val selectedNamespace = namespacePanel.getSelectedNamespace()
         assertNotNull(selectedNamespace)
-        assertEquals(currentNamespace.namespaceId, selectedNamespace?.namespaceId)
+        assertEquals("public", selectedNamespace?.namespaceId)
     }
 
     @Test
-    fun testPanelFollowsExternalNamespaceServiceChange() = runBlocking {
+    fun testPanelIgnoresExternalNamespaceServiceChange() = runBlocking {
         namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
         waitForNamespaceLoad()
 
-        val listenerCaptor = argumentCaptor<NamespaceChangeListener>()
-        verify(mockNamespaceService, timeout(1000)).addNamespaceChangeListener(listenerCaptor.capture())
-
         val targetNamespace = testNamespaces[2]
-        listenerCaptor.firstValue.onNamespaceChanged(testNamespaces[0], targetNamespace)
+        namespacePanel.onNamespaceChanged(testNamespaces[0], targetNamespace)
         waitForUi()
 
         val selectedNamespace = namespacePanel.getSelectedNamespace()
         assertNotNull(selectedNamespace)
-        assertEquals(targetNamespace.namespaceId, selectedNamespace?.namespaceId)
+        assertEquals("public", selectedNamespace?.namespaceId)
     }
 
     @Test

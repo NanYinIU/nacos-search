@@ -13,16 +13,11 @@ sealed interface CacheCoordinate {
     val namespaceId: String
 
     /**
-     * Normalized, slash-trimmed key component used to derive the persisted
-     * storage key. Format: `serverId|authMode|principal|namespace|...`
+ * Versioned key component used to derive the persisted storage key. This is
+ * intentionally not compatible with the pre-profile schema, whose ownership
+ * could not be proven after credentials or endpoints changed.
      */
     fun storageKey(): String
-
-    private companion object {
-        fun normalize(url: String): String = url.trim().trimEnd('/').ifBlank { "<default>" }
-        fun ns(namespaceId: String): String =
-            namespaceId.takeIf { it.isNotBlank() && it != "public" } ?: "public"
-    }
 
     data class NamespaceIndex(
         override val identity: AccessIdentity,
@@ -30,7 +25,7 @@ sealed interface CacheCoordinate {
         override val namespaceId: String
     ) : CacheCoordinate {
         override fun storageKey(): String =
-            "${identity.serverId}|${identity.authMode}|${identity.principal}|${ns(namespaceId)}"
+            identityPrefix(identity) + "|${ns(namespaceId)}"
     }
 
     data class Detail(
@@ -41,7 +36,7 @@ sealed interface CacheCoordinate {
         val group: String
     ) : CacheCoordinate {
         override fun storageKey(): String =
-            "${identity.serverId}|${identity.authMode}|${identity.principal}|${ns(namespaceId)}|$dataId|$group"
+            identityPrefix(identity) + "|${ns(namespaceId)}|$dataId|$group"
     }
 
     data class ListPage(
@@ -51,6 +46,21 @@ sealed interface CacheCoordinate {
         val requestKey: String
     ) : CacheCoordinate {
         override fun storageKey(): String =
-            "${identity.serverId}|${identity.authMode}|${identity.principal}|${ns(namespaceId)}|$requestKey"
+            identityPrefix(identity) + "|${ns(namespaceId)}|$requestKey"
+    }
+
+    companion object {
+        private fun ns(namespaceId: String): String =
+            namespaceId.takeIf { it.isNotBlank() && it != "public" } ?: "public"
+
+        fun identityPrefix(identity: AccessIdentity): String = listOf(
+            "v2",
+            identity.profileId,
+            identity.accessRevision.toString(),
+            identity.canonicalEndpoint,
+            identity.resolvedGeneration.toString(),
+            identity.authMode.name,
+            identity.principal
+        ).joinToString("|")
     }
 }

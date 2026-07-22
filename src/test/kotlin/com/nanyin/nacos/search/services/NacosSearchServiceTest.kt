@@ -1,29 +1,29 @@
 package com.nanyin.nacos.search.services
 
-import com.intellij.testFramework.ApplicationRule
+import com.intellij.testFramework.junit5.TestApplication
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import org.junit.Rule
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.never
 import org.mockito.kotlin.whenever
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.settings.ConfigurationRequired
+import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
+@TestApplication
 class NacosSearchServiceTest {
-
-    @get:Rule
-    val applicationRule = ApplicationRule()
 
     @Test
     fun `search request normalizes wildcard and prefix fuzzy dataId`() {
@@ -103,8 +103,37 @@ class NacosSearchServiceTest {
 
         verify(coordinator, never()).requestIndex(any(), any())
         verify(api, times(1)).listConfigurations(
-            any(), any(), any(), any(), any(), any(), any(), any(), any(), any()
+            anyOrNull(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyOrNull()
         )
+        Unit
+    }
+
+    @Test
+    fun `invalid configuration fails closed in the search UI path before cache or API`() = runBlocking {
+        val settings = com.intellij.openapi.application.ApplicationManager.getApplication()
+            .getService(NacosSettings::class.java)
+        val original = settings.copy()
+        try {
+            settings.resetToDefaults()
+            settings.serverUrl = "https://nacos.example/not-an-origin"
+            val api = mock<NacosApiService>()
+            val service = NacosSearchService()
+
+            service.performSearch(
+                NacosSearchService.SearchRequest(namespace = NamespaceInfo.createPublicNamespace()),
+                api
+            )
+
+            val state = service.searchState.value
+            assertTrue(state is NacosSearchService.SearchState.Error)
+            assertTrue((state as NacosSearchService.SearchState.Error).throwable is ConfigurationRequired)
+            verify(api, never()).listConfigurations(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyOrNull()
+            )
+            Unit
+        } finally {
+            settings.copyFrom(original)
+        }
     }
 
     @Test
@@ -161,8 +190,8 @@ class NacosSearchServiceTest {
         runBlocking {
             whenever(
                 api.listConfigurations(
-                    any(), any(), any(), any(),
-                    any(), any(), any(), any(), any(), any()
+                    anyOrNull(), any(), any(), any(),
+                    any(), any(), any(), any(), any(), any(), anyOrNull()
                 )
             ).thenReturn(Result.success(response))
         }
@@ -225,7 +254,7 @@ class NacosSearchServiceTest {
         // only the second survives.
         verify(api, times(1)).listConfigurations(
             any(), any(), any(), any(),
-            any(), any(), any(), any(), any(), any()
+            any(), any(), any(), any(), any(), any(), anyOrNull()
         )
         scope.cancel()
     }

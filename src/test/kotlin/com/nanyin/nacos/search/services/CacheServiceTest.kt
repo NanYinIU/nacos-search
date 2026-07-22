@@ -528,7 +528,7 @@ class CacheServiceTest {
     }
 
     @Test
-    fun `legacy PropertiesComponent detail blob migrates to file and is cleared`() = runBlocking {
+    fun `ownership-unprovable legacy PropertiesComponent detail blob is discarded`() = runBlocking {
         // Clean slate for both file storage and PropertiesComponent.
        val cleaner = CacheService()
        cleaner.clearAll()
@@ -549,16 +549,17 @@ class CacheServiceTest {
         props.setValue("nacos.cache.detail.$key", gson.toJson(entry))
         props.setValue("nacos.cache.detail.keys", gson.toJson(listOf(key)))
 
-        // Trigger load + migration by constructing a fresh instance.
+        // A legacy key has no profile id or access revision, so loading it would
+        // incorrectly make data visible to whichever profile happens to be active.
         val migrated = CacheService()
         val detail = migrated.getConfigDetail("http://nacos:8848", "dev", "legacy.properties", "DEFAULT_GROUP")
-        assertEquals("legacy=true", detail?.content)
+        assertNull(detail)
 
         // The legacy blob must have been removed so the state XML stops growing.
         assertNull(props.getValue("nacos.cache.detail.$key"))
 
-        // A second fresh load still resolves it (now from the migrated file).
-        assertEquals("legacy=true", CacheService().getConfigDetail("http://nacos:8848", "dev", "legacy.properties", "DEFAULT_GROUP")?.content)
+        // Nor may a second load resurrect the entry from a file or keys list.
+        assertNull(CacheService().getConfigDetail("http://nacos:8848", "dev", "legacy.properties", "DEFAULT_GROUP"))
 
         migrated.clearAll()
     }

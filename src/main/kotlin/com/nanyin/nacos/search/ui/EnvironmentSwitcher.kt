@@ -15,7 +15,7 @@ import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.settings.NacosConfigurable
 import com.nanyin.nacos.search.settings.NacosSettings
-import com.nanyin.nacos.search.settings.NacosSettingsListener
+import com.nanyin.nacos.search.settings.NacosProjectSession
 import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
@@ -41,9 +41,13 @@ class EnvironmentSwitcher(
     private val project: Project,
     private val settings: NacosSettings =
         ApplicationManager.getApplication().getService(NacosSettings::class.java),
+    private val projectSession: NacosProjectSession? = project.getService(NacosProjectSession::class.java),
     private val languageService: LanguageService =
         ApplicationManager.getApplication().getService(LanguageService::class.java)
 ) : JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)), LanguageAwareComponent {
+
+    /** Local callback: selecting an environment must not broadcast global state. */
+    var onSelectionChanged: ((String) -> Unit)? = null
 
     private val envButton: JButton = JButton().apply {
         putClientProperty("nacos.automation.id", "nacos.toolwindow.envSwitcher")
@@ -86,7 +90,9 @@ class EnvironmentSwitcher(
      * Call after settings change (e.g. switching environment or applying settings).
      */
     fun refresh() {
-        val active = settings.getActiveServer()
+        projectSession?.seedIfNew(settings.migrationDefaults())
+        val selectedProfileId = projectSession?.sessionState?.selectedProfileId.orEmpty().ifBlank { settings.activeServerId }
+        val active = settings.cloneServers().firstOrNull { it.id == selectedProfileId } ?: settings.getActiveServer()
         val name = active.displayName.ifBlank {
             active.serverUrl.ifBlank { NacosSearchBundle.message("toolwindow.env.none") }
         }
@@ -100,7 +106,8 @@ class EnvironmentSwitcher(
 
     private fun showPopup() {
         if (!envButton.isShowing) return
-        val activeId = settings.activeServerId
+        projectSession?.seedIfNew(settings.migrationDefaults())
+        val activeId = projectSession?.sessionState?.selectedProfileId.orEmpty().ifBlank { settings.activeServerId }
         val entries = settings.cloneServers()
             .map { EnvEntry.Server(it, it.id == activeId) } + EnvEntry.Manage
         val popup = JBPopupFactory.getInstance().createListPopup(EnvListStep(entries))
@@ -126,10 +133,9 @@ class EnvironmentSwitcher(
             if (choice == 0) openSettings()
             return
         }
-        settings.setActiveServer(entry.config.id)
-        ApplicationManager.getApplication().messageBus
-            .syncPublisher(NacosSettingsListener.TOPIC)
-            .settingsChanged()
+        val namespace = projectSession?.sessionState?.namespaceId.orEmpty().ifBlank { "public" }
+        projectSession?.select(entry.config.id, namespace)
+        onSelectionChanged?.invoke(entry.config.id)
         refresh()
     }
 

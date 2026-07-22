@@ -4,6 +4,8 @@ import com.intellij.openapi.application.ApplicationManager
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.settings.NacosSettings
+import com.nanyin.nacos.search.settings.ConfigurationRequired
+import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import kotlinx.coroutines.*
@@ -58,7 +60,9 @@ class NacosSearchService(
         val pageNo: Int = 1,
         val pageSize: Int = 10,
         val serverId: String = "",
-        val serverSnapshot: NacosServerSnapshot? = null
+        val serverSnapshot: NacosServerSnapshot? = null,
+        /** Captured by the project UI before any cache or transport operation. */
+        val operationContext: NacosOperationContext? = null
     ) {
         /**
          * Determines if this is a fuzzy search based on dataId content
@@ -225,11 +229,14 @@ class NacosSearchService(
         request: SearchRequest,
         nacosApiService: NacosApiService
     ): Result<SearchExecutionResult> {
+        val context = request.operationContext ?: settings.captureOperationContext(
+            request.serverId.takeIf { it.isNotBlank() }
+        ).getOrElse { return Result.failure(it) }
         val requestKey = request.toCacheKey()
         val preferCache = !request.forceRefresh && settings.cacheEnabled
         if (preferCache) {
             val cached = cacheService.getListPage(
-                settings.serverUrl,
+                context.identity,
                 request.namespace?.namespaceId,
                 request.toApiListPageCacheKey()
             )
@@ -239,18 +246,36 @@ class NacosSearchService(
                 return Result.success(SearchExecutionResult(cached, configurations, SearchSource.CACHE))
             }
         }
-        val result = nacosApiService.listConfigurations(
-            namespaceId = request.namespace?.namespaceId,
-            pageNo = request.pageNo,
-            pageSize = request.pageSize,
-            dataId = request.getProcessedDataId(),
-            group = request.group,
-            appName = request.appName,
-            configTags = request.configTags,
-            searchMode = request.getSearchMode(),
-            useCache = settings.cacheEnabled,
-            forceRefresh = request.forceRefresh
-        )
+        val result = if (request.operationContext == null && request.serverId.isBlank()) {
+            // Preserve the legacy API seam for callers that have not supplied
+            // a project context; it still preflights above before this call.
+            nacosApiService.listConfigurations(
+                namespaceId = request.namespace?.namespaceId,
+                pageNo = request.pageNo,
+                pageSize = request.pageSize,
+                dataId = request.getProcessedDataId(),
+                group = request.group,
+                appName = request.appName,
+                configTags = request.configTags,
+                searchMode = request.getSearchMode(),
+                useCache = settings.cacheEnabled,
+                forceRefresh = request.forceRefresh
+            )
+        } else {
+            nacosApiService.listConfigurations(
+                namespaceId = request.namespace?.namespaceId,
+                pageNo = request.pageNo,
+                pageSize = request.pageSize,
+                dataId = request.getProcessedDataId(),
+                group = request.group,
+                appName = request.appName,
+                configTags = request.configTags,
+                searchMode = request.getSearchMode(),
+                useCache = settings.cacheEnabled,
+                forceRefresh = request.forceRefresh,
+                operationContext = context
+            )
+        }
 
         if (result.isSuccess) {
             val response = result.getOrNull()!!
@@ -260,7 +285,7 @@ class NacosSearchService(
         }
 
         val stale = cacheService.getListPage(
-            settings.serverUrl,
+            context.identity,
             request.namespace?.namespaceId,
             request.toApiListPageCacheKey(),
             allowStale = true
@@ -277,9 +302,15 @@ class NacosSearchService(
         request: SearchRequest,
         nacosApiService: NacosApiService
     ): Result<SearchExecutionResult> {
+        val context = request.operationContext ?: settings.captureOperationContext(
+            request.serverId.takeIf { it.isNotBlank() }
+        ).getOrElse { return Result.failure(it) }
         val namespaceId = request.namespace?.namespaceId
         val snapshot = requireNotNull(request.serverSnapshot) {
             "Full namespace search requires a server snapshot captured with the request"
+        }
+        if (snapshot.identity != context.identity) {
+            return Result.failure(ConfigurationRequired(listOf("Search request identity does not match its operation context")))
         }
         val indexRequest = settings.captureNamespaceIndexRequest(namespaceId, snapshot)
         val indexKey = indexRequest.key

@@ -1,6 +1,7 @@
 package com.nanyin.nacos.search.services
 
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
@@ -89,11 +90,14 @@ class NamespaceService(private val nacosApiService: NacosApiService? = null) : P
      * Load namespaces from Nacos server asynchronously
      * @return Deferred result containing list of namespaces
      */
-    fun loadNamespacesAsync(): Deferred<Result<List<NamespaceInfo>>> {
+    fun loadNamespacesAsync(
+        operationContext: NacosOperationContext? = null
+    ): Deferred<Result<List<NamespaceInfo>>> {
         return serviceScope.async {
             try {
                 logger.debug("Loading namespaces from Nacos server")
-                val result = apiService?.getNamespaces() ?: Result.failure(IllegalStateException("NacosApiService not available"))
+                val result = apiService?.getNamespaces(operationContext)
+                    ?: Result.failure(IllegalStateException("NacosApiService not available"))
                 
                 if (result.isSuccess) {
                     val namespaces = result.getOrNull() ?: emptyList()

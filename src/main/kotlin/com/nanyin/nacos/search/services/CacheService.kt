@@ -8,6 +8,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.settings.AuthMode
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,8 +58,8 @@ class CacheService internal constructor(
 
     /** A non-suspending, immutable view for EDT/PSI callers. Never waits for persistence loading. */
     fun configurationSnapshot(serverUrl: String?): List<NacosConfiguration> {
-        val normalizedServerUrl = serverUrl?.let(::normalizeServerUrl)?.takeIf { it.isNotBlank() }
-        return configurationSnapshotForPrefix(normalizedServerUrl)
+        val identity = serverUrl?.let(::legacyIdentity)
+        return configurationSnapshotForPrefix(identity?.let(::identityPrefix))
     }
 
     fun configurationSnapshot(identity: AccessIdentity): List<NacosConfiguration> =
@@ -77,8 +78,8 @@ class CacheService internal constructor(
 
     /** Immutable detail view used by code navigation, including stale targets. */
     fun configurationNavigationSnapshot(serverUrl: String?): List<CachedConfiguration> {
-        val normalizedServerUrl = serverUrl?.let(::normalizeServerUrl)?.takeIf { it.isNotBlank() }
-        return configurationNavigationSnapshotForPrefix(normalizedServerUrl)
+        val identity = serverUrl?.let(::legacyIdentity)
+        return configurationNavigationSnapshotForPrefix(identity?.let(::identityPrefix))
     }
 
     fun configurationNavigationSnapshot(identity: AccessIdentity): List<CachedConfiguration> =
@@ -145,9 +146,6 @@ class CacheService internal constructor(
         // Trigger the oversized-caches sweep only once the cache grows past the hard
         // cap by this margin, so per-insert writes stay O(1) instead of O(n).
         private const val CLEANUP_BUFFER = 100
-        // Guards for the one-time legacy PropertiesComponent -> file migration.
-        private const val LEGACY_MIGRATION_MAX_BYTES = 5_000_000
-        private const val LEGACY_MIGRATION_MAX_ENTRIES = 1000
     }
 
     init {
@@ -189,6 +187,23 @@ class CacheService internal constructor(
         return null
     }
 
+    suspend fun getListPage(
+        identity: AccessIdentity,
+        namespaceId: String?,
+        requestKey: String,
+        allowStale: Boolean = false
+    ): NacosApiService.ConfigListResponse? {
+        loadCompleted.await()
+        val key = listPageKey(identity, namespaceId, requestKey)
+        val entry = listPageCache[key] ?: run { cacheMisses.incrementAndGet(); return null }
+        if (!entry.isExpired(currentTimeMillis()) || allowStale) {
+            cacheHits.incrementAndGet()
+            return entry.data
+        }
+        cacheMisses.incrementAndGet()
+        return null
+    }
+
     suspend fun putListPage(
         serverUrl: String,
         namespaceId: String?,
@@ -199,6 +214,23 @@ class CacheService internal constructor(
     ) {
         cacheMutex.withLock {
             val key = listPageKey(serverUrl, namespaceId, requestKey)
+            listPageCache[key] = CacheEntry(CacheEntryType.LIST_PAGE, response, currentTimeMillis(), ttl, source)
+            persistListPage(key, listPageCache[key]!!)
+            updateListPageKeysList()
+            cleanupOversizedCaches()
+        }
+    }
+
+    suspend fun putListPage(
+        identity: AccessIdentity,
+        namespaceId: String?,
+        requestKey: String,
+        response: NacosApiService.ConfigListResponse,
+        ttl: Long = DEFAULT_TTL,
+        source: CacheSource = CacheSource.REMOTE
+    ) {
+        cacheMutex.withLock {
+            val key = listPageKey(identity, namespaceId, requestKey)
             listPageCache[key] = CacheEntry(CacheEntryType.LIST_PAGE, response, currentTimeMillis(), ttl, source)
             persistListPage(key, listPageCache[key]!!)
             updateListPageKeysList()
@@ -443,7 +475,7 @@ class CacheService internal constructor(
         cacheMutex.withLock {
             val now = currentTimeMillis()
             val namespacePrefix = identity?.let { "${identityPrefix(it)}|${normalizeNamespace(namespaceId)}|" }
-                ?: "${normalizeServerUrl(serverUrl)}|${normalizeNamespace(namespaceId)}|"
+                ?: "${identityPrefix(legacyIdentity(serverUrl))}|${normalizeNamespace(namespaceId)}|"
             val replacementKeys = configurations
                 .mapTo(mutableSetOf()) { config ->
                     identity?.let { detailKey(it, namespaceId, config.dataId, config.group) }
@@ -491,7 +523,7 @@ class CacheService internal constructor(
 
     suspend fun invalidateNamespace(serverUrl: String, namespaceId: String?) {
         invalidateNamespaceByPrefix(
-            "${normalizeServerUrl(serverUrl)}|${normalizeNamespace(namespaceId)}|",
+            "${identityPrefix(legacyIdentity(serverUrl))}|${normalizeNamespace(namespaceId)}|",
             namespaceKey(serverUrl, namespaceId)
         )
     }
@@ -643,95 +675,43 @@ class CacheService internal constructor(
         // or racing with a concurrent write. Reads are lock-free and merely await
         // loadCompleted, so there is no deadlock.
         cacheMutex.withLock {
-            loadDetailsFromPersistence()
-            loadListPagesFromPersistence()
-            migrateLegacyBlobs()
+            loadIdentityScopedDetailsFromPersistence()
+            loadIdentityScopedListPagesFromPersistence()
+            discardLegacyBlobs()
             publishDetailSnapshot()
             markModified()
         }
     }
 
-    private suspend fun loadDetailFromLegacyBlob(key: String): CacheEntry<NacosConfiguration>? {
-        val json = properties.getValue("$DETAIL_KEY_PREFIX$key") ?: return null
-        return try {
-            val entry = gson.fromJson<CacheEntry<NacosConfiguration>>(
-                json, object : TypeToken<CacheEntry<NacosConfiguration>>() {}.type
-            )
-            properties.unsetValue("$DETAIL_KEY_PREFIX$key") // drop legacy blob
-            if (json.length <= LEGACY_MIGRATION_MAX_BYTES) cacheStorage.storeDetail(key, entry)
-            entry
-        } catch (e: Exception) {
-            logger.warn("Failed to migrate legacy detail blob: $key", e)
-            properties.unsetValue("$DETAIL_KEY_PREFIX$key")
-            null
-        }
-    }
-
-    private suspend fun loadListPageFromLegacyBlob(key: String): CacheEntry<NacosApiService.ConfigListResponse>? {
-        val json = properties.getValue("$LIST_PAGE_KEY_PREFIX$key") ?: return null
-        return try {
-            val entry = gson.fromJson<CacheEntry<NacosApiService.ConfigListResponse>>(
-                json, object : TypeToken<CacheEntry<NacosApiService.ConfigListResponse>>() {}.type
-            )
-            properties.unsetValue("$LIST_PAGE_KEY_PREFIX$key")
-            if (json.length <= LEGACY_MIGRATION_MAX_BYTES) cacheStorage.storeListPage(key, entry)
-            entry
-        } catch (e: Exception) {
-            logger.warn("Failed to migrate legacy list-page blob: $key", e)
-            properties.unsetValue("$LIST_PAGE_KEY_PREFIX$key")
-            null
-        }
-    }
-
-    /**
-     * Best-effort one-time sweep of pre-file-storage PropertiesComponent blobs. Only
-     * keys present in the persisted keys lists are migrated (the public PropertiesComponent
-     * API does not allow enumerating arbitrary orphans), and oversized blobs are skipped to
-     * avoid pathological startup times.
-     */
-    private fun migrateLegacyBlobs() {
-        var migrated = 0
+    /** Deletes cache records whose schema cannot establish a profile owner. */
+    private suspend fun discardLegacyBlobs() {
         for (key in getDetailKeys()) {
-            if (properties.getValue("$DETAIL_KEY_PREFIX$key") == null) continue
-            if (++migrated > LEGACY_MIGRATION_MAX_ENTRIES) break
-            val json = properties.getValue("$DETAIL_KEY_PREFIX$key") ?: continue
-            if (json.length > LEGACY_MIGRATION_MAX_BYTES) {
-                properties.unsetValue("$DETAIL_KEY_PREFIX$key")
-                continue
-            }
+            if (isIdentityScopedKey(key)) continue
             properties.unsetValue("$DETAIL_KEY_PREFIX$key")
+            cacheStorage.removeDetail(key)
         }
         for (key in getListPageKeys()) {
-            if (properties.getValue("$LIST_PAGE_KEY_PREFIX$key") == null) continue
-            if (++migrated > LEGACY_MIGRATION_MAX_ENTRIES) break
-            val json = properties.getValue("$LIST_PAGE_KEY_PREFIX$key") ?: continue
-            if (json.length > LEGACY_MIGRATION_MAX_BYTES) {
-                properties.unsetValue("$LIST_PAGE_KEY_PREFIX$key")
-                continue
-            }
+            if (isIdentityScopedKey(key)) continue
             properties.unsetValue("$LIST_PAGE_KEY_PREFIX$key")
+            cacheStorage.removeListPage(key)
         }
+        updateDetailKeysList()
+        updateListPageKeysList()
     }
 
-    private suspend fun loadDetailsFromPersistence() {
+    private suspend fun loadIdentityScopedDetailsFromPersistence() {
         getDetailKeys().forEach { key ->
-            var entry = cacheStorage.loadDetail(key)
-            if (entry == null) {
-                // Pre-file-storage builds stored the entry JSON inside PropertiesComponent.
-                // Migrate it to a file once, then drop the legacy blob.
-                entry = loadDetailFromLegacyBlob(key)
-            }
+            if (!isIdentityScopedKey(key)) return@forEach
+            val entry = cacheStorage.loadDetail(key)
             if (entry == null) return@forEach
             detailCache[key] = entry
         }
     }
 
-    private suspend fun loadListPagesFromPersistence() {
+    private suspend fun loadIdentityScopedListPagesFromPersistence() {
         getListPageKeys().forEach { key ->
-            var entry = cacheStorage.loadListPage(key)
-            if (entry == null) {
-                entry = loadListPageFromLegacyBlob(key)
-            }
+            if (!isIdentityScopedKey(key)) return@forEach
+            val entry = cacheStorage.loadListPage(key)
             if (entry == null) return@forEach
             if (!entry.isExpired()) {
                 listPageCache[key] = entry
@@ -842,28 +822,30 @@ class CacheService internal constructor(
         return if (createdAtValues.isEmpty()) 0L else createdAtValues.sumOf { now - it } / createdAtValues.size
     }
 
-    private fun detailKey(serverUrl: String, namespaceId: String?, dataId: String, group: String): String {
-        return "${normalizeServerUrl(serverUrl)}|${normalizeNamespace(namespaceId)}|$dataId|$group"
-    }
+    private fun detailKey(serverUrl: String, namespaceId: String?, dataId: String, group: String): String =
+        detailKey(legacyIdentity(serverUrl), namespaceId, dataId, group)
 
     private fun detailKey(identity: AccessIdentity, namespaceId: String?, dataId: String, group: String): String =
         CacheCoordinate.Detail(identity, identity.serverId, namespaceId.orEmpty(), dataId, group).storageKey()
 
-    private fun listPageKey(serverUrl: String, namespaceId: String?, requestKey: String): String {
-        return "${normalizeServerUrl(serverUrl)}|${normalizeNamespace(namespaceId)}|$requestKey"
-    }
+    private fun listPageKey(serverUrl: String, namespaceId: String?, requestKey: String): String =
+        listPageKey(legacyIdentity(serverUrl), namespaceId, requestKey)
 
-    private fun namespaceKey(serverUrl: String, namespaceId: String?): String {
-        return "${normalizeServerUrl(serverUrl)}|${normalizeNamespace(namespaceId)}"
-    }
+    private fun listPageKey(identity: AccessIdentity, namespaceId: String?, requestKey: String): String =
+        CacheCoordinate.ListPage(identity, identity.serverId, namespaceId.orEmpty(), requestKey).storageKey()
+
+    private fun namespaceKey(serverUrl: String, namespaceId: String?): String =
+        namespaceKey(legacyIdentity(serverUrl), namespaceId)
 
     private fun namespaceKey(identity: AccessIdentity, namespaceId: String?): String =
         CacheCoordinate.NamespaceIndex(identity, identity.serverId, namespaceId.orEmpty()).storageKey()
 
-    private fun identityPrefix(identity: AccessIdentity): String =
-        "${identity.serverId}|${identity.authMode}|${identity.principal}"
+    private fun identityPrefix(identity: AccessIdentity): String = CacheCoordinate.identityPrefix(identity)
 
-    private fun normalizeServerUrl(serverUrl: String): String = serverUrl.trim().trimEnd('/')
+    private fun legacyIdentity(serverUrl: String): AccessIdentity =
+        AccessIdentity.of(serverUrl, AuthMode.TOKEN, "")
+
+    private fun isIdentityScopedKey(key: String): Boolean = key.startsWith("v2|")
 
     private fun normalizeNamespace(namespaceId: String?): String {
         return namespaceId?.takeIf { it.isNotBlank() && it != "public" } ?: "public"

@@ -65,7 +65,8 @@ class NamespaceIndexCoordinatorTest {
 
             assertEquals("http://a:8848", captured.server.serverUrl)
             assertEquals("alice", captured.server.username)
-            assertEquals(captured.key.identity.serverId, captured.server.serverUrl)
+            assertEquals("server-a", captured.key.identity.profileId)
+            assertEquals(captured.server.serverUrl, captured.key.identity.canonicalEndpoint)
             assertNotEquals(settings.getActiveServer().serverUrl, captured.server.serverUrl)
         } finally {
             settings.servers.clear()
