@@ -26,7 +26,7 @@ enum class V3Capability {
 class V3ProtocolAdapter(
     private val transport: ProtocolTransport,
     private val gson: Gson = Gson()
-) : ProtocolAdapter {
+) : ProtocolAdapter, HistoryCapability {
 
     override suspend fun probe(target: OperationTarget): Result<Unit> = runCatching {
         validate(target)
@@ -129,6 +129,40 @@ class V3ProtocolAdapter(
     }
 
     /** V3 declares the documented content-search capability. V1 does not. */
+    override suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage> = runCatching {
+        validate(target)
+        try {
+            val response = transport.execute(historyListRequest(target, query))
+            val data = unwrapEnvelope(response, "history list")
+            parseHistoryPage(data)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: RemoteOperationError) {
+            throw error
+        } catch (error: JsonParseException) {
+            throw RemoteOperationError.Protocol("Invalid V3 history list response", error)
+        } catch (error: Throwable) {
+            throw RemoteOperationError.Connection(error)
+        }
+    }
+
+    override suspend fun readHistoryDetail(target: OperationTarget, historyId: String): Result<HistoryDetail> = runCatching {
+        validate(target)
+        try {
+            val response = transport.execute(historyDetailRequest(target, historyId))
+            val data = unwrapEnvelope(response, "history detail")
+            parseHistoryDetail(data)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: RemoteOperationError) {
+            throw error
+        } catch (error: JsonParseException) {
+            throw RemoteOperationError.Protocol("Invalid V3 history detail response", error)
+        } catch (error: Throwable) {
+            throw RemoteOperationError.Connection(error)
+        }
+    }
+
     fun declaredCapabilities(): Set<V3Capability> = setOf(
         V3Capability.CONTENT_SEARCH,
         V3Capability.CONFIG_SUMMARY_LIST,
@@ -175,6 +209,29 @@ class V3ProtocolAdapter(
             "group" to coordinate.group,
             "namespaceId" to target.namespaceId.trim().ifBlank { "public" }
         ),
+        headers = mapOf("Accept" to "application/json")
+    )
+
+
+    private fun historyListRequest(target: OperationTarget, query: HistoryQuery): ProtocolRequest = ProtocolRequest(
+        method = "GET",
+        endpoint = target.context.endpoint.value,
+        path = HISTORY_LIST_PATH,
+        query = listOf(
+            "dataId" to query.coordinate.dataId,
+            "group" to query.coordinate.group,
+            "namespaceId" to target.namespaceId.trim().ifBlank { "public" },
+            "pageNo" to query.pageNo.toString(),
+            "pageSize" to query.pageSize.toString()
+        ),
+        headers = mapOf("Accept" to "application/json")
+    )
+
+    private fun historyDetailRequest(target: OperationTarget, historyId: String): ProtocolRequest = ProtocolRequest(
+        method = "GET",
+        endpoint = target.context.endpoint.value,
+        path = HISTORY_DETAIL_PATH,
+        query = listOf("nid" to historyId),
         headers = mapOf("Accept" to "application/json")
     )
 
@@ -251,6 +308,48 @@ class V3ProtocolAdapter(
 
     // ---- error mapping ----
 
+
+    private fun parseHistoryPage(data: JsonObject): HistoryPage {
+        val page = gson.fromJson(data, V3HistoryListData::class.java)
+            ?: throw RemoteOperationError.Protocol("Invalid V3 history data")
+        return HistoryPage(
+            totalCount = page.totalCount,
+            pageNumber = page.pageNumber,
+            pagesAvailable = page.pagesAvailable,
+            items = page.pageItems.map { item ->
+                HistoryEntry(
+                    id = item.id ?: "",
+                    dataId = item.dataId,
+                    group = item.group,
+                    tenantId = normalizeTenant(item.tenant),
+                    type = item.type,
+                    md5 = item.md5,
+                    lastModified = item.lastModified ?: 0L,
+                    opType = item.opType
+                )
+            }
+        )
+    }
+
+    private fun parseHistoryDetail(data: JsonObject): HistoryDetail {
+        val detail = gson.fromJson(data, V3HistoryDetailData::class.java)
+            ?: throw RemoteOperationError.Protocol("Invalid V3 history detail data")
+        if (detail.id.isNullOrBlank()) {
+            throw RemoteOperationError.Protocol("V3 history detail data is missing its id")
+        }
+        return HistoryDetail(
+            id = detail.id,
+            dataId = detail.dataId,
+            group = detail.group,
+            tenantId = normalizeTenant(detail.tenant),
+            content = detail.content ?: "",
+            type = detail.type,
+            md5 = detail.md5,
+            lastModified = detail.lastModified ?: 0L,
+            opType = detail.opType
+        )
+    }
+
     private fun mapStatusFailure(response: ProtocolResponse): RemoteOperationError {
         val envelope = runCatching { gson.fromJson(response.body, V3Envelope::class.java) }.getOrNull()
         val code = envelope?.code
@@ -318,10 +417,42 @@ class V3ProtocolAdapter(
         val md5: String? = null
     )
 
+    private data class V3HistoryListData(
+        val totalCount: Int = 0,
+        val pageNumber: Int = 0,
+        val pagesAvailable: Int = 0,
+        val pageItems: List<V3HistoryItem> = emptyList()
+    )
+
+    private data class V3HistoryItem(
+        val id: String? = null,
+        val dataId: String = "",
+        val group: String = "",
+        val type: String? = null,
+        val md5: String? = null,
+        val tenant: String? = null,
+        val lastModified: Long? = null,
+        val opType: String? = null
+    )
+
+    private data class V3HistoryDetailData(
+        val id: String? = null,
+        val dataId: String = "",
+        val group: String = "",
+        val tenant: String? = null,
+        val content: String? = null,
+        val type: String? = null,
+        val md5: String? = null,
+        val lastModified: Long? = null,
+        val opType: String? = null
+    )
+
     private companion object {
         const val STATE_PATH = "/nacos/v3/admin/core/state"
         const val LIST_PATH = "/nacos/v3/admin/cs/config/list"
         const val DETAIL_PATH = "/nacos/v3/admin/cs/config"
+        const val HISTORY_LIST_PATH = "/nacos/v3/admin/cs/history/list"
+        const val HISTORY_DETAIL_PATH = "/nacos/v3/admin/cs/history"
         const val CODE_SUCCESS = 0
         const val CODE_ACCESS_DENIED = 10001
         const val CODE_NOT_FOUND = 20004

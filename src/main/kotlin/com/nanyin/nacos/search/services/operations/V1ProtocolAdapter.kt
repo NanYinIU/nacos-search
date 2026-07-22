@@ -123,7 +123,7 @@ private object UnavailableV1Authenticator : V1Authenticator {
 class V1ProtocolAdapter(
     private val transport: ProtocolTransport,
     private val gson: Gson = Gson()
-) : ProtocolAdapter {
+) : ProtocolAdapter, HistoryCapability {
     private var authenticator: V1Authenticator = UnavailableV1Authenticator
     private var readBudgetMillis: Long = DEFAULT_READ_BUDGET_MILLIS
     private var clock: () -> Long = System::currentTimeMillis
@@ -144,6 +144,31 @@ class V1ProtocolAdapter(
         this.clock = clock
     }
 
+    override suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage> =
+        execute(target) { authentication ->
+            request(
+                target,
+                HISTORY_PATH,
+                listOf(
+                    "search" to "accurate",
+                    "dataId" to query.coordinate.dataId,
+                    "group" to query.coordinate.group,
+                    "pageNo" to query.pageNo.toString(),
+                    "pageSize" to query.pageSize.toString()
+                ),
+                authentication
+            )
+        }.mapCatching { response -> parseHistoryPage(ensureSuccess(response)) }
+
+    override suspend fun readHistoryDetail(target: OperationTarget, historyId: String): Result<HistoryDetail> =
+        execute(target) { authentication ->
+            request(
+                target,
+                HISTORY_PATH,
+                listOf("nid" to historyId),
+                authentication
+            )
+        }.mapCatching { response -> parseHistoryDetail(ensureSuccess(response)) }
     override suspend fun probe(target: OperationTarget): Result<Unit> = execute(target) {
         request(target, NAMESPACES_PATH, authentication = it)
     }.mapCatching { response ->
@@ -352,6 +377,60 @@ class V1ProtocolAdapter(
         throw RemoteOperationError.Protocol("Invalid V1 detail response", error)
     }
 
+
+    private fun parseHistoryPage(body: String): HistoryPage = try {
+        val raw = gson.fromJson(body, V1HistoryListEnvelope::class.java)
+            ?: throw RemoteOperationError.Protocol("V1 history response was empty")
+        HistoryPage(
+            totalCount = raw.totalCount,
+            pageNumber = raw.pageNumber,
+            pagesAvailable = raw.pagesAvailable,
+            items = raw.pageItems.map { item ->
+                HistoryEntry(
+                    id = item.id ?: "",
+                    dataId = item.dataId,
+                    group = item.group,
+                    tenantId = normalizeTenant(item.tenant),
+                    type = item.type,
+                    md5 = item.md5,
+                    lastModified = item.lastModified ?: 0L,
+                    opType = item.opType
+                )
+            }
+        )
+    } catch (error: RemoteOperationError) {
+        throw error
+    } catch (error: JsonParseException) {
+        throw RemoteOperationError.Protocol("Invalid V1 history list response", error)
+    } catch (error: Exception) {
+        throw RemoteOperationError.Protocol("Invalid V1 history list response", error)
+    }
+
+    private fun parseHistoryDetail(body: String): HistoryDetail = try {
+        val raw = gson.fromJson(body, V1HistoryDetailEnvelope::class.java)
+            ?: throw RemoteOperationError.Protocol("V1 history detail response was empty")
+        if (raw.id.isNullOrBlank()) {
+            throw RemoteOperationError.Protocol("V1 history detail response is missing its id")
+        }
+        HistoryDetail(
+            id = raw.id,
+            dataId = raw.dataId,
+            group = raw.group,
+            tenantId = normalizeTenant(raw.tenant),
+            content = raw.content ?: "",
+            type = raw.type,
+            md5 = raw.md5,
+            lastModified = raw.lastModified ?: 0L,
+            opType = raw.opType
+        )
+    } catch (error: RemoteOperationError) {
+        throw error
+    } catch (error: JsonParseException) {
+        throw RemoteOperationError.Protocol("Invalid V1 history detail response", error)
+    } catch (error: Exception) {
+        throw RemoteOperationError.Protocol("Invalid V1 history detail response", error)
+    }
+
     private fun mapFailure(error: Throwable): RemoteOperationError = when (error) {
         is RemoteOperationError -> error
         is NacosRequestError.Authentication -> RemoteOperationError.Authentication(error.status)
@@ -473,9 +552,40 @@ class V1ProtocolAdapter(
         val message: String? = null
     )
 
+    private data class V1HistoryListEnvelope(
+        val totalCount: Int = 0,
+        val pageNumber: Int = 0,
+        val pagesAvailable: Int = 0,
+        val pageItems: List<V1HistoryItemEnvelope> = emptyList()
+    )
+
+    private data class V1HistoryItemEnvelope(
+        val id: String? = null,
+        val dataId: String = "",
+        val group: String = "",
+        val tenant: String? = null,
+        val type: String? = null,
+        val md5: String? = null,
+        val lastModified: Long? = null,
+        val opType: String? = null
+    )
+
+    private data class V1HistoryDetailEnvelope(
+        val id: String? = null,
+        val dataId: String = "",
+        val group: String = "",
+        val tenant: String? = null,
+        val content: String? = null,
+        val type: String? = null,
+        val md5: String? = null,
+        val lastModified: Long? = null,
+        val opType: String? = null
+    )
+
     private companion object {
         const val CONFIGS_PATH = "/nacos/v1/cs/configs"
         const val NAMESPACES_PATH = "/nacos/v1/console/namespaces"
+        const val HISTORY_PATH = "/nacos/v1/cs/history"
         const val DEFAULT_READ_BUDGET_MILLIS = 30_000L
     }
 }

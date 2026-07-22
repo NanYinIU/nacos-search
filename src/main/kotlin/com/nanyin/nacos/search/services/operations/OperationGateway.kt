@@ -15,7 +15,8 @@ import com.nanyin.nacos.search.services.network.RequestPolicy
  */
 class OperationGateway(
     private val adapters: Map<NacosApiGeneration, ProtocolAdapter>,
-    private val cache: OperationCache = NoOperationCache
+    private val cache: OperationCache = NoOperationCache,
+    private val historyCache: HistoryMemoryCache = HistoryMemoryCache()
 ) {
     suspend fun probe(target: OperationTarget): Result<Unit> =
         adapterFor(target)?.probe(target) ?: unsupportedGeneration(target)
@@ -52,6 +53,57 @@ class OperationGateway(
         return adapter.readDetail(target, coordinate).onSuccess { detail ->
             if (useCache && detail != null) {
                 cache.putDetail(target.context.identity, target.namespaceId, detail)
+            }
+        }
+    }
+
+
+    suspend fun listHistory(
+        target: OperationTarget,
+        query: HistoryQuery,
+        forceRefresh: Boolean = false,
+        useCache: Boolean = true
+    ): Result<HistoryPage> {
+        if (useCache && !forceRefresh) {
+            historyCache.getHistoryPage(target.context.identity, target.namespaceId, query.cacheKey())?.let {
+                return Result.success(it)
+            }
+        }
+        val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
+        if (adapter !is HistoryCapability) {
+            return Result.failure(
+                RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support configuration history")
+            )
+        }
+        return adapter.listHistory(target, query).onSuccess { page ->
+            if (useCache) {
+                historyCache.putHistoryPage(target.context.identity, target.namespaceId, query.cacheKey(), page)
+            }
+        }
+    }
+
+    suspend fun readHistoryDetail(
+        target: OperationTarget,
+        historyId: String,
+        forceRefresh: Boolean = false,
+        useCache: Boolean = true
+    ): Result<HistoryDetail> {
+        if (useCache && !forceRefresh) {
+            historyCache.getHistoryDetail(target.context.identity, target.namespaceId, historyId)?.let {
+                return Result.success(it)
+            }
+        }
+        val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
+        if (adapter !is HistoryCapability) {
+            return Result.failure(
+                RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support configuration history")
+            )
+        }
+        return adapter.readHistoryDetail(target, historyId).onSuccess { detail ->
+            if (useCache) {
+                historyCache.putHistoryDetail(
+                    target.context.identity, target.namespaceId, historyId, detail
+                )
             }
         }
     }
