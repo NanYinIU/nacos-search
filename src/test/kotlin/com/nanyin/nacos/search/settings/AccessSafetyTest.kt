@@ -245,7 +245,7 @@ class AccessSafetyTest {
     }
 
     @Test
-    fun `hybrid, unlocked anonymous, and explicit V1 strategies outside V1 fail closed before transport`() {
+    fun `hybrid is rejected and explicit strategies are valid for AUTO and V3 locked profiles`() {
         val hybridV1 = EnvironmentProfile(
             id = "hybrid-v1",
             displayName = "Hybrid V1",
@@ -254,14 +254,14 @@ class AccessSafetyTest {
             authMode = AuthMode.HYBRID,
             principal = "alice"
         )
-        val unlockedAnonymous = EnvironmentProfile(
+        val autoAnonymous = EnvironmentProfile(
             id = "auto-anonymous",
             displayName = "Auto anonymous",
             canonicalEndpoint = "https://nacos.example",
             apiPolicy = NacosApiPolicy.AUTO,
             authMode = AuthMode.ANONYMOUS
         )
-        val unlockedBasic = EnvironmentProfile(
+        val autoBasic = EnvironmentProfile(
             id = "auto-basic",
             displayName = "Auto basic",
             canonicalEndpoint = "https://nacos.example",
@@ -269,10 +269,25 @@ class AccessSafetyTest {
             authMode = AuthMode.HTTP_BASIC,
             principal = "alice"
         )
+        val v3Password = EnvironmentProfile(
+            id = "v3-password",
+            displayName = "V3 password",
+            canonicalEndpoint = "https://nacos.example",
+            apiPolicy = NacosApiPolicy.V3,
+            authMode = AuthMode.NACOS_PASSWORD,
+            principal = "alice"
+        )
 
         assertInstanceOf(ConfigurationRequired::class.java, OperationContextResolver.resolve(hybridV1, "secret").exceptionOrNull())
-        assertInstanceOf(ConfigurationRequired::class.java, OperationContextResolver.resolve(unlockedAnonymous, "").exceptionOrNull())
-        assertInstanceOf(ConfigurationRequired::class.java, OperationContextResolver.resolve(unlockedBasic, "secret").exceptionOrNull())
+        assertInstanceOf(ConfigurationRequired::class.java, OperationContextResolver.resolve(autoBasic, "").exceptionOrNull())
+        // AUTO with anonymous and complete explicit strategies now resolves to UNKNOWN generation.
+        val anonCtx = OperationContextResolver.resolve(autoAnonymous, "").getOrThrow()
+        assertEquals(NacosApiGeneration.UNKNOWN, anonCtx.resolvedGeneration)
+        val basicCtx = OperationContextResolver.resolve(autoBasic, "secret").getOrThrow()
+        assertEquals(NacosApiGeneration.UNKNOWN, basicCtx.resolvedGeneration)
+        // V3-locked with explicit password strategy resolves to V3 generation.
+        val v3Ctx = OperationContextResolver.resolve(v3Password, "secret").getOrThrow()
+        assertEquals(NacosApiGeneration.V3, v3Ctx.resolvedGeneration)
     }
 
     @Test

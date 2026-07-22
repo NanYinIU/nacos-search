@@ -95,6 +95,10 @@ sealed class RemoteOperationError(message: String, cause: Throwable? = null) : E
     class Connection(cause: Throwable) : RemoteOperationError("Connection failed", cause)
     class Protocol(message: String, cause: Throwable? = null) : RemoteOperationError(message, cause)
     class Unsupported(message: String) : RemoteOperationError(message)
+    class GenerationUnsupported(message: String) : RemoteOperationError(message)
+    class CapabilityUnsupported(message: String) : RemoteOperationError(message)
+    class Cancelled(message: String = "Operation cancelled") : RemoteOperationError(message)
+    class Redirected(val sanitizedEndpoint: String) : RemoteOperationError("Endpoint redirected to $sanitizedEndpoint")
 }
 
 /** V1 obtains Nacos-password tokens from this application-memory boundary. */

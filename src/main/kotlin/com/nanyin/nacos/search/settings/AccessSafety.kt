@@ -131,40 +131,28 @@ object OperationContextResolver {
         val principal = profile.principal.trim()
         val secret = credential.orEmpty()
         val authenticationStrategy = profile.authMode.toV1AuthenticationStrategy()
-        if (profile.apiPolicy == NacosApiPolicy.V1) {
-            if (profile.authMode == AuthMode.HYBRID) {
-                throw ConfigurationRequired(listOf("V1 requires one explicit authentication strategy"))
+        if (profile.authMode == AuthMode.HYBRID) {
+            throw ConfigurationRequired(listOf("An explicit authentication strategy is required; HYBRID is not supported"))
+        }
+        // Auth strategy validation applies to every policy: the strategy must be
+        // satisfiable regardless of whether the generation is locked or AUTO.
+        when (authenticationStrategy) {
+            V1AuthenticationStrategy.ANONYMOUS -> require(principal.isBlank() && secret.isBlank()) {
+                throw ConfigurationRequired(listOf("Anonymous access cannot include a principal or credential"))
             }
-            when (authenticationStrategy) {
-                V1AuthenticationStrategy.ANONYMOUS -> require(principal.isBlank() && secret.isBlank()) {
-                    throw ConfigurationRequired(listOf("Anonymous access cannot include a principal or credential"))
-                }
-                V1AuthenticationStrategy.NACOS_PASSWORD,
-                V1AuthenticationStrategy.HTTP_BASIC -> require(principal.isNotBlank() && secret.isNotBlank()) {
-                    throw ConfigurationRequired(listOf("Username and credential must be provided together"))
-                }
-                V1AuthenticationStrategy.BEARER_TOKEN -> require(secret.isNotBlank()) {
-                    throw ConfigurationRequired(listOf("Bearer token is required"))
-                }
-            }
-        } else {
-            if (profile.authMode == AuthMode.ANONYMOUS) {
-                throw ConfigurationRequired(listOf("Anonymous access requires an explicitly V1-locked profile"))
-            }
-            if (profile.authMode == AuthMode.NACOS_PASSWORD ||
-                profile.authMode == AuthMode.HTTP_BASIC ||
-                profile.authMode == AuthMode.BEARER_TOKEN
-            ) {
-                throw ConfigurationRequired(listOf("Explicit V1 authentication strategies require a V1-locked profile"))
-            }
-            require(!(principal.isBlank() xor secret.isBlank())) {
+            V1AuthenticationStrategy.NACOS_PASSWORD,
+            V1AuthenticationStrategy.HTTP_BASIC -> require(principal.isNotBlank() && secret.isNotBlank()) {
                 throw ConfigurationRequired(listOf("Username and credential must be provided together"))
+            }
+            V1AuthenticationStrategy.BEARER_TOKEN -> require(secret.isNotBlank()) {
+                throw ConfigurationRequired(listOf("Bearer token is required"))
             }
         }
         val normalizedPrincipal = principal.ifBlank { "<anonymous>" }
         val resolvedGeneration = when (profile.apiPolicy) {
             NacosApiPolicy.V1 -> NacosApiGeneration.V1
-            NacosApiPolicy.AUTO, NacosApiPolicy.V3 -> NacosApiGeneration.UNKNOWN
+            NacosApiPolicy.V3 -> NacosApiGeneration.V3
+            NacosApiPolicy.AUTO -> NacosApiGeneration.UNKNOWN
         }
         NacosOperationContext(
             identity = AccessIdentity.ofProfile(

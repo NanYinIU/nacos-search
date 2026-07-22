@@ -3,7 +3,7 @@ package com.nanyin.nacos.search.models
 import com.nanyin.nacos.search.settings.AuthMode
 
 /** The protocol generation that was resolved before an operation started. */
-enum class NacosApiGeneration { UNKNOWN, V1 }
+enum class NacosApiGeneration { UNKNOWN, V1, V3 }
 
 /**
  * Identifies the user/environment context that a cache entry belongs to.
