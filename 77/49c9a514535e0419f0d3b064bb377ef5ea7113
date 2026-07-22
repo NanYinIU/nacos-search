@@ -1,0 +1,21 @@
+src/main/kotlin/com/nanyin/nacos/search/services/SessionFencing.kt
+  s_3115077becdc25::t_79daa8c3e31152 1-152
+src/test/kotlin/com/nanyin/nacos/search/services/SessionFencingTest.kt
+  s_3115077becdc25::t_e4fd402b83b409 1-200
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "7749c9a514535e0419f0d3b064bb377ef5ea7113",
+  "prompts": {},
+  "sessions": {
+    "s_3115077becdc25": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f89e0-5d35-72e0-9634-baa8fe1f6fa6",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
