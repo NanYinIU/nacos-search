@@ -38,7 +38,7 @@ import java.nio.charset.StandardCharsets
  */
 @Service(Service.Level.APP)
 class NacosApiService(
-    private val anonymousV1GatewayOverride: OperationGateway? = null
+    private val v1GatewayOverride: OperationGateway? = null
 ) {
     private val logger = thisLogger()
     private val gson = Gson()
@@ -47,11 +47,12 @@ class NacosApiService(
     private val executor = NacosRequestExecutor()
 
    private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
-   private val anonymousV1Gateway by lazy {
-       anonymousV1GatewayOverride ?: OperationGateway(
+   private val v1Gateway by lazy {
+       v1GatewayOverride ?: OperationGateway(
            mapOf(
                NacosApiGeneration.V1 to V1ProtocolAdapter(
-                   NacosRequestExecutorProtocolTransport(executor)
+                   NacosRequestExecutorProtocolTransport(executor),
+                   authService
                )
            ),
            CacheServiceOperationCache(cacheService) { settings.getCacheTtlMillis() }
@@ -100,8 +101,8 @@ class NacosApiService(
            val context = operationContextOrFailure() ?: return@withContext Result.failure(
                ConfigurationRequired(listOf("Connection configuration is incomplete"))
            )
-           if (usesAnonymousV1(context)) {
-               return@withContext anonymousV1Gateway.probe(anonymousV1Target(context)).map { true }
+           if (usesV1(context)) {
+               return@withContext v1Gateway.probe(v1Target(context)).map { true }
            }
            val url = "${context.endpoint.value}$NAMESPACE_ENDPOINT"
            logger.info("Testing connection to: $url")
@@ -134,9 +135,9 @@ class NacosApiService(
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
             )
-            if (usesAnonymousV1(context)) {
-                return@withContext anonymousV1Gateway.readDetail(
-                    anonymousV1Target(context, namespaceId),
+            if (usesV1(context)) {
+                return@withContext v1Gateway.readDetail(
+                    v1Target(context, namespaceId),
                     ConfigurationCoordinate(dataId, group),
                     forceRefresh = forceRefresh,
                     useCache = useCache
@@ -216,9 +217,9 @@ class NacosApiService(
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
             )
-            if (usesAnonymousV1(context)) {
-                return@withContext anonymousV1Gateway.listSummaries(
-                    anonymousV1Target(context, namespaceId),
+            if (usesV1(context)) {
+                return@withContext v1Gateway.listSummaries(
+                    v1Target(context, namespaceId),
                     SummaryQuery(pageNo, pageSize, dataId, group, appName, configTags, searchMode),
                     forceRefresh = forceRefresh,
                     useCache = useCache
@@ -429,7 +430,7 @@ class NacosApiService(
            val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                ConfigurationRequired(listOf("Connection configuration is incomplete"))
            )
-           if (usesAnonymousV1(context)) {
+           if (usesV1(context)) {
                return@withContext Result.success(listOf(NamespaceInfo.createPublicNamespace()))
            }
            logger.debug("Fetching namespaces from captured endpoint: ${context.endpoint.value}")
@@ -493,14 +494,16 @@ class NacosApiService(
         val mutableParams = params.toMutableMap()
         val headers = mutableMapOf<String, String>()
         val token = when (context.authMode) {
-            AuthMode.TOKEN, AuthMode.HYBRID -> authService.getValidAccessToken(context)
-            AuthMode.BASIC -> null
+            AuthMode.TOKEN, AuthMode.NACOS_PASSWORD, AuthMode.HYBRID -> authService.getValidAccessToken(context)
+            AuthMode.BASIC, AuthMode.HTTP_BASIC, AuthMode.BEARER_TOKEN -> null
             AuthMode.ANONYMOUS -> null
         }
         if (token != null) {
             mutableParams["accessToken"] = token
-        } else if (context.authMode == AuthMode.BASIC || context.authMode == AuthMode.HYBRID) {
+        } else if (context.authMode == AuthMode.BASIC || context.authMode == AuthMode.HTTP_BASIC || context.authMode == AuthMode.HYBRID) {
             addBasicAuthHeader(headers, context)
+        } else if (context.authMode == AuthMode.BEARER_TOKEN && context.credential.secret.isNotBlank()) {
+            headers["Authorization"] = "Bearer ${context.credential.secret}"
         }
         val queryParams = mutableParams.entries.joinToString("&") { (key, value) ->
             "$key=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
@@ -520,8 +523,8 @@ class NacosApiService(
     ): String {
         val mutableParams = params.toMutableMap()
         val shouldUseToken = when (server.authMode) {
-            AuthMode.TOKEN -> true
-            AuthMode.BASIC -> false
+            AuthMode.TOKEN, AuthMode.NACOS_PASSWORD -> true
+            AuthMode.BASIC, AuthMode.HTTP_BASIC, AuthMode.BEARER_TOKEN -> false
             AuthMode.HYBRID -> server.enableTokenAuth
             AuthMode.ANONYMOUS -> false
         }
@@ -537,12 +540,15 @@ class NacosApiService(
     private suspend fun buildAuthHeaders(server: NacosServerSnapshot): Map<String, String> {
         val headers = mutableMapOf<String, String>()
         when (server.authMode) {
-            AuthMode.TOKEN -> if (server.enableTokenAuth) authService.getValidAccessToken(server)
+            AuthMode.TOKEN, AuthMode.NACOS_PASSWORD -> if (server.enableTokenAuth) authService.getValidAccessToken(server)
             AuthMode.HYBRID -> {
                 val token = if (server.enableTokenAuth) authService.getValidAccessToken(server) else null
                 if (token == null) addBasicAuthHeader(headers, server)
             }
-            AuthMode.BASIC -> addBasicAuthHeader(headers, server)
+            AuthMode.BASIC, AuthMode.HTTP_BASIC -> addBasicAuthHeader(headers, server)
+            AuthMode.BEARER_TOKEN -> if (server.password.isNotBlank()) {
+                headers["Authorization"] = "Bearer ${server.password}"
+            }
             AuthMode.ANONYMOUS -> Unit
         }
         return headers
@@ -619,9 +625,9 @@ class NacosApiService(
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
             )
-            if (usesAnonymousV1(context)) {
-                return@withContext Result.failure(
-                    ConfigurationRequired(listOf("The V1 anonymous path is read-only"))
+           if (usesV1(context)) {
+               return@withContext Result.failure(
+                    ConfigurationRequired(listOf("The V1 path is read-only"))
                 )
             }
             val params = buildMap {
@@ -682,10 +688,10 @@ class NacosApiService(
     /** Guards every operation before cache reads, token lookup, or remote transport. */
     private fun operationContextOrFailure() = settings.captureOperationContext().getOrNull()
 
-    private fun usesAnonymousV1(context: NacosOperationContext): Boolean =
-        context.resolvedGeneration == NacosApiGeneration.V1 && context.authMode == AuthMode.ANONYMOUS
+    private fun usesV1(context: NacosOperationContext): Boolean =
+        context.resolvedGeneration == NacosApiGeneration.V1
 
-    private fun anonymousV1Target(context: NacosOperationContext, namespaceId: String? = null): OperationTarget =
+    private fun v1Target(context: NacosOperationContext, namespaceId: String? = null): OperationTarget =
         OperationTarget(context, namespaceId ?: "public")
 
     private fun SummaryPage.toConfigListResponse(): ConfigListResponse = ConfigListResponse(

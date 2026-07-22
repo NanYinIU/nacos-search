@@ -23,7 +23,34 @@ class InMemoryCredentialSlots : CredentialSlots {
     }
 }
 
-private object PasswordSafeCredentialSlots : CredentialSlots {
+/**
+ * Publishes a credential change as an all-or-nothing profile transition. The
+ * replacement secret is staged under a fresh slot before the caller can expose
+ * the profile revision that references it, so a reader sees a complete old or
+ * complete new pair and never a profile pointing at an unwritten slot.
+ */
+class RevisionPinnedCredentialUpdater(private val credentials: CredentialSlots) {
+    fun stage(profile: EnvironmentProfile, secret: String) {
+        credentials.put(profile.credentialSlotId, secret)
+    }
+
+    fun rotate(
+        profile: EnvironmentProfile,
+        secret: String,
+        publish: (EnvironmentProfile) -> Unit
+    ): EnvironmentProfile {
+        val version = profile.credentialSlotVersion + 1
+        val updated = profile.withUpdated(
+            credentialSlotId = "${profile.id}:v$version",
+            credentialSlotVersion = version
+        )
+        stage(updated, secret)
+        publish(updated)
+        return updated
+    }
+}
+
+internal object PasswordSafeCredentialSlots : CredentialSlots {
     override operator fun get(slotId: String): String? = NacosCredentialStore.get(slotId)
     override fun put(slotId: String, secret: String) = NacosCredentialStore.set(slotId, secret)
 }
@@ -84,7 +111,28 @@ data class NacosOperationContext(
     val profileRevision: Long,
     val accessRevision: Long,
     val resolvedGeneration: NacosApiGeneration
-)
+) {
+    val authenticationStrategy: V1AuthenticationStrategy
+        get() = authMode.toV1AuthenticationStrategy()
+}
+
+/**
+ * The V1 adapter's closed authentication vocabulary. It deliberately has no
+ * fallback strategy: each value owns its one wire representation.
+ */
+enum class V1AuthenticationStrategy {
+    ANONYMOUS,
+    NACOS_PASSWORD,
+    HTTP_BASIC,
+    BEARER_TOKEN
+}
+
+internal fun AuthMode.toV1AuthenticationStrategy(): V1AuthenticationStrategy = when (this) {
+    AuthMode.ANONYMOUS -> V1AuthenticationStrategy.ANONYMOUS
+    AuthMode.TOKEN, AuthMode.NACOS_PASSWORD, AuthMode.HYBRID -> V1AuthenticationStrategy.NACOS_PASSWORD
+    AuthMode.BASIC, AuthMode.HTTP_BASIC -> V1AuthenticationStrategy.HTTP_BASIC
+    AuthMode.BEARER_TOKEN -> V1AuthenticationStrategy.BEARER_TOKEN
+}
 
 /** A typed fail-closed result that UI callers can render as configuration required. */
 class ConfigurationRequired(val reasons: List<String>) : IllegalStateException(reasons.joinToString("; "))
@@ -96,17 +144,27 @@ object OperationContextResolver {
         }
         val principal = profile.principal.trim()
         val secret = credential.orEmpty()
-        if (profile.apiPolicy == NacosApiPolicy.V1 && profile.authMode != AuthMode.ANONYMOUS) {
-            throw ConfigurationRequired(listOf("V1 is currently available only for anonymous read access"))
-        }
-        if (profile.authMode == AuthMode.ANONYMOUS && profile.apiPolicy != NacosApiPolicy.V1) {
-            throw ConfigurationRequired(listOf("Anonymous access requires an explicitly V1-locked profile"))
-        }
-        if (profile.authMode == AuthMode.ANONYMOUS) {
-            require(principal.isBlank() && secret.isBlank()) {
-                throw ConfigurationRequired(listOf("Anonymous access cannot include a principal or credential"))
+        val authenticationStrategy = profile.authMode.toV1AuthenticationStrategy()
+        if (profile.apiPolicy == NacosApiPolicy.V1) {
+            if (profile.authMode == AuthMode.HYBRID) {
+                throw ConfigurationRequired(listOf("V1 requires one explicit authentication strategy"))
+            }
+            when (authenticationStrategy) {
+                V1AuthenticationStrategy.ANONYMOUS -> require(principal.isBlank() && secret.isBlank()) {
+                    throw ConfigurationRequired(listOf("Anonymous access cannot include a principal or credential"))
+                }
+                V1AuthenticationStrategy.NACOS_PASSWORD,
+                V1AuthenticationStrategy.HTTP_BASIC -> require(principal.isNotBlank() && secret.isNotBlank()) {
+                    throw ConfigurationRequired(listOf("Username and credential must be provided together"))
+                }
+                V1AuthenticationStrategy.BEARER_TOKEN -> require(secret.isNotBlank()) {
+                    throw ConfigurationRequired(listOf("Bearer token is required"))
+                }
             }
         } else {
+            if (profile.authMode == AuthMode.ANONYMOUS) {
+                throw ConfigurationRequired(listOf("Anonymous access requires an explicitly V1-locked profile"))
+            }
             require(!(principal.isBlank() xor secret.isBlank())) {
                 throw ConfigurationRequired(listOf("Username and credential must be provided together"))
             }

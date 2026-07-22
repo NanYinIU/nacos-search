@@ -36,6 +36,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     // namespace are intentionally kept in NacosProjectSession instead.
     var profiles: MutableList<EnvironmentProfile> = mutableListOf()
     var profileMigrationCompleted: Boolean = false
+    /** True once profile updates publish revision-pinned credential slots. */
+    var credentialSlotsPublished: Boolean = false
     var migratedDefaultProfileId: String = ""
     var migratedDefaultNamespaceId: String = "public"
 
@@ -285,19 +287,31 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             // deterministic source for this one compatibility operation.
             return OperationContextResolver.resolve(persistedProfile, getActiveServer().password)
         }
-        // Flat fields remain a compatibility bridge for callers that predate
-        // profiles. Capture their values into the immutable operation context,
-        // never by mutating the profile while an operation is in flight.
-        val profile = persistedProfile.withUpdated(
-            canonicalEndpoint = com.nanyin.nacos.search.models.CanonicalNacosEndpoint.parse(serverUrl)
-                .getOrNull()?.value.orEmpty(),
-            authMode = authMode,
-            principal = username.trim()
-        )
-        val secret = password.ifEmpty {
-            NacosCredentialStore.get(profile.credentialSlotId).orEmpty().ifEmpty { getActiveServer().password }
+        if (!credentialSlotsPublished) {
+            // Compatibility captures remain available while legacy flat fields
+            // are first being migrated. Each writes the active slot before resolving
+            // it, so no request can combine a new endpoint/principal with an
+            // older or missing profile credential.
+            val legacyProfile = persistedProfile.withUpdated(
+                canonicalEndpoint = com.nanyin.nacos.search.models.CanonicalNacosEndpoint.parse(serverUrl)
+                    .getOrNull()?.value.orEmpty(),
+                authMode = authMode,
+                principal = username.trim()
+            )
+            PasswordSafeCredentialSlots.put(legacyProfile.credentialSlotId, password)
+            return OperationContextResolver.resolve(
+                legacyProfile,
+                PasswordSafeCredentialSlots[legacyProfile.credentialSlotId]
+            )
         }
-        return OperationContextResolver.resolve(profile, secret)
+        // A profile is published with a revision-pinned credential slot. Once
+        // present, that slot is the sole secret source; falling back to flat
+        // fields or a predecessor slot could pair a new identity with an old
+        // credential after a partial update.
+        return OperationContextResolver.resolve(
+            persistedProfile,
+            NacosCredentialStore.get(persistedProfile.credentialSlotId)
+        )
     }
 
     private fun migrateLegacyProfiles() {
@@ -311,6 +325,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
 
     private fun updateProfilesFromServers(previousPasswords: Map<String, String> = emptyMap()) {
         val existing = profiles.associateBy { it.id }
+        val credentialUpdates = RevisionPinnedCredentialUpdater(PasswordSafeCredentialSlots)
         profiles = servers.map { server ->
             val migrated = EnvironmentProfile.fromLegacy(server)
             val previous = existing[server.id]
@@ -326,13 +341,15 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 credentialSlotId = credentialSlotId,
                 credentialSlotVersion = credentialVersion
             ) ?: migrated.copy(credentialSlotId = credentialSlotId, credentialSlotVersion = credentialVersion)
-            NacosCredentialStore.set(updated.credentialSlotId, server.password)
-            if (credentialChanged) NacosCredentialStore.remove(previous!!.credentialSlotId)
+            // The fresh slot is durable before this map is assigned to
+            // [profiles], which is the single publication point for readers.
+            credentialUpdates.stage(updated, server.password)
             updated.copy(displayName = server.displayName)
         }.toMutableList()
         migratedDefaultProfileId = activeServerId
         migratedDefaultNamespaceId = namespace.ifBlank { "public" }
         profileMigrationCompleted = true
+        credentialSlotsPublished = true
     }
 
     /**
@@ -449,6 +466,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         activeServerId = "s_local"
         profiles = mutableListOf()
         profileMigrationCompleted = false
+        credentialSlotsPublished = false
         migratedDefaultProfileId = ""
         migratedDefaultNamespaceId = "public"
     }
@@ -568,5 +586,8 @@ enum class AuthMode {
     BASIC,      // 仅使用Basic Auth
     TOKEN,      // 仅使用Token Auth
     HYBRID,     // 优先Token Auth，回退到Basic Auth
-    ANONYMOUS   // Never sends credentials; only supported by a locked read path
+    ANONYMOUS,  // Never sends credentials; only supported by a locked read path
+    NACOS_PASSWORD,
+    HTTP_BASIC,
+    BEARER_TOKEN
 }

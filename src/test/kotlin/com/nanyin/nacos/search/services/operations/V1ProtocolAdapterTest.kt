@@ -6,6 +6,7 @@ import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.CredentialSnapshot
 import com.nanyin.nacos.search.settings.NacosOperationContext
+import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -114,6 +115,67 @@ class V1ProtocolAdapterTest {
         assertEquals("team-manual", fixture.lastRequest.query.single { it.first == "tenant" }.second)
     }
 
+    @Test
+    fun `invalid Nacos password token relogins once and replays the idempotent V1 read`() = runBlocking {
+        val transport = QueuedTransport(
+            ProtocolResponse(403, """{"code":403,"message":"token is invalid"}"""),
+            ProtocolResponse(
+                200,
+                """{"totalCount":0,"pageNumber":1,"pagesAvailable":0,"pageItems":[]}"""
+            )
+        )
+        val authenticator = RecordingV1Authenticator(listOf("stale", "fresh"))
+
+        val page = V1ProtocolAdapter(transport, authenticator)
+            .listSummaries(passwordTarget(), SummaryQuery())
+            .getOrThrow()
+
+        assertEquals(0, page.totalCount)
+        assertEquals(2, transport.requests.size)
+        assertEquals("stale", transport.requests[0].query.single { it.first == "accessToken" }.second)
+        assertEquals("fresh", transport.requests[1].query.single { it.first == "accessToken" }.second)
+        assertEquals(1, authenticator.invalidations)
+        assertEquals(2, authenticator.requests)
+    }
+
+    @Test
+    fun `permission denial does not invalidate or replay a Nacos password read`() = runBlocking {
+        val transport = QueuedTransport(
+            ProtocolResponse(403, """{"code":403,"message":"permission denied"}""")
+        )
+        val authenticator = RecordingV1Authenticator(listOf("current"))
+
+        val error = V1ProtocolAdapter(transport, authenticator)
+            .listSummaries(passwordTarget(), SummaryQuery())
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
+        assertEquals(1, transport.requests.size)
+        assertEquals(0, authenticator.invalidations)
+        assertEquals(1, authenticator.requests)
+    }
+
+    @Test
+    fun `Basic and Bearer strategies use only their own headers and never replay`() = runBlocking {
+        val authenticator = RecordingV1Authenticator(listOf("must-not-be-used"))
+        val basicTransport = QueuedTransport(ProtocolResponse(401, "not authorized"))
+        val bearerTransport = QueuedTransport(ProtocolResponse(401, "not authorized"))
+
+        val basicError = V1ProtocolAdapter(basicTransport, authenticator)
+            .listSummaries(httpBasicTarget(), SummaryQuery())
+            .exceptionOrNull()
+        val bearerError = V1ProtocolAdapter(bearerTransport, authenticator)
+            .listSummaries(bearerTarget(), SummaryQuery())
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Authentication::class.java, basicError)
+        assertInstanceOf(RemoteOperationError.Authentication::class.java, bearerError)
+        assertEquals("Basic YWxpY2U6cEBzcw==", basicTransport.requests.single().headers["Authorization"])
+        assertEquals("Bearer bearer-token", bearerTransport.requests.single().headers["Authorization"])
+        assertEquals(0, authenticator.requests)
+        assertEquals(0, authenticator.invalidations)
+    }
+
     private fun anonymousPublicTarget(namespaceId: String = "public"): OperationTarget {
         val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
         val context = NacosOperationContext(
@@ -128,6 +190,53 @@ class V1ProtocolAdapterTest {
             endpoint = endpoint,
             credential = CredentialSnapshot(""),
             authMode = AuthMode.ANONYMOUS,
+            profileRevision = 4,
+            accessRevision = 4,
+            resolvedGeneration = NacosApiGeneration.V1
+        )
+        return OperationTarget(context, namespaceId)
+    }
+
+    private fun passwordTarget(namespaceId: String = "public"): OperationTarget {
+        return strategyTarget(
+            authMode = AuthMode.TOKEN,
+            principal = "alice",
+            secret = "p@ss&word",
+            namespaceId = namespaceId
+        )
+    }
+
+    private fun httpBasicTarget(): OperationTarget = strategyTarget(
+        authMode = AuthMode.HTTP_BASIC,
+        principal = "alice",
+        secret = "p@ss"
+    )
+
+    private fun bearerTarget(): OperationTarget = strategyTarget(
+        authMode = AuthMode.BEARER_TOKEN,
+        principal = "",
+        secret = "bearer-token"
+    )
+
+    private fun strategyTarget(
+        authMode: AuthMode,
+        principal: String,
+        secret: String,
+        namespaceId: String = "public"
+    ): OperationTarget {
+        val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
+        val context = NacosOperationContext(
+            identity = AccessIdentity.ofProfile(
+                profileId = "password-v1",
+                accessRevision = 4,
+                canonicalEndpoint = endpoint.value,
+                resolvedGeneration = NacosApiGeneration.V1,
+                authMode = authMode,
+                principal = principal
+            ),
+            endpoint = endpoint,
+            credential = CredentialSnapshot(secret),
+            authMode = authMode,
             profileRevision = 4,
             accessRevision = 4,
             resolvedGeneration = NacosApiGeneration.V1
@@ -150,6 +259,31 @@ class V1ProtocolAdapterTest {
             assertEquals("https://nacos.example", lastRequest.endpoint)
             assertEquals(path, lastRequest.path)
             assertEquals(query, lastRequest.query)
+        }
+    }
+
+    private class QueuedTransport(vararg responses: ProtocolResponse) : ProtocolTransport {
+        private val queuedResponses = ArrayDeque(responses.toList())
+        val requests = mutableListOf<ProtocolRequest>()
+
+        override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
+            requests += request
+            return queuedResponses.removeFirst()
+        }
+    }
+
+    private class RecordingV1Authenticator(tokens: List<String>) : V1Authenticator {
+        private val tokenSequence = ArrayDeque(tokens)
+        var requests = 0
+        var invalidations = 0
+
+        override suspend fun accessToken(context: NacosOperationContext): String? {
+            requests += 1
+            return tokenSequence.removeFirst()
+        }
+
+        override fun invalidate(context: NacosOperationContext) {
+            invalidations += 1
         }
     }
 }

@@ -96,6 +96,49 @@ class AccessSafetyTest {
     }
 
     @Test
+    fun `credential rotation stages its new slot before publishing the new access revision`() {
+        val credentials = InMemoryCredentialSlots()
+        val original = EnvironmentProfile.fromLegacy(
+            NacosServerConfig(id = "dev", serverUrl = "https://nacos.example", username = "alice")
+        )
+        credentials.put(original.credentialSlotId, "old-secret")
+        val published = mutableListOf<EnvironmentProfile>()
+
+        val updated = RevisionPinnedCredentialUpdater(credentials).rotate(original, "new-secret") { profile ->
+            assertEquals("new-secret", credentials[profile.credentialSlotId])
+            assertEquals(original.accessRevision + 1, profile.accessRevision)
+            published += profile
+        }
+
+        assertEquals("old-secret", credentials[original.credentialSlotId])
+        assertEquals("new-secret", credentials[updated.credentialSlotId])
+        assertEquals(updated, published.single())
+    }
+
+    @Test
+    fun `missing current credential slot fails closed without falling back to a legacy secret`() {
+        val settings = NacosSettings()
+        settings.applyServers(
+            listOf(
+                NacosServerConfig(
+                    id = "dev",
+                    serverUrl = "https://nacos.example",
+                    username = "alice",
+                    password = "old-secret"
+                )
+            ),
+            "dev"
+        )
+        val profile = requireNotNull(settings.getActiveProfile())
+        NacosCredentialStore.remove(profile.credentialSlotId)
+
+        assertInstanceOf(
+            ConfigurationRequired::class.java,
+            settings.captureOperationContext().exceptionOrNull()
+        )
+    }
+
+    @Test
     fun `operation context fails closed before a request when endpoint or credentials are incomplete`() {
         val invalidEndpoint = EnvironmentProfile.fromLegacy(
             NacosServerConfig(id = "bad", serverUrl = "https://nacos.example/path")
@@ -162,13 +205,49 @@ class AccessSafetyTest {
     }
 
     @Test
-    fun `V1 password and unlocked anonymous profiles fail closed before transport`() {
-        val v1Password = EnvironmentProfile(
-            id = "v1-password",
-            displayName = "V1 password",
+    fun `V1 context pins one explicit authentication strategy without embedding its secret in identity`() {
+        val profile = EnvironmentProfile(
+            id = "password-v1",
+            displayName = "Password V1",
             canonicalEndpoint = "https://nacos.example",
             apiPolicy = NacosApiPolicy.V1,
-            authMode = AuthMode.BASIC,
+            authMode = AuthMode.NACOS_PASSWORD,
+            principal = "alice"
+        )
+
+        val context = OperationContextResolver.resolve(profile, "p@ss&word").getOrThrow()
+
+        assertEquals(V1AuthenticationStrategy.NACOS_PASSWORD, context.authenticationStrategy)
+        assertEquals(AuthMode.NACOS_PASSWORD, context.identity.authMode)
+        assertEquals("alice", context.identity.principal)
+        assertFalse(context.toString().contains("p@ss&word"))
+        assertFalse(context.identity.toString().contains("p@ss&word"))
+    }
+
+    @Test
+    fun `V1 bearer token context permits a secret without a username`() {
+        val profile = EnvironmentProfile(
+            id = "bearer-v1",
+            displayName = "Bearer V1",
+            canonicalEndpoint = "https://nacos.example",
+            apiPolicy = NacosApiPolicy.V1,
+            authMode = AuthMode.BEARER_TOKEN
+        )
+
+        val context = OperationContextResolver.resolve(profile, "bearer-token").getOrThrow()
+
+        assertEquals(V1AuthenticationStrategy.BEARER_TOKEN, context.authenticationStrategy)
+        assertEquals("<anonymous>", context.identity.principal)
+    }
+
+    @Test
+    fun `hybrid and unlocked anonymous profiles fail closed before transport`() {
+        val hybridV1 = EnvironmentProfile(
+            id = "hybrid-v1",
+            displayName = "Hybrid V1",
+            canonicalEndpoint = "https://nacos.example",
+            apiPolicy = NacosApiPolicy.V1,
+            authMode = AuthMode.HYBRID,
             principal = "alice"
         )
         val unlockedAnonymous = EnvironmentProfile(
@@ -179,7 +258,7 @@ class AccessSafetyTest {
             authMode = AuthMode.ANONYMOUS
         )
 
-        assertInstanceOf(ConfigurationRequired::class.java, OperationContextResolver.resolve(v1Password, "secret").exceptionOrNull())
+        assertInstanceOf(ConfigurationRequired::class.java, OperationContextResolver.resolve(hybridV1, "secret").exceptionOrNull())
         assertInstanceOf(ConfigurationRequired::class.java, OperationContextResolver.resolve(unlockedAnonymous, "").exceptionOrNull())
     }
 

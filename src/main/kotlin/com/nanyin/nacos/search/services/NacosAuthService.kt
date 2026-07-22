@@ -2,6 +2,8 @@ package com.nanyin.nacos.search.services
 
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosOperationContext
+import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
+import com.nanyin.nacos.search.services.operations.V1Authenticator
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.intellij.openapi.application.ApplicationManager
@@ -18,7 +20,7 @@ import java.util.concurrent.atomic.AtomicLong
  * Nacos认证服务，负责管理accessToken的获取、缓存和刷新
  */
 @Service(Service.Level.APP)
-class NacosAuthService {
+class NacosAuthService : V1Authenticator {
     private val logger = thisLogger()
     private val gson = Gson()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
@@ -26,6 +28,7 @@ class NacosAuthService {
     // Token缓存
     private val tokenCache = ConcurrentHashMap<String, TokenInfo>()
     private val lastTokenRefresh = AtomicLong(0)
+    private val v1Sessions = AuthenticationSessionRegistry()
     
     companion object {
         private const val LOGIN_ENDPOINT = "/nacos/v1/auth/login"
@@ -68,16 +71,28 @@ class NacosAuthService {
      * deliberately avoids consulting mutable application settings while an
      * operation is in flight.
      */
-    internal suspend fun getValidAccessToken(context: NacosOperationContext): String? =
-        getValidAccessToken(
-            NacosServerSnapshot(
-                serverUrl = context.endpoint.value,
-                username = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty(),
-                password = context.credential.secret,
-                authMode = context.authMode,
-                enableTokenAuth = true
-            )
+    internal suspend fun getValidAccessToken(context: NacosOperationContext): String? {
+        if (context.authenticationStrategy != V1AuthenticationStrategy.NACOS_PASSWORD) return null
+        val key = AuthenticationExecutionKey(
+            identity = context.identity,
+            profileRevision = context.profileRevision,
+            strategy = context.authenticationStrategy
         )
+        return v1Sessions.getOrLogin(key) {
+            login(
+                NacosServerSnapshot(
+                    serverUrl = context.endpoint.value,
+                    username = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty(),
+                    password = context.credential.secret,
+                    authMode = context.authMode,
+                    enableTokenAuth = true,
+                    identity = context.identity
+                )
+            )?.toAuthenticationToken()
+        }?.value
+    }
+
+    override suspend fun accessToken(context: NacosOperationContext): String? = getValidAccessToken(context)
 
     internal suspend fun getValidAccessToken(server: NacosServerSnapshot): String? {
         return try {
@@ -253,10 +268,13 @@ class NacosAuthService {
     }
 
     internal fun invalidateToken(context: NacosOperationContext) {
+        v1Sessions.invalidate(context.identity)
         val principal = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty()
         tokenCache.remove("${context.endpoint.value}_$principal")
         logger.info("Invalidated token for captured access context")
     }
+
+    override fun invalidate(context: NacosOperationContext) = invalidateToken(context)
 
     /**
      * 检查当前是否有有效的token
@@ -299,4 +317,9 @@ class NacosAuthService {
     private fun buildLoginUrl(): String {
         return "${settings.serverUrl.trimEnd('/')}$LOGIN_ENDPOINT"
     }
+
+    private fun TokenInfo.toAuthenticationToken(): AuthenticationToken = AuthenticationToken(
+        value = accessToken,
+        expiresAtMillis = createTime + tokenTtl * 1000 - TOKEN_REFRESH_BUFFER_MINUTES * 60 * 1000
+    )
 }

@@ -8,6 +8,9 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosOperationContext
+import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeout
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
@@ -82,6 +85,7 @@ interface ProtocolAdapter {
 
 sealed class RemoteOperationError(message: String, cause: Throwable? = null) : Exception(message, cause) {
     class Authentication(val status: Int) : RemoteOperationError("Authentication failed")
+    class Authorization(val status: Int) : RemoteOperationError("Authorization failed")
     class NotFound : RemoteOperationError("Configuration was not found")
     class Client(val status: Int) : RemoteOperationError("Client error $status")
     class Server(val status: Int) : RemoteOperationError("Server error $status")
@@ -89,6 +93,17 @@ sealed class RemoteOperationError(message: String, cause: Throwable? = null) : E
     class Connection(cause: Throwable) : RemoteOperationError("Connection failed", cause)
     class Protocol(message: String, cause: Throwable? = null) : RemoteOperationError(message, cause)
     class Unsupported(message: String) : RemoteOperationError(message)
+}
+
+/** V1 obtains Nacos-password tokens from this application-memory boundary. */
+interface V1Authenticator {
+    suspend fun accessToken(context: NacosOperationContext): String?
+    fun invalidate(context: NacosOperationContext)
+}
+
+private object UnavailableV1Authenticator : V1Authenticator {
+    override suspend fun accessToken(context: NacosOperationContext): String? = null
+    override fun invalidate(context: NacosOperationContext) = Unit
 }
 
 /**
@@ -99,16 +114,35 @@ class V1ProtocolAdapter(
     private val transport: ProtocolTransport,
     private val gson: Gson = Gson()
 ) : ProtocolAdapter {
+    private var authenticator: V1Authenticator = UnavailableV1Authenticator
+    private var readBudgetMillis: Long = DEFAULT_READ_BUDGET_MILLIS
+    private var clock: () -> Long = System::currentTimeMillis
+
+    constructor(transport: ProtocolTransport, authenticator: V1Authenticator) : this(transport) {
+        this.authenticator = authenticator
+    }
+
+    internal constructor(
+        transport: ProtocolTransport,
+        authenticator: V1Authenticator,
+        readBudgetMillis: Long,
+        clock: () -> Long,
+        gson: Gson
+    ) : this(transport, gson) {
+        this.authenticator = authenticator
+        this.readBudgetMillis = readBudgetMillis
+        this.clock = clock
+    }
 
     override suspend fun probe(target: OperationTarget): Result<Unit> = execute(target) {
-        request(target, NAMESPACES_PATH)
+        request(target, NAMESPACES_PATH, authentication = it)
     }.mapCatching { response ->
         ensureSuccess(response)
         Unit
     }
 
     override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery): Result<SummaryPage> =
-        execute(target) {
+        execute(target) { authentication ->
             request(
                 target,
                 CONFIGS_PATH,
@@ -120,7 +154,8 @@ class V1ProtocolAdapter(
                     "appName" to query.appName,
                     "config_tags" to query.configTags,
                     "search" to query.search
-                )
+                ),
+                authentication
             )
         }.mapCatching { response ->
             parseSummaryPage(ensureSuccess(response))
@@ -129,7 +164,7 @@ class V1ProtocolAdapter(
     override suspend fun readDetail(
         target: OperationTarget,
         coordinate: ConfigurationCoordinate
-    ): Result<NacosConfiguration?> = execute(target) {
+    ): Result<NacosConfiguration?> = execute(target) { authentication ->
         request(
             target,
             CONFIGS_PATH,
@@ -137,7 +172,8 @@ class V1ProtocolAdapter(
                 "dataId" to coordinate.dataId,
                 "group" to coordinate.group,
                 "show" to "all"
-            )
+            ),
+            authentication
         )
     }.mapCatching { response ->
         if (response.status == 404) return@mapCatching null
@@ -146,11 +182,20 @@ class V1ProtocolAdapter(
 
     private suspend fun execute(
         target: OperationTarget,
-        build: () -> ProtocolRequest
+        build: (RequestAuthentication) -> ProtocolRequest
     ): Result<ProtocolResponse> = runCatching {
         validate(target)
         try {
-            transport.execute(build())
+            val deadline = clock() + readBudgetMillis
+            val firstResponse = executeWithinBudget(build(authenticationFor(target, deadline)), deadline)
+            if (isRecoverableNacosPasswordToken(target, firstResponse)) {
+                authenticator.invalidate(target.context)
+                executeWithinBudget(build(authenticationFor(target, deadline)), deadline)
+            } else {
+                firstResponse
+            }
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Throwable) {
             throw mapFailure(error)
         }
@@ -159,13 +204,14 @@ class V1ProtocolAdapter(
     private fun request(
         target: OperationTarget,
         path: String,
-        query: List<Pair<String, String>> = emptyList()
+        query: List<Pair<String, String>> = emptyList(),
+        authentication: RequestAuthentication
     ): ProtocolRequest = ProtocolRequest(
         method = "GET",
         endpoint = target.context.endpoint.value,
         path = path,
-        query = query + listOfNotNull(v1TenantQuery(target.namespaceId)),
-        headers = mapOf("Accept" to "application/json")
+        query = query + authentication.query + listOfNotNull(v1TenantQuery(target.namespaceId)),
+        headers = mapOf("Accept" to "application/json") + authentication.headers
     )
 
     /** V1 alone decides how its public Namespace is represented on the wire. */
@@ -178,17 +224,31 @@ class V1ProtocolAdapter(
         require(target.context.resolvedGeneration == NacosApiGeneration.V1) {
             throw RemoteOperationError.Unsupported("V1 adapter requires a V1-locked target")
         }
-        require(target.context.authMode == AuthMode.ANONYMOUS) {
-            throw RemoteOperationError.Unsupported("V1 anonymous adapter requires anonymous authentication")
-        }
-        require(target.context.identity.principal == "<anonymous>" && target.context.credential.secret.isBlank()) {
-            throw RemoteOperationError.Unsupported("Anonymous target must not carry credentials")
+        when (target.context.authenticationStrategy) {
+            V1AuthenticationStrategy.ANONYMOUS -> require(
+                target.context.identity.principal == "<anonymous>" && target.context.credential.secret.isBlank()
+            ) {
+                throw RemoteOperationError.Unsupported("Anonymous target must not carry credentials")
+            }
+            V1AuthenticationStrategy.NACOS_PASSWORD,
+            V1AuthenticationStrategy.HTTP_BASIC -> require(
+                target.context.identity.principal != "<anonymous>" && target.context.credential.secret.isNotBlank()
+            ) {
+                throw RemoteOperationError.Unsupported("Password and principal are required for V1 authentication")
+            }
+            V1AuthenticationStrategy.BEARER_TOKEN -> require(target.context.credential.secret.isNotBlank()) {
+                throw RemoteOperationError.Unsupported("Bearer token is required for V1 authentication")
+            }
         }
     }
 
     private fun ensureSuccess(response: ProtocolResponse): String = when (response.status) {
         in 200..299 -> response.body
-        401, 403 -> throw RemoteOperationError.Authentication(response.status)
+        401, 403 -> if (isPermissionDenied(response.body)) {
+            throw RemoteOperationError.Authorization(response.status)
+        } else {
+            throw RemoteOperationError.Authentication(response.status)
+        }
         404 -> throw RemoteOperationError.NotFound()
         429 -> throw RemoteOperationError.RateLimited()
         in 400..499 -> throw RemoteOperationError.Client(response.status)
@@ -250,6 +310,53 @@ class V1ProtocolAdapter(
 
     private fun normalizeTenant(tenant: String?): String? = tenant?.takeUnless { it.isBlank() || it == "public" }
 
+    private suspend fun authenticationFor(target: OperationTarget, deadline: Long): RequestAuthentication =
+        when (target.context.authenticationStrategy) {
+            V1AuthenticationStrategy.ANONYMOUS -> RequestAuthentication()
+            V1AuthenticationStrategy.NACOS_PASSWORD -> {
+                val token = withinBudget(deadline) { authenticator.accessToken(target.context) }
+                    ?: throw RemoteOperationError.Authentication(401)
+                RequestAuthentication(query = listOf("accessToken" to token))
+            }
+            V1AuthenticationStrategy.HTTP_BASIC -> {
+                val credentials = "${target.context.identity.principal}:${target.context.credential.secret}"
+                val encoded = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray(StandardCharsets.UTF_8))
+                RequestAuthentication(headers = mapOf("Authorization" to "Basic $encoded"))
+            }
+            V1AuthenticationStrategy.BEARER_TOKEN -> RequestAuthentication(
+                headers = mapOf("Authorization" to "Bearer ${target.context.credential.secret}")
+            )
+        }
+
+    private suspend fun executeWithinBudget(request: ProtocolRequest, deadline: Long): ProtocolResponse =
+        withinBudget(deadline) { transport.execute(request) }
+
+    private suspend fun <T> withinBudget(deadline: Long, operation: suspend () -> T): T {
+        val remaining = deadline - clock()
+        if (remaining <= 0) throw RemoteOperationError.Protocol("V1 read budget exhausted")
+        return withTimeout(remaining) { operation() }
+    }
+
+    private fun isRecoverableNacosPasswordToken(target: OperationTarget, response: ProtocolResponse): Boolean =
+        target.context.authenticationStrategy == V1AuthenticationStrategy.NACOS_PASSWORD &&
+            response.status in setOf(401, 403) &&
+            isInvalidOrExpiredNacosToken(response.body)
+
+    private fun isInvalidOrExpiredNacosToken(body: String): Boolean {
+        val normalized = body.lowercase()
+        if ("permission" in normalized || "forbidden" in normalized || "denied" in normalized) return false
+        return Regex("(?:access[_ -]?token|token).{0,48}(?:invalid|expired|expire)|(?:invalid|expired|expire).{0,48}(?:access[_ -]?token|token)")
+            .containsMatchIn(normalized)
+    }
+
+    private fun isPermissionDenied(body: String): Boolean =
+        Regex("(?i)permission|forbidden|denied").containsMatchIn(body)
+
+    private data class RequestAuthentication(
+        val query: List<Pair<String, String>> = emptyList(),
+        val headers: Map<String, String> = emptyMap()
+    )
+
     private data class V1ConfigListEnvelope(
         val totalCount: Int = 0,
         val pageNumber: Int = 0,
@@ -277,5 +384,6 @@ class V1ProtocolAdapter(
     private companion object {
         const val CONFIGS_PATH = "/nacos/v1/cs/configs"
         const val NAMESPACES_PATH = "/nacos/v1/console/namespaces"
+        const val DEFAULT_READ_BUDGET_MILLIS = 30_000L
     }
 }
