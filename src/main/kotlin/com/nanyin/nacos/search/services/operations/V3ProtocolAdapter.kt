@@ -92,6 +92,42 @@ class V3ProtocolAdapter(
         }
     }
 
+    override suspend fun publish(
+        target: OperationTarget,
+        command: PublishCommand
+    ): Result<PublishOutcome> = runCatching {
+        validate(target)
+        val params = buildList {
+            add("dataId" to command.dataId)
+            add("group" to command.group)
+            add("content" to command.content)
+            add("type" to command.type)
+            command.appName?.let { add("appName" to it) }
+            command.desc?.let { add("desc" to it) }
+            command.configTags?.let { add("config_tags" to it) }
+            add("namespaceId" to command.namespaceId.trim().ifBlank { "public" })
+        }
+        val formData = params.joinToString("&") { (k, v) ->
+            "${java.net.URLEncoder.encode(k, "UTF-8")}=${java.net.URLEncoder.encode(v, "UTF-8")}"
+        }
+        val request = ProtocolRequest(
+            method = "POST",
+            endpoint = target.context.endpoint.value,
+            path = DETAIL_PATH,
+            query = emptyList(),
+            headers = mapOf(
+                "Accept" to "application/json",
+                "Content-Type" to "application/x-www-form-urlencoded"
+            ),
+            body = formData
+        )
+        val response = transport.execute(request)
+        // V3 publish response data is a boolean, not a JSON object.
+        verifyV3EnvelopeSuccess(response, "publish")
+        // V3 has no CAS parameter; ordinary publish success only.
+        PublishOutcome.Written(response.body)
+    }
+
     /** V3 declares the documented content-search capability. V1 does not. */
     fun declaredCapabilities(): Set<V3Capability> = setOf(
         V3Capability.CONTENT_SEARCH,
@@ -165,6 +201,18 @@ class V3ProtocolAdapter(
     }
 
     private fun unwrapEnvelopeOrNull(response: ProtocolResponse, operation: String): JsonObject? {
+        return unwrapEnvelopeOrNullInternal(response, operation)
+    }
+
+    /** Checks the V3 envelope success code without requiring data to be a JSON object. */
+    private fun verifyV3EnvelopeSuccess(response: ProtocolResponse, operation: String) {
+        if (response.status !in 200..299) throw mapStatusFailure(response)
+        val parsed = runCatching { gson.fromJson(response.body, V3Envelope::class.java) }.getOrNull()
+            ?: throw RemoteOperationError.Protocol("V3 $operation response was empty")
+        if (parsed.code != 0) throw mapEnvelopeCode(parsed.code, parsed.message)
+    }
+
+    private fun unwrapEnvelopeOrNullInternal(response: ProtocolResponse, operation: String): JsonObject? {
         if (response.status == 404) {
             // Detail 404: check envelope code to distinguish not-found from generation-unsupported.
             val envelope = runCatching { gson.fromJson(response.body, V3Envelope::class.java) }.getOrNull()

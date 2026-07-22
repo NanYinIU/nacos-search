@@ -62,7 +62,8 @@ data class ProtocolRequest(
     val endpoint: String,
     val path: String,
     val query: List<Pair<String, String>>,
-    val headers: Map<String, String>
+    val headers: Map<String, String>,
+    val body: String? = null
 ) {
     val url: String
         get() = if (query.isEmpty()) "$endpoint$path" else "$endpoint$path?" + query.joinToString("&") { (key, value) ->
@@ -81,6 +82,7 @@ interface ProtocolAdapter {
     suspend fun probe(target: OperationTarget): Result<Unit>
     suspend fun listSummaries(target: OperationTarget, query: SummaryQuery): Result<SummaryPage>
     suspend fun readDetail(target: OperationTarget, coordinate: ConfigurationCoordinate): Result<NacosConfiguration?>
+    suspend fun publish(target: OperationTarget, command: PublishCommand): Result<PublishOutcome>
 }
 
 sealed class RemoteOperationError(message: String, cause: Throwable? = null) : Exception(message, cause) {
@@ -99,6 +101,8 @@ sealed class RemoteOperationError(message: String, cause: Throwable? = null) : E
     class CapabilityUnsupported(message: String) : RemoteOperationError(message)
     class Cancelled(message: String = "Operation cancelled") : RemoteOperationError(message)
     class Redirected(val sanitizedEndpoint: String) : RemoteOperationError("Endpoint redirected to $sanitizedEndpoint")
+    class WriteConflict(message: String = "Server-side CAS rejected the write") : RemoteOperationError(message)
+    class AmbiguousWriteResult(message: String = "Write result cannot be confirmed") : RemoteOperationError(message)
 }
 
 /** V1 obtains Nacos-password tokens from this application-memory boundary. */
@@ -184,6 +188,52 @@ class V1ProtocolAdapter(
     }.mapCatching { response ->
         if (response.status == 404) return@mapCatching null
         parseDetail(ensureSuccess(response))
+    }
+
+    override suspend fun publish(
+        target: OperationTarget,
+        command: PublishCommand
+    ): Result<PublishOutcome> = runCatching {
+        validate(target)
+        val deadline = clock() + readBudgetMillis
+        val auth = authenticationFor(target, deadline)
+        val headers = mapOf(
+            "Accept" to "application/json",
+            "Content-Type" to "application/x-www-form-urlencoded"
+        ) + auth.headers + listOfNotNull(
+            command.casMd5?.let { "casMd5" to it }
+        ).toMap()
+
+        val params = buildList {
+            add("dataId" to command.dataId)
+            add("group" to command.group)
+            add("content" to command.content)
+            add("type" to command.type)
+            command.appName?.let { add("appName" to it) }
+            command.desc?.let { add("desc" to it) }
+            command.configTags?.let { add("config_tags" to it) }
+            v1TenantQuery(command.namespaceId)?.let { add(it) }
+        }
+
+        val formData = params.joinToString("&") { (k, v) ->
+            "${java.net.URLEncoder.encode(k, "UTF-8")}=${java.net.URLEncoder.encode(v, "UTF-8")}"
+        }
+
+        val request = ProtocolRequest(
+            method = "POST",
+            endpoint = target.context.endpoint.value,
+            path = CONFIGS_PATH,
+            query = auth.query,
+            headers = headers,
+            body = formData
+        )
+
+        val response = executeWithinBudget(request, deadline)
+        when (val body = ensureSuccess(response).trim().lowercase()) {
+            "true" -> PublishOutcome.Written(response.body)
+            "false" -> PublishOutcome.CasConflict
+            else -> throw RemoteOperationError.Protocol("Unexpected V1 publish response: $body")
+        }
     }
 
     private suspend fun execute(

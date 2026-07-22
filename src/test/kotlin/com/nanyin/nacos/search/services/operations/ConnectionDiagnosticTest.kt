@@ -150,6 +150,8 @@ class ConnectionDiagnosticTest {
 
         override suspend fun readDetail(target: OperationTarget, coordinate: ConfigurationCoordinate) =
             Result.success(null)
+        override suspend fun publish(target: OperationTarget, command: PublishCommand) =
+            Result.success(PublishOutcome.Written("true"))
     }
 
     private class CountingProbeAdapter(
@@ -167,5 +169,7 @@ class ConnectionDiagnosticTest {
 
         override suspend fun readDetail(target: OperationTarget, coordinate: ConfigurationCoordinate) =
             Result.success(null)
+        override suspend fun publish(target: OperationTarget, command: PublishCommand) =
+            Result.success(PublishOutcome.Written("true"))
     }
 }

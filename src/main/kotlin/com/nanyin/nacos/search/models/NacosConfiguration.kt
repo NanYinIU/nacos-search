@@ -24,6 +24,11 @@ data class NacosConfiguration(
     @SerializedName("md5")
     val md5: String? = null,
     
+    val appName: String? = null,
+    val desc: String? = null,
+    val configTags: String? = null,
+    val encryptedDataKey: String? = null,
+    
     val lastModified: Long = System.currentTimeMillis()
 ) {
     /**

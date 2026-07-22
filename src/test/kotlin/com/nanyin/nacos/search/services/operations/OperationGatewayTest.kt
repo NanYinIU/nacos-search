@@ -90,5 +90,8 @@ class OperationGatewayTest {
                 NacosConfiguration(coordinate.dataId, coordinate.group, target.namespaceId, "from-dev", "yaml")
             )
         }
+
+        override suspend fun publish(target: OperationTarget, command: PublishCommand) =
+            Result.success(PublishOutcome.Written("true"))
     }
 }

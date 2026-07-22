@@ -149,6 +149,9 @@ class DualStackBrowsingTest {
 
         override suspend fun readDetail(target: OperationTarget, coordinate: ConfigurationCoordinate) =
             Result.success(NacosConfiguration(coordinate.dataId, coordinate.group, target.namespaceId, "content", "yaml"))
+
+        override suspend fun publish(target: OperationTarget, command: PublishCommand) =
+            Result.success(PublishOutcome.Written("true"))
     }
 
     private class CountingDetailAdapter(
@@ -168,6 +171,9 @@ class DualStackBrowsingTest {
             detailCalls++
             return Result.success(NacosConfiguration(coordinate.dataId, coordinate.group, target.namespaceId, "content", "yaml"))
         }
+
+        override suspend fun publish(target: OperationTarget, command: PublishCommand) =
+            Result.success(PublishOutcome.Written("true"))
     }
 }
 
