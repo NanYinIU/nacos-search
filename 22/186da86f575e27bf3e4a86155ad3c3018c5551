@@ -1,0 +1,41 @@
+src/main/kotlin/com/nanyin/nacos/search/models/AccessIdentity.kt
+  s_2733a4bbf61d05::t_efdfcb182cfb8c 6
+src/main/kotlin/com/nanyin/nacos/search/services/operations/GenerationResolver.kt
+  s_22264a491c1bd3::t_50b7d832f8908c 1-33
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V1ProtocolAdapter.kt
+  s_22264a491c1bd3::t_22c248de4a8c0b 98-101
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V3ProtocolAdapter.kt
+  s_22264a491c1bd3::t_f8b4672826c26e 1-282
+src/main/kotlin/com/nanyin/nacos/search/settings/AccessSafety.kt
+  s_2733a4bbf61d05::t_43f87e55b24e47 134-141,143-144,147-149,154-155
+src/test/kotlin/com/nanyin/nacos/search/services/operations/GenerationResolverTest.kt
+  s_2733a4bbf61d05::t_80a152c75d95f9 1-250
+src/test/kotlin/com/nanyin/nacos/search/services/operations/V3ProtocolAdapterTest.kt
+  s_22264a491c1bd3::t_8b573135074d9f 1-290
+src/test/kotlin/com/nanyin/nacos/search/settings/AccessSafetyTest.kt
+  s_2733a4bbf61d05::t_5a74d7ec704b1c 248,257,264,272-279,282-290
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "22186da86f575e27bf3e4a86155ad3c3018c5551",
+  "prompts": {},
+  "sessions": {
+    "s_22264a491c1bd3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8a12-0657-7881-b146-36292a508d49",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_2733a4bbf61d05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8a0e-cc27-7f22-8fb7-61d370cefc7e",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
