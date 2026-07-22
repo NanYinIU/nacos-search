@@ -1,0 +1,31 @@
+src/main/kotlin/com/nanyin/nacos/search/services/operations/ConnectionDiagnostic.kt
+  s_22264a491c1bd3::t_00aa48bd09b719 1-201
+src/main/kotlin/com/nanyin/nacos/search/services/operations/GenerationResolver.kt
+  s_2733a4bbf61d05::t_668300c3855926 18-20,29-30,37-54
+src/test/kotlin/com/nanyin/nacos/search/services/operations/ConnectionDiagnosticTest.kt
+  s_22264a491c1bd3::t_2d5d476f5f0275 1-171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "3339e64fea3c66646934581b4b23393bea167f0e",
+  "prompts": {},
+  "sessions": {
+    "s_22264a491c1bd3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8a12-0657-7881-b146-36292a508d49",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_2733a4bbf61d05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8a0e-cc27-7f22-8fb7-61d370cefc7e",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
