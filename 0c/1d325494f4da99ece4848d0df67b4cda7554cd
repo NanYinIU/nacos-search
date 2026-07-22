@@ -1,0 +1,31 @@
+src/main/kotlin/com/nanyin/nacos/search/models/CacheConfidence.kt
+  s_22264a491c1bd3::t_061b7600db27d3 1-79
+src/main/kotlin/com/nanyin/nacos/search/services/operations/ObservationHighWater.kt
+  s_2733a4bbf61d05::t_081e63eabad0d3 1-46
+src/test/kotlin/com/nanyin/nacos/search/services/operations/ObservationHighWaterTest.kt
+  s_22264a491c1bd3::t_e17ec5e1ef1bf0 1-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "0c1d325494f4da99ece4848d0df67b4cda7554cd",
+  "prompts": {},
+  "sessions": {
+    "s_22264a491c1bd3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8a12-0657-7881-b146-36292a508d49",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_2733a4bbf61d05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8a0e-cc27-7f22-8fb7-61d370cefc7e",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
