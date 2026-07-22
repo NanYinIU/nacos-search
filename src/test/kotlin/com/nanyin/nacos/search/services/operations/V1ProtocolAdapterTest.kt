@@ -156,6 +156,21 @@ class V1ProtocolAdapterTest {
     }
 
     @Test
+    fun `unmapped gateway token prose does not relogin or replay a Nacos password read`() = runBlocking {
+        val transport = QueuedTransport(ProtocolResponse(403, "upstream says token is invalid"))
+        val authenticator = RecordingV1Authenticator(listOf("current"))
+
+        val error = V1ProtocolAdapter(transport, authenticator)
+            .listSummaries(passwordTarget(), SummaryQuery())
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Authentication::class.java, error)
+        assertEquals(1, transport.requests.size)
+        assertEquals(0, authenticator.invalidations)
+        assertEquals(1, authenticator.requests)
+    }
+
+    @Test
     fun `Basic and Bearer strategies use only their own headers and never replay`() = runBlocking {
         val authenticator = RecordingV1Authenticator(listOf("must-not-be-used"))
         val basicTransport = QueuedTransport(ProtocolResponse(401, "not authorized"))

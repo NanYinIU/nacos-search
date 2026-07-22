@@ -86,6 +86,8 @@ interface ProtocolAdapter {
 sealed class RemoteOperationError(message: String, cause: Throwable? = null) : Exception(message, cause) {
     class Authentication(val status: Int) : RemoteOperationError("Authentication failed")
     class Authorization(val status: Int) : RemoteOperationError("Authorization failed")
+    class InvalidOrExpiredNacosPasswordToken(val status: Int) :
+        RemoteOperationError("Nacos password token is invalid or expired")
     class NotFound : RemoteOperationError("Configuration was not found")
     class Client(val status: Int) : RemoteOperationError("Client error $status")
     class Server(val status: Int) : RemoteOperationError("Server error $status")
@@ -107,7 +109,7 @@ private object UnavailableV1Authenticator : V1Authenticator {
 }
 
 /**
- * Owns every V1 wire decision for the anonymous read path: method, path,
+ * Owns every V1 wire decision for the read path: method, path,
  * query, public-namespace encoding, headers, parsing, and error mapping.
  */
 class V1ProtocolAdapter(
@@ -188,7 +190,7 @@ class V1ProtocolAdapter(
         try {
             val deadline = clock() + readBudgetMillis
             val firstResponse = executeWithinBudget(build(authenticationFor(target, deadline)), deadline)
-            if (isRecoverableNacosPasswordToken(target, firstResponse)) {
+            if (recoverableNacosPasswordTokenFailure(target, firstResponse) != null) {
                 authenticator.invalidate(target.context)
                 executeWithinBudget(build(authenticationFor(target, deadline)), deadline)
             } else {
@@ -244,10 +246,9 @@ class V1ProtocolAdapter(
 
     private fun ensureSuccess(response: ProtocolResponse): String = when (response.status) {
         in 200..299 -> response.body
-        401, 403 -> if (isPermissionDenied(response.body)) {
-            throw RemoteOperationError.Authorization(response.status)
-        } else {
-            throw RemoteOperationError.Authentication(response.status)
+        401, 403 -> when (val failure = mapAuthenticationFailure(response)) {
+            null -> throw RemoteOperationError.Authentication(response.status)
+            else -> throw failure
         }
         404 -> throw RemoteOperationError.NotFound()
         429 -> throw RemoteOperationError.RateLimited()
@@ -337,20 +338,52 @@ class V1ProtocolAdapter(
         return withTimeout(remaining) { operation() }
     }
 
-    private fun isRecoverableNacosPasswordToken(target: OperationTarget, response: ProtocolResponse): Boolean =
-        target.context.authenticationStrategy == V1AuthenticationStrategy.NACOS_PASSWORD &&
-            response.status in setOf(401, 403) &&
-            isInvalidOrExpiredNacosToken(response.body)
+    /**
+     * Recovery is intentionally driven by this adapter-mapped error alone.
+     * Plain proxy prose is not a Nacos error envelope and must never cause a
+     * credential refresh or a second request.
+     */
+    private fun recoverableNacosPasswordTokenFailure(
+        target: OperationTarget,
+        response: ProtocolResponse
+    ): RemoteOperationError.InvalidOrExpiredNacosPasswordToken? =
+        if (target.context.authenticationStrategy == V1AuthenticationStrategy.NACOS_PASSWORD) {
+            mapAuthenticationFailure(response) as? RemoteOperationError.InvalidOrExpiredNacosPasswordToken
+        } else {
+            null
+        }
 
-    private fun isInvalidOrExpiredNacosToken(body: String): Boolean {
-        val normalized = body.lowercase()
-        if ("permission" in normalized || "forbidden" in normalized || "denied" in normalized) return false
-        return Regex("(?:access[_ -]?token|token).{0,48}(?:invalid|expired|expire)|(?:invalid|expired|expire).{0,48}(?:access[_ -]?token|token)")
-            .containsMatchIn(normalized)
+    private fun mapAuthenticationFailure(response: ProtocolResponse): RemoteOperationError? {
+        if (response.status !in setOf(401, 403)) return null
+        val envelope = runCatching {
+            gson.fromJson(response.body, V1ErrorEnvelope::class.java)
+        }.getOrNull() ?: return null
+        if (envelope.code?.toIntOrNull() != response.status) return null
+        return when {
+            isInvalidOrExpiredNacosPasswordMessage(envelope.message) ->
+                RemoteOperationError.InvalidOrExpiredNacosPasswordToken(response.status)
+            isPermissionDenied(envelope.message) -> RemoteOperationError.Authorization(response.status)
+            else -> null
+        }
     }
 
-    private fun isPermissionDenied(body: String): Boolean =
-        Regex("(?i)permission|forbidden|denied").containsMatchIn(body)
+    private fun isInvalidOrExpiredNacosPasswordMessage(message: String?): Boolean =
+        message.orEmpty()
+            .trim()
+            .trimEnd('.', '!', ':')
+            .lowercase() in setOf(
+            "token invalid",
+            "token is invalid",
+            "token expired",
+            "token is expired",
+            "access token invalid",
+            "access token is invalid",
+            "access token expired",
+            "access token is expired"
+        )
+
+    private fun isPermissionDenied(message: String?): Boolean =
+        Regex("(?i)permission|forbidden|denied").containsMatchIn(message.orEmpty())
 
     private data class RequestAuthentication(
         val query: List<Pair<String, String>> = emptyList(),
@@ -379,6 +412,11 @@ class V1ProtocolAdapter(
         val content: String? = null,
         val type: String? = null,
         val md5: String? = null
+    )
+
+    private data class V1ErrorEnvelope(
+        val code: String? = null,
+        val message: String? = null
     )
 
     private companion object {

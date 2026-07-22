@@ -104,14 +104,18 @@ class AccessSafetyTest {
         credentials.put(original.credentialSlotId, "old-secret")
         val published = mutableListOf<EnvironmentProfile>()
 
-        val updated = RevisionPinnedCredentialUpdater(credentials).rotate(original, "new-secret") { profile ->
-            assertEquals("new-secret", credentials[profile.credentialSlotId])
-            assertEquals(original.accessRevision + 1, profile.accessRevision)
-            published += profile
-        }
+        val nextVersion = original.credentialSlotVersion + 1
+        val updated = original.withUpdated(
+            credentialSlotId = credentialSlotId(original.id, nextVersion),
+            credentialSlotVersion = nextVersion
+        )
+        CredentialSlotStager(credentials).stage(updated, "new-secret")
+
+        assertEquals("new-secret", credentials[updated.credentialSlotId])
+        assertEquals(original.accessRevision + 1, updated.accessRevision)
+        published += updated
 
         assertEquals("old-secret", credentials[original.credentialSlotId])
-        assertEquals("new-secret", credentials[updated.credentialSlotId])
         assertEquals(updated, published.single())
     }
 
@@ -241,7 +245,7 @@ class AccessSafetyTest {
     }
 
     @Test
-    fun `hybrid and unlocked anonymous profiles fail closed before transport`() {
+    fun `hybrid, unlocked anonymous, and explicit V1 strategies outside V1 fail closed before transport`() {
         val hybridV1 = EnvironmentProfile(
             id = "hybrid-v1",
             displayName = "Hybrid V1",
@@ -257,9 +261,18 @@ class AccessSafetyTest {
             apiPolicy = NacosApiPolicy.AUTO,
             authMode = AuthMode.ANONYMOUS
         )
+        val unlockedBasic = EnvironmentProfile(
+            id = "auto-basic",
+            displayName = "Auto basic",
+            canonicalEndpoint = "https://nacos.example",
+            apiPolicy = NacosApiPolicy.AUTO,
+            authMode = AuthMode.HTTP_BASIC,
+            principal = "alice"
+        )
 
         assertInstanceOf(ConfigurationRequired::class.java, OperationContextResolver.resolve(hybridV1, "secret").exceptionOrNull())
         assertInstanceOf(ConfigurationRequired::class.java, OperationContextResolver.resolve(unlockedAnonymous, "").exceptionOrNull())
+        assertInstanceOf(ConfigurationRequired::class.java, OperationContextResolver.resolve(unlockedBasic, "secret").exceptionOrNull())
     }
 
     @Test

@@ -325,14 +325,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
 
     private fun updateProfilesFromServers(previousPasswords: Map<String, String> = emptyMap()) {
         val existing = profiles.associateBy { it.id }
-        val credentialUpdates = RevisionPinnedCredentialUpdater(PasswordSafeCredentialSlots)
+        val credentialSlots = CredentialSlotStager(PasswordSafeCredentialSlots)
         profiles = servers.map { server ->
             val migrated = EnvironmentProfile.fromLegacy(server)
             val previous = existing[server.id]
             val credentialChanged = previous != null &&
                 (previousPasswords[server.id] ?: NacosCredentialStore.get(previous.credentialSlotId).orEmpty()) != server.password
             val credentialVersion = if (credentialChanged) previous!!.credentialSlotVersion + 1 else previous?.credentialSlotVersion ?: 1
-            val credentialSlotId = "${server.id}:v$credentialVersion"
+            val credentialSlotId = credentialSlotId(server.id, credentialVersion)
             val updated = previous?.withUpdated(
                 canonicalEndpoint = migrated.canonicalEndpoint,
                 apiPolicy = migrated.apiPolicy,
@@ -343,7 +343,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             ) ?: migrated.copy(credentialSlotId = credentialSlotId, credentialSlotVersion = credentialVersion)
             // The fresh slot is durable before this map is assigned to
             // [profiles], which is the single publication point for readers.
-            credentialUpdates.stage(updated, server.password)
+            credentialSlots.stage(updated, server.password)
             updated.copy(displayName = server.displayName)
         }.toMutableList()
         migratedDefaultProfileId = activeServerId

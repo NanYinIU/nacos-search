@@ -24,31 +24,17 @@ class InMemoryCredentialSlots : CredentialSlots {
 }
 
 /**
- * Publishes a credential change as an all-or-nothing profile transition. The
- * replacement secret is staged under a fresh slot before the caller can expose
- * the profile revision that references it, so a reader sees a complete old or
- * complete new pair and never a profile pointing at an unwritten slot.
+ * Stages a replacement secret under the slot referenced by a pending profile
+ * revision. Callers must do this before publishing the revision, so readers
+ * see a complete old or complete new pair and never an unwritten slot.
  */
-class RevisionPinnedCredentialUpdater(private val credentials: CredentialSlots) {
+class CredentialSlotStager(private val credentials: CredentialSlots) {
     fun stage(profile: EnvironmentProfile, secret: String) {
         credentials.put(profile.credentialSlotId, secret)
     }
-
-    fun rotate(
-        profile: EnvironmentProfile,
-        secret: String,
-        publish: (EnvironmentProfile) -> Unit
-    ): EnvironmentProfile {
-        val version = profile.credentialSlotVersion + 1
-        val updated = profile.withUpdated(
-            credentialSlotId = "${profile.id}:v$version",
-            credentialSlotVersion = version
-        )
-        stage(updated, secret)
-        publish(updated)
-        return updated
-    }
 }
+
+internal fun credentialSlotId(profileId: String, version: Long): String = "$profileId:v$version"
 
 internal object PasswordSafeCredentialSlots : CredentialSlots {
     override operator fun get(slotId: String): String? = NacosCredentialStore.get(slotId)
@@ -164,6 +150,12 @@ object OperationContextResolver {
         } else {
             if (profile.authMode == AuthMode.ANONYMOUS) {
                 throw ConfigurationRequired(listOf("Anonymous access requires an explicitly V1-locked profile"))
+            }
+            if (profile.authMode == AuthMode.NACOS_PASSWORD ||
+                profile.authMode == AuthMode.HTTP_BASIC ||
+                profile.authMode == AuthMode.BEARER_TOKEN
+            ) {
+                throw ConfigurationRequired(listOf("Explicit V1 authentication strategies require a V1-locked profile"))
             }
             require(!(principal.isBlank() xor secret.isBlank())) {
                 throw ConfigurationRequired(listOf("Username and credential must be provided together"))

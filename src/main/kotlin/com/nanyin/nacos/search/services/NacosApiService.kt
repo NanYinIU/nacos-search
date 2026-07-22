@@ -495,15 +495,16 @@ class NacosApiService(
         val headers = mutableMapOf<String, String>()
         val token = when (context.authMode) {
             AuthMode.TOKEN, AuthMode.NACOS_PASSWORD, AuthMode.HYBRID -> authService.getValidAccessToken(context)
-            AuthMode.BASIC, AuthMode.HTTP_BASIC, AuthMode.BEARER_TOKEN -> null
+            AuthMode.BASIC -> null
+            AuthMode.HTTP_BASIC, AuthMode.BEARER_TOKEN -> throw ConfigurationRequired(
+                listOf("Explicit V1 authentication strategies require a V1-locked profile")
+            )
             AuthMode.ANONYMOUS -> null
         }
         if (token != null) {
             mutableParams["accessToken"] = token
-        } else if (context.authMode == AuthMode.BASIC || context.authMode == AuthMode.HTTP_BASIC || context.authMode == AuthMode.HYBRID) {
+        } else if (context.authMode == AuthMode.BASIC || context.authMode == AuthMode.HYBRID) {
             addBasicAuthHeader(headers, context)
-        } else if (context.authMode == AuthMode.BEARER_TOKEN && context.credential.secret.isNotBlank()) {
-            headers["Authorization"] = "Bearer ${context.credential.secret}"
         }
         val queryParams = mutableParams.entries.joinToString("&") { (key, value) ->
             "$key=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
@@ -524,7 +525,10 @@ class NacosApiService(
         val mutableParams = params.toMutableMap()
         val shouldUseToken = when (server.authMode) {
             AuthMode.TOKEN, AuthMode.NACOS_PASSWORD -> true
-            AuthMode.BASIC, AuthMode.HTTP_BASIC, AuthMode.BEARER_TOKEN -> false
+            AuthMode.BASIC -> false
+            AuthMode.HTTP_BASIC, AuthMode.BEARER_TOKEN -> throw ConfigurationRequired(
+                listOf("Explicit V1 authentication strategies require a V1-locked profile")
+            )
             AuthMode.HYBRID -> server.enableTokenAuth
             AuthMode.ANONYMOUS -> false
         }
@@ -545,10 +549,10 @@ class NacosApiService(
                 val token = if (server.enableTokenAuth) authService.getValidAccessToken(server) else null
                 if (token == null) addBasicAuthHeader(headers, server)
             }
-            AuthMode.BASIC, AuthMode.HTTP_BASIC -> addBasicAuthHeader(headers, server)
-            AuthMode.BEARER_TOKEN -> if (server.password.isNotBlank()) {
-                headers["Authorization"] = "Bearer ${server.password}"
-            }
+            AuthMode.BASIC -> addBasicAuthHeader(headers, server)
+            AuthMode.HTTP_BASIC, AuthMode.BEARER_TOKEN -> throw ConfigurationRequired(
+                listOf("Explicit V1 authentication strategies require a V1-locked profile")
+            )
             AuthMode.ANONYMOUS -> Unit
         }
         return headers
