@@ -370,6 +370,24 @@ class NamespacePanel(
             }
         }
 
+        fun chooseSelectedOrManualNamespace() {
+            val enteredNamespaceId = searchField.text.trim()
+            val matchingNamespace = namespaces.find { it.namespaceId == enteredNamespaceId }
+            when {
+                matchingNamespace != null -> {
+                    popup.closeOk(null)
+                    selectNamespace(matchingNamespace, notify = true)
+                }
+                enteredNamespaceId.isNotEmpty() -> {
+                    popup.closeOk(null)
+                    selectManualNamespace(enteredNamespaceId)
+                }
+                else -> chooseSelected()
+            }
+        }
+
+        searchField.textEditor.addActionListener { chooseSelectedOrManualNamespace() }
+
        list.addMouseListener(object : MouseAdapter() {
             override fun mousePressed(e: MouseEvent) {
                 if (SwingUtilities.isLeftMouseButton(e)) chooseSelected()
@@ -446,6 +464,17 @@ class NamespacePanel(
             // notify=true so this project's window receives the selection.
             selectNamespace(matchingNamespace, notify = true)
         }
+    }
+
+    /** Selects a Namespace ID typed by the user when anonymous browsing cannot enumerate it. */
+    fun selectManualNamespace(namespaceId: String) {
+        val normalizedNamespaceId = namespaceId.trim()
+        require(normalizedNamespaceId.isNotEmpty()) { "Namespace ID is required" }
+        val matchingNamespace = namespaces.find { it.namespaceId == normalizedNamespaceId }
+        selectNamespace(
+            matchingNamespace ?: NamespaceInfo(normalizedNamespaceId, normalizedNamespaceId),
+            notify = true
+        )
     }
 
     override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {

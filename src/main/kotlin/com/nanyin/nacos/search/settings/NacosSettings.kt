@@ -320,6 +320,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             val credentialSlotId = "${server.id}:v$credentialVersion"
             val updated = previous?.withUpdated(
                 canonicalEndpoint = migrated.canonicalEndpoint,
+                apiPolicy = migrated.apiPolicy,
                 authMode = migrated.authMode,
                 principal = migrated.principal,
                 credentialSlotId = credentialSlotId,
@@ -566,5 +567,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
 enum class AuthMode {
     BASIC,      // 仅使用Basic Auth
     TOKEN,      // 仅使用Token Auth
-    HYBRID      // 优先Token Auth，回退到Basic Auth
+    HYBRID,     // 优先Token Auth，回退到Basic Auth
+    ANONYMOUS   // Never sends credentials; only supported by a locked read path
 }

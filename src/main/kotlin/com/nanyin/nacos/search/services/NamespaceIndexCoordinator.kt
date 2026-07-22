@@ -4,12 +4,14 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.DatasetState
 import com.nanyin.nacos.search.models.DataSource
 import com.nanyin.nacos.search.models.DataFreshness
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.AuthMode
+import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.RequestPolicy
 import kotlinx.coroutines.CompletableDeferred
@@ -46,11 +48,15 @@ data class NacosServerSnapshot(
 data class NamespaceIndexRequest(
     val key: NamespaceIndexKey,
     val server: NacosServerSnapshot,
-    val cacheTtlMillis: Long
+    val cacheTtlMillis: Long,
+    /** V1 uses this immutable operation snapshot instead of the legacy wire path. */
+    val operationContext: NacosOperationContext? = null
 )
 
-internal fun NacosSettings.captureNamespaceIndexRequest(namespaceId: String?): NamespaceIndexRequest =
-    captureNamespaceIndexRequest(namespaceId, captureServerSnapshot())
+internal fun NacosSettings.captureNamespaceIndexRequest(namespaceId: String?): NamespaceIndexRequest {
+    val context = captureOperationContext().getOrNull()
+    return captureNamespaceIndexRequest(namespaceId, captureServerSnapshot(operationContext = context), context)
+}
 
 internal fun NacosSettings.captureAccessIdentity(profileId: String? = null): AccessIdentity {
     return captureOperationContext(profileId)
@@ -58,7 +64,7 @@ internal fun NacosSettings.captureAccessIdentity(profileId: String? = null): Acc
         profileId = "<configuration-required>",
         accessRevision = -1,
         canonicalEndpoint = "<invalid>",
-        resolvedGeneration = -1,
+        resolvedGeneration = NacosApiGeneration.UNKNOWN,
         authMode = AuthMode.TOKEN,
         principal = ""
     )
@@ -66,20 +72,28 @@ internal fun NacosSettings.captureAccessIdentity(profileId: String? = null): Acc
 
 internal fun NacosSettings.captureNamespaceIndexRequest(
     namespaceId: String?,
-    snapshot: NacosServerSnapshot
+    snapshot: NacosServerSnapshot,
+    operationContext: NacosOperationContext? = null
 ): NamespaceIndexRequest {
+    require(operationContext == null || operationContext.identity == snapshot.identity) {
+        "Namespace index operation context does not match its captured server snapshot"
+    }
     return NamespaceIndexRequest(
         NamespaceIndexKey(
             snapshot.identity,
             namespaceId.orEmpty()
         ),
         snapshot,
-        getCacheTtlMillis()
+        getCacheTtlMillis(),
+        operationContext
     )
 }
 
-internal fun NacosSettings.captureServerSnapshot(profileId: String? = null): NacosServerSnapshot {
-    val context = captureOperationContext(profileId).getOrNull()
+internal fun NacosSettings.captureServerSnapshot(
+    profileId: String? = null,
+    operationContext: NacosOperationContext? = null
+): NacosServerSnapshot {
+    val context = operationContext ?: captureOperationContext(profileId).getOrNull()
     return if (context == null) {
         NacosServerSnapshot("", "", "", AuthMode.TOKEN, false, captureAccessIdentity(profileId))
     } else {
@@ -164,6 +178,9 @@ class NamespaceIndexCoordinator internal constructor(
             }
         ) { "Namespace index key does not match its captured server snapshot" }
         require(request.cacheTtlMillis > 0) { "Namespace index cache TTL must be positive" }
+        require(request.operationContext == null || request.operationContext.identity == key.identity) {
+            "Namespace index key does not match its captured operation context"
+        }
         // PSI cooldown: skip if recently failed
         if (trigger == IndexTrigger.PSI) {
             val cooldownUntil = psiCooldownUntil[key]
@@ -199,7 +216,20 @@ class NamespaceIndexCoordinator internal constructor(
     private suspend fun executeIndex(request: NamespaceIndexRequest, policy: RequestPolicy): IndexOutcome {
         val key = request.key
         return try {
-            val result = apiService.loadNamespace(key.namespaceId, useCache = false, server = request.server, policy = policy)
+            val v1Context = request.operationContext?.takeIf {
+                it.resolvedGeneration == NacosApiGeneration.V1
+            }
+            val result = if (v1Context != null) {
+                apiService.loadNamespace(
+                    key.namespaceId,
+                    useCache = false,
+                    server = null,
+                    policy = policy,
+                    operationContext = v1Context
+                )
+            } else {
+                apiService.loadNamespace(key.namespaceId, useCache = false, server = request.server, policy = policy)
+            }
             if (result.isFailure) {
                 cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
                 recordPsiFailure(key)

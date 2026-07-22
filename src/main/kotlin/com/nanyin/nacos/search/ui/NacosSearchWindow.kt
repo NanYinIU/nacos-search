@@ -425,14 +425,17 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             // Prefer cached list-page data when available — avoids a forced
             // remote API call on every namespace switch. The user can still
             // pull fresh data via the refresh button.
+            val profileId = selectedProfileId()
+            val operationContext = settings.captureOperationContext(profileId).getOrNull()
+            val serverSnapshot = settings.captureServerSnapshot(profileId, operationContext)
             val request = NacosSearchService.SearchRequest(
                 namespace = newNamespace,
                 pageNo = 1,
                 pageSize = paginationPanel.getCurrentPageSize(),
                 forceRefresh = false,
-                serverId = selectedProfileId(),
-                serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
-                operationContext = selectedOperationContext()
+                serverId = profileId,
+                serverSnapshot = serverSnapshot,
+                operationContext = operationContext
             )
             currentSearchRequest = request
             loadConfigurations()
@@ -442,7 +445,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             preheatNamespaceIndex(
                 settings.captureNamespaceIndexRequest(
                     newNamespace.namespaceId,
-                    settings.captureServerSnapshot(selectedProfileId())
+                    serverSnapshot,
+                    operationContext
                 )
             )
         } else {

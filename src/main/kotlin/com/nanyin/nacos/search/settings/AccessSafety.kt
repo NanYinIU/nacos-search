@@ -4,6 +4,8 @@ import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.NacosApiGeneration
+import com.nanyin.nacos.search.models.NacosApiPolicy
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 
@@ -81,7 +83,7 @@ data class NacosOperationContext(
     val authMode: AuthMode,
     val profileRevision: Long,
     val accessRevision: Long,
-    val resolvedGeneration: Long
+    val resolvedGeneration: NacosApiGeneration
 )
 
 /** A typed fail-closed result that UI callers can render as configuration required. */
@@ -94,16 +96,32 @@ object OperationContextResolver {
         }
         val principal = profile.principal.trim()
         val secret = credential.orEmpty()
-        require(!(principal.isBlank() xor secret.isBlank())) {
-            throw ConfigurationRequired(listOf("Username and credential must be provided together"))
+        if (profile.apiPolicy == NacosApiPolicy.V1 && profile.authMode != AuthMode.ANONYMOUS) {
+            throw ConfigurationRequired(listOf("V1 is currently available only for anonymous read access"))
+        }
+        if (profile.authMode == AuthMode.ANONYMOUS && profile.apiPolicy != NacosApiPolicy.V1) {
+            throw ConfigurationRequired(listOf("Anonymous access requires an explicitly V1-locked profile"))
+        }
+        if (profile.authMode == AuthMode.ANONYMOUS) {
+            require(principal.isBlank() && secret.isBlank()) {
+                throw ConfigurationRequired(listOf("Anonymous access cannot include a principal or credential"))
+            }
+        } else {
+            require(!(principal.isBlank() xor secret.isBlank())) {
+                throw ConfigurationRequired(listOf("Username and credential must be provided together"))
+            }
         }
         val normalizedPrincipal = principal.ifBlank { "<anonymous>" }
+        val resolvedGeneration = when (profile.apiPolicy) {
+            NacosApiPolicy.V1 -> NacosApiGeneration.V1
+            NacosApiPolicy.AUTO, NacosApiPolicy.V3 -> NacosApiGeneration.UNKNOWN
+        }
         NacosOperationContext(
             identity = AccessIdentity.ofProfile(
                 profileId = profile.id,
                 accessRevision = profile.accessRevision,
                 canonicalEndpoint = endpoint.value,
-                resolvedGeneration = profile.accessRevision,
+                resolvedGeneration = resolvedGeneration,
                 authMode = profile.authMode,
                 principal = normalizedPrincipal
             ),
@@ -112,7 +130,7 @@ object OperationContextResolver {
             authMode = profile.authMode,
             profileRevision = profile.profileRevision,
             accessRevision = profile.accessRevision,
-            resolvedGeneration = profile.accessRevision
+            resolvedGeneration = resolvedGeneration
         )
     }.recoverCatching { error ->
         if (error is ConfigurationRequired) throw error

@@ -4,9 +4,13 @@ import com.intellij.testFramework.ApplicationRule
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.NacosApiGeneration
+import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
 import com.nanyin.nacos.search.models.NamespaceLoadResult
 import com.nanyin.nacos.search.services.network.RequestPolicy
 import com.nanyin.nacos.search.settings.AuthMode
+import com.nanyin.nacos.search.settings.CredentialSnapshot
+import com.nanyin.nacos.search.settings.NacosOperationContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
@@ -130,6 +134,53 @@ class NamespaceIndexCoordinatorTest {
             listOf(configuration),
             cacheTtlMillis
         )
+    }
+
+    @Test
+    fun `V1 index load uses the captured operation context rather than the legacy server path`() = runBlocking {
+        val apiService = mock<NacosApiService>()
+        val cacheService = mock<CacheService>()
+        val v1Identity = AccessIdentity.ofProfile(
+            profileId = "anonymous-v1",
+            accessRevision = 4,
+            canonicalEndpoint = "https://nacos.example",
+            resolvedGeneration = NacosApiGeneration.V1,
+            authMode = AuthMode.ANONYMOUS,
+            principal = "<anonymous>"
+        )
+        val context = NacosOperationContext(
+            identity = v1Identity,
+            endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow(),
+            credential = CredentialSnapshot(""),
+            authMode = AuthMode.ANONYMOUS,
+            profileRevision = 4,
+            accessRevision = 4,
+            resolvedGeneration = NacosApiGeneration.V1
+        )
+        val snapshot = NacosServerSnapshot(
+            "https://nacos.example", "", "", AuthMode.ANONYMOUS, false, v1Identity
+        )
+        val request = NamespaceIndexRequest(NamespaceIndexKey(v1Identity, "manual-ns"), snapshot, 60_000, context)
+        whenever(
+            apiService.loadNamespace(
+                "manual-ns",
+                useCache = false,
+                server = null,
+                policy = RequestPolicy.PREHEAT,
+                operationContext = context
+            )
+        ).thenReturn(Result.success(NamespaceLoadResult(DatasetCompleteness.COMPLETE, 0, emptyList(), emptyList())))
+
+        NamespaceIndexCoordinator(apiService, cacheService).requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
+
+        verify(apiService).loadNamespace(
+            "manual-ns",
+            useCache = false,
+            server = null,
+            policy = RequestPolicy.PREHEAT,
+            operationContext = context
+        )
+        Unit
     }
 
     @Test

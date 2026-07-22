@@ -88,6 +88,20 @@ class NamespacePanelTest {
     }
 
     @Test
+    fun `manual namespace selection is available when a server only exposes public`() {
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
+        waitForNamespaceLoad()
+
+        var observed: NamespaceInfo? = null
+        namespacePanel.onSelectionChanged = { observed = it }
+        namespacePanel.selectManualNamespace("team-manual")
+        waitForUi()
+
+        assertEquals("team-manual", namespacePanel.getSelectedNamespace()?.namespaceId)
+        assertEquals("team-manual", observed?.namespaceId)
+    }
+
+    @Test
     fun testRefreshFunctionality() {
         namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
         waitForUi()

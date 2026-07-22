@@ -15,6 +15,8 @@ data class NacosServerConfig(
     var username: String = "",
     var password: String = "",
     var namespace: String = "public",
+    /** Explicit protocol choice persisted with the profile-compatible server draft. */
+    var apiPolicy: NacosApiPolicy = NacosApiPolicy.AUTO,
     var authMode: AuthMode = AuthMode.TOKEN,
     var defaultGroup: String = "DEFAULT_GROUP",
     var connectionTimeoutMs: Int = 30000,
@@ -29,6 +31,7 @@ data class NacosServerConfig(
             username = username,
             password = password,
             namespace = namespace,
+            apiPolicy = apiPolicy,
             authMode = authMode,
             defaultGroup = defaultGroup,
             connectionTimeoutMs = connectionTimeoutMs,

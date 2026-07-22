@@ -3,6 +3,8 @@ package com.nanyin.nacos.search.settings
 import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.NacosApiGeneration
+import com.nanyin.nacos.search.models.NacosApiPolicy
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
@@ -135,6 +137,50 @@ class AccessSafetyTest {
         assertEquals("dev-secret", captured.credential.secret)
         assertEquals("https://prod.nacos.example", changed.canonicalEndpoint)
         assertEquals("bob", changed.principal)
+    }
+
+    @Test
+    fun `V1 anonymous profile captures a complete identity without a credential`() {
+        val profile = EnvironmentProfile.fromLegacy(
+            NacosServerConfig(
+                id = "public-read",
+                serverUrl = "https://nacos.example/",
+                apiPolicy = NacosApiPolicy.V1,
+                authMode = AuthMode.ANONYMOUS
+            )
+        )
+
+        val context = OperationContextResolver.resolve(profile, "").getOrThrow()
+
+        assertEquals("public-read", context.identity.profileId)
+        assertEquals(profile.accessRevision, context.identity.accessRevision)
+        assertEquals("https://nacos.example", context.identity.canonicalEndpoint)
+        assertEquals(NacosApiGeneration.V1, context.identity.resolvedGeneration)
+        assertEquals(AuthMode.ANONYMOUS, context.identity.authMode)
+        assertEquals("<anonymous>", context.identity.principal)
+        assertTrue(context.credential.secret.isEmpty())
+    }
+
+    @Test
+    fun `V1 password and unlocked anonymous profiles fail closed before transport`() {
+        val v1Password = EnvironmentProfile(
+            id = "v1-password",
+            displayName = "V1 password",
+            canonicalEndpoint = "https://nacos.example",
+            apiPolicy = NacosApiPolicy.V1,
+            authMode = AuthMode.BASIC,
+            principal = "alice"
+        )
+        val unlockedAnonymous = EnvironmentProfile(
+            id = "auto-anonymous",
+            displayName = "Auto anonymous",
+            canonicalEndpoint = "https://nacos.example",
+            apiPolicy = NacosApiPolicy.AUTO,
+            authMode = AuthMode.ANONYMOUS
+        )
+
+        assertInstanceOf(ConfigurationRequired::class.java, OperationContextResolver.resolve(v1Password, "secret").exceptionOrNull())
+        assertInstanceOf(ConfigurationRequired::class.java, OperationContextResolver.resolve(unlockedAnonymous, "").exceptionOrNull())
     }
 
     @Test

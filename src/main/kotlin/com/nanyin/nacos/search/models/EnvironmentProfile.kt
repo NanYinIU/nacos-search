@@ -85,7 +85,7 @@ data class EnvironmentProfile(
             id = server.id.ifBlank { "default" },
             displayName = server.displayName,
             canonicalEndpoint = CanonicalNacosEndpoint.parse(server.serverUrl).getOrNull()?.value.orEmpty(),
-            apiPolicy = NacosApiPolicy.AUTO,
+            apiPolicy = server.apiPolicy,
             authMode = server.authMode,
             principal = server.username.trim(),
             writeIntent = false,

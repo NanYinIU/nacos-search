@@ -2,6 +2,9 @@ package com.nanyin.nacos.search.models
 
 import com.nanyin.nacos.search.settings.AuthMode
 
+/** The protocol generation that was resolved before an operation started. */
+enum class NacosApiGeneration { UNKNOWN, V1 }
+
 /**
  * Identifies the user/environment context that a cache entry belongs to.
  *
@@ -14,7 +17,7 @@ data class AccessIdentity(
     val profileId: String,
     val accessRevision: Long,
     val canonicalEndpoint: String,
-    val resolvedGeneration: Long,
+    val resolvedGeneration: NacosApiGeneration,
     val authMode: AuthMode,
     val principal: String
 ) {
@@ -29,7 +32,7 @@ data class AccessIdentity(
                 profileId = normalizedServer,
                 accessRevision = 0,
                 canonicalEndpoint = normalizedServer,
-                resolvedGeneration = 0,
+                resolvedGeneration = NacosApiGeneration.UNKNOWN,
                 authMode = authMode,
                 principal = normalizedPrincipal
             )
@@ -39,7 +42,7 @@ data class AccessIdentity(
             profileId: String,
             accessRevision: Long,
             canonicalEndpoint: String,
-            resolvedGeneration: Long,
+            resolvedGeneration: NacosApiGeneration,
             authMode: AuthMode,
             principal: String
         ): AccessIdentity = AccessIdentity(

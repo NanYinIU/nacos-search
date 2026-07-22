@@ -6,6 +6,7 @@ import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NamespaceLoadResult
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosOperationContext
@@ -13,6 +14,14 @@ import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.network.RequestPolicy
+import com.nanyin.nacos.search.services.operations.CacheServiceOperationCache
+import com.nanyin.nacos.search.services.operations.ConfigurationCoordinate
+import com.nanyin.nacos.search.services.operations.NacosRequestExecutorProtocolTransport
+import com.nanyin.nacos.search.services.operations.OperationGateway
+import com.nanyin.nacos.search.services.operations.OperationTarget
+import com.nanyin.nacos.search.services.operations.SummaryPage
+import com.nanyin.nacos.search.services.operations.SummaryQuery
+import com.nanyin.nacos.search.services.operations.V1ProtocolAdapter
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.intellij.openapi.application.ApplicationManager
@@ -28,7 +37,9 @@ import java.nio.charset.StandardCharsets
  * Service for interacting with Nacos Open API
  */
 @Service(Service.Level.APP)
-class NacosApiService {
+class NacosApiService(
+    private val anonymousV1GatewayOverride: OperationGateway? = null
+) {
     private val logger = thisLogger()
     private val gson = Gson()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
@@ -36,6 +47,16 @@ class NacosApiService {
     private val executor = NacosRequestExecutor()
 
    private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
+   private val anonymousV1Gateway by lazy {
+       anonymousV1GatewayOverride ?: OperationGateway(
+           mapOf(
+               NacosApiGeneration.V1 to V1ProtocolAdapter(
+                   NacosRequestExecutorProtocolTransport(executor)
+               )
+           ),
+           CacheServiceOperationCache(cacheService) { settings.getCacheTtlMillis() }
+       )
+   }
   companion object {
        private const val CONFIG_ENDPOINT = "/nacos/v1/cs/configs"
        private const val CONFIG_LIST_ENDPOINT = "/nacos/v1/cs/configs"
@@ -79,6 +100,9 @@ class NacosApiService {
            val context = operationContextOrFailure() ?: return@withContext Result.failure(
                ConfigurationRequired(listOf("Connection configuration is incomplete"))
            )
+           if (usesAnonymousV1(context)) {
+               return@withContext anonymousV1Gateway.probe(anonymousV1Target(context)).map { true }
+           }
            val url = "${context.endpoint.value}$NAMESPACE_ENDPOINT"
            logger.info("Testing connection to: $url")
            val response = executor.get(url, RequestPolicy.DIAGNOSTIC, diagnosticHeaders(context))
@@ -110,6 +134,14 @@ class NacosApiService {
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
             )
+            if (usesAnonymousV1(context)) {
+                return@withContext anonymousV1Gateway.readDetail(
+                    anonymousV1Target(context, namespaceId),
+                    ConfigurationCoordinate(dataId, group),
+                    forceRefresh = forceRefresh,
+                    useCache = useCache
+                )
+            }
             if (useCache && !forceRefresh && settings.cacheEnabled) {
                 cacheService.getConfigDetail(context.identity, namespaceId, dataId, group)?.let { cachedConfig ->
                     logger.debug("Returning cached configuration for $dataId:$group")
@@ -184,6 +216,14 @@ class NacosApiService {
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
             )
+            if (usesAnonymousV1(context)) {
+                return@withContext anonymousV1Gateway.listSummaries(
+                    anonymousV1Target(context, namespaceId),
+                    SummaryQuery(pageNo, pageSize, dataId, group, appName, configTags, searchMode),
+                    forceRefresh = forceRefresh,
+                    useCache = useCache
+                ).map { it.toConfigListResponse() }
+            }
             val params = buildMap {
                 put("pageNo", pageNo.toString())
                 put("pageSize", pageSize.toString())
@@ -389,6 +429,9 @@ class NacosApiService {
            val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                ConfigurationRequired(listOf("Connection configuration is incomplete"))
            )
+           if (usesAnonymousV1(context)) {
+               return@withContext Result.success(listOf(NamespaceInfo.createPublicNamespace()))
+           }
            logger.debug("Fetching namespaces from captured endpoint: ${context.endpoint.value}")
            val response = requestJsonWithReplay(context, NAMESPACE_ENDPOINT, emptyMap(), RequestPolicy.DIAGNOSTIC)
 
@@ -452,6 +495,7 @@ class NacosApiService {
         val token = when (context.authMode) {
             AuthMode.TOKEN, AuthMode.HYBRID -> authService.getValidAccessToken(context)
             AuthMode.BASIC -> null
+            AuthMode.ANONYMOUS -> null
         }
         if (token != null) {
             mutableParams["accessToken"] = token
@@ -479,6 +523,7 @@ class NacosApiService {
             AuthMode.TOKEN -> true
             AuthMode.BASIC -> false
             AuthMode.HYBRID -> server.enableTokenAuth
+            AuthMode.ANONYMOUS -> false
         }
         if (shouldUseToken) {
             authService.getValidAccessToken(server)?.let { mutableParams["accessToken"] = it }
@@ -498,6 +543,7 @@ class NacosApiService {
                 if (token == null) addBasicAuthHeader(headers, server)
             }
             AuthMode.BASIC -> addBasicAuthHeader(headers, server)
+            AuthMode.ANONYMOUS -> Unit
         }
         return headers
     }
@@ -573,6 +619,11 @@ class NacosApiService {
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
             )
+            if (usesAnonymousV1(context)) {
+                return@withContext Result.failure(
+                    ConfigurationRequired(listOf("The V1 anonymous path is read-only"))
+                )
+            }
             val params = buildMap {
                 put("dataId", dataId)
                 put("group", group)
@@ -630,6 +681,21 @@ class NacosApiService {
 
     /** Guards every operation before cache reads, token lookup, or remote transport. */
     private fun operationContextOrFailure() = settings.captureOperationContext().getOrNull()
+
+    private fun usesAnonymousV1(context: NacosOperationContext): Boolean =
+        context.resolvedGeneration == NacosApiGeneration.V1 && context.authMode == AuthMode.ANONYMOUS
+
+    private fun anonymousV1Target(context: NacosOperationContext, namespaceId: String? = null): OperationTarget =
+        OperationTarget(context, namespaceId ?: "public")
+
+    private fun SummaryPage.toConfigListResponse(): ConfigListResponse = ConfigListResponse(
+        totalCount = totalCount,
+        pageNumber = pageNumber,
+        pagesAvailable = pagesAvailable,
+        pageItems = items.mapIndexed { index, item ->
+            ConfigItem(index.toString(), item.dataId, item.group, item.content, item.type, item.tenantId)
+        }
+    )
 
     private fun diagnosticHeaders(context: com.nanyin.nacos.search.settings.NacosOperationContext): Map<String, String> {
         if (context.identity.principal == "<anonymous>" || context.credential.secret.isBlank()) return emptyMap()

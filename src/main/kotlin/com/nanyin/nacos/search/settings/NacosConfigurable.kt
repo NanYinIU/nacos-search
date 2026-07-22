@@ -1,6 +1,7 @@
 package com.nanyin.nacos.search.settings
 
 import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.NacosApiPolicy
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
@@ -58,6 +59,7 @@ class NacosConfigurable : Configurable {
     private lateinit var usernameField: JBTextField
     private lateinit var passwordField: JPasswordField
     private lateinit var namespaceField: JBTextField
+    private lateinit var apiPolicyComboBox: JComboBox<NacosApiPolicy>
     private lateinit var authModeComboBox: JComboBox<AuthMode>
     private lateinit var defaultGroupField: JBTextField
     private lateinit var connectionTimeoutSpinner: JSpinner
@@ -134,6 +136,7 @@ class NacosConfigurable : Configurable {
         server.username = usernameField.text.trim()
         server.password = String(passwordField.password)
         server.namespace = namespaceField.text.trim()
+        server.apiPolicy = apiPolicyComboBox.selectedItem as NacosApiPolicy
         server.authMode = authModeComboBox.selectedItem as AuthMode
         server.defaultGroup = defaultGroupField.text.trim()
         server.connectionTimeoutMs = connectionTimeoutSpinner.value as Int
@@ -221,6 +224,9 @@ class NacosConfigurable : Configurable {
             emptyText.text = "public"
             font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 13)
             document.addDocumentListener(docListener)
+        }
+        apiPolicyComboBox = JComboBox(arrayOf(NacosApiPolicy.AUTO, NacosApiPolicy.V1)).apply {
+            addActionListener { commitDetailFormToDraft() }
         }
         authModeComboBox = JComboBox(AuthMode.values()).apply {
             addActionListener { commitDetailFormToDraft() }
@@ -490,6 +496,7 @@ class NacosConfigurable : Configurable {
             preferredSize = Dimension(360, preferredSize.height)
             minimumSize = Dimension(120, minimumSize.height)
         }, gbc)
+        addRow("settings.server.api.policy", apiPolicyComboBox)
         addRow("settings.server.auth.mode", authModeComboBox)
 
         // Reset to defaults (keeps the display name).
@@ -668,6 +675,7 @@ class NacosConfigurable : Configurable {
             usernameField.text = server.username
             passwordField.text = server.password
             namespaceField.text = server.namespace
+            apiPolicyComboBox.selectedItem = server.apiPolicy
             authModeComboBox.selectedItem = server.authMode
             defaultGroupField.text = server.defaultGroup
             connectionTimeoutSpinner.value = server.connectionTimeoutMs
