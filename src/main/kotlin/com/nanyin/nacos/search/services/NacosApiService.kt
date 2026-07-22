@@ -22,6 +22,7 @@ import com.nanyin.nacos.search.services.operations.OperationTarget
 import com.nanyin.nacos.search.services.operations.SummaryPage
 import com.nanyin.nacos.search.services.operations.SummaryQuery
 import com.nanyin.nacos.search.services.operations.V1ProtocolAdapter
+import com.nanyin.nacos.search.services.operations.V3ProtocolAdapter
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.intellij.openapi.application.ApplicationManager
@@ -53,6 +54,9 @@ class NacosApiService(
                NacosApiGeneration.V1 to V1ProtocolAdapter(
                    NacosRequestExecutorProtocolTransport(executor),
                    authService
+               ),
+               NacosApiGeneration.V3 to V3ProtocolAdapter(
+                   NacosRequestExecutorProtocolTransport(executor)
                )
            ),
            CacheServiceOperationCache(cacheService) { settings.getCacheTtlMillis() }
@@ -101,7 +105,7 @@ class NacosApiService(
            val context = operationContextOrFailure() ?: return@withContext Result.failure(
                ConfigurationRequired(listOf("Connection configuration is incomplete"))
            )
-           if (usesV1(context)) {
+           if (usesLockedGeneration(context)) {
                return@withContext v1Gateway.probe(v1Target(context)).map { true }
            }
            val url = "${context.endpoint.value}$NAMESPACE_ENDPOINT"
@@ -135,7 +139,7 @@ class NacosApiService(
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
             )
-            if (usesV1(context)) {
+            if (usesLockedGeneration(context)) {
                 return@withContext v1Gateway.readDetail(
                     v1Target(context, namespaceId),
                     ConfigurationCoordinate(dataId, group),
@@ -217,7 +221,7 @@ class NacosApiService(
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
             )
-            if (usesV1(context)) {
+            if (usesLockedGeneration(context)) {
                 return@withContext v1Gateway.listSummaries(
                     v1Target(context, namespaceId),
                     SummaryQuery(pageNo, pageSize, dataId, group, appName, configTags, searchMode),
@@ -430,7 +434,7 @@ class NacosApiService(
            val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                ConfigurationRequired(listOf("Connection configuration is incomplete"))
            )
-           if (usesV1(context)) {
+           if (usesLockedGeneration(context)) {
                return@withContext Result.success(listOf(NamespaceInfo.createPublicNamespace()))
            }
            logger.debug("Fetching namespaces from captured endpoint: ${context.endpoint.value}")
@@ -629,7 +633,7 @@ class NacosApiService(
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
             )
-           if (usesV1(context)) {
+           if (usesLockedGeneration(context)) {
                return@withContext Result.failure(
                     ConfigurationRequired(listOf("The V1 path is read-only"))
                 )
@@ -692,8 +696,9 @@ class NacosApiService(
     /** Guards every operation before cache reads, token lookup, or remote transport. */
     private fun operationContextOrFailure() = settings.captureOperationContext().getOrNull()
 
-    private fun usesV1(context: NacosOperationContext): Boolean =
-        context.resolvedGeneration == NacosApiGeneration.V1
+    private fun usesLockedGeneration(context: NacosOperationContext): Boolean =
+        context.resolvedGeneration == NacosApiGeneration.V1 ||
+        context.resolvedGeneration == NacosApiGeneration.V3
 
     private fun v1Target(context: NacosOperationContext, namespaceId: String? = null): OperationTarget =
         OperationTarget(context, namespaceId ?: "public")
