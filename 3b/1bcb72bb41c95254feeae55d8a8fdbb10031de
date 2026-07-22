@@ -1,0 +1,129 @@
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_eb4951cc074034::t_84cca846a1a6bf 7-8,63-65,232-234,239,288,305-307,312-313
+  s_eb4951cc074034::t_8904d7e577a979 249-278,314
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosUpgradeSummary.kt
+  s_eb4951cc074034::t_026e060a39e5d1 1-9,11-22
+  s_eb4951cc074034::t_e303b2456782c0 10
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_eb4951cc074034::t_c2143046f59016 10,79-81,111-112,114,136,185-186,200,211,259-263,574-575,592,631-632,639-643
+  s_eb4951cc074034::t_fd0876e33bb4b7 387,389,392-393,442-446,448-449,451-454,456-459,464-465,467,469,513-515,529-535,537,541-543
+  s_eb4951cc074034::t_57d7014a0dd6f4 675,686
+  s_eb4951cc074034::t_1acbb1b6ec2f53 569-570,573,584,587,671-672,674,695
+  s_eb4951cc074034::t_b3ba8452eef91f 11,106-107,110,126-127,180-181,184,206-207,227-232,242-247,253-254,257-258,272,294
+  s_eb4951cc074034::t_c993e0d27b49c7 82,84,390-391,447,633-638,644
+  s_eb4951cc074034::t_6c89a18f080291 607
+  s_eb4951cc074034::t_85f6ee7843a560 423
+  s_eb4951cc074034::t_6e9c4903231752 645
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanel.kt
+  s_eb4951cc074034::t_70462919490f0a 71-73
+  s_eb4951cc074034::t_ad9005f932e5ad 37,68-70,74,87-91,1158-1159
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosProjectSession.kt
+  s_eb4951cc074034::t_5ea652fe87235a 1-31,34,36-37,39-40,44
+  s_eb4951cc074034::t_e303b2456782c0 32,35,38,41-43
+  s_eb4951cc074034::t_39f08472096170 33
+src/test/kotlin/com/nanyin/nacos/search/ui/NamespacePanelTest.kt
+  s_eb4951cc074034::t_568619c5ce0f88 79-80,87
+  s_eb4951cc074034::t_3566db640566c2 129,138,142,147,152
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceTest.kt
+  s_eb4951cc074034::t_8c0629a37b0732 17-18,109-130,132,134-136
+  s_eb4951cc074034::t_d1745835da53d4 108,133
+  s_eb4951cc074034::t_40d8bab7c2264e 131
+  s_eb4951cc074034::t_c82bad2b9f7065 3,25
+  s_eb4951cc074034::t_c132fefd0c8d5b 194
+  s_eb4951cc074034::t_294ba085e547c2 10
+  s_eb4951cc074034::t_0c7f0b01c724e1 257
+  s_eb4951cc074034::t_54cdf015be91f9 106,193
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceCancelTest.kt
+  s_eb4951cc074034::t_6eb772f6fd9d04 40,67
+  s_eb4951cc074034::t_294ba085e547c2 13
+src/main/kotlin/com/nanyin/nacos/search/models/AccessIdentity.kt
+  s_eb4951cc074034::t_f20ff7814d8c2b 14-17,21-23,28-35,37-52
+src/test/kotlin/com/nanyin/nacos/search/services/CacheServiceTest.kt
+  s_eb4951cc074034::t_28de7507a19e31 531,552-553,556,561-562
+src/main/kotlin/com/nanyin/nacos/search/models/NacosServerConfig.kt
+  s_eb4951cc074034::t_88f3c9a0c5e8fb 41
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceService.kt
+  s_eb4951cc074034::t_0de3da3dc14aec 4,93-95,99-100
+src/main/kotlin/com/nanyin/nacos/search/services/CacheCoordinate.kt
+  s_eb4951cc074034::t_f20ff7814d8c2b 16-18,28,39,49-52,56-64
+  s_eb4951cc074034::t_2a047297f54924 53-55
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchWindow.kt
+  s_eb4951cc074034::t_c5ea63356a52e9 91-97,433-435,491-493,544-546,560-562,572-574,585-587,616,707-709,741-743
+  s_eb4951cc074034::t_3f7e743f62b317 223-228,357,403,442-447,939,966
+  s_eb4951cc074034::t_026e060a39e5d1 25-26,61,100-101
+  s_eb4951cc074034::t_9a269426c9dce3 229,231
+  s_eb4951cc074034::t_daf1690018d26b 230,338-356
+  s_eb4951cc074034::t_c4285433e7dc50 304-306
+  s_eb4951cc074034::t_996670dba091b3 761-765,767,844-845
+src/main/kotlin/com/nanyin/nacos/search/ui/EnvironmentSwitcher.kt
+  s_eb4951cc074034::t_e303b2456782c0 94,110,136
+  s_eb4951cc074034::t_026e060a39e5d1 18,44,93,95,109,137
+  s_eb4951cc074034::t_9a269426c9dce3 49-51,138
+src/main/kotlin/com/nanyin/nacos/search/services/NacosAuthService.kt
+  s_eb4951cc074034::t_f54f1c00366bbe 4,66-81,255-258
+  s_eb4951cc074034::t_7e49fccdb7c77b 119-120
+  s_eb4951cc074034::t_6c89a18f080291 144
+  s_eb4951cc074034::t_f7945c37634499 259-260
+src/test/kotlin/com/nanyin/nacos/search/services/NacosApiServiceTest.kt
+  s_eb4951cc074034::t_7b99f2ae4d88fc 10,44,93,100,233-252
+  s_eb4951cc074034::t_0242f8903a8311 253-254
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
+  s_eb4951cc074034::t_b2a73e66853f86 12,39-40,55-56,62-63,73,81-94
+  s_eb4951cc074034::t_44d4a67a328bbc 57-61,64
+  s_eb4951cc074034::t_7c968f2c04bdea 155,157-164
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinatorTest.kt
+  s_eb4951cc074034::t_44d4a67a328bbc 68-69
+src/main/kotlin/com/nanyin/nacos/search/models/EnvironmentProfile.kt
+  s_eb4951cc074034::t_5ea652fe87235a 1-96
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosSettings.kt
+  s_eb4951cc074034::t_8e4f0fe2e6a888 317,319-320,324-327,329
+  s_eb4951cc074034::t_63d2be3c87f182 8,34-41,135,245-260,262,300-311,313-316,321-323,328,330-334,449-452
+  s_eb4951cc074034::t_6152eb1ba02adf 239,244,312,318
+  s_eb4951cc074034::t_9ce3cf62be6d38 261,263,273-280,287
+  s_eb4951cc074034::t_88f3c9a0c5e8fb 403
+  s_eb4951cc074034::t_a8b4d2a09d3c65 355-356
+  s_eb4951cc074034::t_9091bf7a97e279 288-299
+  s_eb4951cc074034::t_7f47752ab0caea 266-272
+  s_eb4951cc074034::t_f3d3d607b4c38b 264-265,281-286
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_eb4951cc074034::t_9e9647dc87355e 11,61-62,81-82,190-206,224-233,238-239,678-680,686-687,689,691,694,696,698-699,702,704-705,711,713-714,825-826,831-832,834-838,843-846,848
+  s_eb4951cc074034::t_a1cfe4930540b3 478,526
+  s_eb4951cc074034::t_5f4f95b6507d2b 234-237
+  s_eb4951cc074034::t_bdf849f2279bd2 240
+src/test/kotlin/com/nanyin/nacos/search/settings/AccessSafetyTest.kt
+  s_eb4951cc074034::t_76e4b634475fcb 1-62,79-85,87-91,94-115,141-160
+  s_eb4951cc074034::t_6b0ee0b83f9265 63-78
+  s_eb4951cc074034::t_3163878042b390 116-140
+  s_eb4951cc074034::t_8e4f0fe2e6a888 86,92-93
+src/main/kotlin/com/nanyin/nacos/search/services/network/NacosRequestExecutor.kt
+  s_eb4951cc074034::t_6c89a18f080291 119-122
+src/main/kotlin/com/nanyin/nacos/search/settings/AccessSafety.kt
+  s_eb4951cc074034::t_9ce3cf62be6d38 81,112
+  s_eb4951cc074034::t_90781fcc12e3d9 12,18,25
+  s_eb4951cc074034::t_5ea652fe87235a 1-6,9-11,13-17,19-24,26-41,43-44,49-58,70-72,76-80,82-111,113-121
+  s_eb4951cc074034::t_523a1c4ba96265 73-75
+  s_eb4951cc074034::t_6b0ee0b83f9265 7-8,42,45-48,59-69
+src/main/kotlin/com/nanyin/nacos/search/ui/NamespacePanel.kt
+  s_eb4951cc074034::t_0de3da3dc14aec 73-75,213-215,219,223,272,446
+  s_eb4951cc074034::t_88f3c9a0c5e8fb 216,218
+  s_eb4951cc074034::t_568619c5ce0f88 185-192,202
+  s_eb4951cc074034::t_e303b2456782c0 217,270
+  s_eb4951cc074034::t_ae989af5110de4 452-454
+  s_eb4951cc074034::t_026e060a39e5d1 8-9,55-57,269,271
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "3b1bcb72bb41c95254feeae55d8a8fdbb10031de",
+  "prompts": {},
+  "sessions": {
+    "s_eb4951cc074034": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8972-622a-7511-9a9a-65d420482b65",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
