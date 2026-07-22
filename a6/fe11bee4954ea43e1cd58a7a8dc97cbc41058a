@@ -1,0 +1,31 @@
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_22264a491c1bd3::t_89f0f1d5d61bd2 25,57-59,108,142,224,437,636,699-701
+src/main/kotlin/com/nanyin/nacos/search/services/operations/NamespaceDiscoveryCapability.kt
+  s_22264a491c1bd3::t_3605ee8353d086 1-67
+src/test/kotlin/com/nanyin/nacos/search/services/operations/DualStackBrowsingTest.kt
+  s_2733a4bbf61d05::t_3c4a6690bc39b2 1-177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "a6fe11bee4954ea43e1cd58a7a8dc97cbc41058a",
+  "prompts": {},
+  "sessions": {
+    "s_22264a491c1bd3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8a12-0657-7881-b146-36292a508d49",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_2733a4bbf61d05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8a0e-cc27-7f22-8fb7-61d370cefc7e",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
