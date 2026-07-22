@@ -1,0 +1,34 @@
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V1ProtocolAdapter.kt
+  s_b499fdcf7130c2::t_37687d9614f6d4 89-90,112,193,249-251,341-354,356-367,370-386,417-419
+  s_b499fdcf7130c2::t_a4ca9d0c51f36c 420-421
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosSettings.kt
+  s_b499fdcf7130c2::t_37687d9614f6d4 328,335,346
+src/test/kotlin/com/nanyin/nacos/search/services/operations/V1ProtocolAdapterTest.kt
+  s_b499fdcf7130c2::t_fbd59b37d1fec8 159-172
+  s_b499fdcf7130c2::t_3d8895ba32a33a 158
+src/main/kotlin/com/nanyin/nacos/search/settings/AccessSafety.kt
+  s_b499fdcf7130c2::t_4b6a4650a01156 27-29
+  s_b499fdcf7130c2::t_37687d9614f6d4 31,37-38,154-158
+  s_b499fdcf7130c2::t_344f65d9df6aa9 159
+src/test/kotlin/com/nanyin/nacos/search/settings/AccessSafetyTest.kt
+  s_b499fdcf7130c2::t_fbd59b37d1fec8 248,264-271,275
+  s_b499fdcf7130c2::t_ed6da48c0fd2e2 107-112,115-118
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_b499fdcf7130c2::t_37687d9614f6d4 498-501,506,528-531,552-555
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ed7a5238f24553b9fae36342f15add38afeb4bc1",
+  "prompts": {},
+  "sessions": {
+    "s_b499fdcf7130c2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f89b4-c96e-7302-ab4a-55b5ad835043",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
