@@ -1,0 +1,63 @@
+src/test/kotlin/com/nanyin/nacos/search/services/AuthenticationSessionRegistryTest.kt
+  s_b499fdcf7130c2::t_febc55f06c7f97 63
+  s_b499fdcf7130c2::t_f85f0cd321eeeb 1-62,64-103
+src/main/kotlin/com/nanyin/nacos/search/services/AuthenticationSessionRegistry.kt
+  s_b499fdcf7130c2::t_30fd1c317c4139 1-60
+src/test/kotlin/com/nanyin/nacos/search/services/operations/V1ProtocolAdapterTest.kt
+  s_b499fdcf7130c2::t_7e741f1d2d063e 141-178,201-226,234,238-239,243
+  s_b499fdcf7130c2::t_32cafa6c054886 121,124
+  s_b499fdcf7130c2::t_6dc62ad33bb5be 9,118-120,122-123,125-140,200,227-233,236-237,240-241,245,264-288
+  s_b499fdcf7130c2::t_05e783b05b5b4c 235,242
+  s_b499fdcf7130c2::t_a3d4c456af65a1 244
+  s_b499fdcf7130c2::t_c9dba367464160 246
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V1ProtocolAdapter.kt
+  s_b499fdcf7130c2::t_ed317026d73c33 11-13,88,98-108,138,145,157-158,167,175-176,185,189-198,207-208,213-214,227-241,247-251,313-359,387
+  s_b499fdcf7130c2::t_05e783b05b5b4c 117-135
+src/test/kotlin/com/nanyin/nacos/search/settings/AccessSafetyTest.kt
+  s_b499fdcf7130c2::t_0508a857940557 99-118
+  s_b499fdcf7130c2::t_0f8bb56b1ebca8 119-140
+  s_b499fdcf7130c2::t_c31adfa75e34aa 98,208-220,222-247,250,261
+  s_b499fdcf7130c2::t_05e783b05b5b4c 221
+src/main/kotlin/com/nanyin/nacos/search/services/NacosAuthService.kt
+  s_b499fdcf7130c2::t_4fdc296f9a4f10 5-6,23,31,74-79,81-95,271,277-278,320-324
+src/main/kotlin/com/nanyin/nacos/search/settings/AccessSafety.kt
+  s_b499fdcf7130c2::t_ed317026d73c33 128-134
+  s_b499fdcf7130c2::t_b7ac1166d6b0e3 53
+  s_b499fdcf7130c2::t_30fd1c317c4139 119-127,135
+  s_b499fdcf7130c2::t_26fca4d8d0df94 26-32,37-46,48-52
+  s_b499fdcf7130c2::t_05e783b05b5b4c 114-117
+  s_b499fdcf7130c2::t_f48e1f1bca11ec 147
+  s_b499fdcf7130c2::t_bea5c9b0eb9825 148-162,165-167
+  s_b499fdcf7130c2::t_2bd906e5874f25 33-36,47
+  s_b499fdcf7130c2::t_71ac98fe26f010 118
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_b499fdcf7130c2::t_4fdc296f9a4f10 41,50-51,54-55,104-105,138-140,220-222,433,628-630,691-692,694
+  s_b499fdcf7130c2::t_462d636a699b78 497-498,503,505-506,526-527,543,548-551
+src/test/kotlin/com/nanyin/nacos/search/services/NacosApiServiceV1AnonymousTest.kt
+  s_b499fdcf7130c2::t_05e783b05b5b4c 113,120
+  s_b499fdcf7130c2::t_0799720ab00b55 70-83,104-112,114-119,121-122
+  s_b499fdcf7130c2::t_d76576670ceaf4 123
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosSettings.kt
+  s_b499fdcf7130c2::t_1922b665fd7291 290
+  s_b499fdcf7130c2::t_bea5c9b0eb9825 293-305
+  s_b499fdcf7130c2::t_2bd906e5874f25 307-314,328,344-346
+  s_b499fdcf7130c2::t_ed317026d73c33 589-592
+  s_b499fdcf7130c2::t_baf551f4ee7bb7 291-292
+  s_b499fdcf7130c2::t_02c7deb3cce330 39-40,352,469
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "53f03e101950685a809602765d3f1134413ef69c",
+  "prompts": {},
+  "sessions": {
+    "s_b499fdcf7130c2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f89b4-c96e-7302-ab4a-55b5ad835043",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
