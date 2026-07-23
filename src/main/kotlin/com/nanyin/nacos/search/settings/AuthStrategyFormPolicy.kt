@@ -13,8 +13,9 @@ object AuthStrategyFormPolicy {
         AuthMode.BEARER_TOKEN
     )
 
-    fun normalizeStored(mode: AuthMode): AuthMode = when (mode) {
-        AuthMode.TOKEN, AuthMode.HYBRID, AuthMode.NACOS_PASSWORD -> AuthMode.NACOS_PASSWORD
+    fun normalizeStored(mode: AuthMode, enableTokenAuth: Boolean = true): AuthMode = when (mode) {
+        AuthMode.TOKEN, AuthMode.NACOS_PASSWORD -> AuthMode.NACOS_PASSWORD
+        AuthMode.HYBRID -> if (enableTokenAuth) AuthMode.NACOS_PASSWORD else AuthMode.HTTP_BASIC
         AuthMode.BASIC, AuthMode.HTTP_BASIC -> AuthMode.HTTP_BASIC
         AuthMode.ANONYMOUS -> AuthMode.ANONYMOUS
         AuthMode.BEARER_TOKEN -> AuthMode.BEARER_TOKEN

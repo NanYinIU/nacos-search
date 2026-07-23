@@ -23,6 +23,7 @@ class AuthStrategyFormPolicyTest {
         assertEquals(AuthMode.NACOS_PASSWORD, AuthStrategyFormPolicy.normalizeStored(AuthMode.TOKEN))
         assertEquals(AuthMode.HTTP_BASIC, AuthStrategyFormPolicy.normalizeStored(AuthMode.BASIC))
         assertEquals(AuthMode.NACOS_PASSWORD, AuthStrategyFormPolicy.normalizeStored(AuthMode.HYBRID))
+        assertEquals(AuthMode.HTTP_BASIC, AuthStrategyFormPolicy.normalizeStored(AuthMode.HYBRID, enableTokenAuth = false))
         assertEquals(AuthMode.ANONYMOUS, AuthStrategyFormPolicy.normalizeStored(AuthMode.ANONYMOUS))
         assertEquals(AuthMode.BEARER_TOKEN, AuthStrategyFormPolicy.normalizeStored(AuthMode.BEARER_TOKEN))
     }

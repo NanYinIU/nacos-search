@@ -58,7 +58,6 @@ class NacosConfigurable : Configurable {
     private lateinit var serverUrlField: JBTextField
     private lateinit var usernameField: JBTextField
     private lateinit var passwordField: JPasswordField
-    private lateinit var usernameLabel: JLabel
     private lateinit var passwordLabel: JLabel
     private lateinit var namespaceField: JBTextField
     private lateinit var apiPolicyComboBox: JComboBox<NacosApiPolicy>
@@ -106,7 +105,7 @@ class NacosConfigurable : Configurable {
 
     private fun initializeDraft() {
         draftServers = settings.cloneServers().onEach {
-            it.authMode = AuthStrategyFormPolicy.normalizeStored(it.authMode)
+            it.authMode = AuthStrategyFormPolicy.normalizeStored(it.authMode, settings.enableTokenAuth)
         }.toMutableList()
         draftActiveId = settings.activeServerId
         if (draftServers.isEmpty()) {
@@ -143,7 +142,8 @@ class NacosConfigurable : Configurable {
         server.namespace = namespaceField.text.trim()
         server.apiPolicy = apiPolicyComboBox.selectedItem as NacosApiPolicy
         val selectedAuth = AuthStrategyFormPolicy.normalizeStored(
-            authModeComboBox.selectedItem as AuthMode? ?: AuthMode.ANONYMOUS
+            authModeComboBox.selectedItem as AuthMode? ?: AuthMode.ANONYMOUS,
+            settings.enableTokenAuth
         )
         val inferred = AuthStrategyFormPolicy.onCredentialsEdited(selectedAuth, username, password)
         if (inferred != selectedAuth) {
@@ -156,7 +156,8 @@ class NacosConfigurable : Configurable {
             }
         }
         val authMode = AuthStrategyFormPolicy.normalizeStored(
-            authModeComboBox.selectedItem as AuthMode? ?: inferred
+            authModeComboBox.selectedItem as AuthMode? ?: inferred,
+            settings.enableTokenAuth
         )
         if (authMode == AuthMode.ANONYMOUS) {
             username = ""
@@ -557,7 +558,7 @@ class NacosConfigurable : Configurable {
         gbc.gridx = 1; gbc.gridy++; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL
         scrollPanel.add(testStatusLabel, gbc)
 
-        addRow("settings.server.username", usernameField).also { usernameLabel = it }
+        addRow("settings.server.username", usernameField)
         // Password with eye toggle (show/hide) per design guide
         gbc.gridx = 0; gbc.gridy++; gbc.weightx = 0.0; gbc.fill = GridBagConstraints.NONE
         gbc.anchor = GridBagConstraints.EAST
@@ -778,7 +779,7 @@ class NacosConfigurable : Configurable {
         try {
             displayNameField.text = server.displayName
             serverUrlField.text = server.serverUrl
-            val authMode = AuthStrategyFormPolicy.normalizeStored(server.authMode)
+            val authMode = AuthStrategyFormPolicy.normalizeStored(server.authMode, settings.enableTokenAuth)
             server.authMode = authMode
             if (authMode == AuthMode.ANONYMOUS) {
                 server.username = ""
