@@ -1,0 +1,57 @@
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_1eb48ec5c3bc6a::t_e98b845ef14d84 28-29,31-32,53-62,244,333,478,937-944
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_9c9e563315d145::t_d943db3351f524 25,52-63,67-68,73-74,121-127,161-173,256-268,743-773
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
+  s_9c9e563315d145::t_5c2e50815e187b 14,62-69,71-81
+src/main/kotlin/com/nanyin/nacos/search/services/SessionFencing.kt
+  s_1eb48ec5c3bc6a::t_70923f3b784005 93,97-98
+src/main/kotlin/com/nanyin/nacos/search/services/operations/OperationGateway.kt
+  s_9c9e563315d145::t_28c5ca81ccb846 8,234-243,248-257,259-272
+src/main/kotlin/com/nanyin/nacos/search/services/operations/PublishController.kt
+  s_1eb48ec5c3bc6a::t_20283be953b4eb 156-160
+src/main/kotlin/com/nanyin/nacos/search/settings/AccessSafety.kt
+  s_9c9e563315d145::t_aef1d4a0c23ace 127-152
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosSettings.kt
+  s_1eb48ec5c3bc6a::t_bd5afa0ba4321d 4,243-247,255-266
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanel.kt
+  s_1eb48ec5c3bc6a::t_20a52d3dc3a1f5 69-70,75,88-89,93
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchWindow.kt
+  s_9c9e563315d145::t_5fafc3aba9bdc7 26,93-102,108-115,123,343,366,449,451
+src/test/kotlin/com/nanyin/nacos/search/services/CacheServiceTest.kt
+  s_1eb48ec5c3bc6a::t_427186abdcfd77 633-649
+src/test/kotlin/com/nanyin/nacos/search/services/NacosApiServiceAutoResolutionTest.kt
+  s_9c9e563315d145::t_fb0e6c871e9175 1-108
+src/test/kotlin/com/nanyin/nacos/search/services/operations/GenerationResolverTest.kt
+  s_1eb48ec5c3bc6a::t_425f078c25b463 6-7,256-296
+src/test/kotlin/com/nanyin/nacos/search/services/operations/ProtocolTransportTest.kt
+  s_9c9e563315d145::t_3216eac82335e5 75-154
+src/test/kotlin/com/nanyin/nacos/search/services/operations/PublishControllerTest.kt
+  s_9c9e563315d145::t_402611466a25d8 246-268
+src/test/kotlin/com/nanyin/nacos/search/settings/AccessSafetyTest.kt
+  s_9c9e563315d145::t_1432fee4693599 313-369
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "2050f911ff568eb6772ea996a926c7190bfe82ce",
+  "prompts": {},
+  "sessions": {
+    "s_1eb48ec5c3bc6a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8cca-c2e6-7482-b823-677cd152ae3c",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_9c9e563315d145": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8cb6-47ee-7323-be27-b7f29fec97c8",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
