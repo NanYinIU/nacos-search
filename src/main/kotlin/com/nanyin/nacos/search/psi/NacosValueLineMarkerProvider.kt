@@ -104,13 +104,13 @@ class NacosValueLineMarkerProvider internal constructor(
         NacosKeyResolver.resolveCurrentState(
             key,
             allowCrossNamespace = project.allowCrossNamespaceNavigation(),
-            activeNamespaceId = effectiveNamespaceId(project, codeContext),
+            activeNamespaceId = project.selectedNacosNamespaceId(),
             activeIdentity = project.captureSelectedAccessIdentity()
         )
 
     private fun effectiveNamespaceId(project: Project, codeContext: NacosCodeContext): String? =
         if (project.allowCrossNamespaceNavigation()) {
-            codeContext.namespaceId
+            codeContext.namespaceId ?: project.selectedNacosNamespaceId()
         } else {
             project.selectedNacosNamespaceId()
         }

@@ -33,11 +33,7 @@ class NacosValueReference(
             preferredGroup = codeContext.group,
             preferredNamespaceId = codeContext.namespaceId,
             allowCrossNamespace = allowCrossNamespace,
-            activeNamespaceId = if (allowCrossNamespace) {
-                codeContext.namespaceId
-            } else {
-                project.selectedNacosNamespaceId()
-            },
+            activeNamespaceId = project.selectedNacosNamespaceId(),
             activeIdentity = project.captureSelectedAccessIdentity()
         )
         return hits.map { hit ->
