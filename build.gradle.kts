@@ -202,7 +202,10 @@ tasks {
         group = "verification"
         description =
             "JUnit4 ApplicationRule tests in an isolated JVM (avoids @TestApplication teardown)"
-        dependsOn("testClasses")
+        // Match the IntelliJ Platform test wiring on the primary `test` task so
+        // Gradle 9 validation does not flag sandbox/plugin outputs as undeclared
+        // (prepareTestSandbox → .intellijPlatform/sandbox/.../plugins-test).
+        dependsOn("testClasses", "instrumentTestCode", "prepareTestSandbox", "prepareTest")
         useJUnitPlatform {
             includeEngines("junit-vintage")
         }
@@ -233,6 +236,8 @@ tasks {
                 mainTest.jvmArgumentProviders.forEach { addAll(it.asArguments()) }
             }
             environment(mainTest.environment)
+            // Also inherit any extra task deps the IntelliJ plugin attached to `test`.
+            dependsOn(mainTest.taskDependencies.getDependencies(mainTest))
         }
     }
 
