@@ -49,7 +49,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     var namespace: String = "public"
     
     // Authentication configuration
-    var authMode: AuthMode = AuthMode.ANONYMOUS
+    var authMode: AuthMode = AuthMode.NACOS_PASSWORD
     var enableTokenAuth: Boolean = true
     var tokenCacheDurationMinutes: Int = 30
     var autoTokenRefresh: Boolean = true
@@ -573,7 +573,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         username = ""
         password = ""
         namespace = "public"
-        authMode = AuthMode.ANONYMOUS
+        authMode = AuthMode.NACOS_PASSWORD
         
         cacheEnabled = true
         cacheTtlMinutes = 5

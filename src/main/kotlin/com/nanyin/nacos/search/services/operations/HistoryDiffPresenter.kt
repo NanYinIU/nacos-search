@@ -9,6 +9,7 @@ import com.intellij.diff.requests.LoadingDiffRequest
 import com.intellij.diff.requests.MessageDiffRequest
 import com.intellij.diff.requests.NoDiffRequest
 import com.intellij.diff.requests.SimpleDiffRequest
+import com.intellij.diff.util.DiffUserDataKeys
 import com.intellij.openapi.editor.impl.DocumentImpl
 import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.fileTypes.FileTypeManager
@@ -20,6 +21,8 @@ import com.intellij.openapi.project.Project
  * Both history-to-history and history-to-current comparisons are supported.
  * No mutation, restore, or republish is derived from a diff — this presenter
  * constructs a presentational [SimpleDiffRequest] and displays it, nothing more.
+ * Writable sides would show IDEA's default gutter apply/merge chevrons; both
+ * documents and the request are forced read-only so only highlighting remains.
  */
 object HistoryDiffPresenter {
 
@@ -33,7 +36,7 @@ object HistoryDiffPresenter {
             rightContent,
             request.left.title,
             request.right.title
-        )
+        ).also { it.putUserData(DiffUserDataKeys.FORCE_READ_ONLY, true) }
     }
 
     /** Applies [request] to an embedded [DiffRequestPanel]. */
@@ -66,7 +69,7 @@ object HistoryDiffPresenter {
 
     private fun createContent(side: HistoryDiffSide): DocumentContent {
         val fileType = resolveFileType(side.contentType)
-        val document = DocumentImpl(side.content)
+        val document = DocumentImpl(side.content).apply { setReadOnly(true) }
         return com.intellij.diff.contents.DocumentContentImpl(null, document, fileType)
     }
 
