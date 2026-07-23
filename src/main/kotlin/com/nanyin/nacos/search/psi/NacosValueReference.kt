@@ -32,6 +32,7 @@ class NacosValueReference(
             key = key,
             preferredGroup = codeContext.group,
             preferredNamespaceId = codeContext.namespaceId,
+            preferredDataId = codeContext.dataId,
             allowCrossNamespace = allowCrossNamespace,
             activeNamespaceId = project.selectedNacosNamespaceId(),
             activeIdentity = project.captureSelectedAccessIdentity()
