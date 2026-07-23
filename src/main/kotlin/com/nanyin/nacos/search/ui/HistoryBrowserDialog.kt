@@ -1,6 +1,7 @@
 package com.nanyin.nacos.search.ui
 
-import com.intellij.openapi.application.EDT
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
@@ -22,7 +23,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.time.Instant
@@ -40,9 +40,11 @@ import javax.swing.ListSelectionModel
  * Read-only history browser for one configuration coordinate.
  * Supports open-body and Diff (history↔history, history↔current). No restore/publish.
  *
- * Network work runs on [Dispatchers.IO]; UI updates on [Dispatchers.EDT].
- * Using [Dispatchers.Main] here deadlocks under modal [DialogWrapper.show]:
- * the load coroutine never resumes while the dialog event loop is nested.
+ * Network work runs on [Dispatchers.IO]. UI updates are posted with
+ * [ModalityState.any] so they run while this modal [DialogWrapper] is open.
+ * Plain [com.intellij.openapi.application.EDT] / [Dispatchers.Main] without a
+ * modality context is treated as NON_MODAL and will not resume until the
+ * dialog closes — leaving the UI stuck on "Loading history…".
  */
 class HistoryBrowserDialog(
     private val project: Project,
@@ -58,6 +60,7 @@ class HistoryBrowserDialog(
     private val listModel = DefaultListModel<HistoryEntry>()
     private val list = JBList(listModel).apply {
         selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
+        emptyText.text = ""
         cellRenderer = object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(
                 list: JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean
@@ -91,6 +94,17 @@ class HistoryBrowserDialog(
         loadFirstPage()
     }
 
+    /**
+     * Posts pure Swing updates so they run under the open modal dialog.
+     * [ModalityState.any] is required: IO-launched coroutines have no modality
+     * context, which the platform treats as NON_MODAL (blocked by this dialog).
+     */
+    private fun onDialogUi(action: () -> Unit) {
+        ApplicationManager.getApplication().invokeLater({
+            if (!isDisposed) action()
+        }, ModalityState.any())
+    }
+
     override fun createCenterPanel(): JComponent {
         val panel = JPanel(BorderLayout(0, 8))
         panel.preferredSize = Dimension(640, 360)
@@ -113,6 +127,7 @@ class HistoryBrowserDialog(
 
     private fun loadFirstPage() {
         statusLabel.text = NacosSearchBundle.message("history.loading")
+        list.emptyText.text = ""
         listModel.clear()
         scope.launch {
             val outcome = try {
@@ -126,10 +141,7 @@ class HistoryBrowserDialog(
             } catch (error: Exception) {
                 HistoryBrowserController.Outcome.Failed(error.message ?: error.toString())
             }
-            withContext(Dispatchers.EDT) {
-                if (isDisposed) return@withContext
-                applyOutcome(outcome)
-            }
+            onDialogUi { applyOutcome(outcome) }
         }
     }
 
@@ -137,23 +149,29 @@ class HistoryBrowserDialog(
         when (outcome) {
             is HistoryBrowserController.Outcome.Stale -> {
                 statusLabel.text = NacosSearchBundle.message("history.stale")
+                list.emptyText.text = statusLabel.text
             }
             is HistoryBrowserController.Outcome.Empty -> {
                 statusLabel.text = NacosSearchBundle.message("history.empty")
+                list.emptyText.text = statusLabel.text
             }
             is HistoryBrowserController.Outcome.PermissionDenied -> {
                 statusLabel.text = NacosSearchBundle.message("history.permission.denied")
+                list.emptyText.text = statusLabel.text
             }
             is HistoryBrowserController.Outcome.Unsupported -> {
                 statusLabel.text = NacosSearchBundle.message("history.unsupported")
+                list.emptyText.text = statusLabel.text
             }
             is HistoryBrowserController.Outcome.Failed -> {
                 statusLabel.text = NacosSearchBundle.message("history.failed", outcome.message)
+                list.emptyText.text = statusLabel.text
             }
             is HistoryBrowserController.Outcome.Body -> {
                 entries = outcome.page.items
                 listModel.clear()
                 entries.forEach { listModel.addElement(it) }
+                list.emptyText.text = ""
                 statusLabel.text = NacosSearchBundle.message(
                     "history.loaded",
                     outcome.page.totalCount
@@ -175,8 +193,7 @@ class HistoryBrowserDialog(
         val entry = controller.selectedEntries(entries, list.selectedIndices).singleOrNull() ?: return
         scope.launch {
             val detail = controller.loadDetail(target, entry.id, expectedGeneration).getOrElse { error ->
-                withContext(Dispatchers.EDT) {
-                    if (isDisposed) return@withContext
+                onDialogUi {
                     Messages.showErrorDialog(
                         project,
                         error.message ?: NacosSearchBundle.message("history.failed", error.toString()),
@@ -185,8 +202,7 @@ class HistoryBrowserDialog(
                 }
                 return@launch
             }
-            withContext(Dispatchers.EDT) {
-                if (isDisposed) return@withContext
+            onDialogUi {
                 val area = JTextArea(detail.content).apply {
                     isEditable = false
                     lineWrap = true
@@ -206,14 +222,12 @@ class HistoryBrowserDialog(
         val entry = controller.selectedEntries(entries, list.selectedIndices).singleOrNull() ?: return
         scope.launch {
             val detail = controller.loadDetail(target, entry.id, expectedGeneration).getOrElse { error ->
-                withContext(Dispatchers.EDT) {
-                    if (isDisposed) return@withContext
+                onDialogUi {
                     Messages.showErrorDialog(project, error.message ?: error.toString(), title)
                 }
                 return@launch
             }
-            withContext(Dispatchers.EDT) {
-                if (isDisposed) return@withContext
+            onDialogUi {
                 HistoryDiffPresenter.show(
                     project,
                     HistoryDiffPresenter.historyToCurrent(detail, currentContent, configuration.type)
@@ -227,21 +241,18 @@ class HistoryBrowserDialog(
         if (selected.size != 2) return
         scope.launch {
             val left = controller.loadDetail(target, selected[0].id, expectedGeneration).getOrElse {
-                withContext(Dispatchers.EDT) {
-                    if (isDisposed) return@withContext
+                onDialogUi {
                     Messages.showErrorDialog(project, it.message ?: it.toString(), title)
                 }
                 return@launch
             }
             val right = controller.loadDetail(target, selected[1].id, expectedGeneration).getOrElse {
-                withContext(Dispatchers.EDT) {
-                    if (isDisposed) return@withContext
+                onDialogUi {
                     Messages.showErrorDialog(project, it.message ?: it.toString(), title)
                 }
                 return@launch
             }
-            withContext(Dispatchers.EDT) {
-                if (isDisposed) return@withContext
+            onDialogUi {
                 HistoryDiffPresenter.show(project, HistoryDiffPresenter.historyToHistory(left, right))
             }
         }
