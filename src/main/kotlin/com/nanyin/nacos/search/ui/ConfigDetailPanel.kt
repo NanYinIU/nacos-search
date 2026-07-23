@@ -252,61 +252,61 @@ class ConfigDetailPanel internal constructor(
         
         // Error state
         errorPanel = createErrorPanel()
-        
-        // Action buttons
-        refreshButton = JButton(AllIcons.Actions.Refresh).apply {
-            toolTipText = NacosSearchBundle.message("config.detail.refresh")
-            preferredSize = Dimension(26, 26)
-            minimumSize = Dimension(26, 26)
-            border = JBUI.Borders.empty()
-            isContentAreaFilled = false
+       
+      // Read-utility buttons (Refresh / Copy / History) are compact icon-only
+        // toolbar controls — tool actions, so they carry an icon + tooltip rather
+        // than a text label. This keeps the action bar scannable instead of a row
+        // of equal-weight buttons. See [detailIconButton] below for the shared style.
+        refreshButton = detailIconButton(
+            AllIcons.Actions.Refresh,
+            NacosSearchBundle.message("config.detail.refresh")
+        )
+        copyButton = detailIconButton(
+            AllIcons.Actions.Copy,
+            NacosSearchBundle.message("config.detail.copy")
+        ).apply { isEnabled = false }
+        historyButton = detailIconButton(
+            AllIcons.Vcs.History,
+            NacosSearchBundle.message("config.detail.action.history.tooltip")
+        ).apply { isEnabled = false }
+
+        // Edit lifecycle buttons keep text labels — they are the clear commit
+        // commands and adapt to the current mode (see enterEditMode / exitEditMode):
+        //   view mode  -> [Edit]          (primary CTA to start editing)
+        //   edit mode  -> [Revert] [Save] (Save is the accent primary)
+        // Save & Revert are hidden until the editor enters edit mode.
+        saveButton = JButton(NacosSearchBundle.message("config.detail.action.save.publish")).apply {
+            toolTipText = NacosSearchBundle.message("config.detail.save")
+            putClientProperty("JButton.buttonType", "primary")
+            preferredSize = Dimension(72, 26)
+            minimumSize = Dimension(60, 26)
+            isEnabled = false
+            isVisible = false
         }
-        
-        copyButton = JButton(NacosSearchBundle.message("config.detail.action.copy")).apply {
-            toolTipText = NacosSearchBundle.message("config.detail.copy")
-            icon = null
+
+        // Edit button — primary CTA in view mode; hidden while editing.
+        editButton = JButton(NacosSearchBundle.message("config.detail.action.edit")).apply {
+            toolTipText = NacosSearchBundle.message("config.detail.action.edit")
+            putClientProperty("JButton.buttonType", "primary")
             preferredSize = Dimension(72, 26)
             minimumSize = Dimension(60, 26)
             isEnabled = false
         }
 
-       // Save action button (publishes content back to Nacos)
-       saveButton = JButton(NacosSearchBundle.message("config.detail.action.save.publish")).apply {
-          toolTipText = NacosSearchBundle.message("config.detail.save")
-          putClientProperty("JButton.buttonType", "primary")
-           preferredSize = Dimension(72, 26)
-            minimumSize = Dimension(60, 26)
-           isEnabled = false
-       }
-
-       // Edit button — toggles editor editable mode
-       editButton = JButton(NacosSearchBundle.message("config.detail.action.edit")).apply {
-           toolTipText = NacosSearchBundle.message("config.detail.action.edit")
+        // Revert button — discards unsaved edits; only shown in edit mode.
+        revertButton = JButton(NacosSearchBundle.message("config.detail.action.revert")).apply {
+            toolTipText = NacosSearchBundle.message("config.detail.action.revert")
             preferredSize = Dimension(72, 26)
-            minimumSize = Dimension(60, 26)
-           isEnabled = false
-       }
-
-       // Revert button — discards unsaved edits
-       revertButton = JButton(NacosSearchBundle.message("config.detail.action.revert")).apply {
-           toolTipText = NacosSearchBundle.message("config.detail.action.revert")
-            preferredSize = Dimension(72, 26)
-            minimumSize = Dimension(60, 26)
-           isEnabled = false
-       }
-
-        historyButton = JButton(NacosSearchBundle.message("config.detail.action.history")).apply {
-            toolTipText = NacosSearchBundle.message("config.detail.action.history.tooltip")
-            preferredSize = Dimension(80, 26)
             minimumSize = Dimension(60, 26)
             isEnabled = false
+            isVisible = false
         }
 
         // Format tag label
-        formatTagLabel = JBLabel("").apply {
-            foreground = JBColor.GRAY
-            font = font.deriveFont(Font.PLAIN, 11f)
-        }
+       formatTagLabel = JBLabel("").apply {
+           foreground = JBColor.GRAY
+           font = font.deriveFont(Font.PLAIN, 11f)
+       }
 
         // Dirty pill
         dirtyLabel = JBLabel(NacosSearchBundle.message("config.detail.modified")).apply {
@@ -337,12 +337,29 @@ class ConfigDetailPanel internal constructor(
             font = font.deriveFont(Font.PLAIN, 11f)
             foreground = JBColor(0x6f737a, 0x9b9ea6)
         }
-        statusMd5Label = JBLabel("—").apply {
-            font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 11)
-            foreground = JBColor(0x6f737a, 0x9b9ea6)
+       statusMd5Label = JBLabel("—").apply {
+           font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 11)
+           foreground = JBColor(0x6f737a, 0x9b9ea6)
+       }
+   }
+   
+      /**
+     * Compact icon-only toolbar button for a read-utility action (Refresh / Copy / History).
+     * Mirrors the tool-window header [iconButton] idiom: flat, borderless, 26x26, with the
+     * full label exposed only as a tooltip so the action bar stays scannable.
+     */
+    private fun detailIconButton(icon: javax.swing.Icon, tooltip: String): JButton =
+        JButton(icon).apply {
+            toolTipText = tooltip
+            putClientProperty("JButton.buttonType", "toolbar")
+            preferredSize = Dimension(26, 26)
+            minimumSize = Dimension(26, 26)
+            border = JBUI.Borders.empty()
+            isContentAreaFilled = false
+            isBorderPainted = false
+            isFocusPainted = false
         }
-    }
-    
+
     private fun setupLayout() {
         border = JBUI.Borders.empty()
 
@@ -368,20 +385,24 @@ class ConfigDetailPanel internal constructor(
             add(metadataPanel)
         }
 
-        // ===== Action bar: format tag | edit + save + revert | copy =====
+        // ===== Action bar: format tag (left) | utility icons + edit lifecycle (right) =====
         val actionBar = JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(3, DETAIL_HORIZONTAL_INSET)
             val leftPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                 add(formatTagLabel)
             }
-            // Design order: History / Edit / Save / Revert / Copy
             val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                // Read utilities: compact icon buttons for the current content
                 add(refreshButton)
-                add(historyButton)
-                add(editButton)
-                add(saveButton)
-                add(revertButton)
                 add(copyButton)
+                add(historyButton)
+                // Gap separates the always-on utilities from the commit group
+                add(Box.createHorizontalStrut(8))
+                // Edit lifecycle: [Edit] in view mode, [Revert] [Save] in edit mode.
+                // Save (primary) sits rightmost; only the relevant buttons are visible.
+                add(editButton)
+                add(revertButton)
+                add(saveButton)
             }
             add(leftPanel, BorderLayout.WEST)
             add(rightPanel, BorderLayout.EAST)
@@ -420,7 +441,7 @@ class ConfigDetailPanel internal constructor(
         add(statusBar, BorderLayout.SOUTH)
     }
     
-    private fun setupEventHandlers() {
+private fun setupEventHandlers() {
         refreshButton.addActionListener {
             currentConfiguration?.let { config ->
                 loadConfigurationContent(config, forceRefresh = true)
@@ -500,7 +521,10 @@ class ConfigDetailPanel internal constructor(
               boundEditTarget = target
               editor?.let { ed ->
                   ed.document.setReadOnly(false)
+                  // Swap the edit lifecycle: hide Edit, reveal Save/Revert (only shown while editing)
                   editButton.isVisible = false
+                  revertButton.isVisible = true
+                  saveButton.isVisible = true
                   checkDirtyState(ed.document.text)
               }
           }
@@ -512,8 +536,11 @@ class ConfigDetailPanel internal constructor(
      */
     private fun exitEditMode() {
         editor?.document?.setReadOnly(true)
+        // Restore view mode: re-show Edit and hide the Save/Revert commit buttons
         editButton.isVisible = true
         editButton.text = NacosSearchBundle.message("config.detail.action.edit")
+        saveButton.isVisible = false
+        revertButton.isVisible = false
     }
 
     /**
@@ -978,13 +1005,15 @@ class ConfigDetailPanel internal constructor(
               updateEditorUI(newEditor)
               applyKeyGutterMarkers(configuration, newEditor)
               consumePendingNavigation(configuration)
-              copyButton.isEnabled = true
+               copyButton.isEnabled = true
                editButton.isEnabled = true
                historyButton.isEnabled = true
                 editButton.isVisible = true
                 editButton.text = NacosSearchBundle.message("config.detail.action.edit")
                saveButton.isEnabled = false
+               saveButton.isVisible = false
                revertButton.isEnabled = false
+               revertButton.isVisible = false
             }
         }, ModalityState.defaultModalityState())
     }
@@ -1406,10 +1435,13 @@ class ConfigDetailPanel internal constructor(
         currentConfiguration = null
         disposeEditorSafely()
         showEmptyState()
+        editButton.isVisible = true
         saveButton.isEnabled = false
+        saveButton.isVisible = false
         copyButton.isEnabled = false
         editButton.isEnabled = false
         revertButton.isEnabled = false
+        revertButton.isVisible = false
         historyButton.isEnabled = false
         dirtyLabel.isVisible = false
 

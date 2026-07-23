@@ -14,6 +14,7 @@ import kotlinx.coroutines.CompletableDeferred
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Test
 import java.awt.Dimension
 import java.awt.Rectangle
@@ -231,17 +232,28 @@ class UiButtonInteractionTest {
             val saveButton = privateField<JButton>(panel, "saveButton")
             val editButton = privateField<JButton>(panel, "editButton")
             val revertButton = privateField<JButton>(panel, "revertButton")
+            val historyButton = privateField<JButton>(panel, "historyButton")
 
+            // Read utilities are compact icon-only toolbar buttons (tool actions)
             assertEquals(Dimension(26, 26), refreshButton.preferredSize)
-            assertEquals(Dimension(72, 26), copyButton.preferredSize)
+            assertEquals(Dimension(26, 26), copyButton.preferredSize)
+            assertEquals(Dimension(26, 26), historyButton.preferredSize)
+            assertNotNull(refreshButton.icon)
+            assertNotNull(copyButton.icon)
+            assertNotNull(historyButton.icon)
+
+            // Edit lifecycle buttons keep text labels (clear commit commands)
             assertEquals(Dimension(72, 26), saveButton.preferredSize)
             assertEquals(Dimension(72, 26), editButton.preferredSize)
             assertEquals(Dimension(72, 26), revertButton.preferredSize)
-            assertTrue(copyButton.text.isNotBlank())
-            assertEquals(null, copyButton.icon)
-            assertEquals(null, saveButton.icon)
-            assertEquals(null, editButton.icon)
-            assertEquals(null, revertButton.icon)
+            assertTrue(editButton.text.isNotBlank())
+            assertTrue(saveButton.text.isNotBlank())
+            assertTrue(revertButton.text.isNotBlank())
+
+            // View mode: Edit visible; Save/Revert hidden until editing
+            assertTrue(editButton.isVisible)
+            assertFalse(saveButton.isVisible)
+            assertFalse(revertButton.isVisible)
         } finally {
             Disposer.dispose(panel)
         }

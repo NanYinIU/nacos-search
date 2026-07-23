@@ -34,6 +34,9 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.ui.JBSplitter
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
@@ -44,7 +47,6 @@ import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
 import javax.swing.*
-import javax.swing.plaf.basic.BasicButtonUI
 
 /**
 * Main window for Nacos Search plugin
@@ -119,6 +121,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         NacosUpgradeSummary.showOnce(project, projectSession, settings)
         initializeComponents()
         setupLayout()
+        setupTitleActions()
         setupEventHandlers()
         coroutineScope.launch { refreshOperationContextSnapshot() }
         loadInitialData()
@@ -153,18 +156,14 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun setupLayout() {
         border = JBUI.Borders.empty()
 
-       // ===== Header bar: title + icon toolbar =====
+       // ===== Header bar: environment switcher =====
+       // Window-level actions (Refresh / Settings / More) live in the native tool-window
+       // title bar via setupTitleActions(), not as hand-rolled JButtons here. This removes the
+       // BasicButtonUI overrides and lets the platform render correct toolbar styling.
        val headerBar = JPanel(BorderLayout()).apply {
            border = JBUI.Borders.empty(2, 8)
            add(environmentSwitcher, BorderLayout.WEST)
-           val iconBar = JPanel(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
-                isOpaque = false
-                add(iconButton(AllIcons.Actions.Refresh, NacosSearchBundle.message("toolwindow.refresh.all"), "nacos.toolwindow.refreshAll") { refreshAll() })
-                add(iconButton(AllIcons.General.Settings, NacosSearchBundle.message("toolwindow.settings"), "nacos.toolwindow.settings") { openSettings() })
-                add(iconButton(AllIcons.Actions.More, NacosSearchBundle.message("toolwindow.more"), "nacos.toolwindow.more") { showMoreMenu(this) })
-            }
-            add(iconBar, BorderLayout.EAST)
-        }
+       }
 
         // ===== Toolbar: namespace row + search row (stacked, compact) =====
         val toolbarPanel = JPanel().apply {
@@ -199,35 +198,23 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         add(rightSplitter, BorderLayout.CENTER)
     }
 
-    private fun iconButton(icon: javax.swing.Icon, tooltip: String, automationId: String, action: () -> Unit): JButton {
-        return JButton(icon).apply {
-            toolTipText = tooltip
-            putClientProperty("nacos.automation.id", automationId)
-            putClientProperty("JButton.buttonType", "toolbar")
-            ui = BasicButtonUI()
-            preferredSize = Dimension(28, 24)
-            minimumSize = Dimension(28, 24)
-            border = JBUI.Borders.empty()
-            isContentAreaFilled = false
-            isBorderPainted = false
-            isFocusPainted = false
-            addActionListener { action() }
-        }
-    }
-
     private fun openSettings() {
         ShowSettingsUtil.getInstance().editConfigurable(project, NacosConfigurable(project))
     }
 
-    private fun showMoreMenu(invoker: JComponent) {
-        val popup = JPopupMenu()
-        popup.add(JMenuItem(NacosSearchBundle.message("action.refresh.cache")).apply {
-            addActionListener { refreshAll() }
-        })
-        popup.add(JMenuItem(NacosSearchBundle.message("action.clear.cache")).apply {
-            addActionListener { clearCache() }
-        })
-        popup.show(invoker, 0, invoker.height)
+    /**
+     * Registers the window-level actions into the native tool-window title bar instead of
+     * hand-rolled JButtons in the content header. Refresh + Settings appear as title actions;
+     * the overflow (refresh cache / clear cache) folds into the additional gear menu. This is
+     * the New UI idiom and removes the old BasicButtonUI styling overrides.
+     */
+    private fun setupTitleActions() {
+        toolWindow.setTitleActions(listOf(RefreshAllAction(), OpenSettingsAction()))
+        val gearGroup = DefaultActionGroup().apply {
+            add(RefreshCacheAction())
+            add(ClearCacheAction())
+        }
+        toolWindow.setAdditionalGearActions(gearGroup)
     }
 
     private fun clearCache() {
@@ -1097,5 +1084,27 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      */
     override fun getLanguageService(): LanguageService {
         return languageService
+    }
+    private inner class RefreshAllAction :
+        AnAction(NacosSearchBundle.message("toolwindow.refresh.all"), NacosSearchBundle.message("toolwindow.refresh.all"), AllIcons.Actions.Refresh) {
+        override fun actionPerformed(e: AnActionEvent) = refreshAll()
+        override fun update(e: AnActionEvent) {
+            e.presentation.isEnabled = !isSearching
+        }
+    }
+
+    private inner class OpenSettingsAction :
+        AnAction(NacosSearchBundle.message("toolwindow.settings"), NacosSearchBundle.message("toolwindow.settings"), AllIcons.General.Settings) {
+        override fun actionPerformed(e: AnActionEvent) = openSettings()
+    }
+
+    private inner class RefreshCacheAction :
+        AnAction(NacosSearchBundle.message("action.refresh.cache"), NacosSearchBundle.message("action.refresh.cache"), AllIcons.Actions.Refresh) {
+        override fun actionPerformed(e: AnActionEvent) = refreshAll()
+    }
+
+    private inner class ClearCacheAction :
+        AnAction(NacosSearchBundle.message("action.clear.cache"), NacosSearchBundle.message("action.clear.cache"), AllIcons.Actions.GC) {
+        override fun actionPerformed(e: AnActionEvent) = clearCache()
     }
 }
