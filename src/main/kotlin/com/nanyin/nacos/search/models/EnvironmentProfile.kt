@@ -46,7 +46,7 @@ data class EnvironmentProfile(
     var displayName: String = "",
     var canonicalEndpoint: String = "",
     var apiPolicy: NacosApiPolicy = NacosApiPolicy.AUTO,
-    var authMode: AuthMode = AuthMode.TOKEN,
+    var authMode: AuthMode = AuthMode.ANONYMOUS,
     var principal: String = "",
     var profileRevision: Long = 1,
     var accessRevision: Long = 1,

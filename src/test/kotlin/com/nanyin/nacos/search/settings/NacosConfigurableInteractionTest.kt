@@ -159,6 +159,58 @@ class NacosConfigurableInteractionTest {
         assertNotNull(findLabelByText(component, "Cross namespace"))
     }
 
+    @Test
+    fun authApiAndWriteIntentLiveUnderAdvancedWithP0ChooserOnly() {
+        val configurable = NacosConfigurable()
+        val component = configurable.createComponent()
+        val advancedButton = findButtonByAutomationId(component, "nacos.settings.advanced.toggle")!!
+        val authCombo = privateField<javax.swing.JComboBox<*>>(configurable, "authModeComboBox")
+        val apiCombo = privateField<javax.swing.JComboBox<*>>(configurable, "apiPolicyComboBox")
+        val writeIntent = findCheckBoxByAutomationId(component, "nacos.settings.writeIntent")!!
+
+        assertEquals(4, authCombo.itemCount)
+        assertEquals(
+            listOf(
+                AuthMode.ANONYMOUS,
+                AuthMode.NACOS_PASSWORD,
+                AuthMode.HTTP_BASIC,
+                AuthMode.BEARER_TOKEN
+            ),
+            (0 until authCombo.itemCount).map { authCombo.getItemAt(it) }
+        )
+        assertEquals(AuthMode.ANONYMOUS, authCombo.selectedItem)
+
+        val advancedBody = findByAutomationId(component, "nacos.settings.advanced.body")
+        assertNotNull(advancedBody)
+        assertFalse(advancedBody!!.isVisible)
+        assertTrue(isAncestor(advancedBody, authCombo))
+        assertTrue(isAncestor(advancedBody, apiCombo))
+        assertTrue(isAncestor(advancedBody, writeIntent))
+
+        runOnEdt { advancedButton.doClick() }
+        waitForUi()
+        assertTrue(advancedBody.isVisible)
+    }
+
+    private fun findByAutomationId(root: Component, automationId: String): JComponent? {
+        if (root is JComponent && root.getClientProperty("nacos.automation.id") == automationId) return root
+        if (root is Container) {
+            root.components.forEach { child ->
+                findByAutomationId(child, automationId)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun isAncestor(ancestor: Component, node: Component): Boolean {
+        var current: Component? = node
+        while (current != null) {
+            if (current === ancestor) return true
+            current = current.parent
+        }
+        return false
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun <T> privateField(target: Any, name: String): T {
         val field = target.javaClass.getDeclaredField(name)

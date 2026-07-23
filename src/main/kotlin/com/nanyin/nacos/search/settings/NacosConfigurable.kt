@@ -58,6 +58,7 @@ class NacosConfigurable : Configurable {
     private lateinit var serverUrlField: JBTextField
     private lateinit var usernameField: JBTextField
     private lateinit var passwordField: JPasswordField
+    private lateinit var passwordLabel: JLabel
     private lateinit var namespaceField: JBTextField
     private lateinit var apiPolicyComboBox: JComboBox<NacosApiPolicy>
     private lateinit var authModeComboBox: JComboBox<AuthMode>
@@ -103,7 +104,9 @@ class NacosConfigurable : Configurable {
     // ------------------------------------------------------------------
 
     private fun initializeDraft() {
-        draftServers = settings.cloneServers()
+        draftServers = settings.cloneServers().onEach {
+            it.authMode = AuthStrategyFormPolicy.normalizeStored(it.authMode, settings.enableTokenAuth)
+        }.toMutableList()
         draftActiveId = settings.activeServerId
         if (draftServers.isEmpty()) {
             val default = NacosServerConfig(id = "default", displayName = "Local")
@@ -134,11 +137,44 @@ class NacosConfigurable : Configurable {
         val server = selectedDraft() ?: return
         server.displayName = displayNameField.text.trim()
         server.serverUrl = serverUrlField.text.trim()
-        server.username = usernameField.text.trim()
-        server.password = String(passwordField.password)
+        var username = usernameField.text.trim()
+        var password = String(passwordField.password)
         server.namespace = namespaceField.text.trim()
         server.apiPolicy = apiPolicyComboBox.selectedItem as NacosApiPolicy
-        server.authMode = authModeComboBox.selectedItem as AuthMode
+        val selectedAuth = AuthStrategyFormPolicy.normalizeStored(
+            authModeComboBox.selectedItem as AuthMode? ?: AuthMode.ANONYMOUS,
+            settings.enableTokenAuth
+        )
+        val inferred = AuthStrategyFormPolicy.onCredentialsEdited(selectedAuth, username, password)
+        if (inferred != selectedAuth) {
+            loadingForm = true
+            try {
+                authModeComboBox.selectedItem = inferred
+                applyAuthFormEffects(inferred, clearCredentials = false)
+            } finally {
+                loadingForm = false
+            }
+        }
+        val authMode = AuthStrategyFormPolicy.normalizeStored(
+            authModeComboBox.selectedItem as AuthMode? ?: inferred,
+            settings.enableTokenAuth
+        )
+        if (authMode == AuthMode.ANONYMOUS) {
+            username = ""
+            password = ""
+            if (usernameField.text.isNotEmpty() || passwordField.password.isNotEmpty()) {
+                loadingForm = true
+                try {
+                    usernameField.text = ""
+                    passwordField.text = ""
+                } finally {
+                    loadingForm = false
+                }
+            }
+        }
+        server.username = username
+        server.password = password
+        server.authMode = authMode
         server.defaultGroup = defaultGroupField.text.trim()
         server.connectionTimeoutMs = connectionTimeoutSpinner.value as Int
         server.allowCrossNamespaceNavigation = crossNamespaceNavigationCheckBox.isSelected
@@ -151,6 +187,27 @@ class NacosConfigurable : Configurable {
         refreshServerListDecorations()
         updateDetailHeader(server)
         updateApplyEnabledState()
+    }
+
+    private fun applyAuthFormEffects(mode: AuthMode, clearCredentials: Boolean) {
+        val effects = AuthStrategyFormPolicy.onStrategyChosen(mode)
+        usernameField.isEnabled = effects.credentialsEnabled
+        passwordField.isEnabled = effects.credentialsEnabled
+        if (clearCredentials && effects.clearCredentials) {
+            usernameField.text = ""
+            passwordField.text = ""
+        }
+        when (effects.secretFieldKind) {
+            AuthStrategyFormPolicy.SecretFieldKind.TOKEN -> {
+                passwordLabel.text = NacosSearchBundle.message("settings.server.token")
+                passwordField.toolTipText = NacosSearchBundle.message("settings.server.token.tooltip")
+            }
+            AuthStrategyFormPolicy.SecretFieldKind.PASSWORD -> {
+                passwordLabel.text = NacosSearchBundle.message("settings.server.password")
+                passwordField.toolTipText = null
+            }
+        }
+        authModeComboBox.toolTipText = NacosSearchBundle.message(AuthStrategyFormPolicy.tooltipKey(mode))
     }
 
     private fun updateFooter() {
@@ -228,10 +285,48 @@ class NacosConfigurable : Configurable {
             document.addDocumentListener(docListener)
         }
         apiPolicyComboBox = JComboBox(arrayOf(NacosApiPolicy.AUTO, NacosApiPolicy.V1, NacosApiPolicy.V3)).apply {
-            addActionListener { commitDetailFormToDraft() }
+            putClientProperty("nacos.automation.id", "nacos.settings.apiPolicy")
+            renderer = object : DefaultListCellRenderer() {
+                override fun getListCellRendererComponent(
+                    list: JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean
+                ): Component {
+                    super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                    if (value is NacosApiPolicy) {
+                        text = NacosSearchBundle.message(apiPolicyLabelKey(value))
+                        toolTipText = NacosSearchBundle.message(apiPolicyTooltipKey(value))
+                    }
+                    return this
+                }
+            }
+            addActionListener {
+                if (!loadingForm) {
+                    selectedItem?.let { item ->
+                        toolTipText = NacosSearchBundle.message(apiPolicyTooltipKey(item as NacosApiPolicy))
+                    }
+                    commitDetailFormToDraft()
+                }
+            }
         }
-        authModeComboBox = JComboBox(AuthMode.values()).apply {
-            addActionListener { commitDetailFormToDraft() }
+        authModeComboBox = JComboBox(AuthStrategyFormPolicy.chooserModes().toTypedArray()).apply {
+            putClientProperty("nacos.automation.id", "nacos.settings.authStrategy")
+            renderer = object : DefaultListCellRenderer() {
+                override fun getListCellRendererComponent(
+                    list: JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean
+                ): Component {
+                    super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                    if (value is AuthMode) {
+                        text = NacosSearchBundle.message(AuthStrategyFormPolicy.labelKey(value))
+                        toolTipText = NacosSearchBundle.message(AuthStrategyFormPolicy.tooltipKey(value))
+                    }
+                    return this
+                }
+            }
+            addActionListener {
+                if (loadingForm) return@addActionListener
+                val mode = selectedItem as AuthMode? ?: return@addActionListener
+                applyAuthFormEffects(mode, clearCredentials = true)
+                commitDetailFormToDraft()
+            }
         }
         defaultGroupField = JBTextField("DEFAULT_GROUP").apply {
             font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 13)
@@ -414,16 +509,18 @@ class NacosConfigurable : Configurable {
             }
         }
 
-        fun addRow(labelKey: String, field: JComponent) {
+        fun addRow(labelKey: String, field: JComponent): JLabel {
             gbc.gridx = 0; gbc.gridy++; gbc.weightx = 0.0; gbc.fill = GridBagConstraints.NONE
             gbc.anchor = GridBagConstraints.EAST
-            scrollPanel.add(formLabel(labelKey), gbc)
+            val label = formLabel(labelKey)
+            scrollPanel.add(label, gbc)
 
             gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL
             gbc.anchor = GridBagConstraints.WEST
             val wrapper = JPanel(BorderLayout(8, 0))
             wrapper.add(field, BorderLayout.CENTER)
             scrollPanel.add(wrapper, gbc)
+            return label
         }
 
         // Detail title row: selected environment + active badge.
@@ -465,7 +562,8 @@ class NacosConfigurable : Configurable {
         // Password with eye toggle (show/hide) per design guide
         gbc.gridx = 0; gbc.gridy++; gbc.weightx = 0.0; gbc.fill = GridBagConstraints.NONE
         gbc.anchor = GridBagConstraints.EAST
-        scrollPanel.add(formLabel("settings.server.password"), gbc)
+        passwordLabel = formLabel("settings.server.password")
+        scrollPanel.add(passwordLabel, gbc)
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.anchor = GridBagConstraints.WEST
         val pwdRow = JPanel(BorderLayout(4, 0))
         pwdRow.add(passwordField, BorderLayout.CENTER)
@@ -503,9 +601,6 @@ class NacosConfigurable : Configurable {
             preferredSize = Dimension(360, preferredSize.height)
             minimumSize = Dimension(120, minimumSize.height)
         }, gbc)
-        addRow("settings.server.api.policy", apiPolicyComboBox)
-        addRow("settings.server.auth.mode", authModeComboBox)
-        addRow("settings.server.write.intent", writeIntentCheckBox)
 
         // Reset to defaults (keeps the display name).
         gbc.gridx = 1; gbc.gridy++; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.NONE
@@ -538,6 +633,7 @@ class NacosConfigurable : Configurable {
         // Advanced body container (toggled visible/hidden)
         val advBody = JPanel(GridBagLayout()).apply {
             border = JBUI.Borders.empty(2, 0)
+            putClientProperty("nacos.automation.id", "nacos.settings.advanced.body")
         }
         val advGbc = GridBagConstraints().apply {
             fill = GridBagConstraints.HORIZONTAL
@@ -559,6 +655,9 @@ class NacosConfigurable : Configurable {
             advBody.add(wrapper, advGbc)
         }
 
+        addAdvRow("settings.server.auth.strategy", authModeComboBox)
+        addAdvRow("settings.server.api.version", apiPolicyComboBox)
+        addAdvRow("settings.server.write.intent", writeIntentCheckBox)
         addAdvRow("settings.server.default.group", defaultGroupField)
 
         // Connection timeout with "ms" unit label
@@ -680,15 +779,22 @@ class NacosConfigurable : Configurable {
         try {
             displayNameField.text = server.displayName
             serverUrlField.text = server.serverUrl
+            val authMode = AuthStrategyFormPolicy.normalizeStored(server.authMode, settings.enableTokenAuth)
+            server.authMode = authMode
+            if (authMode == AuthMode.ANONYMOUS) {
+                server.username = ""
+                server.password = ""
+            }
             usernameField.text = server.username
             passwordField.text = server.password
             namespaceField.text = server.namespace
             apiPolicyComboBox.selectedItem = server.apiPolicy
-            authModeComboBox.selectedItem = server.authMode
+            authModeComboBox.selectedItem = authMode
             defaultGroupField.text = server.defaultGroup
             connectionTimeoutSpinner.value = server.connectionTimeoutMs
             crossNamespaceNavigationCheckBox.isSelected = server.allowCrossNamespaceNavigation
             writeIntentCheckBox.isSelected = server.writeIntent
+            applyAuthFormEffects(authMode, clearCredentials = false)
             updateDetailHeader(server)
         } finally {
             // Re-add listeners
@@ -738,6 +844,7 @@ class NacosConfigurable : Configurable {
             if (d.id != s.id || d.displayName != s.displayName ||
                 d.serverUrl != s.serverUrl || d.username != s.username ||
                 d.password != s.password || d.namespace != s.namespace ||
+                d.apiPolicy != s.apiPolicy ||
                 d.authMode != s.authMode || d.defaultGroup != s.defaultGroup ||
                 d.connectionTimeoutMs != s.connectionTimeoutMs ||
                 d.allowCrossNamespaceNavigation != s.allowCrossNamespaceNavigation ||
@@ -922,4 +1029,16 @@ class NacosConfigurable : Configurable {
 
     private fun connectionSignature(server: NacosServerConfig): String =
         "${server.serverUrl}|${server.username}|${server.authMode}|${server.namespace}|${server.connectionTimeoutMs}"
+
+    private fun apiPolicyLabelKey(policy: NacosApiPolicy): String = when (policy) {
+        NacosApiPolicy.AUTO -> "settings.api.generation.auto.label"
+        NacosApiPolicy.V1 -> "settings.api.generation.v1.label"
+        NacosApiPolicy.V3 -> "settings.api.generation.v3.label"
+    }
+
+    private fun apiPolicyTooltipKey(policy: NacosApiPolicy): String = when (policy) {
+        NacosApiPolicy.AUTO -> "settings.api.generation.auto.tooltip"
+        NacosApiPolicy.V1 -> "settings.api.generation.v1.tooltip"
+        NacosApiPolicy.V3 -> "settings.api.generation.v3.tooltip"
+    }
 }
