@@ -822,10 +822,15 @@ class NacosConfigurable : Configurable {
             return
         }
 
-        // Temporarily set the active server for the connection test
-        val origServers = settings.cloneServers()
-        val origActiveId = settings.activeServerId
-        settings.applyServers(draftServers, server.id)
+        // Diagnose from the unapplied draft only — never mutate persisted settings.
+        val snapshot = com.nanyin.nacos.search.services.operations.DiagnosticSnapshot(
+            endpoint = server.serverUrl.trim(),
+            apiPolicy = server.apiPolicy.name,
+            authStrategy = server.authMode.name,
+            principal = server.username.trim(),
+            secret = server.password,
+            namespaceId = server.namespace.trim().ifBlank { "public" }
+        )
 
         testConnectionButton.isEnabled = false
         testStatusLabel.text = NacosSearchBundle.message("settings.test.connecting")
@@ -834,27 +839,36 @@ class NacosConfigurable : Configurable {
         ProgressManager.getInstance().run(object : Task.Backgroundable(null, NacosSearchBundle.message("settings.test.progress"), true) {
             override fun run(indicator: ProgressIndicator) {
                 indicator.text = NacosSearchBundle.message("settings.test.connecting")
-                val result = try {
-                    runBlocking(Dispatchers.IO) {
-                        apiService.testConnection()
-                    }
+                val outcome: Result<com.nanyin.nacos.search.services.operations.DiagnosticReport> = try {
+                    Result.success(
+                        runBlocking(Dispatchers.IO) {
+                            apiService.diagnoseConnection(snapshot)
+                        }
+                    )
                 } catch (e: Exception) {
                     Result.failure(e)
-                } finally {
-                    ApplicationManager.getApplication().invokeAndWait {
-                        settings.applyServers(origServers, origActiveId)
-                    }
                 }
 
                 ApplicationManager.getApplication().invokeLater {
                     testConnectionButton.isEnabled = true
-                    if (result.isSuccess) {
-                        testStatusLabel.text = NacosSearchBundle.message("settings.connection.success")
-                        testStatusLabel.foreground = JBColor(0x5fb865, 0x208a3c)
+                    val report = outcome.getOrNull()
+                    if (report != null) {
+                        testStatusLabel.text = report.summary
+                        testStatusLabel.foreground = if (report.connected) {
+                            JBColor(0x5fb865, 0x208a3c)
+                        } else {
+                            JBColor.RED
+                        }
+                        testStatusLabel.toolTipText = report.stages.joinToString("\n") { stage ->
+                            val status = if (stage.success) "ok" else (stage.sanitizedFailure ?: "failed")
+                            "${stage.stage}: $status (${stage.durationMillis}ms)" +
+                                (stage.resolvedGeneration?.let { " gen=$it" } ?: "")
+                        }
                     } else {
-                        val msg = result.exceptionOrNull()?.message ?: NacosSearchBundle.message("error.unknown")
+                        val msg = outcome.exceptionOrNull()?.message ?: NacosSearchBundle.message("error.unknown")
                         testStatusLabel.text = NacosSearchBundle.message("settings.test.failed", msg)
                         testStatusLabel.foreground = JBColor.RED
+                        testStatusLabel.toolTipText = null
                     }
                 }
             }

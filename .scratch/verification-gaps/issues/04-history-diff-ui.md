@@ -9,3 +9,5 @@
 - Diff history↔history and history↔current via HistoryDiffPresenter; read-only; no restore/publish.
 - Epoch fencing: switch profile/namespace mid-load drops stale results.
 - Manual GUI: entry visible, click opens list, select opens body, Diff opens IntelliJ Diff.
+
+**Status: DONE**

@@ -8,3 +8,5 @@
 - Profile write opt-in (writesEnabled) defaults false for new/migrated profiles.
 - V1 CAS + V3 ordinary paths; CAS conflict / unknown / reconciliation user-visible.
 - Dirty guards block retarget while dirty.
+
+**Status: DONE**

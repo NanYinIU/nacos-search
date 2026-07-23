@@ -16,6 +16,9 @@ import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.network.RequestPolicy
 import com.nanyin.nacos.search.services.operations.CacheServiceOperationCache
 import com.nanyin.nacos.search.services.operations.ConfigurationCoordinate
+import com.nanyin.nacos.search.services.operations.ConnectionDiagnostic
+import com.nanyin.nacos.search.services.operations.DiagnosticReport
+import com.nanyin.nacos.search.services.operations.DiagnosticSnapshot
 import com.nanyin.nacos.search.services.operations.EditSession
 import com.nanyin.nacos.search.services.operations.HistoryDetail
 import com.nanyin.nacos.search.services.operations.HistoryPage
@@ -696,6 +699,17 @@ class NacosApiService(
      */
     suspend fun controlledPublish(session: EditSession): PublishResult = withContext(Dispatchers.IO) {
         PublishController(OperationGatewayPublishGateway(v1Gateway)).publish(session)
+    }
+
+    /**
+     * Isolated connection diagnostic from an unapplied settings snapshot.
+     * Never mutates persisted profiles, sessions, cache, or the auth registry.
+     */
+    suspend fun diagnoseConnection(snapshot: DiagnosticSnapshot): DiagnosticReport = withContext(Dispatchers.IO) {
+        ConnectionDiagnostic(
+            resolver = generationResolver,
+            gateway = v1Gateway
+        ).diagnose(snapshot)
     }
 
    /**
