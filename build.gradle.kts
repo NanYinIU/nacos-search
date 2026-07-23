@@ -190,6 +190,12 @@ tasks {
         }
     }
 
+    // Ant instrumentIdeaExtensions is not thread-safe; parallel instrumentCode +
+    // instrumentTestCode races (CI: "1 >= 1", local: nested element BuildException).
+    named("instrumentTestCode") {
+        mustRunAfter("instrumentCode")
+    }
+
     runIde {
         jvmArgs("-Xmx2048m")
     }

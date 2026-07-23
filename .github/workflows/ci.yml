@@ -28,7 +28,9 @@ jobs:
       - name: Compile
         run: ./gradlew compileKotlin compileTestKotlin
       - name: Run unit tests
-        run: ./gradlew test
+        # instrumentCode/instrumentTestCode share Ant taskdefs and race under
+        # org.gradle.parallel=true (flaky "1 >= 1" / nested instrumentIdeaExtensions).
+        run: ./gradlew test --no-parallel
 
   live-smoke-v1:
     name: Live smoke V1 (Nacos 2.5.3)
@@ -63,7 +65,7 @@ jobs:
       - name: Run V1 live smoke
         env:
           NACOS_LIVE_V1_ENDPOINT: http://localhost:8848
-        run: ./gradlew test --tests "com.nanyin.nacos.search.services.operations.LiveSmokeTest.V1*"
+        run: ./gradlew test --no-parallel --tests "com.nanyin.nacos.search.services.operations.LiveSmokeTest.V1*"
 
   live-smoke-v3:
     name: Live smoke V3 (Nacos 3.2.3)
@@ -110,4 +112,4 @@ jobs:
       - name: Run V3 live smoke
         env:
           NACOS_LIVE_V3_ENDPOINT: http://localhost:8848
-        run: ./gradlew test --tests "com.nanyin.nacos.search.services.operations.LiveSmokeTest.V3*"
+        run: ./gradlew test --no-parallel --tests "com.nanyin.nacos.search.services.operations.LiveSmokeTest.V3*"
