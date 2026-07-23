@@ -1,0 +1,35 @@
+.github/workflows/ci.yml
+  s_af6ab9fe44270e::t_e5ec0ca3e8a670 1-71
+src/main/kotlin/com/nanyin/nacos/search/services/network/NacosRequestExecutor.kt
+  s_af6ab9fe44270e::t_94bc9026f044cf 31-37,45-46,96-117,179-217
+src/main/kotlin/com/nanyin/nacos/search/services/operations/OperationGateway.kt
+  s_af6ab9fe44270e::t_5b5cf913f2205f 10,20-22,39,41-43,59,61,118-130,233,239-247
+src/main/kotlin/com/nanyin/nacos/search/services/operations/PublishController.kt
+  s_af6ab9fe44270e::t_b4a3eaa268dd42 137-141,156-163,170-192
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V3ProtocolAdapter.kt
+  s_af6ab9fe44270e::t_0475fffc57feac 40,246-261
+src/test/kotlin/com/nanyin/nacos/search/services/operations/OperationGatewayTest.kt
+  s_af6ab9fe44270e::t_8dd132e7482fce 66-92,124-147
+src/test/kotlin/com/nanyin/nacos/search/services/operations/ProtocolTransportTest.kt
+  s_af6ab9fe44270e::t_a36b4052343adc 1-75
+src/test/kotlin/com/nanyin/nacos/search/services/operations/PublishControllerTest.kt
+  s_af6ab9fe44270e::t_3075252f2ea636 12,194-245
+src/test/kotlin/com/nanyin/nacos/search/services/operations/V3ProtocolAdapterTest.kt
+  s_af6ab9fe44270e::t_842b062b5fbc27 146-160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "713f698f6c667a62effd3e91080047290aba68be",
+  "prompts": {},
+  "sessions": {
+    "s_af6ab9fe44270e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8c42-6989-7613-9429-581cf369e64d",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
