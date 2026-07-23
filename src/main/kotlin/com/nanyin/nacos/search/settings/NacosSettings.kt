@@ -250,6 +250,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         syncFromActiveServer()
         persistCredentials(previousIds)
         updateProfilesFromServers(previousPasswords)
+        // Profile / credential / policy changes invalidate in-flight browse results.
+        com.nanyin.nacos.search.services.ProjectSessionEpochs.bumpAllOpenProjects()
     }
 
     /** Persists a deletion tombstone for a profile removed from the settings. */
@@ -258,6 +260,9 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             ApplicationManager.getApplication()
                 .getService(com.nanyin.nacos.search.services.ProfileTombstoneRegistry::class.java)
                 ?.entomb(profileId, 0)
+            ApplicationManager.getApplication()
+                .getService(com.nanyin.nacos.search.services.LastKnownGenerationStore::class.java)
+                ?.clearProfile(profileId)
         } catch (e: Exception) {
             // Settings can be applied outside a fully initialised application
             // (e.g. tests); the tombstone is best-effort within a live IDE.
@@ -356,9 +361,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 apiPolicy = migrated.apiPolicy,
                 authMode = migrated.authMode,
                 principal = migrated.principal,
+                writeIntent = server.writeIntent,
                 credentialSlotId = credentialSlotId,
                 credentialSlotVersion = credentialVersion
-            ) ?: migrated.copy(credentialSlotId = credentialSlotId, credentialSlotVersion = credentialVersion)
+            ) ?: migrated.copy(
+                credentialSlotId = credentialSlotId,
+                credentialSlotVersion = credentialVersion,
+                writeIntent = server.writeIntent
+            )
             // The fresh slot is durable before this map is assigned to
             // [profiles], which is the single publication point for readers.
             credentialSlots.stage(updated, server.password)

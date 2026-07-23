@@ -16,9 +16,19 @@ import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.network.RequestPolicy
 import com.nanyin.nacos.search.services.operations.CacheServiceOperationCache
 import com.nanyin.nacos.search.services.operations.ConfigurationCoordinate
+import com.nanyin.nacos.search.services.operations.ConnectionDiagnostic
+import com.nanyin.nacos.search.services.operations.DiagnosticReport
+import com.nanyin.nacos.search.services.operations.DiagnosticSnapshot
+import com.nanyin.nacos.search.services.operations.EditSession
+import com.nanyin.nacos.search.services.operations.HistoryDetail
+import com.nanyin.nacos.search.services.operations.HistoryPage
+import com.nanyin.nacos.search.services.operations.HistoryQuery
 import com.nanyin.nacos.search.services.operations.NacosRequestExecutorProtocolTransport
 import com.nanyin.nacos.search.services.operations.OperationGateway
+import com.nanyin.nacos.search.services.operations.OperationGatewayPublishGateway
 import com.nanyin.nacos.search.services.operations.OperationTarget
+import com.nanyin.nacos.search.services.operations.PublishController
+import com.nanyin.nacos.search.services.operations.PublishResult
 import com.nanyin.nacos.search.services.operations.SummaryPage
 import com.nanyin.nacos.search.services.operations.SummaryQuery
 import com.nanyin.nacos.search.services.operations.V1ProtocolAdapter
@@ -471,42 +481,37 @@ class NacosApiService(
            val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                ConfigurationRequired(listOf("Connection configuration is incomplete"))
            )
-           if (usesLockedGeneration(context)) {
+           val resolvedTarget = resolvedReadTarget(context, null).getOrElse { error ->
+               logger.warn("Failed to resolve generation for namespace discovery", error)
+               // Discovery failure must not hide a manually readable public namespace.
                return@withContext Result.success(listOf(NamespaceInfo.createPublicNamespace()))
            }
-           logger.debug("Fetching namespaces from captured endpoint: ${context.endpoint.value}")
-           val response = requestJsonWithReplay(context, NAMESPACE_ENDPOINT, emptyMap(), RequestPolicy.DIAGNOSTIC)
-
-           val apiResponse = gson.fromJson(response, object : TypeToken<NacosApiResponse<List<Map<String, Any>>>>() {}.type) as NacosApiResponse<List<Map<String, Any>>>
-            
-            if (apiResponse.data != null) {
-                val namespaces = apiResponse.data.mapNotNull { namespaceMap ->
-                    try {
-                        NamespaceInfo.fromJsonMap(namespaceMap)
-                    } catch (e: Exception) {
-                        logger.warn("Failed to parse namespace: $namespaceMap", e)
-                        null
-                    }
-                }
-                
-                // Always include public namespace if not present
-                val hasPublicNamespace = namespaces.any { it.isPublicNamespace() }
-                val finalNamespaces = if (!hasPublicNamespace) {
-                    listOf(NamespaceInfo.createPublicNamespace()) + namespaces
-                } else {
-                    namespaces
-                }
-                
-                Result.success(finalNamespaces)
-            } else {
-                logger.warn("Failed to get namespaces: ${apiResponse.getErrorMessage()}")
-                // Return public namespace as fallback
-                Result.success(listOf(NamespaceInfo.createPublicNamespace()))
-            }
+           logger.debug("Discovering namespaces via gateway for ${resolvedTarget.context.resolvedGeneration}")
+           val discovered = v1Gateway.discoverNamespaces(resolvedTarget)
+           discovered.fold(
+               onSuccess = { namespaces ->
+                   val mapped = namespaces.map { ns ->
+                       NamespaceInfo(
+                           namespaceId = if (ns.namespaceId == "public") "" else ns.namespaceId,
+                           namespaceName = ns.displayName,
+                           namespaceDesc = ns.description.orEmpty(),
+                           configCount = ns.configCount?.toInt() ?: 0
+                       )
+                   }
+                   val hasPublic = mapped.any { it.isPublicNamespace() }
+                   Result.success(
+                       if (hasPublic) mapped else listOf(NamespaceInfo.createPublicNamespace()) + mapped
+                   )
+               },
+               onFailure = { error ->
+                   logger.warn("Namespace discovery unavailable: ${error.message}")
+                   // Capability/auth denial → public + manual entry UX; not a hard failure.
+                   Result.success(listOf(NamespaceInfo.createPublicNamespace()))
+               }
+           )
         } catch (e: Exception) {
             logger.warn("Error getting namespaces", e)
             if (e is ConfigurationRequired) return@withContext Result.failure(e)
-            // Return public namespace as fallback
             Result.success(listOf(NamespaceInfo.createPublicNamespace()))
         }
     }
@@ -654,9 +659,59 @@ class NacosApiService(
        }
    }
 
+    /**
+     * Resolves a locked [OperationTarget] for the given context/namespace,
+     * including AUTO → V3-first generation resolution. UI layers must use this
+     * (or an equivalent) so history/publish never dispatch against UNKNOWN.
+     */
+    suspend fun resolveOperationTarget(
+        context: NacosOperationContext,
+        namespaceId: String?
+    ): Result<OperationTarget> = withContext(Dispatchers.IO) {
+        resolvedReadTarget(context, namespaceId)
+    }
+
+    /** Identity-scoped gateway used by history browsing and controlled publish. */
+    fun operationGateway(): OperationGateway = v1Gateway
+
+    suspend fun listConfigurationHistory(
+        target: OperationTarget,
+        query: HistoryQuery
+    ): Result<HistoryPage> = withContext(Dispatchers.IO) {
+        v1Gateway.listHistory(target, query, forceRefresh = true, useCache = false)
+    }
+
+    suspend fun readConfigurationHistoryDetail(
+        target: OperationTarget,
+        historyId: String
+    ): Result<HistoryDetail> = withContext(Dispatchers.IO) {
+        v1Gateway.readHistoryDetail(target, historyId, forceRefresh = true, useCache = false)
+    }
+
+    /**
+     * Controlled publish through [PublishController]. Prefer this over
+     * [publishConfiguration] for locked V1/V3 paths.
+     */
+    suspend fun controlledPublish(session: EditSession): PublishResult = withContext(Dispatchers.IO) {
+        PublishController(OperationGatewayPublishGateway(v1Gateway)).publish(session)
+    }
+
+    /**
+     * Isolated connection diagnostic from an unapplied settings snapshot.
+     * Never mutates persisted profiles, sessions, cache, or the auth registry.
+     */
+    suspend fun diagnoseConnection(snapshot: DiagnosticSnapshot): DiagnosticReport = withContext(Dispatchers.IO) {
+        ConnectionDiagnostic(
+            resolver = generationResolver,
+            gateway = v1Gateway
+        ).diagnose(snapshot)
+    }
+
    /**
     * Publishes (creates or updates) a configuration to Nacos via POST.
      * Uses the Nacos Open API /nacos/v1/cs/configs endpoint.
+     *
+     * Locked V1/V3 generations reject this path — use [controlledPublish] instead.
      */
     suspend fun publishConfiguration(
         dataId: String,
@@ -672,7 +727,7 @@ class NacosApiService(
             )
            if (usesLockedGeneration(context)) {
                return@withContext Result.failure(
-                    ConfigurationRequired(listOf("The V1 path is read-only"))
+                    ConfigurationRequired(listOf("The V1 path is read-only; use controlledPublish"))
                 )
             }
             val params = buildMap {
@@ -757,7 +812,43 @@ class NacosApiService(
         val generation = generationResolver.resolve(probeTarget).getOrElse { error ->
             return Result.failure(error)
         }
+        persistLastKnownGeneration(context, generation)
         return Result.success(v1Target(lockedContext(context, generation), namespaceId))
+    }
+
+    private fun persistLastKnownGeneration(context: NacosOperationContext, generation: NacosApiGeneration) {
+        if (generation != NacosApiGeneration.V1 && generation != NacosApiGeneration.V3) return
+        try {
+            ApplicationManager.getApplication()
+                .getService(LastKnownGenerationStore::class.java)
+                ?.put(
+                    LastKnownGenerationStore.Key(
+                        profileId = context.identity.profileId,
+                        accessRevision = context.accessRevision,
+                        canonicalEndpoint = context.endpoint.value
+                    ),
+                    generation
+                )
+        } catch (_: Exception) {
+            // Persistence is best-effort outside a fully initialised application.
+        }
+    }
+
+    /** Offline bootstrap helper: last successful AUTO resolution for this access key. */
+    fun lastKnownGeneration(context: NacosOperationContext): NacosApiGeneration? {
+        return try {
+            ApplicationManager.getApplication()
+                .getService(LastKnownGenerationStore::class.java)
+                ?.get(
+                    LastKnownGenerationStore.Key(
+                        profileId = context.identity.profileId,
+                        accessRevision = context.accessRevision,
+                        canonicalEndpoint = context.endpoint.value
+                    )
+                )
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun lockedContext(

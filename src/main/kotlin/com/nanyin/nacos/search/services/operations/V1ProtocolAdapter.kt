@@ -123,7 +123,7 @@ private object UnavailableV1Authenticator : V1Authenticator {
 class V1ProtocolAdapter(
     private val transport: ProtocolTransport,
     private val gson: Gson = Gson()
-) : ProtocolAdapter, HistoryCapability {
+) : ProtocolAdapter, HistoryCapability, NamespaceDiscoveryCapability {
     private var authenticator: V1Authenticator = UnavailableV1Authenticator
     private var readBudgetMillis: Long = DEFAULT_READ_BUDGET_MILLIS
     private var clock: () -> Long = System::currentTimeMillis
@@ -175,6 +175,13 @@ class V1ProtocolAdapter(
         ensureSuccess(response)
         Unit
     }
+
+    override suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> =
+        execute(target) { authentication ->
+            request(target, NAMESPACES_PATH, authentication = authentication)
+        }.mapCatching { response ->
+            parseNamespaceList(ensureSuccess(response))
+        }
 
     override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery): Result<SummaryPage> =
         execute(target) { authentication ->
@@ -443,6 +450,41 @@ class V1ProtocolAdapter(
     }
 
     private fun normalizeTenant(tenant: String?): String? = tenant?.takeUnless { it.isBlank() || it == "public" }
+
+    private fun parseNamespaceList(body: String): List<DiscoveredNamespace> = try {
+        val element = gson.fromJson(body, com.google.gson.JsonElement::class.java)
+            ?: throw RemoteOperationError.Protocol("V1 namespace response was empty")
+        val dataElement = when {
+            element.isJsonArray -> element
+            element.isJsonObject && element.asJsonObject.has("data") -> element.asJsonObject.get("data")
+            element.isJsonObject -> element.asJsonObject.get("pageItems")
+            else -> null
+        }
+        val items = dataElement?.takeIf { it.isJsonArray }?.asJsonArray?.toList().orEmpty()
+        items.mapNotNull { item ->
+            if (!item.isJsonObject) return@mapNotNull null
+            val obj = item.asJsonObject
+            val rawId = obj.get("namespace")?.asString
+                ?: obj.get("namespaceId")?.asString
+                ?: return@mapNotNull null
+            val normalizedId = rawId.trim().ifBlank { "public" }
+            val displayName = obj.get("namespaceShowName")?.asString
+                ?: obj.get("namespaceName")?.asString
+                ?: normalizedId
+            DiscoveredNamespace(
+                namespaceId = normalizedId,
+                displayName = displayName,
+                description = obj.get("namespaceDesc")?.asString,
+                configCount = obj.get("configCount")?.asLong
+            )
+        }
+    } catch (error: RemoteOperationError) {
+        throw error
+    } catch (error: JsonParseException) {
+        throw RemoteOperationError.Protocol("Invalid V1 namespace response", error)
+    } catch (error: Exception) {
+        throw RemoteOperationError.Protocol("Invalid V1 namespace response", error)
+    }
 
     private suspend fun authenticationFor(target: OperationTarget, deadline: Long): RequestAuthentication =
         when (target.context.authenticationStrategy) {

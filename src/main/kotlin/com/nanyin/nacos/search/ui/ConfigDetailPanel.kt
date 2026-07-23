@@ -32,9 +32,12 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
-import com.nanyin.nacos.search.services.captureAccessIdentity
+import com.nanyin.nacos.search.services.operations.EditSession
+import com.nanyin.nacos.search.services.operations.OperationTarget
+import com.nanyin.nacos.search.services.operations.PublishState
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosProjectSession
+import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.ActionEvent
@@ -103,9 +106,12 @@ class ConfigDetailPanel internal constructor(
     private lateinit var saveButton: JButton
     private lateinit var editButton: JButton
     private lateinit var revertButton: JButton
+    private lateinit var historyButton: JButton
     private lateinit var formatTagLabel: JBLabel
     private lateinit var dirtyLabel: JBLabel
     private lateinit var freshnessLabel: JBLabel
+    /** Bound publish target captured when entering edit mode (never live UI). */
+    private var boundEditTarget: OperationTarget? = null
     
     // Editor status bar components (UTF-8 · LF · pos · chars · md5)
     private lateinit var statusBar: JPanel
@@ -272,6 +278,13 @@ class ConfigDetailPanel internal constructor(
            isEnabled = false
        }
 
+        historyButton = JButton(NacosSearchBundle.message("config.detail.action.history")).apply {
+            toolTipText = NacosSearchBundle.message("config.detail.action.history.tooltip")
+            preferredSize = Dimension(80, 26)
+            minimumSize = Dimension(60, 26)
+            isEnabled = false
+        }
+
         // Format tag label
         formatTagLabel = JBLabel("").apply {
             foreground = JBColor.GRAY
@@ -344,9 +357,10 @@ class ConfigDetailPanel internal constructor(
             val leftPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                 add(formatTagLabel)
             }
-            // Design order: Edit / Save & Publish / Revert ... Copy
+            // Design order: History / Edit / Save / Revert / Copy
             val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
                 add(refreshButton)
+                add(historyButton)
                 add(editButton)
                 add(saveButton)
                 add(revertButton)
@@ -411,6 +425,10 @@ class ConfigDetailPanel internal constructor(
        revertButton.addActionListener {
            revertEdits()
       }
+
+        historyButton.addActionListener {
+            openHistoryBrowser()
+        }
   }
 
 
@@ -432,10 +450,43 @@ class ConfigDetailPanel internal constructor(
     * hides #editBtn while editing.
     */
   private fun enterEditMode() {
-      editor?.let { ed ->
-          ed.document.setReadOnly(false)
-          editButton.isVisible = false
-          checkDirtyState(ed.document.text)
+      val profile = settings.getActiveProfile()
+      if (profile == null || !profile.writeIntent) {
+          com.intellij.openapi.ui.Messages.showInfoMessage(
+              NacosSearchBundle.message("config.detail.publish.writes.disabled"),
+              NacosSearchBundle.message("config.detail.action.edit")
+          )
+          return
+      }
+      coroutineScope.launch {
+          val context = selectedOperationContext()
+          if (context == null) {
+              withContext(Dispatchers.Main) {
+                  com.intellij.openapi.ui.Messages.showErrorDialog(
+                      NacosSearchBundle.message("error.connection.incomplete"),
+                      NacosSearchBundle.message("common.error")
+                  )
+              }
+              return@launch
+          }
+          val config = currentConfiguration ?: return@launch
+          val namespaceId = config.tenantId?.takeIf { it.isNotBlank() } ?: "public"
+          val targetResult = nacosApiService.resolveOperationTarget(context, namespaceId)
+          withContext(Dispatchers.Main) {
+              val target = targetResult.getOrElse {
+                  com.intellij.openapi.ui.Messages.showErrorDialog(
+                      it.message ?: NacosSearchBundle.message("common.error"),
+                      NacosSearchBundle.message("common.error")
+                  )
+                  return@withContext
+              }
+              boundEditTarget = target
+              editor?.let { ed ->
+                  ed.document.setReadOnly(false)
+                  editButton.isVisible = false
+                  checkDirtyState(ed.document.text)
+              }
+          }
       }
   }
 
@@ -558,7 +609,7 @@ class ConfigDetailPanel internal constructor(
             PendingNavigation(configuration.getKey(), it)
         }
         updateMetadata(configuration, generation)
-        val accessIdentity = settings.captureAccessIdentity()
+        val accessIdentity = project.captureSelectedAccessIdentity(settings)
         val cachedState = cacheService.configDetailState(
             accessIdentity,
             configuration.tenantId,
@@ -787,6 +838,7 @@ class ConfigDetailPanel internal constructor(
             dirtyLabel.isVisible = false
             editButton.isEnabled = true
             copyButton.isEnabled = true
+            historyButton.isEnabled = true
         }, ModalityState.defaultModalityState())
     }
     
@@ -842,7 +894,7 @@ class ConfigDetailPanel internal constructor(
                         setLoadingState(false)
                         if (keepCachedVisible) {
                             cacheService.removeConfigDetail(
-                                settings.captureAccessIdentity(),
+                                project.captureSelectedAccessIdentity(settings),
                                 configuration.tenantId,
                                 configuration.dataId,
                                 configuration.group
@@ -911,6 +963,7 @@ class ConfigDetailPanel internal constructor(
               consumePendingNavigation(configuration)
               copyButton.isEnabled = true
                editButton.isEnabled = true
+               historyButton.isEnabled = true
                 editButton.isVisible = true
                 editButton.text = NacosSearchBundle.message("config.detail.action.edit")
                saveButton.isEnabled = false
@@ -1094,7 +1147,7 @@ class ConfigDetailPanel internal constructor(
     private fun refreshNavigationState() {
         ApplicationManager.getApplication()
             .getService(NavigationIndexRefreshService::class.java)
-            .refresh(settings.captureAccessIdentity(), project)
+            .refresh(project.captureSelectedAccessIdentity(settings), project)
     }
     
     private fun showEmptyState() {
@@ -1147,49 +1200,177 @@ class ConfigDetailPanel internal constructor(
     }
     
     /**
-     * Save (publish) the current configuration content back to Nacos.
+     * Save (publish) through the controlled [PublishController] path using the
+     * edit session bound when entering edit mode.
      */
     private fun saveConfiguration() {
         val config = currentConfiguration ?: return
         val textToSave = editor?.document?.text ?: config.content
         if (textToSave == originalContent) return
+        val profile = settings.getActiveProfile()
+        if (profile == null || !profile.writeIntent) {
+            com.intellij.openapi.ui.Messages.showInfoMessage(
+                NacosSearchBundle.message("config.detail.publish.writes.disabled"),
+                NacosSearchBundle.message("config.detail.action.save.publish")
+            )
+            return
+        }
         coroutineScope.launch {
             try {
-                val namespaceId = if (config.tenantId.isNullOrBlank()) null else config.tenantId
-                val result = nacosApiService.publishConfiguration(
-                    config.dataId, config.group, textToSave, config.type ?: "text", namespaceId,
-                    selectedOperationContext()
+                val target = boundEditTarget ?: run {
+                    val context = selectedOperationContext()
+                        ?: return@launch showSaveError(NacosSearchBundle.message("error.connection.incomplete"))
+                    val namespaceId = config.tenantId?.takeIf { it.isNotBlank() } ?: "public"
+                    nacosApiService.resolveOperationTarget(context, namespaceId).getOrElse {
+                        return@launch showSaveError(it.message ?: it.toString())
+                    }
+                }
+                val namespaceId = config.tenantId?.takeIf { it.isNotBlank() } ?: "public"
+                val confirm = withContext(Dispatchers.Main) {
+                    com.intellij.openapi.ui.Messages.showYesNoDialog(
+                        project,
+                        NacosSearchBundle.message(
+                            "config.detail.publish.confirm",
+                            config.dataId,
+                            config.group,
+                            namespaceId,
+                            target.context.endpoint.value
+                        ),
+                        NacosSearchBundle.message("config.detail.action.save.publish"),
+                        com.intellij.openapi.ui.Messages.getQuestionIcon()
+                    )
+                }
+                if (confirm != com.intellij.openapi.ui.Messages.YES) return@launch
+
+                val session = EditSession(
+                    target = target,
+                    dataId = config.dataId,
+                    group = config.group,
+                    namespaceId = namespaceId,
+                    baselineContent = originalContent,
+                    baselineMd5 = config.md5,
+                    baselineType = config.type,
+                    baselineAppName = config.appName,
+                    baselineDesc = config.desc,
+                    baselineConfigTags = config.configTags,
+                    draftContent = textToSave
                 )
+                val publishResult = nacosApiService.controlledPublish(session)
                 withContext(Dispatchers.Main) {
-                    if (result.isSuccess && result.getOrNull() == true) {
-                       originalContent = textToSave
-                        exitEditMode()
-                        saveButton.isEnabled = false
-                        revertButton.isEnabled = false
-                        updateDirtyUI(false)
-                        updateStatusBar(textToSave)
-                        com.intellij.openapi.ui.Messages.showInfoMessage(
-                            NacosSearchBundle.message("message.configuration.saved"),
-                            NacosSearchBundle.message("common.success")
-                        )
-                    } else {
-                        com.intellij.openapi.ui.Messages.showErrorDialog(
-                            NacosSearchBundle.message("error.config.save.failed") + ": " +
-                                (result.exceptionOrNull()?.message ?: ""),
-                            NacosSearchBundle.message("common.error")
-                        )
+                    when (val state = publishResult.state) {
+                        is PublishState.Verified -> {
+                            val verified = publishResult.verifiedDetail
+                            originalContent = verified?.content ?: textToSave
+                            if (verified != null) {
+                                currentConfiguration = verified
+                            }
+                            boundEditTarget = null
+                            exitEditMode()
+                            saveButton.isEnabled = false
+                            revertButton.isEnabled = false
+                            updateDirtyUI(false)
+                            updateStatusBar(originalContent)
+                            com.intellij.openapi.ui.Messages.showInfoMessage(
+                                NacosSearchBundle.message("message.configuration.saved"),
+                                NacosSearchBundle.message("common.success")
+                            )
+                        }
+                        is PublishState.RemoteConflict -> {
+                            com.intellij.openapi.ui.Messages.showErrorDialog(
+                                NacosSearchBundle.message("config.detail.publish.conflict"),
+                                NacosSearchBundle.message("common.error")
+                            )
+                        }
+                        is PublishState.TargetDeleted -> {
+                            com.intellij.openapi.ui.Messages.showErrorDialog(
+                                NacosSearchBundle.message("config.detail.publish.deleted"),
+                                NacosSearchBundle.message("common.error")
+                            )
+                        }
+                        is PublishState.PermissionDenied -> {
+                            com.intellij.openapi.ui.Messages.showErrorDialog(
+                                NacosSearchBundle.message("config.detail.publish.permission"),
+                                NacosSearchBundle.message("common.error")
+                            )
+                        }
+                        is PublishState.ServerStateUnknown -> {
+                            com.intellij.openapi.ui.Messages.showErrorDialog(
+                                NacosSearchBundle.message("config.detail.publish.unknown"),
+                                NacosSearchBundle.message("common.error")
+                            )
+                        }
+                        is PublishState.ReadOnly -> {
+                            com.intellij.openapi.ui.Messages.showErrorDialog(
+                                NacosSearchBundle.message("config.detail.publish.readonly", state.reason),
+                                NacosSearchBundle.message("common.error")
+                            )
+                        }
+                        else -> {
+                            com.intellij.openapi.ui.Messages.showErrorDialog(
+                                NacosSearchBundle.message("error.config.save.failed") + ": $state",
+                                NacosSearchBundle.message("common.error")
+                            )
+                        }
                     }
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    com.intellij.openapi.ui.Messages.showErrorDialog(
-                        NacosSearchBundle.message("error.config.save.failed") + ": ${e.message}",
-                        NacosSearchBundle.message("common.error")
-                    )
-                }
+                showSaveError(e.message ?: e.toString())
             }
         }
     }
+
+    private suspend fun showSaveError(message: String) {
+        withContext(Dispatchers.Main) {
+            com.intellij.openapi.ui.Messages.showErrorDialog(
+                NacosSearchBundle.message("error.config.save.failed") + ": $message",
+                NacosSearchBundle.message("common.error")
+            )
+        }
+    }
+
+    private fun openHistoryBrowser() {
+        val config = currentConfiguration ?: return
+        coroutineScope.launch {
+            val context = selectedOperationContext()
+            if (context == null) {
+                withContext(Dispatchers.Main) {
+                    com.intellij.openapi.ui.Messages.showErrorDialog(
+                        NacosSearchBundle.message("error.connection.incomplete"),
+                        NacosSearchBundle.message("common.error")
+                    )
+                }
+                return@launch
+            }
+            val namespaceId = config.tenantId?.takeIf { it.isNotBlank() } ?: "public"
+            val target = nacosApiService.resolveOperationTarget(context, namespaceId).getOrElse {
+                withContext(Dispatchers.Main) {
+                    com.intellij.openapi.ui.Messages.showErrorDialog(
+                        it.message ?: it.toString(),
+                        NacosSearchBundle.message("common.error")
+                    )
+                }
+                return@launch
+            }
+            val currentText = editor?.document?.text ?: config.content
+            withContext(Dispatchers.Main) {
+                HistoryBrowserDialog(
+                    project = project,
+                    target = target,
+                    configuration = config,
+                    currentContent = currentText,
+                    gateway = nacosApiService.operationGateway(),
+                    generationProvider = {
+                        project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)
+                            ?.currentEpoch()
+                            ?: displayGeneration
+                    }
+                ).show()
+            }
+        }
+    }
+
+    /** Whether the detail editor has unsaved edits (for retarget guards). */
+    fun isDirty(): Boolean = isDirty
 
     // Legacy method for backward compatibility
     private fun disposeEditor() {
@@ -1212,6 +1393,7 @@ class ConfigDetailPanel internal constructor(
         copyButton.isEnabled = false
         editButton.isEnabled = false
         revertButton.isEnabled = false
+        historyButton.isEnabled = false
         dirtyLabel.isVisible = false
 
         // Reset status bar

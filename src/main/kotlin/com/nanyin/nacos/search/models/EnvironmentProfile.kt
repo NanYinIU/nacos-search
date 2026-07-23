@@ -88,7 +88,7 @@ data class EnvironmentProfile(
             apiPolicy = server.apiPolicy,
             authMode = server.authMode,
             principal = server.username.trim(),
-            writeIntent = false,
+            writeIntent = server.writeIntent,
             credentialSlotId = "${server.id.ifBlank { "default" }}:v1",
             credentialSlotVersion = 1
         )

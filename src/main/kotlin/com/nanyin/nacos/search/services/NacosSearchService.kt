@@ -1,8 +1,16 @@
 package com.nanyin.nacos.search.services
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.project.Project
+import com.nanyin.nacos.search.models.CacheAge
+import com.nanyin.nacos.search.models.CacheAgeCalculator
+import com.nanyin.nacos.search.models.CacheConfidence
+import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.services.operations.SearchCoverage
+import com.nanyin.nacos.search.services.operations.contentSearchCapability
+import com.nanyin.nacos.search.services.operations.SearchCapability
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosOperationContext
@@ -19,6 +27,7 @@ import java.util.concurrent.atomic.AtomicLong
  */
 @Service(Service.Level.PROJECT)
 class NacosSearchService(
+    private val project: Project? = null,
     private val indexRequester: NamespaceIndexRequester? = null
 ) {
     private val logger = thisLogger()
@@ -143,6 +152,11 @@ class NacosSearchService(
             val pageSize: Int,
             val pagesAvailable: Int,
             val source: SearchSource = SearchSource.REMOTE,
+            val confidence: CacheConfidence = CacheConfidence.remoteConfirmed(
+                System.currentTimeMillis(),
+                DatasetCompleteness.COMPLETE
+            ),
+            val coverage: SearchCoverage? = null,
             val fromCache: Boolean = false,
             val request: SearchRequest? = null
         ) : SearchState()
@@ -207,6 +221,7 @@ class NacosSearchService(
        // result is only published if it is still the latest request.
        searchJob?.cancel()
        val generation = requestGeneration.incrementAndGet()
+       val sessionTicket = captureSessionTicket(request)
        try {
            _searchState.value = SearchState.Loading
 
@@ -216,14 +231,24 @@ class NacosSearchService(
            } else {
                searchWithRemoteList(request, nacosApiService)
            }
-           publishIfCurrent(generation, result, request)
+           publishIfCurrent(generation, result, request, sessionTicket)
        } catch (e: Exception) {
-           if (generation == requestGeneration.get()) {
+           if (generation == requestGeneration.get() && sessionTicket?.isCurrent() != false) {
                _searchState.value = SearchState.Error("搜索过程中发生错误: ${e.message}", e)
            }
            logger.warn("Search error", e)
        }
    }
+
+    private fun captureSessionTicket(request: SearchRequest): OperationTicket? {
+        val epochs = project?.getService(ProjectSessionEpochs::class.java) ?: return null
+        val identity = request.operationContext?.identity
+            ?: request.serverSnapshot?.identity
+            ?: settings.captureOperationContext(request.serverId.takeIf { it.isNotBlank() })
+                .getOrNull()?.identity
+            ?: return null
+        return epochs.capture(identity)
+    }
 
     private suspend fun searchWithRemoteList(
         request: SearchRequest,
@@ -243,7 +268,14 @@ class NacosSearchService(
             if (cached != null) {
                 val configurations = cached.pageItems.map { it.toMetadataConfiguration() }
                 lastCompletedRequestKey = requestKey
-                return Result.success(SearchExecutionResult(cached, configurations, SearchSource.CACHE))
+                return Result.success(
+                    SearchExecutionResult(
+                        cached,
+                        configurations,
+                        SearchSource.CACHE,
+                        confidenceFor(SearchSource.CACHE, configurations.size)
+                    )
+                )
             }
         }
         val result = if (request.operationContext == null && request.serverId.isBlank()) {
@@ -281,7 +313,15 @@ class NacosSearchService(
             val response = result.getOrNull()!!
             val configurations = response.pageItems.map { it.toMetadataConfiguration() }
             lastCompletedRequestKey = requestKey
-            return Result.success(SearchExecutionResult(response, configurations, SearchSource.REMOTE))
+            return Result.success(
+                SearchExecutionResult(
+                    response,
+                    configurations,
+                    SearchSource.REMOTE,
+                    confidenceFor(SearchSource.REMOTE, configurations.size),
+                    coverageFor(request, context, response.totalCount)
+                )
+            )
         }
 
         val stale = cacheService.getListPage(
@@ -292,7 +332,14 @@ class NacosSearchService(
         )
         if (stale != null) {
             val configurations = stale.pageItems.map { it.toMetadataConfiguration() }
-            return Result.success(SearchExecutionResult(stale, configurations, SearchSource.STALE_CACHE))
+            return Result.success(
+                SearchExecutionResult(
+                    stale,
+                    configurations,
+                    SearchSource.STALE_CACHE,
+                    confidenceFor(SearchSource.STALE_CACHE, configurations.size)
+                )
+            )
         }
 
         return Result.failure(result.exceptionOrNull() ?: Exception("Unknown search error"))
@@ -367,16 +414,26 @@ class NacosSearchService(
             }
         )
         lastCompletedRequestKey = request.toCacheKey()
-        return Result.success(SearchExecutionResult(response, fromIndex, source))
+        return Result.success(
+            SearchExecutionResult(
+                response,
+                fromIndex,
+                source,
+                confidenceFor(source, fromIndex.size, filtered.size),
+                coverageForLocalIndex(request, context, filtered.size, allConfigurations.size)
+            )
+        )
     }
 
    private fun publishIfCurrent(
        generation: Long,
        result: Result<SearchExecutionResult>,
-       request: SearchRequest
+       request: SearchRequest,
+       sessionTicket: OperationTicket?
    ) {
-       // Drop results from superseded requests
+       // Drop results from superseded requests or obsolete session epochs.
        if (generation != requestGeneration.get()) return
+       if (sessionTicket != null && !sessionTicket.isCurrent()) return
        if (result.isSuccess) {
             val execution = result.getOrNull()!!
             _paginationState.value = PaginationState(
@@ -392,6 +449,8 @@ class NacosSearchService(
                 pageSize = request.pageSize,
                 pagesAvailable = execution.response.pagesAvailable,
                 source = execution.source,
+                confidence = execution.confidence,
+                coverage = execution.coverage,
                 fromCache = execution.source != SearchSource.REMOTE,
                 request = request
             )
@@ -400,6 +459,64 @@ class NacosSearchService(
             val error = result.exceptionOrNull() ?: Exception("Unknown search error")
             _searchState.value = SearchState.Error("搜索失败: ${error.message}", error)
             logger.warn("Search failed", error)
+        }
+    }
+
+    private fun confidenceFor(
+        source: SearchSource,
+        pageCount: Int,
+        totalCount: Int = pageCount
+    ): CacheConfidence {
+        val completeness = if (totalCount > 0 && pageCount < totalCount) {
+            DatasetCompleteness.PARTIAL
+        } else {
+            DatasetCompleteness.COMPLETE
+        }
+        val now = System.currentTimeMillis()
+        val age = CacheAgeCalculator.compute(now, now, settings.getCacheTtlMillis())
+        return when (source) {
+            SearchSource.REMOTE -> CacheConfidence.remoteConfirmed(now, completeness)
+            SearchSource.CACHE -> CacheConfidence.restoredUnconfirmed(completeness, age, now)
+            SearchSource.STALE_CACHE -> CacheConfidence.refreshFailed(
+                completeness,
+                CacheAge.STALE,
+                now - settings.getCacheTtlMillis()
+            )
+        }
+    }
+
+    private fun coverageFor(
+        request: SearchRequest,
+        context: NacosOperationContext,
+        totalCount: Int
+    ): SearchCoverage? {
+        if (!request.searchContent && request.query.isBlank()) return null
+        return when (contentSearchCapability(context.resolvedGeneration)) {
+            SearchCapability.SERVER_SIDE -> SearchCoverage.complete(totalCount, totalCount)
+            SearchCapability.COVERAGE_LIMITED -> SearchCoverage.partial(
+                totalCount,
+                totalCount,
+                "V1 content search is coverage-limited"
+            )
+            SearchCapability.UNKNOWN -> null
+        }
+    }
+
+    private fun coverageForLocalIndex(
+        request: SearchRequest,
+        context: NacosOperationContext,
+        matched: Int,
+        total: Int
+    ): SearchCoverage? {
+        if (!request.searchContent && request.query.isBlank()) return null
+        return when (contentSearchCapability(context.resolvedGeneration)) {
+            SearchCapability.SERVER_SIDE -> SearchCoverage.complete(matched, total)
+            SearchCapability.COVERAGE_LIMITED -> SearchCoverage.partial(
+                matched,
+                total,
+                "V1 local index only"
+            )
+            SearchCapability.UNKNOWN -> SearchCoverage.localComplete(matched, total)
         }
     }
     
@@ -536,7 +653,9 @@ class NacosSearchService(
     private data class SearchExecutionResult(
         val response: NacosApiService.ConfigListResponse,
         val configurations: List<NacosConfiguration>,
-        val source: SearchSource
+        val source: SearchSource,
+        val confidence: CacheConfidence,
+        val coverage: SearchCoverage? = null
     )
 
     private fun NacosApiService.ConfigItem.toMetadataConfiguration(): NacosConfiguration =

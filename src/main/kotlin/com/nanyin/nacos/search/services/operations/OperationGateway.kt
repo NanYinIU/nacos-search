@@ -116,6 +116,29 @@ class OperationGateway(
         }
     }
 
+    /**
+     * Dispatches a single publish write to the adapter for [target]'s generation.
+     * Callers that need the full controlled state machine should use
+     * [PublishController] with [OperationGatewayPublishGateway], not this method alone.
+     */
+    suspend fun publish(
+        target: OperationTarget,
+        command: PublishCommand
+    ): Result<PublishOutcome> {
+        val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
+        return adapter.publish(target, command)
+    }
+
+    suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> {
+        val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
+        if (adapter !is NamespaceDiscoveryCapability) {
+            return Result.failure(
+                RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support namespace discovery")
+            )
+        }
+        return adapter.discoverNamespaces(target)
+    }
+
     private fun acceptObservation(key: String, seq: Long): Boolean =
         observationGates.computeIfAbsent(key) { ObservationGate() }.acceptIfNewer(seq)
 
