@@ -1,0 +1,19 @@
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosCredentialStore.kt
+  s_c5999ed292c3aa::t_b929c9a974ef46 7-11,17-23,25,30-35,41-49,57-66,74-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "2063feec98daddf276e11356da88557d6fa9b4ff",
+  "prompts": {},
+  "sessions": {
+    "s_c5999ed292c3aa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8cbc-cd1a-7002-a4b8-84e2d12298cd",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
