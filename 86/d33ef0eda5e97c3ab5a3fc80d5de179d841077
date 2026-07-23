@@ -1,0 +1,21 @@
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanel.kt
+  s_e5c5adf161de06::t_aa30413ac6f310 255-280,284,287-290,293-294,296-298,302,306-309,340-360,362,388,395,397,399-402,405,444,524,526-527,539,542-543,1008,1014,1016,1438,1440,1444
+src/test/kotlin/com/nanyin/nacos/search/ui/UiButtonInteractionTest.kt
+  s_e5c5adf161de06::t_2e6930575819da 17,235,237,239-245,249-256
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "86d33ef0eda5e97c3ab5a3fc80d5de179d841077",
+  "prompts": {},
+  "sessions": {
+    "s_e5c5adf161de06": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8e76-cbcc-7560-ac39-b4154a21ebff",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
