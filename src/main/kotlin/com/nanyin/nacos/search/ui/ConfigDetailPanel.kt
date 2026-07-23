@@ -32,6 +32,7 @@ import com.intellij.ui.AnimatedIcon
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
+import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
@@ -42,7 +43,6 @@ import com.nanyin.nacos.search.services.operations.PublishState
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
-import com.nanyin.nacos.search.settings.selectedNacosProfileId
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.ActionEvent
@@ -77,7 +77,7 @@ class ConfigDetailPanel internal constructor(
                 operationContext = withContext(Dispatchers.IO) {
                     project.getService(NacosProjectSession::class.java)?.let { session ->
                         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-                        session.healSelection(settings)
+                        // Do not heal: deleted explicit profiles must fail closed (ADR 0025).
                         settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
                     }
                 }
@@ -95,13 +95,19 @@ class ConfigDetailPanel internal constructor(
     private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
     private suspend fun selectedOperationContext() = withContext(Dispatchers.IO) {
         project.getService(NacosProjectSession::class.java)?.let { session ->
-            session.healSelection(settings)
+            // Do not heal: deleted explicit profiles must fail closed (ADR 0025).
             settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
         }
     }
 
     /** Project-selected profile — not the app-wide Settings "active"/default. */
-    private fun selectedProfile() = settings.getProfile(project.selectedNacosProfileId(settings))
+    private fun selectedProfile(): EnvironmentProfile? {
+        val profileId = project.getService(NacosProjectSession::class.java)
+            ?.sessionState?.selectedProfileId
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+        return settings.getProfile(profileId)
+    }
 
     /**
      * Namespace for history/publish. Prefer the config's tenant; when list APIs
@@ -506,6 +512,7 @@ private fun setupEventHandlers() {
      * Restores the read-only view mode: locks the editor and re-shows the Edit button.
      */
     private fun exitEditMode() {
+        boundEditTarget = null
         editor?.document?.setReadOnly(true)
         // Restore view mode: re-show Edit and hide the Save/Revert commit buttons
         editButton.isVisible = true
@@ -951,7 +958,12 @@ private fun setupEventHandlers() {
     }
     
     private fun displayConfigurationContentSafely(configuration: NacosConfiguration) {
+        val generation = displayGeneration
+        val expectedKey = configuration.getKey()
         ApplicationManager.getApplication().invokeLater({
+            if (generation != displayGeneration || currentConfiguration?.getKey() != expectedKey) {
+                return@invokeLater
+            }
             // Dispose previous editor safely
             disposeEditorSafely()
             
@@ -963,6 +975,10 @@ private fun setupEventHandlers() {
                 
                 // Reset state for new editor
                 editorState.set(EditorState.NONE)
+            }
+
+            if (generation != displayGeneration || currentConfiguration?.getKey() != expectedKey) {
+                return@invokeLater
             }
             
             val content = configuration.content
@@ -1009,8 +1025,8 @@ private fun setupEventHandlers() {
                     }
                 })
 
-                // Register with Disposer for proper cleanup
-                Disposer.register(this) { EditorFactory.getInstance().releaseEditor(newEditor) }
+                // disposeEditorSafely() releases on swap and panel dispose; avoid
+                // stacking Disposer callbacks that retain every past editor.
                 
                 editorState.set(EditorState.ACTIVE)
                 newEditor
@@ -1289,10 +1305,16 @@ private fun setupEventHandlers() {
                     baselineAppName = config.appName,
                     baselineDesc = config.desc,
                     baselineConfigTags = config.configTags,
-                    draftContent = textToSave
+                    draftContent = textToSave,
+                    writesEnabled = profile.writeIntent
                 )
+                val expectedKey = config.getKey()
+                val expectedGeneration = displayGeneration
                 val publishResult = nacosApiService.controlledPublish(session)
                 withContext(Dispatchers.Main) {
+                    if (expectedGeneration != displayGeneration || currentConfiguration?.getKey() != expectedKey) {
+                        return@withContext
+                    }
                     when (val state = publishResult.state) {
                         is PublishState.Verified -> {
                             val verified = publishResult.verifiedDetail
@@ -1300,7 +1322,6 @@ private fun setupEventHandlers() {
                             if (verified != null) {
                                 currentConfiguration = verified
                             }
-                            boundEditTarget = null
                             exitEditMode()
                             saveButton.isEnabled = false
                             revertButton.isEnabled = false
@@ -1423,6 +1444,7 @@ private fun setupEventHandlers() {
         setLoadingState(false)
         
         currentConfiguration = null
+        boundEditTarget = null
         disposeEditorSafely()
         showEmptyState()
         editButton.isVisible = true

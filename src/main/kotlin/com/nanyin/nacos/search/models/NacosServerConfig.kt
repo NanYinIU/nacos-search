@@ -17,7 +17,8 @@ data class NacosServerConfig(
     var namespace: String = "public",
     /** Explicit protocol choice persisted with the profile-compatible server draft. */
     var apiPolicy: NacosApiPolicy = NacosApiPolicy.AUTO,
-    var authMode: AuthMode = AuthMode.NACOS_PASSWORD,
+    /** Empty-credential profiles start anonymous (ADR 0040); credentials upgrade on apply. */
+    var authMode: AuthMode = AuthMode.ANONYMOUS,
     var defaultGroup: String = "DEFAULT_GROUP",
     var connectionTimeoutMs: Int = 30000,
     var autoRefreshOnOpen: Boolean = true,

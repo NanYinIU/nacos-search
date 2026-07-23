@@ -16,6 +16,20 @@ import org.junit.jupiter.api.Test
 class PublishControllerTest {
 
     @Test
+    fun `writes disabled returns read-only without calling gateway`() = runBlocking {
+        val gateway = ScriptedPublishGateway(
+            preflightResult = Result.success(baseDetail())
+        )
+        val controller = PublishController(gateway)
+        val session = v1EditSession(draftContent = "new content").copy(writesEnabled = false)
+
+        val result = controller.publish(session)
+
+        assertInstanceOf<PublishState.ReadOnly>(result.state)
+        assertTrue(result.isDirty)
+    }
+
+    @Test
     fun `preflight detects deleted target`() = runBlocking {
         val controller = PublishController(ScriptedPublishGateway(
             preflightResult = Result.success(null)
@@ -297,7 +311,8 @@ class PublishControllerTest {
             baselineContent = baselineContent, baselineMd5 = baselineMd5,
             baselineType = "yaml", baselineAppName = null,
             baselineDesc = null, baselineConfigTags = null,
-            draftContent = draftContent
+            draftContent = draftContent,
+            writesEnabled = true
         )
     }
 }

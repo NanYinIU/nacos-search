@@ -23,7 +23,7 @@ class NacosSettingsTest {
         assertEquals("", settings.username)
         assertEquals("", settings.password)
         assertEquals("public", settings.namespace)
-        assertEquals(AuthMode.NACOS_PASSWORD, settings.authMode)
+        assertEquals(AuthMode.ANONYMOUS, settings.authMode)
         assertTrue(settings.enableTokenAuth)
         assertEquals(30, settings.tokenCacheDurationMinutes)
         assertTrue(settings.autoTokenRefresh)
@@ -571,7 +571,7 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `project session healSelection replaces blank or missing profile ids`() {
+    fun `project session healSelection replaces blank profile ids but not explicit deleted ones`() {
         settings.applyServers(
             listOf(
                 NacosServerConfig(
@@ -585,12 +585,20 @@ class NacosSettingsTest {
             ),
             "s_ok"
         )
-        val session = NacosProjectSessionState(
+        val blank = NacosProjectSessionState(
+            selectedProfileId = "",
+            namespaceId = "public",
+            selectionWasExplicit = false
+        )
+        blank.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
+        assertEquals("s_ok", blank.selectedProfileId)
+
+        val explicitDeleted = NacosProjectSessionState(
             selectedProfileId = "ghost",
             namespaceId = "public",
             selectionWasExplicit = true
         )
-        session.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
-        assertEquals("s_ok", session.selectedProfileId)
+        explicitDeleted.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
+        assertEquals("ghost", explicitDeleted.selectedProfileId)
     }
 }

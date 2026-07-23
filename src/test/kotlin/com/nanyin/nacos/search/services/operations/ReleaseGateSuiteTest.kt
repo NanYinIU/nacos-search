@@ -48,7 +48,8 @@ class ReleaseGateSuiteTest {
             baselineContent = "original", baselineMd5 = "md5",
             baselineType = "yaml", baselineAppName = null,
             baselineDesc = null, baselineConfigTags = null,
-            draftContent = "edited"
+            draftContent = "edited",
+            writesEnabled = true
         )
         assertEquals("app.yaml", session.dataId)
         assertEquals("G", session.group)
@@ -75,7 +76,8 @@ class ReleaseGateSuiteTest {
             baselineContent = "original", baselineMd5 = "md5",
             baselineType = "yaml", baselineAppName = null,
             baselineDesc = null, baselineConfigTags = null,
-            draftContent = "edited"
+            draftContent = "edited",
+            writesEnabled = true
         )
 
         val result = controller.publish(session)
@@ -190,7 +192,8 @@ class ReleaseGateSuiteTest {
                 baselineContent = "original", baselineMd5 = "md5",
                 baselineType = "yaml", baselineAppName = null,
                 baselineDesc = null, baselineConfigTags = null,
-                draftContent = "new content"
+                draftContent = "new content",
+                writesEnabled = true
             )
 
             val result = controller.publish(session)

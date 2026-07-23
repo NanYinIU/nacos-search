@@ -21,6 +21,7 @@ import com.nanyin.nacos.search.services.operations.HistoryQuery
 import com.nanyin.nacos.search.services.operations.HistoryTimestamps
 import com.nanyin.nacos.search.services.operations.OperationGateway
 import com.nanyin.nacos.search.services.operations.OperationTarget
+import com.nanyin.nacos.search.services.operations.RemoteOperationError
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -101,7 +102,9 @@ class HistoryBrowserDialog(
      */
     private fun onDialogUi(action: () -> Unit) {
         ApplicationManager.getApplication().invokeLater({
-            if (!isDisposed) action()
+            // Re-check generation on the EDT: a session change can land between
+            // the controller's IO checkpoint and this modal resume.
+            if (!isDisposed && generationProvider() == expectedGeneration) action()
         }, ModalityState.any())
     }
 
@@ -217,10 +220,14 @@ class HistoryBrowserDialog(
             val detail = controller.loadDetail(target, entry.id, expectedGeneration).getOrElse { error ->
                 onDialogUi {
                     if (epoch != selectionEpoch) return@onDialogUi
-                    HistoryDiffPresenter.showError(
-                        diffPanel,
-                        error.message ?: NacosSearchBundle.message("history.failed", error.toString())
-                    )
+                    if (error is RemoteOperationError.Cancelled) {
+                        HistoryDiffPresenter.showEmpty(diffPanel, NacosSearchBundle.message("history.stale"))
+                    } else {
+                        HistoryDiffPresenter.showError(
+                            diffPanel,
+                            error.message ?: NacosSearchBundle.message("history.failed", error.toString())
+                        )
+                    }
                 }
                 return@launch
             }
@@ -240,14 +247,22 @@ class HistoryBrowserDialog(
             val leftDetail = controller.loadDetail(target, left.id, expectedGeneration).getOrElse {
                 onDialogUi {
                     if (epoch != selectionEpoch) return@onDialogUi
-                    HistoryDiffPresenter.showError(diffPanel, it.message ?: it.toString())
+                    if (it is RemoteOperationError.Cancelled) {
+                        HistoryDiffPresenter.showEmpty(diffPanel, NacosSearchBundle.message("history.stale"))
+                    } else {
+                        HistoryDiffPresenter.showError(diffPanel, it.message ?: it.toString())
+                    }
                 }
                 return@launch
             }
             val rightDetail = controller.loadDetail(target, right.id, expectedGeneration).getOrElse {
                 onDialogUi {
                     if (epoch != selectionEpoch) return@onDialogUi
-                    HistoryDiffPresenter.showError(diffPanel, it.message ?: it.toString())
+                    if (it is RemoteOperationError.Cancelled) {
+                        HistoryDiffPresenter.showEmpty(diffPanel, NacosSearchBundle.message("history.stale"))
+                    } else {
+                        HistoryDiffPresenter.showError(diffPanel, it.message ?: it.toString())
+                    }
                 }
                 return@launch
             }

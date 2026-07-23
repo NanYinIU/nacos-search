@@ -178,7 +178,7 @@ class NacosConfigurableInteractionTest {
             ),
             (0 until authCombo.itemCount).map { authCombo.getItemAt(it) }
         )
-        assertEquals(AuthMode.NACOS_PASSWORD, authCombo.selectedItem)
+        assertEquals(AuthMode.ANONYMOUS, authCombo.selectedItem)
 
         val advancedBody = findByAutomationId(component, "nacos.settings.advanced.body")
         assertNotNull(advancedBody)
