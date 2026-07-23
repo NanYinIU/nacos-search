@@ -1,10 +1,13 @@
 package com.nanyin.nacos.search.ui
 
+import com.intellij.diff.DiffManager
+import com.intellij.diff.DiffRequestPanel
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.openapi.ui.Messages
+import com.intellij.CommonBundle
+import com.intellij.ui.JBSplitter
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -15,6 +18,7 @@ import com.nanyin.nacos.search.services.operations.ConfigurationCoordinate
 import com.nanyin.nacos.search.services.operations.HistoryDiffPresenter
 import com.nanyin.nacos.search.services.operations.HistoryEntry
 import com.nanyin.nacos.search.services.operations.HistoryQuery
+import com.nanyin.nacos.search.services.operations.HistoryTimestamps
 import com.nanyin.nacos.search.services.operations.OperationGateway
 import com.nanyin.nacos.search.services.operations.OperationTarget
 import kotlinx.coroutines.CancellationException
@@ -25,26 +29,23 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.awt.BorderLayout
 import java.awt.Dimension
-import java.time.Instant
-import java.time.format.DateTimeFormatter
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
-import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JList
 import javax.swing.JPanel
-import javax.swing.JTextArea
 import javax.swing.ListSelectionModel
 
 /**
  * Read-only history browser for one configuration coordinate.
- * Supports open-body and Diff (history↔history, history↔current). No restore/publish.
+ *
+ * Left: revision list. Right: embedded IntelliJ Diff.
+ * - One selection → diff that revision against the current content.
+ * - Two selections → diff the two revisions against each other.
+ * No restore/publish. Open-body is intentionally omitted; the embedded diff is the primary view.
  *
  * Network work runs on [Dispatchers.IO]. UI updates are posted with
  * [ModalityState.any] so they run while this modal [DialogWrapper] is open.
- * Plain [com.intellij.openapi.application.EDT] / [Dispatchers.Main] without a
- * modality context is treated as NON_MODAL and will not resume until the
- * dialog closes — leaving the UI stuck on "Loading history…".
  */
 class HistoryBrowserDialog(
     private val project: Project,
@@ -67,18 +68,19 @@ class HistoryBrowserDialog(
             ): java.awt.Component {
                 super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
                 if (value is HistoryEntry) {
-                    text = "${value.id} · ${value.opType ?: "-"} · ${formatTs(value.lastModified)} · ${value.md5 ?: "-"}"
+                    val time = HistoryTimestamps.formatForDisplay(value.lastModified)
+                    val op = HistoryTimestamps.formatOpType(value.opType)
+                    text = "$time  ·  $op  ·  #${value.id}"
                 }
                 return this
             }
         }
     }
     private val statusLabel = JBLabel(NacosSearchBundle.message("history.loading"))
-    private val openButton = JButton(NacosSearchBundle.message("history.action.open")).apply { isEnabled = false }
-    private val diffCurrentButton = JButton(NacosSearchBundle.message("history.action.diff.current")).apply { isEnabled = false }
-    private val diffSelectedButton = JButton(NacosSearchBundle.message("history.action.diff.selected")).apply { isEnabled = false }
+    private lateinit var diffPanel: DiffRequestPanel
     private val expectedGeneration = generationProvider()
     private var entries: List<HistoryEntry> = emptyList()
+    private var selectionEpoch = 0L
 
     init {
         title = NacosSearchBundle.message(
@@ -86,11 +88,9 @@ class HistoryBrowserDialog(
             configuration.dataId,
             configuration.group
         )
+        setOKButtonText(CommonBundle.getCloseButtonText())
         init()
-        list.addListSelectionListener { updateActionEnabled() }
-        openButton.addActionListener { openSelectedBody() }
-        diffCurrentButton.addActionListener { diffWithCurrent() }
-        diffSelectedButton.addActionListener { diffSelectedPair() }
+        list.addListSelectionListener { refreshDiffForSelection() }
         loadFirstPage()
     }
 
@@ -106,19 +106,32 @@ class HistoryBrowserDialog(
     }
 
     override fun createCenterPanel(): JComponent {
-        val panel = JPanel(BorderLayout(0, 8))
-        panel.preferredSize = Dimension(640, 360)
-        panel.border = JBUI.Borders.empty(8)
-        panel.add(statusLabel, BorderLayout.NORTH)
-        panel.add(JBScrollPane(list), BorderLayout.CENTER)
-        val actions = JPanel().apply {
-            add(openButton)
-            add(diffCurrentButton)
-            add(diffSelectedButton)
+        diffPanel = DiffManager.getInstance().createRequestPanel(project, disposable, window)
+        HistoryDiffPresenter.showEmpty(
+            diffPanel,
+            NacosSearchBundle.message("history.diff.hint")
+        )
+
+        val left = JPanel(BorderLayout()).apply {
+            add(JBScrollPane(list), BorderLayout.CENTER)
+            preferredSize = Dimension(280, 480)
         }
-        panel.add(actions, BorderLayout.SOUTH)
-        return panel
+
+        val splitter = JBSplitter(false, 0.28f).apply {
+            firstComponent = left
+            secondComponent = diffPanel.component
+            setAndLoadSplitterProportionKey("nacos.search.history.splitter")
+        }
+
+        return JPanel(BorderLayout(0, 8)).apply {
+            preferredSize = Dimension(960, 560)
+            border = JBUI.Borders.empty(8)
+            add(statusLabel, BorderLayout.NORTH)
+            add(splitter, BorderLayout.CENTER)
+        }
     }
+
+    override fun createActions() = arrayOf(okAction)
 
     override fun dispose() {
         scope.cancel()
@@ -176,88 +189,75 @@ class HistoryBrowserDialog(
                     "history.loaded",
                     outcome.page.totalCount
                 )
-                updateActionEnabled()
+                if (entries.isNotEmpty()) {
+                    list.selectedIndex = 0
+                }
             }
             HistoryBrowserController.Outcome.Loading -> Unit
         }
     }
 
-    private fun updateActionEnabled() {
-        val selected = list.selectedIndices.size
-        openButton.isEnabled = selected == 1
-        diffCurrentButton.isEnabled = selected == 1
-        diffSelectedButton.isEnabled = selected == 2
+    private fun refreshDiffForSelection() {
+        if (!::diffPanel.isInitialized) return
+        val selected = controller.selectedEntries(entries, list.selectedIndices)
+        val epoch = ++selectionEpoch
+        when (selected.size) {
+            1 -> loadHistoryVsCurrent(selected[0], epoch)
+            2 -> loadHistoryVsHistory(selected[0], selected[1], epoch)
+            else -> HistoryDiffPresenter.showEmpty(
+                diffPanel,
+                NacosSearchBundle.message("history.diff.hint")
+            )
+        }
     }
 
-    private fun openSelectedBody() {
-        val entry = controller.selectedEntries(entries, list.selectedIndices).singleOrNull() ?: return
+    private fun loadHistoryVsCurrent(entry: HistoryEntry, epoch: Long) {
+        HistoryDiffPresenter.showLoading(diffPanel, NacosSearchBundle.message("history.diff.loading"))
         scope.launch {
             val detail = controller.loadDetail(target, entry.id, expectedGeneration).getOrElse { error ->
                 onDialogUi {
-                    Messages.showErrorDialog(
-                        project,
-                        error.message ?: NacosSearchBundle.message("history.failed", error.toString()),
-                        NacosSearchBundle.message("history.dialog.title", configuration.dataId, configuration.group)
+                    if (epoch != selectionEpoch) return@onDialogUi
+                    HistoryDiffPresenter.showError(
+                        diffPanel,
+                        error.message ?: NacosSearchBundle.message("history.failed", error.toString())
                     )
                 }
                 return@launch
             }
             onDialogUi {
-                val area = JTextArea(detail.content).apply {
-                    isEditable = false
-                    lineWrap = true
-                    wrapStyleWord = true
-                }
-                Messages.showMessageDialog(
-                    project,
-                    area.text,
-                    NacosSearchBundle.message("history.body.title", detail.id),
-                    Messages.getInformationIcon()
-                )
-            }
-        }
-    }
-
-    private fun diffWithCurrent() {
-        val entry = controller.selectedEntries(entries, list.selectedIndices).singleOrNull() ?: return
-        scope.launch {
-            val detail = controller.loadDetail(target, entry.id, expectedGeneration).getOrElse { error ->
-                onDialogUi {
-                    Messages.showErrorDialog(project, error.message ?: error.toString(), title)
-                }
-                return@launch
-            }
-            onDialogUi {
-                HistoryDiffPresenter.show(
-                    project,
+                if (epoch != selectionEpoch) return@onDialogUi
+                HistoryDiffPresenter.showIn(
+                    diffPanel,
                     HistoryDiffPresenter.historyToCurrent(detail, currentContent, configuration.type)
                 )
             }
         }
     }
 
-    private fun diffSelectedPair() {
-        val selected = controller.selectedEntries(entries, list.selectedIndices)
-        if (selected.size != 2) return
+    private fun loadHistoryVsHistory(left: HistoryEntry, right: HistoryEntry, epoch: Long) {
+        HistoryDiffPresenter.showLoading(diffPanel, NacosSearchBundle.message("history.diff.loading"))
         scope.launch {
-            val left = controller.loadDetail(target, selected[0].id, expectedGeneration).getOrElse {
+            val leftDetail = controller.loadDetail(target, left.id, expectedGeneration).getOrElse {
                 onDialogUi {
-                    Messages.showErrorDialog(project, it.message ?: it.toString(), title)
+                    if (epoch != selectionEpoch) return@onDialogUi
+                    HistoryDiffPresenter.showError(diffPanel, it.message ?: it.toString())
                 }
                 return@launch
             }
-            val right = controller.loadDetail(target, selected[1].id, expectedGeneration).getOrElse {
+            val rightDetail = controller.loadDetail(target, right.id, expectedGeneration).getOrElse {
                 onDialogUi {
-                    Messages.showErrorDialog(project, it.message ?: it.toString(), title)
+                    if (epoch != selectionEpoch) return@onDialogUi
+                    HistoryDiffPresenter.showError(diffPanel, it.message ?: it.toString())
                 }
                 return@launch
             }
             onDialogUi {
-                HistoryDiffPresenter.show(project, HistoryDiffPresenter.historyToHistory(left, right))
+                if (epoch != selectionEpoch) return@onDialogUi
+                HistoryDiffPresenter.showIn(
+                    diffPanel,
+                    HistoryDiffPresenter.historyToHistory(leftDetail, rightDetail)
+                )
             }
         }
     }
-
-    private fun formatTs(millis: Long): String =
-        DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochMilli(millis))
 }

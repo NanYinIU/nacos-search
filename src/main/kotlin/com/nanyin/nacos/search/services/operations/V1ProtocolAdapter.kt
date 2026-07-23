@@ -400,8 +400,14 @@ class V1ProtocolAdapter(
                     tenantId = normalizeTenant(item.tenant),
                     type = item.type,
                     md5 = item.md5,
-                    lastModified = item.lastModified ?: 0L,
-                    opType = item.opType
+                    lastModified = HistoryTimestamps.resolveMillis(
+                        lastModified = item.lastModified,
+                        modifyTime = item.modifyTime,
+                        createTime = item.createTime,
+                        lastModifiedTime = item.lastModifiedTime,
+                        createdTime = item.createdTime
+                    ),
+                    opType = item.opType?.trim()
                 )
             }
         )
@@ -427,8 +433,14 @@ class V1ProtocolAdapter(
             content = raw.content ?: "",
             type = raw.type,
             md5 = raw.md5,
-            lastModified = raw.lastModified ?: 0L,
-            opType = raw.opType
+            lastModified = HistoryTimestamps.resolveMillis(
+                lastModified = raw.lastModified,
+                modifyTime = raw.modifyTime,
+                createTime = raw.createTime,
+                lastModifiedTime = raw.lastModifiedTime,
+                createdTime = raw.createdTime
+            ),
+            opType = raw.opType?.trim()
         )
     } catch (error: RemoteOperationError) {
         throw error
@@ -609,6 +621,10 @@ class V1ProtocolAdapter(
         val type: String? = null,
         val md5: String? = null,
         val lastModified: Long? = null,
+        val modifyTime: Long? = null,
+        val createTime: Long? = null,
+        val lastModifiedTime: String? = null,
+        val createdTime: String? = null,
         val opType: String? = null
     )
 
@@ -621,6 +637,10 @@ class V1ProtocolAdapter(
         val type: String? = null,
         val md5: String? = null,
         val lastModified: Long? = null,
+        val modifyTime: Long? = null,
+        val createTime: Long? = null,
+        val lastModifiedTime: String? = null,
+        val createdTime: String? = null,
         val opType: String? = null
     )
 
