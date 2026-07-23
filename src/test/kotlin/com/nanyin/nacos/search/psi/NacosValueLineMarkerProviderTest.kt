@@ -181,7 +181,7 @@ class NacosValueLineMarkerProviderTest {
         val local = settings.getActiveServer()
         settings.servers = mutableListOf(local, qa)
         settings.profileMigrationCompleted = false
-        settings.migrateLegacyProfiles()
+        settings.migrationDefaults()
 
         val project = ProjectManager.getInstance().defaultProject
         project.getService(NacosProjectSession::class.java).select("qa", "public")
@@ -202,7 +202,7 @@ class NacosValueLineMarkerProviderTest {
                 ttl = 60_000L
             )
             // App-active profile cache stays empty — gutter must not look there.
-            NacosKeyResolver.refreshIndex(cache, settings.serverUrl, qaIdentity)
+            NacosKeyResolver.refreshIndex(cache, qaIdentity)
         }
 
         val marker = markerFor(
