@@ -23,7 +23,7 @@ class NacosSettingsTest {
         assertEquals("", settings.username)
         assertEquals("", settings.password)
         assertEquals("public", settings.namespace)
-        assertEquals(AuthMode.ANONYMOUS, settings.authMode)
+        assertEquals(AuthMode.NACOS_PASSWORD, settings.authMode)
         assertTrue(settings.enableTokenAuth)
         assertEquals(30, settings.tokenCacheDurationMinutes)
         assertTrue(settings.autoTokenRefresh)

@@ -14,6 +14,7 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.never
 import org.mockito.kotlin.whenever
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.intellij.openapi.application.ApplicationManager
@@ -29,7 +30,13 @@ class NacosSearchServiceTest {
 
     @BeforeEach
     fun resetSharedSettingsToAnonymousDefaults() {
-        ApplicationManager.getApplication().getService(NacosSettings::class.java).resetToDefaults()
+        // Product defaults are NACOS_PASSWORD; these mocked search paths still exercise
+        // anonymous credential-less stubs, so force ANONYMOUS after reset.
+        ApplicationManager.getApplication().getService(NacosSettings::class.java).apply {
+            resetToDefaults()
+            authMode = AuthMode.ANONYMOUS
+            getActiveServer().authMode = AuthMode.ANONYMOUS
+        }
     }
 
     @Test
