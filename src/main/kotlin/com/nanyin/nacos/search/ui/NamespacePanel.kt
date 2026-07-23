@@ -190,13 +190,21 @@ class NamespacePanel(
             } ?: namespaceService.loadNamespacesAsync()
             val loaded = result.await()
             loaded.onSuccess { loadedNamespaces ->
-                namespaces = loadedNamespaces
+                namespaces = loadedNamespaces.ifEmpty { listOf(NamespaceInfo.createPublicNamespace()) }
                 updateNamespaceButton()
                 setLoadingState(false)
-                updateStatus(NacosSearchBundle.message("namespace.loaded.namespaces", loadedNamespaces.size))
+                val status = when {
+                    namespaces.size == 1 && namespaces.first().isPublicNamespace() ->
+                        NacosSearchBundle.message("namespace.discovery.publicOnly")
+                    else -> NacosSearchBundle.message("namespace.loaded.namespaces", namespaces.size)
+                }
+                updateStatus(status)
             }.onFailure { error ->
+                // Keep public namespace selectable and allow manual ID entry.
+                namespaces = listOf(NamespaceInfo.createPublicNamespace())
+                updateNamespaceButton()
                 setLoadingState(false)
-                updateStatus(NacosSearchBundle.message("namespace.failed.load"))
+                updateStatus(NacosSearchBundle.message("namespace.discovery.manual"))
                 showError(NacosSearchBundle.message("namespace.failed.load"), error.message ?: NacosSearchBundle.message("error.unknown"))
             }
             loaded
@@ -269,6 +277,7 @@ class NamespacePanel(
                 projectSession?.seedIfNew(settings.migrationDefaults())
                 val profileId = projectSession?.sessionState?.selectedProfileId.orEmpty().ifBlank { settings.activeServerId }
                 projectSession?.select(profileId, namespace.namespaceId)
+                project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)?.bump()
                 onSelectionChanged?.invoke(namespace)
                 updateStatus(NacosSearchBundle.message("namespace.selected", namespace.namespaceName))
             } catch (e: Exception) {
@@ -424,7 +433,11 @@ class NamespacePanel(
             isLoading = loading
             loadingLabel.isVisible = loading
             refreshButton.isEnabled = !loading
+            // Keep the control enabled whenever at least public (or a manual ID) is available.
             namespaceButton.isEnabled = !loading && namespaces.isNotEmpty()
+            if (!loading && namespaces.isNotEmpty()) {
+                namespaceButton.toolTipText = NacosSearchBundle.message("namespace.discovery.manual")
+            }
         }
     }
 

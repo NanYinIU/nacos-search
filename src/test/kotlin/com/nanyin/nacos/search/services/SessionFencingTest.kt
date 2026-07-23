@@ -113,6 +113,20 @@ class SessionFencingTest {
         assertTrue(tombstones.isEntombed(identity("dev", 3)))
     }
 
+    @Test
+    fun `profile tombstone persists across state reload`() {
+        val original = ProfileTombstoneRegistry()
+        original.entomb("dev", 1)
+        original.entomb("sit", 2)
+
+        val restored = ProfileTombstoneRegistry()
+        restored.loadState(original.getState())
+
+        assertTrue(restored.isEntombed(identity("dev", 9)))
+        assertTrue(restored.isEntombed(identity("sit", 1)))
+        assertFalse(restored.isEntombed(identity("prod", 1)))
+    }
+
     // ── Observation high-water ordering ──
 
     @Test

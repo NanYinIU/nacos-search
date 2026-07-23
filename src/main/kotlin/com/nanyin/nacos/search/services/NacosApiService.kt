@@ -481,42 +481,37 @@ class NacosApiService(
            val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                ConfigurationRequired(listOf("Connection configuration is incomplete"))
            )
-           if (usesLockedGeneration(context)) {
+           val resolvedTarget = resolvedReadTarget(context, null).getOrElse { error ->
+               logger.warn("Failed to resolve generation for namespace discovery", error)
+               // Discovery failure must not hide a manually readable public namespace.
                return@withContext Result.success(listOf(NamespaceInfo.createPublicNamespace()))
            }
-           logger.debug("Fetching namespaces from captured endpoint: ${context.endpoint.value}")
-           val response = requestJsonWithReplay(context, NAMESPACE_ENDPOINT, emptyMap(), RequestPolicy.DIAGNOSTIC)
-
-           val apiResponse = gson.fromJson(response, object : TypeToken<NacosApiResponse<List<Map<String, Any>>>>() {}.type) as NacosApiResponse<List<Map<String, Any>>>
-            
-            if (apiResponse.data != null) {
-                val namespaces = apiResponse.data.mapNotNull { namespaceMap ->
-                    try {
-                        NamespaceInfo.fromJsonMap(namespaceMap)
-                    } catch (e: Exception) {
-                        logger.warn("Failed to parse namespace: $namespaceMap", e)
-                        null
-                    }
-                }
-                
-                // Always include public namespace if not present
-                val hasPublicNamespace = namespaces.any { it.isPublicNamespace() }
-                val finalNamespaces = if (!hasPublicNamespace) {
-                    listOf(NamespaceInfo.createPublicNamespace()) + namespaces
-                } else {
-                    namespaces
-                }
-                
-                Result.success(finalNamespaces)
-            } else {
-                logger.warn("Failed to get namespaces: ${apiResponse.getErrorMessage()}")
-                // Return public namespace as fallback
-                Result.success(listOf(NamespaceInfo.createPublicNamespace()))
-            }
+           logger.debug("Discovering namespaces via gateway for ${resolvedTarget.context.resolvedGeneration}")
+           val discovered = v1Gateway.discoverNamespaces(resolvedTarget)
+           discovered.fold(
+               onSuccess = { namespaces ->
+                   val mapped = namespaces.map { ns ->
+                       NamespaceInfo(
+                           namespaceId = if (ns.namespaceId == "public") "" else ns.namespaceId,
+                           namespaceName = ns.displayName,
+                           namespaceDesc = ns.description.orEmpty(),
+                           configCount = ns.configCount?.toInt() ?: 0
+                       )
+                   }
+                   val hasPublic = mapped.any { it.isPublicNamespace() }
+                   Result.success(
+                       if (hasPublic) mapped else listOf(NamespaceInfo.createPublicNamespace()) + mapped
+                   )
+               },
+               onFailure = { error ->
+                   logger.warn("Namespace discovery unavailable: ${error.message}")
+                   // Capability/auth denial → public + manual entry UX; not a hard failure.
+                   Result.success(listOf(NamespaceInfo.createPublicNamespace()))
+               }
+           )
         } catch (e: Exception) {
             logger.warn("Error getting namespaces", e)
             if (e is ConfigurationRequired) return@withContext Result.failure(e)
-            // Return public namespace as fallback
             Result.success(listOf(NamespaceInfo.createPublicNamespace()))
         }
     }
@@ -817,7 +812,43 @@ class NacosApiService(
         val generation = generationResolver.resolve(probeTarget).getOrElse { error ->
             return Result.failure(error)
         }
+        persistLastKnownGeneration(context, generation)
         return Result.success(v1Target(lockedContext(context, generation), namespaceId))
+    }
+
+    private fun persistLastKnownGeneration(context: NacosOperationContext, generation: NacosApiGeneration) {
+        if (generation != NacosApiGeneration.V1 && generation != NacosApiGeneration.V3) return
+        try {
+            ApplicationManager.getApplication()
+                .getService(LastKnownGenerationStore::class.java)
+                ?.put(
+                    LastKnownGenerationStore.Key(
+                        profileId = context.identity.profileId,
+                        accessRevision = context.accessRevision,
+                        canonicalEndpoint = context.endpoint.value
+                    ),
+                    generation
+                )
+        } catch (_: Exception) {
+            // Persistence is best-effort outside a fully initialised application.
+        }
+    }
+
+    /** Offline bootstrap helper: last successful AUTO resolution for this access key. */
+    fun lastKnownGeneration(context: NacosOperationContext): NacosApiGeneration? {
+        return try {
+            ApplicationManager.getApplication()
+                .getService(LastKnownGenerationStore::class.java)
+                ?.get(
+                    LastKnownGenerationStore.Key(
+                        profileId = context.identity.profileId,
+                        accessRevision = context.accessRevision,
+                        canonicalEndpoint = context.endpoint.value
+                    )
+                )
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun lockedContext(

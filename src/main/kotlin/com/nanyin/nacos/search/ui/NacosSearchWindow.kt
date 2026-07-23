@@ -651,7 +651,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                             paginationPanel.setLoading(false)
                             configListPanel.setSearchQuery(searchPanel.getSearchQuery())
                             updateConfigurationList(state.configurations)
-                            configListPanel.setDataSourceStatus(state.source)
+                            configListPanel.setConfidenceStatus(state.confidence, state.coverage)
                             paginationPanel.updatePagination(
                                 NacosSearchService.PaginationState(
                                     currentPage = state.pageNumber,

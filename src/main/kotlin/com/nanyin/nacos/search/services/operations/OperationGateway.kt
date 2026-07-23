@@ -129,6 +129,16 @@ class OperationGateway(
         return adapter.publish(target, command)
     }
 
+    suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> {
+        val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
+        if (adapter !is NamespaceDiscoveryCapability) {
+            return Result.failure(
+                RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support namespace discovery")
+            )
+        }
+        return adapter.discoverNamespaces(target)
+    }
+
     private fun acceptObservation(key: String, seq: Long): Boolean =
         observationGates.computeIfAbsent(key) { ObservationGate() }.acceptIfNewer(seq)
 

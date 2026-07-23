@@ -1,5 +1,9 @@
 package com.nanyin.nacos.search.services
 
+import com.intellij.openapi.components.PersistentStateComponent
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.State
+import com.intellij.openapi.components.Storage
 import com.nanyin.nacos.search.models.AccessIdentity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -86,22 +90,42 @@ class OperationFence(private val registry: SessionEpochRegistry) {
 /**
  * Persists a profile deletion marker before cleanup. Once entombed, every
  * late credential, token, probe, session, index, detail, and cache completion
- * for that profile identity is rejected. The tombstone survives profile
- * re-creation with the same id so stale in-flight work can never resurrect
- * deleted state.
+ * for that profile identity is rejected. The tombstone survives IDE restarts
+ * and profile re-creation with the same id so stale in-flight work can never
+ * resurrect deleted state.
  */
-@com.intellij.openapi.components.Service(com.intellij.openapi.components.Service.Level.APP)
+@Service(Service.Level.APP)
+@State(name = "NacosProfileTombstones", storages = [Storage("nacos-profile-tombstones.xml")])
 class ProfileTombstoneRegistry(
     private val clock: () -> Long = System::currentTimeMillis
-) {
+) : PersistentStateComponent<ProfileTombstoneRegistry.State> {
     constructor() : this(System::currentTimeMillis)
+
+    data class State(
+        var profileIds: MutableSet<String> = linkedSetOf()
+    )
 
     private data class Tombstone(val profileId: String, val entombedAt: Long)
 
     private val tombstones = ConcurrentHashMap<String, Tombstone>()
+    private var state = State()
+
+    override fun getState(): State {
+        state.profileIds = tombstones.keys.toMutableSet()
+        return state
+    }
+
+    override fun loadState(state: State) {
+        this.state = state
+        tombstones.clear()
+        state.profileIds.forEach { id ->
+            tombstones[id] = Tombstone(id, clock())
+        }
+    }
 
     fun entomb(profileId: String, @Suppress("UNUSED_PARAMETER") accessRevision: Long) {
         tombstones[profileId] = Tombstone(profileId, clock())
+        state.profileIds.add(profileId)
     }
 
     /**
@@ -114,6 +138,7 @@ class ProfileTombstoneRegistry(
 
     fun clear(profileId: String) {
         tombstones.remove(profileId)
+        state.profileIds.remove(profileId)
     }
 }
 
