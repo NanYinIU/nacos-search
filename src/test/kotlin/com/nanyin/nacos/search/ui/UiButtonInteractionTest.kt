@@ -196,7 +196,8 @@ class UiButtonInteractionTest {
 
        assertEquals(Dimension(24, 22), previousButton.preferredSize)
        assertEquals(Dimension(24, 22), nextButton.preferredSize)
-        assertEquals(Dimension(72, 22), pageSizeComboBox.preferredSize)
+        assertEquals(Dimension(56, 22), pageSizeComboBox.preferredSize)
+        assertEquals(Dimension(56, 22), pageSizeComboBox.maximumSize)
 
         panel.onPreviousPage = { calls.add("previous") }
         panel.onNextPage = { calls.add("next") }
@@ -366,6 +367,11 @@ class UiButtonInteractionTest {
         var refreshCount = 0
 
         panel.onRefreshRequested = { refreshCount++ }
+
+        assertEquals(Dimension(28, 24), refreshButton.preferredSize)
+        assertEquals("toolbar", refreshButton.getClientProperty("JButton.buttonType"))
+        assertFalse(refreshButton.isBorderPainted)
+        assertFalse(refreshButton.isContentAreaFilled)
 
         runOnEdt {
             refreshButton.doClick()
