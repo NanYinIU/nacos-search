@@ -21,7 +21,26 @@ data class NacosProjectSessionState(
     fun seedIfNew(defaults: LegacyMigrationResult) {
         if (selectionWasExplicit || selectedProfileId.isNotBlank()) return
         selectedProfileId = defaults.defaultProfileId
-        namespaceId = defaults.defaultNamespaceId
+        namespaceId = defaults.defaultNamespaceId.ifBlank { "public" }
+    }
+
+    /**
+     * Keeps [selectedProfileId] pointing at a live profile. Stale workspace
+     * selections (deleted server, failed Instantiator migration, empty seed)
+     * otherwise make every search fail with "Select a Nacos environment profile".
+     */
+    fun healSelection(defaults: LegacyMigrationResult, profileExists: (String) -> Boolean) {
+        seedIfNew(defaults)
+        if (selectedProfileId.isNotBlank() && profileExists(selectedProfileId)) return
+        val healed = defaults.defaultProfileId.takeIf { it.isNotBlank() && profileExists(it) }
+            ?: defaults.profiles.firstOrNull { profileExists(it.id) }?.id
+            ?: ""
+        if (healed.isNotBlank()) {
+            selectedProfileId = healed
+            if (namespaceId.isBlank()) {
+                namespaceId = defaults.defaultNamespaceId.ifBlank { "public" }
+            }
+        }
     }
 
     fun select(profileId: String, namespace: String) {
@@ -44,6 +63,12 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
     }
 
     fun seedIfNew(defaults: LegacyMigrationResult) = sessionState.seedIfNew(defaults)
+
+    fun healSelection(settings: NacosSettings) {
+        val defaults = settings.migrationDefaults()
+        sessionState.healSelection(defaults) { profileId -> settings.getProfile(profileId) != null }
+    }
+
     fun select(profileId: String, namespace: String) = sessionState.select(profileId, namespace)
     fun markUpgradeSummaryShown() { sessionState.upgradeSummaryShown = true }
 }
@@ -56,9 +81,9 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
 internal fun Project.selectedNacosProfileId(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
 ): String {
-    val session = getService(NacosProjectSession::class.java) ?: return settings.activeServerId
-    session.seedIfNew(settings.migrationDefaults())
-    return session.sessionState.selectedProfileId.ifBlank { settings.activeServerId }
+    val session = getService(NacosProjectSession::class.java) ?: return settings.resolveDefaultProfileId()
+    session.healSelection(settings)
+    return session.sessionState.selectedProfileId.ifBlank { settings.resolveDefaultProfileId() }
 }
 
 internal fun Project.selectedNacosNamespaceId(

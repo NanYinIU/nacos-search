@@ -572,6 +572,12 @@ class V3ProtocolAdapter(
         CODE_ACCESS_DENIED -> RemoteOperationError.Authorization(403)
         CODE_NOT_FOUND -> RemoteOperationError.NotFound()
         CODE_INVALID_TOKEN -> RemoteOperationError.Authentication(401)
+        // Nacos (and non-V3 frontends) commonly answer unknown V3 routes with
+        // {code:-1,message:"No message available"}. Treat like classifyStateNotFound:
+        // this is generation absence for AUTO, not a locked-V3 auth failure.
+        -1 -> RemoteOperationError.GenerationUnsupported(
+            "V3 envelope code -1: ${message.orEmpty().ifBlank { "not a V3 response" }}"
+        )
         in 400..499 -> RemoteOperationError.Client(code)
         in 500..599 -> RemoteOperationError.Server(code)
         else -> RemoteOperationError.Protocol("Unexpected V3 envelope code $code: ${message.orEmpty()}")

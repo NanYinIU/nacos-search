@@ -51,17 +51,18 @@ class NamespaceIndexCoordinatorTest {
         val originalServers = settings.servers.map { it.copy() }
         val originalActive = settings.activeServerId
         try {
-            settings.servers.clear()
-            settings.servers.add(
-                com.nanyin.nacos.search.models.NacosServerConfig(
-                    id = "server-a",
-                    serverUrl = "http://a:8848",
-                    username = "alice",
-                    password = "secret-a",
-                    authMode = AuthMode.BASIC
-                )
+            settings.applyServers(
+                listOf(
+                    com.nanyin.nacos.search.models.NacosServerConfig(
+                        id = "server-a",
+                        serverUrl = "http://a:8848",
+                        username = "alice",
+                        password = "secret-a",
+                        authMode = AuthMode.BASIC
+                    )
+                ),
+                "server-a"
             )
-            settings.activeServerId = "server-a"
 
             val captured = settings.captureNamespaceIndexRequest("ns-a")
             settings.servers[0].serverUrl = "http://b:8848"
@@ -73,9 +74,14 @@ class NamespaceIndexCoordinatorTest {
             assertEquals(captured.server.serverUrl, captured.key.identity.canonicalEndpoint)
             assertNotEquals(settings.getActiveServer().serverUrl, captured.server.serverUrl)
         } finally {
-            settings.servers.clear()
-            settings.servers.addAll(originalServers)
-            settings.activeServerId = originalActive
+            settings.applyServers(originalServers, originalActive)
+            // applyServers entombs removed ids and never lifts them on restore
+            // (by design for production). Clear the restored profiles so later
+            // tests can write the shared CacheService again.
+            val tombstones = com.intellij.openapi.application.ApplicationManager
+                .getApplication()
+                .getService(ProfileTombstoneRegistry::class.java)
+            originalServers.forEach { tombstones.clear(it.id) }
         }
     }
 
