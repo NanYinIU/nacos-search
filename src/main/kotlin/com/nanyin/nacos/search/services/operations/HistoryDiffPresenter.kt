@@ -5,7 +5,6 @@ import com.intellij.diff.DiffRequestPanel
 import com.intellij.diff.contents.DocumentContent
 import com.intellij.diff.requests.DiffRequest
 import com.intellij.diff.requests.ErrorDiffRequest
-import com.intellij.diff.requests.LoadingDiffRequest
 import com.intellij.diff.requests.MessageDiffRequest
 import com.intellij.diff.requests.NoDiffRequest
 import com.intellij.diff.requests.SimpleDiffRequest
@@ -44,8 +43,9 @@ object HistoryDiffPresenter {
         panel.setRequest(toDiffRequest(request))
     }
 
+    /** Brief loading placeholder while history content is fetched. */
     fun showLoading(panel: DiffRequestPanel, message: String) {
-        panel.setRequest(LoadingDiffRequest(message))
+        showEmpty(panel, message)
     }
 
     fun showEmpty(panel: DiffRequestPanel, message: String) {

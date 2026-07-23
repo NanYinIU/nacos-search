@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.3.6"
+version = "1.3.7"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -110,6 +110,10 @@ tasks {
         """.trimIndent())
 
        changeNotes.set("""
+            <h3>1.3.7</h3>
+            <ul>
+                <li><b>Compatibility</b>: History Diff loading state uses the public MessageDiffRequest API instead of internal LoadingDiffRequest (Marketplace verifier).</li>
+            </ul>
             <h3>1.3.6</h3>
             <ul>
                 <li><b>Dual-stack</b>: V1/V3 protocol adapters with AUTO generation resolve, namespace discovery, and connection diagnostics from unsaved settings drafts.</li>
