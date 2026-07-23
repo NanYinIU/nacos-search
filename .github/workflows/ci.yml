@@ -55,7 +55,7 @@ jobs:
             -e PREFER_HOST_MODE=hostname \
             -p 8848:8848 \
             nacos/nacos-server:v2.5.3
-          timeout 120 bash -c 'until curl -sf http://localhost:8848/nacos/v1/console/namespaces; do sleep 2; done'
+          timeout 180 bash -c 'until curl -sf http://localhost:8848/nacos/v1/console/namespaces 2>/dev/null; do echo "waiting for Nacos 2.5.3..."; sleep 3; done'
       - name: Start Nacos 3.2.3
         run: |
           docker run -d --name nacos-v3 \
@@ -63,7 +63,7 @@ jobs:
             -e PREFER_HOST_MODE=hostname \
             -p 9848:8848 \
             nacos/nacos-server:v3.2.3
-          timeout 120 bash -c 'until curl -sf http://localhost:9848/nacos/v3/admin/core/state; do sleep 2; done'
+          timeout 240 bash -c 'until curl -sf http://localhost:9848/nacos/v3/admin/core/state 2>/dev/null; do echo "waiting for Nacos 3.2.3..."; sleep 5; done'
       - name: Run live smoke tests
         env:
           NACOS_LIVE_V1_ENDPOINT: http://localhost:8848/nacos
