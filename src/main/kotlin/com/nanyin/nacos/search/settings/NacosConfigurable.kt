@@ -64,6 +64,7 @@ class NacosConfigurable : Configurable {
     private lateinit var defaultGroupField: JBTextField
     private lateinit var connectionTimeoutSpinner: JSpinner
     private lateinit var crossNamespaceNavigationCheckBox: JCheckBox
+    private lateinit var writeIntentCheckBox: JCheckBox
 
     // Test connection UI
     private lateinit var testConnectionButton: JButton
@@ -141,6 +142,7 @@ class NacosConfigurable : Configurable {
         server.defaultGroup = defaultGroupField.text.trim()
         server.connectionTimeoutMs = connectionTimeoutSpinner.value as Int
         server.allowCrossNamespaceNavigation = crossNamespaceNavigationCheckBox.isSelected
+        server.writeIntent = writeIntentCheckBox.isSelected
         // Refresh the list display so name/host changes show immediately
         val idx = serverListModel.indexOf(server)
         if (idx >= 0) {
@@ -241,6 +243,11 @@ class NacosConfigurable : Configurable {
         crossNamespaceNavigationCheckBox = JCheckBox().apply {
             putClientProperty("nacos.automation.id", "nacos.settings.crossNamespaceNavigation")
             toolTipText = NacosSearchBundle.message("settings.server.cross.namespace.navigation.tooltip")
+            addActionListener { commitDetailFormToDraft() }
+        }
+        writeIntentCheckBox = JCheckBox().apply {
+            putClientProperty("nacos.automation.id", "nacos.settings.writeIntent")
+            toolTipText = NacosSearchBundle.message("settings.server.write.intent.tooltip")
             addActionListener { commitDetailFormToDraft() }
         }
 
@@ -498,6 +505,7 @@ class NacosConfigurable : Configurable {
         }, gbc)
         addRow("settings.server.api.policy", apiPolicyComboBox)
         addRow("settings.server.auth.mode", authModeComboBox)
+        addRow("settings.server.write.intent", writeIntentCheckBox)
 
         // Reset to defaults (keeps the display name).
         gbc.gridx = 1; gbc.gridy++; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.NONE
@@ -680,6 +688,7 @@ class NacosConfigurable : Configurable {
             defaultGroupField.text = server.defaultGroup
             connectionTimeoutSpinner.value = server.connectionTimeoutMs
             crossNamespaceNavigationCheckBox.isSelected = server.allowCrossNamespaceNavigation
+            writeIntentCheckBox.isSelected = server.writeIntent
             updateDetailHeader(server)
         } finally {
             // Re-add listeners
@@ -731,7 +740,8 @@ class NacosConfigurable : Configurable {
                 d.password != s.password || d.namespace != s.namespace ||
                 d.authMode != s.authMode || d.defaultGroup != s.defaultGroup ||
                 d.connectionTimeoutMs != s.connectionTimeoutMs ||
-                d.allowCrossNamespaceNavigation != s.allowCrossNamespaceNavigation
+                d.allowCrossNamespaceNavigation != s.allowCrossNamespaceNavigation ||
+                d.writeIntent != s.writeIntent
             ) return true
         }
         return langChanged

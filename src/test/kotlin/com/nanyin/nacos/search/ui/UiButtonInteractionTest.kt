@@ -261,17 +261,9 @@ class UiButtonInteractionTest {
         // Edit button is visible by default (prototype: #editBtn visible until editing).
         assertTrue(editButton.isVisible)
 
-        // The edit flow hides the button while editing and re-shows it on exit.
-        // Simulate the internal state transitions directly (the editor is created
-        // asynchronously via the real Nacos API, so we exercise the visibility
-        // logic rather than the full load pipeline here).
-        runOnEdt {
-            val enterMethod = ConfigDetailPanel::class.java.getDeclaredMethod("enterEditMode")
-            enterMethod.isAccessible = true
-            enterMethod.invoke(panel)
-        }
-        // enterEditMode only hides when an editor exists; without one it is a no-op,
-        // so the button stays visible. Verify exitEditMode restores a visible button.
+        // enterEditMode now requires writeIntent and resolves an OperationTarget
+        // asynchronously. Without those, it shows a dialog and returns. Exercise
+        // exitEditMode to verify the button remains/restores visible.
         runOnEdt {
             val exitMethod = ConfigDetailPanel::class.java.getDeclaredMethod("exitEditMode")
             exitMethod.isAccessible = true
