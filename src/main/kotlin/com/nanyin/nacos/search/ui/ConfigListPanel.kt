@@ -12,6 +12,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.AnimatedIcon
 import com.intellij.ui.JBColor
+import com.intellij.util.ui.UIUtil
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -454,25 +455,31 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
                 dirtyDot.isVisible = false
             }
 
+            // Theme-aware fallbacks so rows render correctly under Darcula / New UI / high-contrast.
+            // Previously these fell back to Color.WHITE / Color.BLACK / a fixed navy, which painted a
+            // white block under dark themes when the list reference was absent.
             if (isSelected) {
-                background = list?.selectionBackground ?: JBColor(0x2e436e, 0x2e436e)
-                dataIdLabel.foreground = list?.selectionForeground ?: Color.WHITE
+                background = list?.selectionBackground ?: UIUtil.getListSelectionBackground()
+                dataIdLabel.foreground = list?.selectionForeground ?: UIUtil.getListSelectionForeground()
             } else {
-                background = list?.background ?: Color.WHITE
-                dataIdLabel.foreground = list?.foreground ?: Color.BLACK
+                background = list?.background ?: UIUtil.getListBackground()
+                dataIdLabel.foreground = list?.foreground ?: UIUtil.getListForeground()
             }
 
             return this
         }
 
         private fun getBadgeForType(type: String): Pair<String, Color> {
+            // Distinct per-type hues, wrapped as JBColor with lighter dark-theme variants so the
+            // colored badge stays legible against a dark list background and participates in the
+            // platform theme model (no longer flat, theme-blind java.awt.Color values).
             return when {
-                type.contains("yaml") || type.contains("yml") -> "Y" to Color(0xcb, 0x6b, 0x3f)
-                type.contains("json") -> "J" to Color(0xca, 0xa5, 0x3d)
-                type.contains("properties") -> "P" to Color(0x50, 0x8c, 0xc4)
-                type.contains("xml") -> "X" to Color(0x8c, 0x6c, 0xb4)
-                type.contains("text") -> "T" to Color(0x7a, 0x7e, 0x85)
-                else -> "T" to Color(0x7a, 0x7e, 0x85)
+                type.contains("yaml") || type.contains("yml") -> "Y" to JBColor(0xcb6b3f, 0xd98b5f)
+                type.contains("json") -> "J" to JBColor(0xcaa53d, 0xd9b85f)
+                type.contains("properties") -> "P" to JBColor(0x508cc4, 0x6aa3d6)
+                type.contains("xml") -> "X" to JBColor(0x8c6cb4, 0xa88fc4)
+                type.contains("text") -> "T" to JBColor(0x7a7e85, 0x9b9ea6)
+                else -> "T" to JBColor(0x7a7e85, 0x9b9ea6)
             }
         }
 

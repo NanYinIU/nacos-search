@@ -224,33 +224,36 @@ class UiButtonInteractionTest {
         assertTrue("size:20" in calls)
     }
 
-    @Test
-    fun configDetailActionButtonsFollowPrototypeSizing() {
-        val panel = ConfigDetailPanel(mockProject)
-        try {
-            val refreshButton = privateField<JButton>(panel, "refreshButton")
-            val historyButton = privateField<JButton>(panel, "historyButton")
-            val copyButton = privateField<JButton>(panel, "copyButton")
+   @Test
+   fun configDetailActionButtonsFollowPrototypeSizing() {
+       val panel = ConfigDetailPanel(mockProject)
+       try {
+            // Read utilities (Refresh / Copy / History) are now native AnActions rendered via an
+            // ActionToolbar (not icon JButtons). Verify the three actions carry their icons and the
+            // toolbar component is present; the legacy refreshButton/copyButton/historyButton fields
+            // no longer exist.
+            val refreshAction = privateField<com.intellij.openapi.actionSystem.AnAction>(panel, "refreshAction")
+            val copyAction = privateField<com.intellij.openapi.actionSystem.AnAction>(panel, "copyAction")
+            val historyAction = privateField<com.intellij.openapi.actionSystem.AnAction>(panel, "historyAction")
+            assertNotNull(refreshAction.templatePresentation.icon)
+            assertNotNull(copyAction.templatePresentation.icon)
+            assertNotNull(historyAction.templatePresentation.icon)
+
+            // Edit lifecycle buttons keep text labels (clear commit commands)
             val saveButton = privateField<JButton>(panel, "saveButton")
             val editButton = privateField<JButton>(panel, "editButton")
             val revertButton = privateField<JButton>(panel, "revertButton")
-
-            // Secondary tools are icon-only toolbar buttons; mode actions stay text.
-            assertEquals(Dimension(28, 24), refreshButton.preferredSize)
-            assertEquals(Dimension(28, 24), historyButton.preferredSize)
-            assertEquals("", refreshButton.text)
-            assertEquals("", historyButton.text)
-            assertNotNull(refreshButton.icon)
-            assertNotNull(historyButton.icon)
-            assertEquals(Dimension(72, 26), copyButton.preferredSize)
             assertEquals(Dimension(72, 26), saveButton.preferredSize)
             assertEquals(Dimension(72, 26), editButton.preferredSize)
             assertEquals(Dimension(72, 26), revertButton.preferredSize)
-            assertTrue(copyButton.text.isNotBlank())
-            assertEquals(null, copyButton.icon)
-            assertEquals(null, saveButton.icon)
-            assertEquals(null, editButton.icon)
-            assertEquals(null, revertButton.icon)
+            assertTrue(editButton.text.isNotBlank())
+            assertTrue(saveButton.text.isNotBlank())
+           assertTrue(revertButton.text.isNotBlank())
+
+           // View mode: Edit visible; Save/Revert hidden until editing
+           assertTrue(editButton.isVisible)
+           assertFalse(saveButton.isVisible)
+           assertFalse(revertButton.isVisible)
         } finally {
             Disposer.dispose(panel)
         }
@@ -286,8 +289,10 @@ class UiButtonInteractionTest {
     @Test
     fun clearingConfigDetailAfterSelectionRemovesStaleMetadataAndActions() {
         val panel = ConfigDetailPanel(mockProject)
+        // Copy/History are now AnActions whose enabled state derives from currentConfiguration
+        // in update(); clearing the config (currentConfiguration == null) disables them, verified
+        // indirectly via the currentConfiguration assertion below. editButton is still a JButton.
         val dataIdLabel = privateField<JTextField>(panel, "dataIdLabel")
-        val copyButton = privateField<JButton>(panel, "copyButton")
         val editButton = privateField<JButton>(panel, "editButton")
         val config = NacosConfiguration(
             dataId = "application.properties",
@@ -305,7 +310,6 @@ class UiButtonInteractionTest {
 
         assertEquals(null, panel.getCurrentConfiguration())
         assertEquals("", dataIdLabel.text)
-        assertTrue(!copyButton.isEnabled)
         assertTrue(!editButton.isEnabled)
 
         Disposer.dispose(panel)

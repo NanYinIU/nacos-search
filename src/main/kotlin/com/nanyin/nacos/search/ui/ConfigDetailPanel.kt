@@ -3,6 +3,10 @@ package com.nanyin.nacos.search.ui
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.nanyin.nacos.search.services.LanguageService
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
@@ -45,7 +49,6 @@ import java.awt.event.ActionEvent
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import javax.swing.*
-import javax.swing.plaf.basic.BasicButtonUI
 import kotlin.concurrent.withLock
 
 
@@ -86,21 +89,6 @@ class ConfigDetailPanel internal constructor(
 
     companion object {
         private const val DETAIL_HORIZONTAL_INSET = 10
-
-        private fun toolbarIconButton(icon: Icon, tooltip: String): JButton {
-            return JButton(icon).apply {
-                toolTipText = tooltip
-                putClientProperty("JButton.buttonType", "toolbar")
-                ui = BasicButtonUI()
-                preferredSize = Dimension(28, 24)
-                minimumSize = Dimension(28, 24)
-                maximumSize = Dimension(28, 24)
-                border = JBUI.Borders.empty()
-                isContentAreaFilled = false
-                isBorderPainted = false
-                isFocusPainted = false
-            }
-        }
     }
     
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
@@ -134,12 +122,16 @@ class ConfigDetailPanel internal constructor(
     private lateinit var loadingLabel: JBLabel
     private lateinit var emptyStatePanel: JPanel
     private lateinit var errorPanel: JPanel
-    private lateinit var refreshButton: JButton
-    private lateinit var copyButton: JButton
+    // Read-utility actions (Refresh / Copy / History) live in a native ActionToolbar
+    // instead of hand-rolled icon JButtons. Kept as fields so their enabled state can
+    // be refreshed in [updateActionsEnabled]; the toolbar component is [detailToolbar].
+    private val refreshAction = RefreshDetailAction()
+    private val copyAction = CopyDetailAction()
+    private val historyAction = HistoryDetailAction()
+    private lateinit var detailToolbar: com.intellij.openapi.actionSystem.ActionToolbar
     private lateinit var saveButton: JButton
     private lateinit var editButton: JButton
     private lateinit var revertButton: JButton
-    private lateinit var historyButton: JButton
     private lateinit var formatTagLabel: JBLabel
     private lateinit var dirtyLabel: JBLabel
     private lateinit var freshnessLabel: JBLabel
@@ -266,57 +258,46 @@ class ConfigDetailPanel internal constructor(
         // Empty state
         emptyStatePanel = createEmptyStatePanel()
         
-        // Error state
-        errorPanel = createErrorPanel()
-        
-        // Secondary actions: icon-only toolbar buttons (IntelliJ editor convention)
-        refreshButton = toolbarIconButton(
-            AllIcons.Actions.Refresh,
-            NacosSearchBundle.message("config.detail.refresh")
-        )
-        historyButton = toolbarIconButton(
-            AllIcons.Vcs.History,
-            NacosSearchBundle.message("config.detail.action.history.tooltip")
-        ).apply { isEnabled = false }
+       // Error state
+       errorPanel = createErrorPanel()
+      
+       // Edit lifecycle buttons keep text labels — they are the clear commit
+        // commands and adapt to the current mode (see enterEditMode / exitEditMode):
+        //   view mode  -> [Edit]          (primary CTA to start editing)
+        //   edit mode  -> [Revert] [Save] (Save is the accent primary)
+        // Save & Revert are hidden until the editor enters edit mode.
+        saveButton = JButton(NacosSearchBundle.message("config.detail.action.save.publish")).apply {
+            toolTipText = NacosSearchBundle.message("config.detail.save")
+            putClientProperty("JButton.buttonType", "primary")
+            preferredSize = Dimension(72, 26)
+            minimumSize = Dimension(60, 26)
+            isEnabled = false
+            isVisible = false
+        }
 
-        copyButton = JButton(NacosSearchBundle.message("config.detail.action.copy")).apply {
-            toolTipText = NacosSearchBundle.message("config.detail.copy")
-            icon = null
+        // Edit button — primary CTA in view mode; hidden while editing.
+        editButton = JButton(NacosSearchBundle.message("config.detail.action.edit")).apply {
+            toolTipText = NacosSearchBundle.message("config.detail.action.edit")
+            putClientProperty("JButton.buttonType", "primary")
             preferredSize = Dimension(72, 26)
             minimumSize = Dimension(60, 26)
             isEnabled = false
         }
 
-       // Save action button (publishes content back to Nacos)
-       saveButton = JButton(NacosSearchBundle.message("config.detail.action.save.publish")).apply {
-          toolTipText = NacosSearchBundle.message("config.detail.save")
-          putClientProperty("JButton.buttonType", "primary")
-           preferredSize = Dimension(72, 26)
-            minimumSize = Dimension(60, 26)
-           isEnabled = false
-       }
-
-       // Edit — primary mode CTA as a text button; keeps visual weight vs icon tools
-       editButton = JButton(NacosSearchBundle.message("config.detail.action.edit")).apply {
-           toolTipText = NacosSearchBundle.message("config.detail.action.edit")
+        // Revert button — discards unsaved edits; only shown in edit mode.
+        revertButton = JButton(NacosSearchBundle.message("config.detail.action.revert")).apply {
+            toolTipText = NacosSearchBundle.message("config.detail.action.revert")
             preferredSize = Dimension(72, 26)
             minimumSize = Dimension(60, 26)
-           isEnabled = false
-       }
-
-       // Revert button — discards unsaved edits
-       revertButton = JButton(NacosSearchBundle.message("config.detail.action.revert")).apply {
-           toolTipText = NacosSearchBundle.message("config.detail.action.revert")
-            preferredSize = Dimension(72, 26)
-            minimumSize = Dimension(60, 26)
-           isEnabled = false
-       }
+            isEnabled = false
+            isVisible = false
+        }
 
         // Format tag label
-        formatTagLabel = JBLabel("").apply {
-            foreground = JBColor.GRAY
-            font = font.deriveFont(Font.PLAIN, 11f)
-        }
+       formatTagLabel = JBLabel("").apply {
+           foreground = JBColor.GRAY
+           font = font.deriveFont(Font.PLAIN, 11f)
+       }
 
         // Dirty pill
         dirtyLabel = JBLabel(NacosSearchBundle.message("config.detail.modified")).apply {
@@ -347,13 +328,13 @@ class ConfigDetailPanel internal constructor(
             font = font.deriveFont(Font.PLAIN, 11f)
             foreground = JBColor(0x6f737a, 0x9b9ea6)
         }
-        statusMd5Label = JBLabel("—").apply {
-            font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 11)
-            foreground = JBColor(0x6f737a, 0x9b9ea6)
-        }
-    }
-    
-    private fun setupLayout() {
+       statusMd5Label = JBLabel("—").apply {
+           font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 11)
+           foreground = JBColor(0x6f737a, 0x9b9ea6)
+       }
+   }
+   
+      private fun setupLayout() {
         border = JBUI.Borders.empty()
 
         // ===== Header: dataId title (bold) + dirty pill + metadata row =====
@@ -378,30 +359,34 @@ class ConfigDetailPanel internal constructor(
             add(metadataPanel)
         }
 
-        // ===== Action bar: format | icon tools · primary text actions =====
-        // Secondary (Refresh/History) stay icon-only; Edit/Save/Revert/Copy stay text
-        // so the mode CTA is not competing with a same-weight History label.
+        // ===== Action bar: format tag (left) | utility icons + edit lifecycle (right) =====
         val actionBar = JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(3, DETAIL_HORIZONTAL_INSET)
             val leftPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                 add(formatTagLabel)
             }
-            val iconTools = JPanel(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
-                isOpaque = false
-                add(refreshButton)
-                add(historyButton)
+            // Build the native ActionToolbar for the read utilities (Refresh/Copy/History).
+            // Horizontal layout; the toolbar's component replaces the three icon JButtons.
+            val actionGroup = DefaultActionGroup().apply {
+                add(refreshAction)
+                add(copyAction)
+                add(historyAction)
             }
-            val primaryActions = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-                isOpaque = false
+            detailToolbar = ActionManager.getInstance().createActionToolbar(
+                "NacosConfigDetail",
+                actionGroup,
+                true // horizontal
+            )
+            detailToolbar.targetComponent = this
+            val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                add(detailToolbar.component)
+                // Gap separates the always-on utilities from the commit group
+                add(Box.createHorizontalStrut(8))
+                // Edit lifecycle: [Edit] in view mode, [Revert] [Save] in edit mode.
+                // Save (primary) sits rightmost; only the relevant buttons are visible.
                 add(editButton)
-                add(saveButton)
                 add(revertButton)
-                add(copyButton)
-            }
-            val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0)).apply {
-                isOpaque = false
-                add(iconTools)
-                add(primaryActions)
+                add(saveButton)
             }
             add(leftPanel, BorderLayout.WEST)
             add(rightPanel, BorderLayout.EAST)
@@ -440,17 +425,7 @@ class ConfigDetailPanel internal constructor(
         add(statusBar, BorderLayout.SOUTH)
     }
     
-    private fun setupEventHandlers() {
-        refreshButton.addActionListener {
-            currentConfiguration?.let { config ->
-                loadConfigurationContent(config, forceRefresh = true)
-            }
-        }
-        
-        copyButton.addActionListener {
-            copyContentToClipboard()
-        }
-
+private fun setupEventHandlers() {
         saveButton.addActionListener {
             saveConfiguration()
         }
@@ -463,9 +438,6 @@ class ConfigDetailPanel internal constructor(
            revertEdits()
       }
 
-        historyButton.addActionListener {
-            openHistoryBrowser()
-        }
   }
 
 
@@ -520,7 +492,10 @@ class ConfigDetailPanel internal constructor(
               boundEditTarget = target
               editor?.let { ed ->
                   ed.document.setReadOnly(false)
+                  // Swap the edit lifecycle: hide Edit, reveal Save/Revert (only shown while editing)
                   editButton.isVisible = false
+                  revertButton.isVisible = true
+                  saveButton.isVisible = true
                   checkDirtyState(ed.document.text)
               }
           }
@@ -532,8 +507,11 @@ class ConfigDetailPanel internal constructor(
      */
     private fun exitEditMode() {
         editor?.document?.setReadOnly(true)
+        // Restore view mode: re-show Edit and hide the Save/Revert commit buttons
         editButton.isVisible = true
         editButton.text = NacosSearchBundle.message("config.detail.action.edit")
+        saveButton.isVisible = false
+        revertButton.isVisible = false
     }
 
     /**
@@ -874,8 +852,7 @@ class ConfigDetailPanel internal constructor(
             formatTagLabel.text = configuration.getConfigType().uppercase()
             dirtyLabel.isVisible = false
             editButton.isEnabled = true
-            copyButton.isEnabled = true
-            historyButton.isEnabled = true
+            updateActionsEnabled()
         }, ModalityState.defaultModalityState())
     }
     
@@ -998,13 +975,14 @@ class ConfigDetailPanel internal constructor(
               updateEditorUI(newEditor)
               applyKeyGutterMarkers(configuration, newEditor)
               consumePendingNavigation(configuration)
-              copyButton.isEnabled = true
                editButton.isEnabled = true
-               historyButton.isEnabled = true
+               updateActionsEnabled()
                 editButton.isVisible = true
                 editButton.text = NacosSearchBundle.message("config.detail.action.edit")
                saveButton.isEnabled = false
+               saveButton.isVisible = false
                revertButton.isEnabled = false
+               revertButton.isVisible = false
             }
         }, ModalityState.defaultModalityState())
     }
@@ -1157,8 +1135,29 @@ class ConfigDetailPanel internal constructor(
     private fun setLoadingState(loading: Boolean) {
         ApplicationManager.getApplication().invokeLater({
             isLoading = loading
-            refreshButton.isEnabled = !loading
+            updateActionsEnabled()
         }, ModalityState.defaultModalityState())
+    }
+
+    /**
+     * Refreshes the enabled state of the read-utility actions (Refresh / Copy / History)
+     * from the current panel state, then asks the ActionToolbar to re-render.
+     * Centralising this replaces the previously scattered copyButton/historyButton/refreshButton
+     * isEnabled mutations across updateMetadata/displayConfigurationContentSafely/clearConfiguration.
+     */
+    private fun updateActionsEnabled() {
+        // updateActionsImmediately() touches the action system and must run on the EDT; this is
+        // reached from both EDT contexts and construct-time paths, so dispatch defensively.
+        val run = {
+            if (::detailToolbar.isInitialized) {
+                detailToolbar.updateActionsImmediately()
+            }
+        }
+        if (ApplicationManager.getApplication().isDispatchThread) {
+            run()
+        } else {
+            ApplicationManager.getApplication().invokeLater(run, ModalityState.defaultModalityState())
+        }
     }
     
     private fun showCard(cardName: String) {
@@ -1189,7 +1188,7 @@ class ConfigDetailPanel internal constructor(
     
     private fun showEmptyState() {
         showCard("empty")
-        copyButton.isEnabled = false
+        updateActionsEnabled()
     }
     
     private fun showError(title: String, message: String) {
@@ -1426,11 +1425,13 @@ class ConfigDetailPanel internal constructor(
         currentConfiguration = null
         disposeEditorSafely()
         showEmptyState()
+        editButton.isVisible = true
         saveButton.isEnabled = false
-        copyButton.isEnabled = false
+        saveButton.isVisible = false
         editButton.isEnabled = false
         revertButton.isEnabled = false
-        historyButton.isEnabled = false
+        revertButton.isVisible = false
+        updateActionsEnabled()
         dirtyLabel.isVisible = false
 
         // Reset status bar
@@ -1515,9 +1516,6 @@ class ConfigDetailPanel internal constructor(
             loadingLabel.text = NacosSearchBundle.message("config.detail.loading")
             
             // Update button tooltips
-            refreshButton.toolTipText = NacosSearchBundle.message("config.detail.refresh")
-            historyButton.toolTipText = NacosSearchBundle.message("config.detail.action.history.tooltip")
-            copyButton.toolTipText = NacosSearchBundle.message("config.detail.copy")
             
             // Update size label if there's content
             currentConfiguration?.let { config ->
@@ -1586,9 +1584,39 @@ class ConfigDetailPanel internal constructor(
      */
     private fun updateButtonTooltips() {
         SwingUtilities.invokeLater {
-            refreshButton.toolTipText = NacosSearchBundle.message("config.detail.refresh")
-            historyButton.toolTipText = NacosSearchBundle.message("config.detail.action.history.tooltip")
-            copyButton.toolTipText = NacosSearchBundle.message("config.detail.copy")
+        }
+    }
+    private inner class RefreshDetailAction :
+        AnAction(NacosSearchBundle.message("config.detail.refresh"),
+                 NacosSearchBundle.message("config.detail.refresh"),
+                 AllIcons.Actions.Refresh) {
+        override fun actionPerformed(e: AnActionEvent) {
+            currentConfiguration?.let { config ->
+                loadConfigurationContent(config, forceRefresh = true)
+            }
+        }
+        override fun update(e: AnActionEvent) {
+            e.presentation.isEnabled = currentConfiguration != null && !isLoading
+        }
+    }
+
+    private inner class CopyDetailAction :
+        AnAction(NacosSearchBundle.message("config.detail.action.copy"),
+                 NacosSearchBundle.message("config.detail.copy"),
+                 AllIcons.Actions.Copy) {
+        override fun actionPerformed(e: AnActionEvent) = copyContentToClipboard()
+        override fun update(e: AnActionEvent) {
+            e.presentation.isEnabled = currentConfiguration != null
+        }
+    }
+
+    private inner class HistoryDetailAction :
+        AnAction(NacosSearchBundle.message("config.detail.action.history"),
+                 NacosSearchBundle.message("config.detail.action.history.tooltip"),
+                 AllIcons.Vcs.History) {
+        override fun actionPerformed(e: AnActionEvent) = openHistoryBrowser()
+        override fun update(e: AnActionEvent) {
+            e.presentation.isEnabled = currentConfiguration != null
         }
     }
 }
