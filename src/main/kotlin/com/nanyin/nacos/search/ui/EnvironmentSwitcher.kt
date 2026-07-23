@@ -137,6 +137,9 @@ class EnvironmentSwitcher(
         }
         val namespace = projectSession?.sessionState?.namespaceId.orEmpty().ifBlank { "public" }
         projectSession?.select(entry.config.id, namespace)
+        // Keep the Settings "default" badge in sync with the tool-window choice so
+        // operators are not left thinking Local is still the live target.
+        settings.setActiveServer(entry.config.id)
         project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)?.bump()
         onSelectionChanged?.invoke(entry.config.id)
         refresh()

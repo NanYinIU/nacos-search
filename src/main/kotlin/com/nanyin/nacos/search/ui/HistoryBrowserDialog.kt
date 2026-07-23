@@ -1,5 +1,6 @@
 package com.nanyin.nacos.search.ui
 
+import com.intellij.openapi.application.EDT
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
@@ -38,6 +39,10 @@ import javax.swing.ListSelectionModel
 /**
  * Read-only history browser for one configuration coordinate.
  * Supports open-body and Diff (history↔history, history↔current). No restore/publish.
+ *
+ * Network work runs on [Dispatchers.IO]; UI updates on [Dispatchers.EDT].
+ * Using [Dispatchers.Main] here deadlocks under modal [DialogWrapper.show]:
+ * the load coroutine never resumes while the dialog event loop is nested.
  */
 class HistoryBrowserDialog(
     private val project: Project,
@@ -48,7 +53,7 @@ class HistoryBrowserDialog(
     private val generationProvider: () -> Long
 ) : DialogWrapper(project) {
 
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val controller = HistoryBrowserController(gateway, generationProvider)
     private val listModel = DefaultListModel<HistoryEntry>()
     private val list = JBList(listModel).apply {
@@ -110,50 +115,52 @@ class HistoryBrowserDialog(
         statusLabel.text = NacosSearchBundle.message("history.loading")
         listModel.clear()
         scope.launch {
-            try {
-                val outcome = withContext(Dispatchers.IO) {
-                    controller.loadPage(
-                        target,
-                        HistoryQuery(ConfigurationCoordinate(configuration.dataId, configuration.group)),
-                        expectedGeneration
-                    )
-                }
-                when (outcome) {
-                    is HistoryBrowserController.Outcome.Stale -> {
-                        statusLabel.text = NacosSearchBundle.message("history.stale")
-                    }
-                    is HistoryBrowserController.Outcome.Empty -> {
-                        statusLabel.text = NacosSearchBundle.message("history.empty")
-                    }
-                    is HistoryBrowserController.Outcome.PermissionDenied -> {
-                        statusLabel.text = NacosSearchBundle.message("history.permission.denied")
-                    }
-                    is HistoryBrowserController.Outcome.Unsupported -> {
-                        statusLabel.text = NacosSearchBundle.message("history.unsupported")
-                    }
-                    is HistoryBrowserController.Outcome.Failed -> {
-                        statusLabel.text = NacosSearchBundle.message("history.failed", outcome.message)
-                    }
-                    is HistoryBrowserController.Outcome.Body -> {
-                        entries = outcome.page.items
-                        listModel.clear()
-                        entries.forEach { listModel.addElement(it) }
-                        statusLabel.text = NacosSearchBundle.message(
-                            "history.loaded",
-                            outcome.page.totalCount
-                        )
-                        updateActionEnabled()
-                    }
-                    HistoryBrowserController.Outcome.Loading -> Unit
-                }
+            val outcome = try {
+                controller.loadPage(
+                    target,
+                    HistoryQuery(ConfigurationCoordinate(configuration.dataId, configuration.group)),
+                    expectedGeneration
+                )
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                statusLabel.text = NacosSearchBundle.message(
-                    "history.failed",
-                    error.message ?: error.toString()
-                )
+                HistoryBrowserController.Outcome.Failed(error.message ?: error.toString())
             }
+            withContext(Dispatchers.EDT) {
+                if (isDisposed) return@withContext
+                applyOutcome(outcome)
+            }
+        }
+    }
+
+    private fun applyOutcome(outcome: HistoryBrowserController.Outcome) {
+        when (outcome) {
+            is HistoryBrowserController.Outcome.Stale -> {
+                statusLabel.text = NacosSearchBundle.message("history.stale")
+            }
+            is HistoryBrowserController.Outcome.Empty -> {
+                statusLabel.text = NacosSearchBundle.message("history.empty")
+            }
+            is HistoryBrowserController.Outcome.PermissionDenied -> {
+                statusLabel.text = NacosSearchBundle.message("history.permission.denied")
+            }
+            is HistoryBrowserController.Outcome.Unsupported -> {
+                statusLabel.text = NacosSearchBundle.message("history.unsupported")
+            }
+            is HistoryBrowserController.Outcome.Failed -> {
+                statusLabel.text = NacosSearchBundle.message("history.failed", outcome.message)
+            }
+            is HistoryBrowserController.Outcome.Body -> {
+                entries = outcome.page.items
+                listModel.clear()
+                entries.forEach { listModel.addElement(it) }
+                statusLabel.text = NacosSearchBundle.message(
+                    "history.loaded",
+                    outcome.page.totalCount
+                )
+                updateActionEnabled()
+            }
+            HistoryBrowserController.Outcome.Loading -> Unit
         }
     }
 
@@ -168,24 +175,30 @@ class HistoryBrowserDialog(
         val entry = controller.selectedEntries(entries, list.selectedIndices).singleOrNull() ?: return
         scope.launch {
             val detail = controller.loadDetail(target, entry.id, expectedGeneration).getOrElse { error ->
-                Messages.showErrorDialog(
-                    project,
-                    error.message ?: NacosSearchBundle.message("history.failed", error.toString()),
-                    NacosSearchBundle.message("history.dialog.title", configuration.dataId, configuration.group)
-                )
+                withContext(Dispatchers.EDT) {
+                    if (isDisposed) return@withContext
+                    Messages.showErrorDialog(
+                        project,
+                        error.message ?: NacosSearchBundle.message("history.failed", error.toString()),
+                        NacosSearchBundle.message("history.dialog.title", configuration.dataId, configuration.group)
+                    )
+                }
                 return@launch
             }
-            val area = JTextArea(detail.content).apply {
-                isEditable = false
-                lineWrap = true
-                wrapStyleWord = true
+            withContext(Dispatchers.EDT) {
+                if (isDisposed) return@withContext
+                val area = JTextArea(detail.content).apply {
+                    isEditable = false
+                    lineWrap = true
+                    wrapStyleWord = true
+                }
+                Messages.showMessageDialog(
+                    project,
+                    area.text,
+                    NacosSearchBundle.message("history.body.title", detail.id),
+                    Messages.getInformationIcon()
+                )
             }
-            Messages.showMessageDialog(
-                project,
-                area.text,
-                NacosSearchBundle.message("history.body.title", detail.id),
-                Messages.getInformationIcon()
-            )
         }
     }
 
@@ -193,13 +206,19 @@ class HistoryBrowserDialog(
         val entry = controller.selectedEntries(entries, list.selectedIndices).singleOrNull() ?: return
         scope.launch {
             val detail = controller.loadDetail(target, entry.id, expectedGeneration).getOrElse { error ->
-                Messages.showErrorDialog(project, error.message ?: error.toString(), title)
+                withContext(Dispatchers.EDT) {
+                    if (isDisposed) return@withContext
+                    Messages.showErrorDialog(project, error.message ?: error.toString(), title)
+                }
                 return@launch
             }
-            HistoryDiffPresenter.show(
-                project,
-                HistoryDiffPresenter.historyToCurrent(detail, currentContent, configuration.type)
-            )
+            withContext(Dispatchers.EDT) {
+                if (isDisposed) return@withContext
+                HistoryDiffPresenter.show(
+                    project,
+                    HistoryDiffPresenter.historyToCurrent(detail, currentContent, configuration.type)
+                )
+            }
         }
     }
 
@@ -208,14 +227,23 @@ class HistoryBrowserDialog(
         if (selected.size != 2) return
         scope.launch {
             val left = controller.loadDetail(target, selected[0].id, expectedGeneration).getOrElse {
-                Messages.showErrorDialog(project, it.message ?: it.toString(), title)
+                withContext(Dispatchers.EDT) {
+                    if (isDisposed) return@withContext
+                    Messages.showErrorDialog(project, it.message ?: it.toString(), title)
+                }
                 return@launch
             }
             val right = controller.loadDetail(target, selected[1].id, expectedGeneration).getOrElse {
-                Messages.showErrorDialog(project, it.message ?: it.toString(), title)
+                withContext(Dispatchers.EDT) {
+                    if (isDisposed) return@withContext
+                    Messages.showErrorDialog(project, it.message ?: it.toString(), title)
+                }
                 return@launch
             }
-            HistoryDiffPresenter.show(project, HistoryDiffPresenter.historyToHistory(left, right))
+            withContext(Dispatchers.EDT) {
+                if (isDisposed) return@withContext
+                HistoryDiffPresenter.show(project, HistoryDiffPresenter.historyToHistory(left, right))
+            }
         }
     }
 
