@@ -32,12 +32,12 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
-import com.nanyin.nacos.search.services.captureAccessIdentity
 import com.nanyin.nacos.search.services.operations.EditSession
 import com.nanyin.nacos.search.services.operations.OperationTarget
 import com.nanyin.nacos.search.services.operations.PublishState
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosProjectSession
+import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.ActionEvent
@@ -609,7 +609,7 @@ class ConfigDetailPanel internal constructor(
             PendingNavigation(configuration.getKey(), it)
         }
         updateMetadata(configuration, generation)
-        val accessIdentity = settings.captureAccessIdentity()
+        val accessIdentity = project.captureSelectedAccessIdentity(settings)
         val cachedState = cacheService.configDetailState(
             accessIdentity,
             configuration.tenantId,
@@ -894,7 +894,7 @@ class ConfigDetailPanel internal constructor(
                         setLoadingState(false)
                         if (keepCachedVisible) {
                             cacheService.removeConfigDetail(
-                                settings.captureAccessIdentity(),
+                                project.captureSelectedAccessIdentity(settings),
                                 configuration.tenantId,
                                 configuration.dataId,
                                 configuration.group
@@ -1147,7 +1147,7 @@ class ConfigDetailPanel internal constructor(
     private fun refreshNavigationState() {
         ApplicationManager.getApplication()
             .getService(NavigationIndexRefreshService::class.java)
-            .refresh(settings.captureAccessIdentity(), project)
+            .refresh(project.captureSelectedAccessIdentity(settings), project)
     }
     
     private fun showEmptyState() {
