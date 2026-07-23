@@ -117,6 +117,7 @@ tasks {
                 <li><b>History / Diff</b>: identity-local read-only history browser with embedded split-pane Diff (no merge chevrons).</li>
                 <li><b>Publish</b>: opt-in per-profile write intent with controlled CAS/read-back publish path.</li>
                 <li><b>Settings</b>: progressive disclosure (Advanced for auth/API/write intent); empty-credential profiles default to ANONYMOUS and upgrade to NACOS_PASSWORD when credentials are filled.</li>
+                <li><b>Navigation</b>: when <code>@NacosPropertySource</code> declares a dataId and the cache has that key in that file, gutter/go-to hard-filters to it; otherwise soft-falls back to all hits.</li>
                 <li><b>UI</b>: native ActionToolbar chrome; cache confidence status; Settings blue-dot tracks the current project environment.</li>
                 <li><b>Reliability</b>: release-gate contract suite; fail-closed capture for deleted profiles; write-intent enforced in PublishController; diagnostics honor locked V1/V3 API policy.</li>
             </ul>
