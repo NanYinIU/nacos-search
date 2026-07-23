@@ -1,0 +1,19 @@
+.github/workflows/ci.yml
+  s_af6ab9fe44270e::t_5ed36603a6d871 33-34,55-56,60-82,87-89,91-92,94-95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "91c0e5c72627b61004bbbef6b5012d87719ad751",
+  "prompts": {},
+  "sessions": {
+    "s_af6ab9fe44270e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8c42-6989-7613-9429-581cf369e64d",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
