@@ -254,6 +254,54 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         updateStatus(label)
     }
 
+    /**
+     * Surfaces the three orthogonal [CacheConfidence] dimensions plus optional
+     * content-search coverage in the list status line.
+     */
+    fun setConfidenceStatus(
+        confidence: com.nanyin.nacos.search.models.CacheConfidence,
+        coverage: com.nanyin.nacos.search.services.operations.SearchCoverage? = null
+    ) {
+        val sourceLabel = when (confidence.source) {
+            com.nanyin.nacos.search.models.DataSource.REMOTE ->
+                NacosSearchBundle.message("config.list.status.source.remote")
+            com.nanyin.nacos.search.models.DataSource.CACHE ->
+                NacosSearchBundle.message("config.list.status.source.cache")
+        }
+        val confirmationLabel = when (confidence.confirmation) {
+            com.nanyin.nacos.search.models.DatasetConfirmation.CONFIRMED ->
+                NacosSearchBundle.message("config.list.status.confirmation.confirmed")
+            com.nanyin.nacos.search.models.DatasetConfirmation.UNCONFIRMED ->
+                NacosSearchBundle.message("config.list.status.confirmation.unconfirmed")
+            com.nanyin.nacos.search.models.DatasetConfirmation.REFRESH_FAILED ->
+                NacosSearchBundle.message("config.list.status.confirmation.refreshFailed")
+        }
+        val ageLabel = when (confidence.age) {
+            com.nanyin.nacos.search.models.CacheAge.WITHIN_TTL ->
+                NacosSearchBundle.message("config.list.status.age.fresh")
+            com.nanyin.nacos.search.models.CacheAge.STALE ->
+                NacosSearchBundle.message("config.list.status.age.stale")
+            com.nanyin.nacos.search.models.CacheAge.DEEP_STALE ->
+                NacosSearchBundle.message("config.list.status.age.deepStale")
+        }
+        val completenessLabel = when (confidence.completeness) {
+            com.nanyin.nacos.search.models.DatasetCompleteness.COMPLETE ->
+                NacosSearchBundle.message("config.list.status.completeness.complete")
+            com.nanyin.nacos.search.models.DatasetCompleteness.PARTIAL ->
+                NacosSearchBundle.message("config.list.status.completeness.partial")
+            com.nanyin.nacos.search.models.DatasetCompleteness.FAILED ->
+                NacosSearchBundle.message("config.list.status.completeness.failed")
+        }
+        val parts = mutableListOf(sourceLabel, confirmationLabel, ageLabel, completenessLabel)
+        if (coverage != null && !coverage.isComplete) {
+            parts += NacosSearchBundle.message(
+                "config.list.status.coverage.partial",
+                coverage.coverageText
+            )
+        }
+        updateStatus(parts.joinToString(" · "))
+    }
+
     fun setPage(page: Int) {
         currentPage = page
     }

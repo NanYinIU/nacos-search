@@ -13,6 +13,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
@@ -135,7 +136,10 @@ class NamespacePanelTest {
         namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
         waitForUi()
 
-        assertNull(namespacePanel.getSelectedNamespace())
+        // Discovery failure keeps public available for manual Namespace ID entry.
+        val selected = namespacePanel.getSelectedNamespace()
+        assertNotNull(selected)
+        assertTrue(selected!!.isPublicNamespace())
         verify(mockNamespaceService, timeout(1000)).loadNamespacesAsync()
     }
 

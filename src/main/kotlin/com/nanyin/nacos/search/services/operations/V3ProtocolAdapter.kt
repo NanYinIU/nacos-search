@@ -1,11 +1,17 @@
 package com.nanyin.nacos.search.services.operations
 
 import com.google.gson.Gson
+import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParseException
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
 import kotlinx.coroutines.CancellationException
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+import java.util.concurrent.ConcurrentHashMap
 
 /** Optional capabilities a V3 adapter may declare for the current identity. */
 enum class V3Capability {
@@ -26,12 +32,14 @@ enum class V3Capability {
 class V3ProtocolAdapter(
     private val transport: ProtocolTransport,
     private val gson: Gson = Gson()
-) : ProtocolAdapter, HistoryCapability {
+) : ProtocolAdapter, HistoryCapability, NamespaceDiscoveryCapability {
+
+    private val tokenCache = ConcurrentHashMap<String, CachedAccessToken>()
 
     override suspend fun probe(target: OperationTarget): Result<Unit> = runCatching {
         validate(target)
         try {
-            val response = transport.execute(stateRequest(target))
+            val response = executeAuthenticated(target) { auth -> applyAuth(stateRequest(target), auth) }
             // V3 state is a raw map — not wrapped in the {code,message,data} envelope.
             // A 404 on this path means V3 is not available; a non-JSON or envelope
             // response means we are not talking to a V3 server.
@@ -55,7 +63,7 @@ class V3ProtocolAdapter(
     ): Result<SummaryPage> = runCatching {
         validate(target)
         try {
-            val response = transport.execute(listRequest(target, query))
+            val response = executeAuthenticated(target) { auth -> applyAuth(listRequest(target, query), auth) }
             val data = unwrapEnvelope(response, "summary list")
             parseSummaryPage(data)
         } catch (error: CancellationException) {
@@ -75,7 +83,7 @@ class V3ProtocolAdapter(
     ): Result<NacosConfiguration?> = runCatching {
         validate(target)
         try {
-            val response = transport.execute(detailRequest(target, coordinate))
+            val response = executeAuthenticated(target) { auth -> applyAuth(detailRequest(target, coordinate), auth) }
             val data = unwrapEnvelopeOrNull(response, "detail")
             if (data == null || data.isJsonNull) return@runCatching null
             parseDetail(data)
@@ -106,9 +114,9 @@ class V3ProtocolAdapter(
             add("namespaceId" to command.namespaceId.trim().ifBlank { "public" })
         }
         val formData = params.joinToString("&") { (k, v) ->
-            "${java.net.URLEncoder.encode(k, "UTF-8")}=${java.net.URLEncoder.encode(v, "UTF-8")}"
+            "${URLEncoder.encode(k, "UTF-8")}=${URLEncoder.encode(v, "UTF-8")}"
         }
-        val request = ProtocolRequest(
+        val baseRequest = ProtocolRequest(
             method = "POST",
             endpoint = target.context.endpoint.value,
             path = DETAIL_PATH,
@@ -119,7 +127,7 @@ class V3ProtocolAdapter(
             ),
             body = formData
         )
-        val response = transport.execute(request)
+        val response = executeAuthenticated(target) { auth -> applyAuth(baseRequest, auth) }
         // V3 publish response data is a boolean, not a JSON object.
         verifyV3EnvelopeSuccess(response, "publish")
         // V3 has no CAS parameter; ordinary publish success only.
@@ -130,7 +138,7 @@ class V3ProtocolAdapter(
     override suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage> = runCatching {
         validate(target)
         try {
-            val response = transport.execute(historyListRequest(target, query))
+            val response = executeAuthenticated(target) { auth -> applyAuth(historyListRequest(target, query), auth) }
             val data = unwrapEnvelope(response, "history list")
             parseHistoryPage(data)
         } catch (error: CancellationException) {
@@ -147,7 +155,7 @@ class V3ProtocolAdapter(
     override suspend fun readHistoryDetail(target: OperationTarget, historyId: String): Result<HistoryDetail> = runCatching {
         validate(target)
         try {
-            val response = transport.execute(historyDetailRequest(target, historyId))
+            val response = executeAuthenticated(target) { auth -> applyAuth(historyDetailRequest(target, historyId), auth) }
             val data = unwrapEnvelope(response, "history detail")
             parseHistoryDetail(data)
         } catch (error: CancellationException) {
@@ -156,6 +164,23 @@ class V3ProtocolAdapter(
             throw error
         } catch (error: JsonParseException) {
             throw RemoteOperationError.Protocol("Invalid V3 history detail response", error)
+        } catch (error: Throwable) {
+            throw RemoteOperationError.Connection(error)
+        }
+    }
+
+    override suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> = runCatching {
+        validate(target)
+        try {
+            val response = executeAuthenticated(target) { auth -> applyAuth(namespaceListRequest(target), auth) }
+            val data = unwrapEnvelopeElement(response, "namespace list")
+            parseNamespaceList(data)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: RemoteOperationError) {
+            throw error
+        } catch (error: JsonParseException) {
+            throw RemoteOperationError.Protocol("Invalid V3 namespace list response", error)
         } catch (error: Throwable) {
             throw RemoteOperationError.Connection(error)
         }
@@ -233,6 +258,128 @@ class V3ProtocolAdapter(
         headers = mapOf("Accept" to "application/json")
     )
 
+    private fun namespaceListRequest(target: OperationTarget): ProtocolRequest = ProtocolRequest(
+        method = "GET",
+        endpoint = target.context.endpoint.value,
+        path = NAMESPACE_LIST_PATH,
+        query = emptyList(),
+        headers = mapOf("Accept" to "application/json")
+    )
+
+    // ---- authentication ----
+
+    private suspend fun executeAuthenticated(
+        target: OperationTarget,
+        build: (RequestAuthentication) -> ProtocolRequest
+    ): ProtocolResponse {
+        val firstAuth = authenticationFor(target, forceRefresh = false)
+        val firstResponse = transport.execute(build(firstAuth))
+        if (
+            target.context.authenticationStrategy == V1AuthenticationStrategy.NACOS_PASSWORD &&
+            isInvalidOrExpiredToken(firstResponse)
+        ) {
+            val refreshed = authenticationFor(target, forceRefresh = true)
+            return transport.execute(build(refreshed))
+        }
+        return firstResponse
+    }
+
+    private fun applyAuth(request: ProtocolRequest, auth: RequestAuthentication): ProtocolRequest =
+        request.copy(
+            query = request.query + auth.query,
+            headers = request.headers + auth.headers
+        )
+
+    private suspend fun authenticationFor(
+        target: OperationTarget,
+        forceRefresh: Boolean
+    ): RequestAuthentication = when (target.context.authenticationStrategy) {
+        V1AuthenticationStrategy.ANONYMOUS -> RequestAuthentication()
+        V1AuthenticationStrategy.NACOS_PASSWORD -> {
+            val token = loginAccessToken(target, forceRefresh)
+                ?: throw RemoteOperationError.Authentication(401)
+            RequestAuthentication(query = listOf("accessToken" to token))
+        }
+        V1AuthenticationStrategy.HTTP_BASIC -> {
+            val credentials = "${target.context.identity.principal}:${target.context.credential.secret}"
+            val encoded = java.util.Base64.getEncoder()
+                .encodeToString(credentials.toByteArray(StandardCharsets.UTF_8))
+            RequestAuthentication(headers = mapOf("Authorization" to "Basic $encoded"))
+        }
+        V1AuthenticationStrategy.BEARER_TOKEN -> RequestAuthentication(
+            headers = mapOf("Authorization" to "Bearer ${target.context.credential.secret}")
+        )
+    }
+
+    private suspend fun loginAccessToken(target: OperationTarget, forceRefresh: Boolean): String? {
+        val cacheKey = listOf(
+            target.context.endpoint.value,
+            target.context.identity.principal,
+            target.context.accessRevision.toString()
+        ).joinToString("|")
+        if (!forceRefresh) {
+            tokenCache[cacheKey]?.takeIf { it.expiresAtEpochMs > System.currentTimeMillis() }?.let {
+                return it.accessToken
+            }
+        } else {
+            tokenCache.remove(cacheKey)
+        }
+        val username = target.context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty()
+        val password = target.context.credential.secret
+        if (username.isBlank() || password.isBlank()) return null
+        val formData =
+            "username=${URLEncoder.encode(username, StandardCharsets.UTF_8.name())}" +
+                "&password=${URLEncoder.encode(password, StandardCharsets.UTF_8.name())}"
+        val request = ProtocolRequest(
+            method = "POST",
+            endpoint = target.context.endpoint.value,
+            path = AUTH_LOGIN_PATH,
+            query = emptyList(),
+            headers = mapOf(
+                "Accept" to "application/json",
+                "Content-Type" to "application/x-www-form-urlencoded"
+            ),
+            body = formData
+        )
+        val response = transport.execute(request)
+        if (response.status !in 200..299) {
+            throw mapStatusFailure(response)
+        }
+        // V3 login may return either a bare token object or a {code,message,data} envelope.
+        val tokenObject = extractLoginTokenObject(response.body)
+            ?: throw RemoteOperationError.Protocol("V3 login response missing accessToken")
+        val accessToken = tokenObject.get("accessToken")?.asString?.takeIf { it.isNotBlank() }
+            ?: throw RemoteOperationError.Protocol("V3 login response missing accessToken")
+        val ttlSeconds = tokenObject.get("tokenTtl")?.asLong ?: DEFAULT_TOKEN_TTL_SECONDS
+        tokenCache[cacheKey] = CachedAccessToken(
+            accessToken = accessToken,
+            expiresAtEpochMs = System.currentTimeMillis() +
+                ((ttlSeconds - TOKEN_EXPIRY_SKEW_SECONDS) * 1000L)
+        )
+        return accessToken
+    }
+
+    private fun extractLoginTokenObject(body: String): JsonObject? {
+        val root = runCatching { gson.fromJson(body, JsonObject::class.java) }.getOrNull() ?: return null
+        if (root.has("accessToken")) return root
+        if (root.has("code")) {
+            val code = root.get("code")?.asInt ?: -1
+            if (code != 0) throw mapEnvelopeCode(code, root.get("message")?.asString)
+            val data = root.get("data")
+            if (data != null && data.isJsonObject) return data.asJsonObject
+        }
+        return null
+    }
+
+    private fun isInvalidOrExpiredToken(response: ProtocolResponse): Boolean {
+        if (response.status !in setOf(401, 403)) {
+            val envelope = runCatching { gson.fromJson(response.body, V3Envelope::class.java) }.getOrNull()
+            return envelope?.code == CODE_INVALID_TOKEN
+        }
+        val envelope = runCatching { gson.fromJson(response.body, V3Envelope::class.java) }.getOrNull()
+        return envelope?.code == CODE_INVALID_TOKEN || response.status == 401
+    }
+
     // ---- response parsing ----
 
     private fun parseRawStateMap(body: String) {
@@ -260,15 +407,20 @@ class V3ProtocolAdapter(
     }
 
     private fun unwrapEnvelope(response: ProtocolResponse, operation: String): JsonObject {
-        if (response.status !in 200..299) throw mapStatusFailure(response)
-        val parsed = gson.fromJson(response.body, V3Envelope::class.java)
-            ?: throw RemoteOperationError.Protocol("V3 $operation response was empty")
-        // The V3 envelope uses code=0 for success. A non-zero code on a 2xx
-        // status is still a typed failure.
-        if (parsed.code != 0) throw mapEnvelopeCode(parsed.code, parsed.message)
-        val data = gson.toJsonTree(parsed.data)?.takeIf { it.isJsonObject }?.asJsonObject
+        val element = unwrapEnvelopeElement(response, operation)
+        return element.takeIf { it.isJsonObject }?.asJsonObject
             ?: throw RemoteOperationError.Protocol("V3 $operation response data is missing or not an object")
-        return data
+    }
+
+    private fun unwrapEnvelopeElement(response: ProtocolResponse, operation: String): JsonElement {
+        if (response.status !in 200..299) throw mapStatusFailure(response)
+        val root = runCatching { gson.fromJson(response.body, JsonObject::class.java) }.getOrNull()
+            ?: throw RemoteOperationError.Protocol("V3 $operation response was empty")
+        val code = root.get("code")?.asInt ?: -1
+        val message = root.get("message")?.asString
+        if (code != 0) throw mapEnvelopeCode(code, message)
+        return root.get("data")
+            ?: throw RemoteOperationError.Protocol("V3 $operation response data is missing")
     }
 
     private fun unwrapEnvelopeOrNull(response: ProtocolResponse, operation: String): JsonObject? {
@@ -364,6 +516,43 @@ class V3ProtocolAdapter(
         )
     }
 
+    private fun parseNamespaceList(data: JsonElement): List<DiscoveredNamespace> {
+        val items: JsonArray = when {
+            data.isJsonArray -> data.asJsonArray
+            data.isJsonObject -> {
+                val obj = data.asJsonObject
+                obj.getAsJsonArray("data")
+                    ?: obj.getAsJsonArray("pageItems")
+                    ?: JsonArray()
+            }
+            else -> JsonArray()
+        }
+        return items.mapNotNull { element ->
+            if (!element.isJsonObject) return@mapNotNull null
+            val obj = element.asJsonObject
+            val namespaceId = firstPresent(
+                obj.get("namespace")?.asString,
+                obj.get("namespaceShowName")?.asString,
+                obj.get("namespaceName")?.asString
+            ) ?: return@mapNotNull null
+            // V3 public namespace commonly uses empty string as id.
+            val normalizedId = namespaceId.trim().ifBlank { "public" }
+            DiscoveredNamespace(
+                namespaceId = normalizedId,
+                displayName = firstPresent(
+                    obj.get("namespaceShowName")?.asString,
+                    obj.get("namespaceName")?.asString,
+                    normalizedId
+                ) ?: normalizedId,
+                description = obj.get("namespaceDesc")?.asString,
+                configCount = obj.get("configCount")?.asLong
+            )
+        }
+    }
+
+    private fun firstPresent(vararg values: String?): String? =
+        values.firstOrNull { !it.isNullOrBlank() }
+
     private fun mapStatusFailure(response: ProtocolResponse): RemoteOperationError {
         val envelope = runCatching { gson.fromJson(response.body, V3Envelope::class.java) }.getOrNull()
         val code = envelope?.code
@@ -394,10 +583,36 @@ class V3ProtocolAdapter(
         require(target.context.resolvedGeneration == NacosApiGeneration.V3) {
             throw RemoteOperationError.Unsupported("V3 adapter requires a V3-locked target")
         }
+        when (target.context.authenticationStrategy) {
+            V1AuthenticationStrategy.ANONYMOUS -> require(
+                target.context.identity.principal == "<anonymous>" && target.context.credential.secret.isBlank()
+            ) {
+                throw RemoteOperationError.Unsupported("Anonymous target must not carry credentials")
+            }
+            V1AuthenticationStrategy.NACOS_PASSWORD,
+            V1AuthenticationStrategy.HTTP_BASIC -> require(
+                target.context.identity.principal != "<anonymous>" && target.context.credential.secret.isNotBlank()
+            ) {
+                throw RemoteOperationError.Unsupported("Password and principal are required for V3 authentication")
+            }
+            V1AuthenticationStrategy.BEARER_TOKEN -> require(target.context.credential.secret.isNotBlank()) {
+                throw RemoteOperationError.Unsupported("Bearer token is required for V3 authentication")
+            }
+        }
     }
 
     private fun normalizeTenant(tenant: String?): String? =
         tenant?.trim()?.takeUnless { it.isEmpty() || it == "public" }
+
+    private data class RequestAuthentication(
+        val query: List<Pair<String, String>> = emptyList(),
+        val headers: Map<String, String> = emptyMap()
+    )
+
+    private data class CachedAccessToken(
+        val accessToken: String,
+        val expiresAtEpochMs: Long
+    )
 
     private data class V3Envelope(
         val code: Int = -1,
@@ -463,6 +678,8 @@ class V3ProtocolAdapter(
 
     private companion object {
         const val STATE_PATH = "/nacos/v3/admin/core/state"
+        const val AUTH_LOGIN_PATH = "/nacos/v3/auth/user/login"
+        const val NAMESPACE_LIST_PATH = "/nacos/v3/admin/core/namespace/list"
         const val LIST_PATH = "/nacos/v3/admin/cs/config/list"
         const val DETAIL_PATH = "/nacos/v3/admin/cs/config"
         const val HISTORY_LIST_PATH = "/nacos/v3/admin/cs/history/list"
@@ -471,5 +688,7 @@ class V3ProtocolAdapter(
         const val CODE_ACCESS_DENIED = 10001
         const val CODE_NOT_FOUND = 20004
         const val CODE_INVALID_TOKEN = 401
+        const val DEFAULT_TOKEN_TTL_SECONDS = 18_000L
+        const val TOKEN_EXPIRY_SKEW_SECONDS = 30L
     }
 }

@@ -135,6 +135,7 @@ class EnvironmentSwitcher(
         }
         val namespace = projectSession?.sessionState?.namespaceId.orEmpty().ifBlank { "public" }
         projectSession?.select(entry.config.id, namespace)
+        project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)?.bump()
         onSelectionChanged?.invoke(entry.config.id)
         refresh()
     }

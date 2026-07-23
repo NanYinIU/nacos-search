@@ -260,6 +260,50 @@ class V3ProtocolAdapterTest {
         assertNull(result)
     }
 
+    @Test
+    fun `V3 HTTP basic attaches Authorization header`() = runBlocking {
+        val fixture = RecordingTransport(ProtocolResponse(200, RAW_STATE_MAP))
+        V3ProtocolAdapter(fixture).probe(httpBasicTarget()).getOrThrow()
+        assertEquals("Basic YWxpY2U6cEBzcw==", fixture.lastRequest.headers["Authorization"])
+    }
+
+    @Test
+    fun `V3 bearer attaches Authorization Bearer header`() = runBlocking {
+        val fixture = RecordingTransport(ProtocolResponse(200, RAW_STATE_MAP))
+        V3ProtocolAdapter(fixture).probe(bearerTarget()).getOrThrow()
+        assertEquals("Bearer bearer-token", fixture.lastRequest.headers["Authorization"])
+    }
+
+    @Test
+    fun `V3 nacos password logs in then attaches accessToken query`() = runBlocking {
+        val fixture = ScriptedTransport(
+            listOf(
+                ProtocolResponse(200, """{"accessToken":"v3-token","tokenTtl":18000}"""),
+                ProtocolResponse(200, RAW_STATE_MAP)
+            )
+        )
+        V3ProtocolAdapter(fixture).probe(passwordTarget()).getOrThrow()
+        assertEquals("/nacos/v3/auth/user/login", fixture.requests[0].path)
+        assertEquals("POST", fixture.requests[0].method)
+        assertEquals("/nacos/v3/admin/core/state", fixture.requests[1].path)
+        assertTrue(fixture.requests[1].query.any { it == "accessToken" to "v3-token" })
+    }
+
+    @Test
+    fun `V3 discoverNamespaces parses admin namespace list`() = runBlocking {
+        val fixture = RecordingTransport(
+            ProtocolResponse(
+                200,
+                """{"code":0,"message":"success","data":[{"namespace":"","namespaceShowName":"public","namespaceDesc":"Public","configCount":2},{"namespace":"team-a","namespaceShowName":"Team A","namespaceDesc":"A","configCount":1}]}"""
+            )
+        )
+        val namespaces = V3ProtocolAdapter(fixture).discoverNamespaces(anonymousPublicTarget()).getOrThrow()
+        assertEquals(2, namespaces.size)
+        assertEquals("public", namespaces[0].namespaceId)
+        assertEquals("team-a", namespaces[1].namespaceId)
+        assertEquals("/nacos/v3/admin/core/namespace/list", fixture.lastRequest.path)
+    }
+
     private fun anonymousPublicTarget(namespaceId: String = "public"): OperationTarget {
         val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
         val context = NacosOperationContext(
@@ -281,6 +325,49 @@ class V3ProtocolAdapterTest {
         return OperationTarget(context, namespaceId)
     }
 
+    private fun passwordTarget(): OperationTarget = strategyTarget(
+        authMode = AuthMode.NACOS_PASSWORD,
+        principal = "alice",
+        secret = "p@ss"
+    )
+
+    private fun httpBasicTarget(): OperationTarget = strategyTarget(
+        authMode = AuthMode.HTTP_BASIC,
+        principal = "alice",
+        secret = "p@ss"
+    )
+
+    private fun bearerTarget(): OperationTarget = strategyTarget(
+        authMode = AuthMode.BEARER_TOKEN,
+        principal = "alias",
+        secret = "bearer-token"
+    )
+
+    private fun strategyTarget(
+        authMode: AuthMode,
+        principal: String,
+        secret: String
+    ): OperationTarget {
+        val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
+        val context = NacosOperationContext(
+            identity = AccessIdentity.ofProfile(
+                profileId = "v3-auth",
+                accessRevision = 4,
+                canonicalEndpoint = endpoint.value,
+                resolvedGeneration = NacosApiGeneration.V3,
+                authMode = authMode,
+                principal = principal
+            ),
+            endpoint = endpoint,
+            credential = CredentialSnapshot(secret),
+            authMode = authMode,
+            profileRevision = 4,
+            accessRevision = 4,
+            resolvedGeneration = NacosApiGeneration.V3
+        )
+        return OperationTarget(context, "public")
+    }
+
     private class RecordingTransport(
         private val response: ProtocolResponse
     ) : ProtocolTransport {
@@ -296,6 +383,20 @@ class V3ProtocolAdapterTest {
             assertEquals("https://nacos.example", lastRequest.endpoint)
             assertEquals(path, lastRequest.path)
             assertEquals(query, lastRequest.query)
+        }
+    }
+
+    private class ScriptedTransport(
+        private val responses: List<ProtocolResponse>
+    ) : ProtocolTransport {
+        val requests = mutableListOf<ProtocolRequest>()
+        private var index = 0
+
+        override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
+            requests += request
+            val response = responses[index.coerceAtMost(responses.lastIndex)]
+            index++
+            return response
         }
     }
 

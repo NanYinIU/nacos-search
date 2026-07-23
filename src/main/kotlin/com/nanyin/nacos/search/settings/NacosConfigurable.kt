@@ -227,7 +227,7 @@ class NacosConfigurable : Configurable {
             font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 13)
             document.addDocumentListener(docListener)
         }
-        apiPolicyComboBox = JComboBox(arrayOf(NacosApiPolicy.AUTO, NacosApiPolicy.V1)).apply {
+        apiPolicyComboBox = JComboBox(arrayOf(NacosApiPolicy.AUTO, NacosApiPolicy.V1, NacosApiPolicy.V3)).apply {
             addActionListener { commitDetailFormToDraft() }
         }
         authModeComboBox = JComboBox(AuthMode.values()).apply {

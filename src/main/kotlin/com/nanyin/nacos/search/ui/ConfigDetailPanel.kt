@@ -1359,7 +1359,11 @@ class ConfigDetailPanel internal constructor(
                     configuration = config,
                     currentContent = currentText,
                     gateway = nacosApiService.operationGateway(),
-                    generationProvider = { displayGeneration }
+                    generationProvider = {
+                        project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)
+                            ?.currentEpoch()
+                            ?: displayGeneration
+                    }
                 ).show()
             }
         }
