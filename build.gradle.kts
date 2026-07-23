@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.3.5"
+version = "1.3.6"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -110,6 +110,16 @@ tasks {
         """.trimIndent())
 
        changeNotes.set("""
+            <h3>1.3.6</h3>
+            <ul>
+                <li><b>Dual-stack</b>: V1/V3 protocol adapters with AUTO generation resolve, namespace discovery, and connection diagnostics from unsaved settings drafts.</li>
+                <li><b>Environments</b>: project-local environment sessions with epoch fencing; History/Diff/publish/gutter follow the project-selected profile (not the app-wide Settings default).</li>
+                <li><b>History / Diff</b>: identity-local read-only history browser with embedded split-pane Diff (no merge chevrons).</li>
+                <li><b>Publish</b>: opt-in per-profile write intent with controlled CAS/read-back publish path.</li>
+                <li><b>Settings</b>: progressive disclosure (Advanced for auth/API/write intent); empty-credential profiles default to ANONYMOUS and upgrade to NACOS_PASSWORD when credentials are filled.</li>
+                <li><b>UI</b>: native ActionToolbar chrome; cache confidence status; Settings blue-dot tracks the current project environment.</li>
+                <li><b>Reliability</b>: release-gate contract suite; fail-closed capture for deleted profiles; write-intent enforced in PublishController; diagnostics honor locked V1/V3 API policy.</li>
+            </ul>
             <h3>1.3.5</h3>
             <ul>
                 <li><b>Cache</b>: full-namespace index writes now honor the configured TTL, while expired configuration details remain available for stale-while-revalidate navigation.</li>

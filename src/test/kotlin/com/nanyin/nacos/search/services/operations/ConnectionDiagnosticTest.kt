@@ -12,6 +12,21 @@ import org.junit.jupiter.api.Test
 class ConnectionDiagnosticTest {
 
     @Test
+    fun `locked V1 apiPolicy skips AUTO probing and uses V1`() = runBlocking {
+        val v3 = CountingProbeAdapter(NacosApiGeneration.V3)
+        val v1 = StubAdapter(NacosApiGeneration.V1, probeResult = Result.success(Unit))
+        val resolver = GenerationResolver(v3, v1)
+        val gateway = OperationGateway(mapOf(NacosApiGeneration.V3 to v3, NacosApiGeneration.V1 to v1))
+        val diagnostic = ConnectionDiagnostic(resolver, gateway)
+
+        val report = diagnostic.diagnose(validAnonymousSnapshot().copy(apiPolicy = "V1"))
+
+        assertTrue(report.connected)
+        assertEquals(NacosApiGeneration.V1, report.stages[1].resolvedGeneration)
+        assertEquals(0, v3.probeCount)
+    }
+
+    @Test
     fun `valid unapplied settings report connection success`() = runBlocking {
         val v3 = StubAdapter(NacosApiGeneration.V3, probeResult = Result.success(Unit))
         val v1 = StubAdapter(NacosApiGeneration.V1, probeResult = Result.success(Unit))

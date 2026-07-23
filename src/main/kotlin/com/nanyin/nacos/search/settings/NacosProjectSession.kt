@@ -32,6 +32,9 @@ data class NacosProjectSessionState(
     fun healSelection(defaults: LegacyMigrationResult, profileExists: (String) -> Boolean) {
         seedIfNew(defaults)
         if (selectedProfileId.isNotBlank() && profileExists(selectedProfileId)) return
+        // Explicit selections must not silently retarget after profile deletion
+        // (ADR 0025). Leave the stale id so captureOperationContext fails closed.
+        if (selectionWasExplicit && selectedProfileId.isNotBlank()) return
         val healed = defaults.defaultProfileId.takeIf { it.isNotBlank() && profileExists(it) }
             ?: defaults.profiles.firstOrNull { profileExists(it.id) }?.id
             ?: ""

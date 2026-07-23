@@ -36,6 +36,12 @@ interface PublishGateway {
 class PublishController(private val gateway: PublishGateway) {
 
     suspend fun publish(session: EditSession): PublishResult {
+        if (!session.writesEnabled) {
+            return PublishResult(
+                PublishState.ReadOnly("Publishing is disabled for this environment"),
+                isDirty = session.isDirty
+            )
+        }
         // Phase 1: Preflight
         val preflightResult = gateway.preflight(session)
         if (preflightResult.isFailure) {

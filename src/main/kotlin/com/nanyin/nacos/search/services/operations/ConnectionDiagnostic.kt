@@ -73,18 +73,34 @@ class ConnectionDiagnostic(
             return DiagnosticReport(connected = false, stages = stages, manualNamespaceRequired = false)
         }
 
-        // Stage 2: resolve generation using isolated probing
-        val target = snapshotToTarget(snapshot, NacosApiGeneration.UNKNOWN)
-        val genResult = timed("generation") {
-            resolver.resolve(target)
+        // Stage 2: honor locked V1/V3 drafts; only AUTO runs isolated probing
+        val genStage = when (val policy = parseApiPolicy(snapshot.apiPolicy)) {
+            com.nanyin.nacos.search.models.NacosApiPolicy.V1 ->
+                DiagnosticStageResult(
+                    stage = "generation",
+                    success = true,
+                    durationMillis = 0,
+                    resolvedGeneration = NacosApiGeneration.V1
+                )
+            com.nanyin.nacos.search.models.NacosApiPolicy.V3 ->
+                DiagnosticStageResult(
+                    stage = "generation",
+                    success = true,
+                    durationMillis = 0,
+                    resolvedGeneration = NacosApiGeneration.V3
+                )
+            com.nanyin.nacos.search.models.NacosApiPolicy.AUTO -> {
+                val target = snapshotToTarget(snapshot, NacosApiGeneration.UNKNOWN)
+                val genResult = timed("generation") { resolver.resolve(target) }
+                DiagnosticStageResult(
+                    stage = "generation",
+                    success = genResult.second.isSuccess,
+                    durationMillis = genResult.first,
+                    resolvedGeneration = genResult.second.getOrNull(),
+                    sanitizedFailure = genResult.second.exceptionOrNull()?.let { sanitize(it) }
+                )
+            }
         }
-        val genStage = DiagnosticStageResult(
-            stage = "generation",
-            success = genResult.second.isSuccess,
-            durationMillis = genResult.first,
-            resolvedGeneration = genResult.second.getOrNull(),
-            sanitizedFailure = genResult.second.exceptionOrNull()?.let { sanitize(it) }
-        )
         stages.add(genStage)
         if (!genStage.success) {
             return DiagnosticReport(connected = false, stages = stages, manualNamespaceRequired = false)
@@ -170,6 +186,13 @@ class ConnectionDiagnostic(
         )
         return OperationTarget(context, snapshot.namespaceId.ifBlank { "public" })
     }
+
+    private fun parseApiPolicy(policy: String): com.nanyin.nacos.search.models.NacosApiPolicy =
+        when (policy.trim().uppercase()) {
+            "V1" -> com.nanyin.nacos.search.models.NacosApiPolicy.V1
+            "V3" -> com.nanyin.nacos.search.models.NacosApiPolicy.V3
+            else -> com.nanyin.nacos.search.models.NacosApiPolicy.AUTO
+        }
 
     private fun parseAuthMode(strategy: String): com.nanyin.nacos.search.settings.AuthMode = when (strategy.uppercase()) {
         "ANONYMOUS" -> com.nanyin.nacos.search.settings.AuthMode.ANONYMOUS

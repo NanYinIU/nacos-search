@@ -61,7 +61,9 @@ data class EditSession(
     val baselineAppName: String?,
     val baselineDesc: String?,
     val baselineConfigTags: String?,
-    val draftContent: String
+    val draftContent: String,
+    /** Per-profile publish opt-in (ADR 0026). Must be true for any write. */
+    val writesEnabled: Boolean = false
 ) {
     val isDirty: Boolean get() = draftContent != baselineContent
 

@@ -108,13 +108,6 @@ class NacosValueLineMarkerProvider internal constructor(
             activeIdentity = project.captureSelectedAccessIdentity()
         )
 
-    private fun effectiveNamespaceId(project: Project, codeContext: NacosCodeContext): String? =
-        if (project.allowCrossNamespaceNavigation()) {
-            codeContext.namespaceId ?: project.selectedNacosNamespaceId()
-        } else {
-            project.selectedNacosNamespaceId()
-        }
-
     private fun navigateFromCode(
         anchor: PsiElement,
         literal: PsiLiteralExpression,
@@ -153,11 +146,7 @@ class NacosValueLineMarkerProvider internal constructor(
             val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
             val profileId = project.selectedNacosProfileId(settings)
-            val namespaceId = if (project.allowCrossNamespaceNavigation(settings)) {
-                codeContext.namespaceId
-            } else {
-                project.selectedNacosNamespaceId(settings)
-            }
+            val namespaceId = effectiveNamespaceId(project, codeContext)
             val accessIdentity = settings.captureAccessIdentity(profileId)
             val operationContext = settings.captureOperationContext(profileId).getOrNull()
             val cached = runBlocking {
@@ -238,6 +227,13 @@ class NacosValueLineMarkerProvider internal constructor(
             )
         }
 
+        private fun effectiveNamespaceId(project: Project, codeContext: NacosCodeContext): String? =
+            if (project.allowCrossNamespaceNavigation()) {
+                codeContext.namespaceId ?: project.selectedNacosNamespaceId()
+            } else {
+                project.selectedNacosNamespaceId()
+            }
+
         private fun requestBackgroundRefresh(
             project: Project,
             codeContext: NacosCodeContext
@@ -247,11 +243,7 @@ class NacosValueLineMarkerProvider internal constructor(
                 val settings = application.getService(NacosSettings::class.java)
                 if (!settings.cacheEnabled) return
                 val profileId = project.selectedNacosProfileId(settings)
-                val namespaceId = if (project.allowCrossNamespaceNavigation(settings)) {
-                    codeContext.namespaceId
-                } else {
-                    project.selectedNacosNamespaceId(settings)
-                }
+                val namespaceId = effectiveNamespaceId(project, codeContext)
                 application.getService(NamespaceIndexRefreshService::class.java)
                     .requestIfNeeded(settings.captureAccessIdentity(profileId), namespaceId.orEmpty(), project)
             } catch (_: Exception) {
