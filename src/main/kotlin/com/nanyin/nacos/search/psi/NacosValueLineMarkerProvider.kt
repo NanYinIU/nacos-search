@@ -6,6 +6,7 @@ import com.nanyin.nacos.search.NacosIcons
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.markup.GutterIconRenderer
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
@@ -14,9 +15,12 @@ import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NamespaceIndexRefreshService
-import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
 import com.nanyin.nacos.search.services.captureAccessIdentity
 import com.nanyin.nacos.search.settings.NacosSettings
+import com.nanyin.nacos.search.settings.allowCrossNamespaceNavigation
+import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
+import com.nanyin.nacos.search.settings.selectedNacosNamespaceId
+import com.nanyin.nacos.search.settings.selectedNacosProfileId
 import kotlinx.coroutines.runBlocking
 import java.awt.BorderLayout
 import java.awt.Font
@@ -34,7 +38,7 @@ import javax.swing.ListCellRenderer
  * definitions exist.
  */
 class NacosValueLineMarkerProvider internal constructor(
-    private val refreshObserver: (com.intellij.openapi.project.Project, NacosCodeContext) -> Unit
+    private val refreshObserver: (Project, NacosCodeContext) -> Unit
 ) : LineMarkerProvider {
     constructor() : this(::requestBackgroundRefresh)
 
@@ -54,14 +58,15 @@ class NacosValueLineMarkerProvider internal constructor(
 
         if (!NacosValueReferenceContributor.isInSupportedAnnotation(literal)) return null
         val codeContext = NacosCodeContextExtractor.fromLiteral(literal)
-        val resolution = currentResolution(placeholder.key)
+        val project = anchor.project
+        val resolution = currentResolution(project, placeholder.key, codeContext)
         if (resolution.status != ConfigReferenceStatus.RESOLVED) {
-            refreshObserver(anchor.project, codeContext)
+            refreshObserver(project, codeContext)
         }
 
         // Only show the marker if the key is in the cache or a dataId context
         // is available for remote lookup fallback.
-        if (!shouldShowMarker(resolution, codeContext)) return null
+        if (!shouldShowMarker(project, resolution, codeContext)) return null
 
         val presentation = markerPresentation(resolution.status)
         return LineMarkerInfo(
@@ -77,43 +82,37 @@ class NacosValueLineMarkerProvider internal constructor(
         )
     }
 
-   private fun shouldShowMarker(resolution: ConfigResolution, codeContext: NacosCodeContext): Boolean {
-       if (resolution.hits.isNotEmpty()) return true
-       val dataId = codeContext.dataId ?: return false
-       return NacosKeyResolver.isDataIdKnown(
-           dataId,
-           activeNamespaceId = effectiveNamespaceId(codeContext),
-           activeIdentity = currentAccessIdentity()
-       )
-   }
+    private fun shouldShowMarker(
+        project: Project,
+        resolution: ConfigResolution,
+        codeContext: NacosCodeContext
+    ): Boolean {
+        if (resolution.hits.isNotEmpty()) return true
+        val dataId = codeContext.dataId ?: return false
+        return NacosKeyResolver.isDataIdKnown(
+            dataId,
+            activeNamespaceId = effectiveNamespaceId(project, codeContext),
+            activeIdentity = project.captureSelectedAccessIdentity()
+        )
+    }
 
-    private fun currentResolution(key: String): ConfigResolution =
+    private fun currentResolution(
+        project: Project,
+        key: String,
+        codeContext: NacosCodeContext
+    ): ConfigResolution =
         NacosKeyResolver.resolveCurrentState(
             key,
-            allowCrossNamespace = crossNamespaceEnabled(),
-            activeIdentity = currentAccessIdentity()
+            allowCrossNamespace = project.allowCrossNamespaceNavigation(),
+            activeNamespaceId = effectiveNamespaceId(project, codeContext),
+            activeIdentity = project.captureSelectedAccessIdentity()
         )
 
-    private fun currentAccessIdentity() =
-        ApplicationManager.getApplication().getService(NacosSettings::class.java).captureAccessIdentity()
-
-    private fun effectiveNamespaceId(codeContext: NacosCodeContext): String? =
-        if (crossNamespaceEnabled()) {
+    private fun effectiveNamespaceId(project: Project, codeContext: NacosCodeContext): String? =
+        if (project.allowCrossNamespaceNavigation()) {
             codeContext.namespaceId
         } else {
-            ApplicationManager.getApplication()
-                .getService(NamespaceService::class.java)
-                .getCurrentNamespace()?.namespaceId
-        }
-
-    private fun crossNamespaceEnabled(): Boolean =
-        try {
-            ApplicationManager.getApplication()
-                ?.getService(NacosSettings::class.java)
-                ?.getActiveServer()
-                ?.allowCrossNamespaceNavigation == true
-        } catch (e: Exception) {
-            false
+            project.selectedNacosNamespaceId()
         }
 
     private fun navigateFromCode(
@@ -153,13 +152,14 @@ class NacosValueLineMarkerProvider internal constructor(
             val apiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
             val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-            val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
-            val namespaceId = if (settings.getActiveServer().allowCrossNamespaceNavigation) {
+            val profileId = project.selectedNacosProfileId(settings)
+            val namespaceId = if (project.allowCrossNamespaceNavigation(settings)) {
                 codeContext.namespaceId
             } else {
-                namespaceService.getCurrentNamespace()?.namespaceId
+                project.selectedNacosNamespaceId(settings)
             }
-            val accessIdentity = settings.captureAccessIdentity()
+            val accessIdentity = settings.captureAccessIdentity(profileId)
+            val operationContext = settings.captureOperationContext(profileId).getOrNull()
             val cached = runBlocking {
                 cacheService.getConfigDetail(
                     accessIdentity,
@@ -179,7 +179,8 @@ class NacosValueLineMarkerProvider internal constructor(
                     dataId = dataId,
                     group = group,
                     namespaceId = namespaceId,
-                    useCache = true
+                    useCache = true,
+                    operationContext = operationContext
                 ).getOrNull()
             } ?: return@executeOnPooledThread
 
@@ -238,21 +239,21 @@ class NacosValueLineMarkerProvider internal constructor(
         }
 
         private fun requestBackgroundRefresh(
-            project: com.intellij.openapi.project.Project,
+            project: Project,
             codeContext: NacosCodeContext
         ) {
             try {
                 val application = ApplicationManager.getApplication()
                 val settings = application.getService(NacosSettings::class.java)
                 if (!settings.cacheEnabled) return
-                val namespaceId = if (settings.getActiveServer().allowCrossNamespaceNavigation) {
+                val profileId = project.selectedNacosProfileId(settings)
+                val namespaceId = if (project.allowCrossNamespaceNavigation(settings)) {
                     codeContext.namespaceId
                 } else {
-                    application.getService(NamespaceService::class.java)
-                        .getCurrentNamespace()?.namespaceId
+                    project.selectedNacosNamespaceId(settings)
                 }
                 application.getService(NamespaceIndexRefreshService::class.java)
-                    .requestIfNeeded(settings.captureAccessIdentity(namespaceId), namespaceId.orEmpty(), project)
+                    .requestIfNeeded(settings.captureAccessIdentity(profileId), namespaceId.orEmpty(), project)
             } catch (_: Exception) {
                 // Gutter calculation is best-effort and must never fail PSI analysis.
             }

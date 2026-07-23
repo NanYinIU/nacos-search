@@ -10,9 +10,11 @@ import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.ApplicationRule
 import com.nanyin.nacos.search.NacosIcons
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.captureAccessIdentity
+import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -32,12 +34,26 @@ class NacosValueLineMarkerProviderTest {
     fun setUp() {
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         settings.resetToDefaults()
+        val project = ProjectManager.getInstance().defaultProject
+        project.getService(NacosProjectSession::class.java).sessionState.apply {
+            selectedProfileId = ""
+            namespaceId = "public"
+            selectionWasExplicit = false
+            upgradeSummaryShown = false
+        }
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
             cache.clearAll()
             NacosKeyResolver.refreshIndex(cache, settings.serverUrl, settings.captureAccessIdentity())
         }
         ApplicationManager.getApplication().getService(NamespaceService::class.java).setCurrentNamespace(null)
+    }
+
+    private fun selectProjectNamespace(namespaceId: String) {
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        ProjectManager.getInstance().defaultProject
+            .getService(NacosProjectSession::class.java)
+            .select(settings.activeServerId, namespaceId)
     }
 
     private fun cacheAndRefresh(configuration: NacosConfiguration) = runBlocking {
@@ -99,10 +115,10 @@ class NacosValueLineMarkerProviderTest {
             ttl = -1L
         )
         NacosKeyResolver.refreshIndex(cache, settings.serverUrl, settings.captureAccessIdentity())
+
         var observed = false
         val provider = NacosValueLineMarkerProvider { _, _ -> observed = true }
-
-        markerFor(
+        val marker = markerFor(
             """
             class Demo {
                 @org.springframework.beans.factory.annotation.Value("${'$'}{app.name}")
@@ -112,7 +128,94 @@ class NacosValueLineMarkerProviderTest {
             provider
         )
 
+        assertNotNull(marker)
         assertTrue(observed)
+    }
+
+    @Test
+    fun `marker resolves against project-selected namespace not app-wide NamespaceService`() {
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        settings.getActiveServer().allowCrossNamespaceNavigation = false
+        // App-wide service points at a different namespace than the project session.
+        ApplicationManager.getApplication().getService(NamespaceService::class.java)
+            .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("other-ns", "Other"))
+        selectProjectNamespace("qa-ns")
+        runBlocking {
+            val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+            cache.putConfigDetail(
+                identity = settings.captureAccessIdentity(),
+                namespaceId = "qa-ns",
+                configuration = NacosConfiguration(
+                    "room.properties",
+                    "DEFAULT_GROUP",
+                    "qa-ns",
+                    "room.room.fluency.type=5\n",
+                    "properties"
+                ),
+                ttl = 60_000L
+            )
+            NacosKeyResolver.refreshIndex(cache, settings.serverUrl, settings.captureAccessIdentity())
+        }
+
+        val marker = markerFor(
+            """
+            class RoomConfig {
+                @NacosValue(value = "${'$'}{room.room.fluency.type:3}")
+                private Integer fluencyType;
+            }
+            """.trimIndent()
+        )
+
+        assertNotNull(marker)
+        assertEquals(NacosIcons.GutterConfig, marker?.createGutterRenderer()?.icon)
+    }
+
+    @Test
+    fun `marker resolves against project-selected profile cache identity`() {
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val qa = NacosServerConfig(
+            id = "qa",
+            displayName = "QA",
+            serverUrl = "http://qa.example:8848"
+        )
+        val local = settings.getActiveServer()
+        settings.servers = mutableListOf(local, qa)
+        settings.profileMigrationCompleted = false
+        settings.migrateLegacyProfiles()
+
+        val project = ProjectManager.getInstance().defaultProject
+        project.getService(NacosProjectSession::class.java).select("qa", "public")
+
+        runBlocking {
+            val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+            val qaIdentity = settings.captureAccessIdentity("qa")
+            cache.putConfigDetail(
+                identity = qaIdentity,
+                namespaceId = null,
+                configuration = NacosConfiguration(
+                    "room.properties",
+                    "DEFAULT_GROUP",
+                    null,
+                    "room.room.fluency.type=5\n",
+                    "properties"
+                ),
+                ttl = 60_000L
+            )
+            // App-active profile cache stays empty — gutter must not look there.
+            NacosKeyResolver.refreshIndex(cache, settings.serverUrl, qaIdentity)
+        }
+
+        val marker = markerFor(
+            """
+            class RoomConfig {
+                @NacosValue(value = "${'$'}{room.room.fluency.type:3}")
+                private Integer fluencyType;
+            }
+            """.trimIndent()
+        )
+
+        assertNotNull(marker)
+        assertEquals(NacosIcons.GutterConfig, marker?.createGutterRenderer()?.icon)
     }
 
     @Test
@@ -300,6 +403,7 @@ class NacosValueLineMarkerProviderTest {
     fun `value reference only resolves current namespace when cross namespace navigation is disabled`() {
         ApplicationManager.getApplication().getService(NacosSettings::class.java)
             .getActiveServer().allowCrossNamespaceNavigation = false
+        selectProjectNamespace("namespace1")
         ApplicationManager.getApplication().getService(NamespaceService::class.java)
             .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("namespace1", "Namespace 1"))
         runBlocking {
@@ -331,6 +435,7 @@ class NacosValueLineMarkerProviderTest {
     fun `value reference resolves other namespaces when cross namespace navigation is enabled`() {
         ApplicationManager.getApplication().getService(NacosSettings::class.java)
             .getActiveServer().allowCrossNamespaceNavigation = true
+        selectProjectNamespace("namespace1")
         ApplicationManager.getApplication().getService(NamespaceService::class.java)
             .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("namespace1", "Namespace 1"))
         runBlocking {
@@ -393,6 +498,7 @@ class NacosValueLineMarkerProviderTest {
     private fun cacheKeyInOtherNamespaceForActive(activeNamespaceId: String, allowCrossNamespace: Boolean) {
         ApplicationManager.getApplication().getService(NacosSettings::class.java)
             .getActiveServer().allowCrossNamespaceNavigation = allowCrossNamespace
+        selectProjectNamespace(activeNamespaceId)
         ApplicationManager.getApplication().getService(NamespaceService::class.java)
             .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo(activeNamespaceId, "Namespace 1"))
         runBlocking {

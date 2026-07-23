@@ -5,9 +5,9 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiPolyVariantReferenceBase
 import com.intellij.psi.ResolveResult
-import com.nanyin.nacos.search.settings.NacosSettings
-import com.intellij.openapi.application.ApplicationManager
-import com.nanyin.nacos.search.services.captureAccessIdentity
+import com.nanyin.nacos.search.settings.allowCrossNamespaceNavigation
+import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
+import com.nanyin.nacos.search.settings.selectedNacosNamespaceId
 
 /**
  * A reference from a `${...}` placeholder inside `@NacosValue` / `@Value` to the
@@ -27,26 +27,30 @@ class NacosValueReference(
 
     override fun multiResolve(incompleteCode: Boolean): Array<ResolveResult> {
         val project: Project = element.project ?: return emptyArray()
+        val allowCrossNamespace = project.allowCrossNamespaceNavigation()
         val hits = NacosKeyResolver.resolve(
             key = key,
             preferredGroup = codeContext.group,
             preferredNamespaceId = codeContext.namespaceId,
-            allowCrossNamespace = crossNamespaceNavigationEnabled(),
-            activeIdentity = ApplicationManager.getApplication()
-                .getService(NacosSettings::class.java)
-                .captureAccessIdentity()
+            allowCrossNamespace = allowCrossNamespace,
+            activeNamespaceId = if (allowCrossNamespace) {
+                codeContext.namespaceId
+            } else {
+                project.selectedNacosNamespaceId()
+            },
+            activeIdentity = project.captureSelectedAccessIdentity()
         )
-       return hits.map { hit ->
-           object : ResolveResult {
-               override fun getElement(): PsiElement =
-                   NacosConfigKeyElement(
-                       project,
-                       hit.config,
-                       key,
-                       hit.location.value,
-                       hit.location.lineIndex,
+        return hits.map { hit ->
+            object : ResolveResult {
+                override fun getElement(): PsiElement =
+                    NacosConfigKeyElement(
+                        project,
+                        hit.config,
+                        key,
+                        hit.location.value,
+                        hit.location.lineIndex,
                         contextElement = this@NacosValueReference.element
-                   )
+                    )
                 override fun isValidResult(): Boolean = true
             }
         }.toTypedArray()
@@ -55,14 +59,4 @@ class NacosValueReference(
     override fun isReferenceTo(element: PsiElement): Boolean {
         return element is NacosConfigKeyElement && (element as NacosConfigKeyElement).key == key
     }
-
-    private fun crossNamespaceNavigationEnabled(): Boolean =
-        try {
-            ApplicationManager.getApplication()
-                ?.getService(NacosSettings::class.java)
-                ?.getActiveServer()
-                ?.allowCrossNamespaceNavigation == true
-        } catch (e: Exception) {
-            false
-        }
 }

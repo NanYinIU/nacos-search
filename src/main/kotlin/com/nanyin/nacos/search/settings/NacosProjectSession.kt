@@ -1,10 +1,15 @@
 package com.nanyin.nacos.search.settings
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
+import com.intellij.openapi.project.Project
 import com.intellij.util.xmlb.XmlSerializerUtil
+import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.services.NamespaceService
+import com.nanyin.nacos.search.services.captureAccessIdentity
 
 /** Project-local state; profiles themselves remain application-wide. */
 data class NacosProjectSessionState(
@@ -41,4 +46,47 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
     fun seedIfNew(defaults: LegacyMigrationResult) = sessionState.seedIfNew(defaults)
     fun select(profileId: String, namespace: String) = sessionState.select(profileId, namespace)
     fun markUpgradeSummaryShown() { sessionState.upgradeSummaryShown = true }
+}
+
+/**
+ * PSI/UI helpers that read the project-selected profile and namespace.
+ * Tool-window selection lives here; app-wide [NacosSettings.activeServerId] and
+ * [NamespaceService] must not retarget another project's navigation.
+ */
+internal fun Project.selectedNacosProfileId(
+    settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+): String {
+    val session = getService(NacosProjectSession::class.java) ?: return settings.activeServerId
+    session.seedIfNew(settings.migrationDefaults())
+    return session.sessionState.selectedProfileId.ifBlank { settings.activeServerId }
+}
+
+internal fun Project.selectedNacosNamespaceId(
+    settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java),
+    namespaceService: NamespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
+): String? {
+    val session = getService(NacosProjectSession::class.java)
+    if (session != null) {
+        session.seedIfNew(settings.migrationDefaults())
+        if (session.sessionState.selectionWasExplicit) {
+            return session.sessionState.namespaceId
+        }
+        val seeded = session.sessionState.namespaceId.takeIf { it.isNotBlank() }
+        // Prefer an explicit app-service override only before the project has
+        // made its own selection (tests / cold start).
+        return namespaceService.getCurrentNamespace()?.namespaceId ?: seeded
+    }
+    return namespaceService.getCurrentNamespace()?.namespaceId
+}
+
+internal fun Project.captureSelectedAccessIdentity(
+    settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+): AccessIdentity = settings.captureAccessIdentity(selectedNacosProfileId(settings))
+
+internal fun Project.allowCrossNamespaceNavigation(
+    settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+): Boolean {
+    val profileId = selectedNacosProfileId(settings)
+    return settings.cloneServers().firstOrNull { it.id == profileId }?.allowCrossNamespaceNavigation
+        ?: settings.getActiveServer().allowCrossNamespaceNavigation
 }
