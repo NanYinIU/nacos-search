@@ -116,6 +116,19 @@ class OperationGateway(
         }
     }
 
+    /**
+     * Dispatches a single publish write to the adapter for [target]'s generation.
+     * Callers that need the full controlled state machine should use
+     * [PublishController] with [OperationGatewayPublishGateway], not this method alone.
+     */
+    suspend fun publish(
+        target: OperationTarget,
+        command: PublishCommand
+    ): Result<PublishOutcome> {
+        val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
+        return adapter.publish(target, command)
+    }
+
     private fun acceptObservation(key: String, seq: Long): Boolean =
         observationGates.computeIfAbsent(key) { ObservationGate() }.acceptIfNewer(seq)
 

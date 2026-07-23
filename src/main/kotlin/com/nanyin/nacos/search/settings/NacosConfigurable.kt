@@ -64,6 +64,7 @@ class NacosConfigurable : Configurable {
     private lateinit var defaultGroupField: JBTextField
     private lateinit var connectionTimeoutSpinner: JSpinner
     private lateinit var crossNamespaceNavigationCheckBox: JCheckBox
+    private lateinit var writeIntentCheckBox: JCheckBox
 
     // Test connection UI
     private lateinit var testConnectionButton: JButton
@@ -141,6 +142,7 @@ class NacosConfigurable : Configurable {
         server.defaultGroup = defaultGroupField.text.trim()
         server.connectionTimeoutMs = connectionTimeoutSpinner.value as Int
         server.allowCrossNamespaceNavigation = crossNamespaceNavigationCheckBox.isSelected
+        server.writeIntent = writeIntentCheckBox.isSelected
         // Refresh the list display so name/host changes show immediately
         val idx = serverListModel.indexOf(server)
         if (idx >= 0) {
@@ -241,6 +243,11 @@ class NacosConfigurable : Configurable {
         crossNamespaceNavigationCheckBox = JCheckBox().apply {
             putClientProperty("nacos.automation.id", "nacos.settings.crossNamespaceNavigation")
             toolTipText = NacosSearchBundle.message("settings.server.cross.namespace.navigation.tooltip")
+            addActionListener { commitDetailFormToDraft() }
+        }
+        writeIntentCheckBox = JCheckBox().apply {
+            putClientProperty("nacos.automation.id", "nacos.settings.writeIntent")
+            toolTipText = NacosSearchBundle.message("settings.server.write.intent.tooltip")
             addActionListener { commitDetailFormToDraft() }
         }
 
@@ -498,6 +505,7 @@ class NacosConfigurable : Configurable {
         }, gbc)
         addRow("settings.server.api.policy", apiPolicyComboBox)
         addRow("settings.server.auth.mode", authModeComboBox)
+        addRow("settings.server.write.intent", writeIntentCheckBox)
 
         // Reset to defaults (keeps the display name).
         gbc.gridx = 1; gbc.gridy++; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.NONE
@@ -680,6 +688,7 @@ class NacosConfigurable : Configurable {
             defaultGroupField.text = server.defaultGroup
             connectionTimeoutSpinner.value = server.connectionTimeoutMs
             crossNamespaceNavigationCheckBox.isSelected = server.allowCrossNamespaceNavigation
+            writeIntentCheckBox.isSelected = server.writeIntent
             updateDetailHeader(server)
         } finally {
             // Re-add listeners
@@ -731,7 +740,8 @@ class NacosConfigurable : Configurable {
                 d.password != s.password || d.namespace != s.namespace ||
                 d.authMode != s.authMode || d.defaultGroup != s.defaultGroup ||
                 d.connectionTimeoutMs != s.connectionTimeoutMs ||
-                d.allowCrossNamespaceNavigation != s.allowCrossNamespaceNavigation
+                d.allowCrossNamespaceNavigation != s.allowCrossNamespaceNavigation ||
+                d.writeIntent != s.writeIntent
             ) return true
         }
         return langChanged
@@ -812,10 +822,15 @@ class NacosConfigurable : Configurable {
             return
         }
 
-        // Temporarily set the active server for the connection test
-        val origServers = settings.cloneServers()
-        val origActiveId = settings.activeServerId
-        settings.applyServers(draftServers, server.id)
+        // Diagnose from the unapplied draft only — never mutate persisted settings.
+        val snapshot = com.nanyin.nacos.search.services.operations.DiagnosticSnapshot(
+            endpoint = server.serverUrl.trim(),
+            apiPolicy = server.apiPolicy.name,
+            authStrategy = server.authMode.name,
+            principal = server.username.trim(),
+            secret = server.password,
+            namespaceId = server.namespace.trim().ifBlank { "public" }
+        )
 
         testConnectionButton.isEnabled = false
         testStatusLabel.text = NacosSearchBundle.message("settings.test.connecting")
@@ -824,27 +839,36 @@ class NacosConfigurable : Configurable {
         ProgressManager.getInstance().run(object : Task.Backgroundable(null, NacosSearchBundle.message("settings.test.progress"), true) {
             override fun run(indicator: ProgressIndicator) {
                 indicator.text = NacosSearchBundle.message("settings.test.connecting")
-                val result = try {
-                    runBlocking(Dispatchers.IO) {
-                        apiService.testConnection()
-                    }
+                val outcome: Result<com.nanyin.nacos.search.services.operations.DiagnosticReport> = try {
+                    Result.success(
+                        runBlocking(Dispatchers.IO) {
+                            apiService.diagnoseConnection(snapshot)
+                        }
+                    )
                 } catch (e: Exception) {
                     Result.failure(e)
-                } finally {
-                    ApplicationManager.getApplication().invokeAndWait {
-                        settings.applyServers(origServers, origActiveId)
-                    }
                 }
 
                 ApplicationManager.getApplication().invokeLater {
                     testConnectionButton.isEnabled = true
-                    if (result.isSuccess) {
-                        testStatusLabel.text = NacosSearchBundle.message("settings.connection.success")
-                        testStatusLabel.foreground = JBColor(0x5fb865, 0x208a3c)
+                    val report = outcome.getOrNull()
+                    if (report != null) {
+                        testStatusLabel.text = report.summary
+                        testStatusLabel.foreground = if (report.connected) {
+                            JBColor(0x5fb865, 0x208a3c)
+                        } else {
+                            JBColor.RED
+                        }
+                        testStatusLabel.toolTipText = report.stages.joinToString("\n") { stage ->
+                            val status = if (stage.success) "ok" else (stage.sanitizedFailure ?: "failed")
+                            "${stage.stage}: $status (${stage.durationMillis}ms)" +
+                                (stage.resolvedGeneration?.let { " gen=$it" } ?: "")
+                        }
                     } else {
-                        val msg = result.exceptionOrNull()?.message ?: NacosSearchBundle.message("error.unknown")
+                        val msg = outcome.exceptionOrNull()?.message ?: NacosSearchBundle.message("error.unknown")
                         testStatusLabel.text = NacosSearchBundle.message("settings.test.failed", msg)
                         testStatusLabel.foreground = JBColor.RED
+                        testStatusLabel.toolTipText = null
                     }
                 }
             }

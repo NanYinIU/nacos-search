@@ -21,7 +21,9 @@ data class NacosServerConfig(
     var defaultGroup: String = "DEFAULT_GROUP",
     var connectionTimeoutMs: Int = 30000,
     var autoRefreshOnOpen: Boolean = true,
-    var allowCrossNamespaceNavigation: Boolean = false
+    var allowCrossNamespaceNavigation: Boolean = false,
+    /** Explicit publish intent; defaults false for new/migrated environments. */
+    var writeIntent: Boolean = false
 ) {
     fun copyConfig(): NacosServerConfig {
         return NacosServerConfig(
@@ -36,7 +38,8 @@ data class NacosServerConfig(
             defaultGroup = defaultGroup,
             connectionTimeoutMs = connectionTimeoutMs,
             autoRefreshOnOpen = autoRefreshOnOpen,
-            allowCrossNamespaceNavigation = allowCrossNamespaceNavigation
+            allowCrossNamespaceNavigation = allowCrossNamespaceNavigation,
+            writeIntent = writeIntent
         )
     }
 

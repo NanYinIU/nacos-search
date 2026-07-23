@@ -16,9 +16,19 @@ import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.network.RequestPolicy
 import com.nanyin.nacos.search.services.operations.CacheServiceOperationCache
 import com.nanyin.nacos.search.services.operations.ConfigurationCoordinate
+import com.nanyin.nacos.search.services.operations.ConnectionDiagnostic
+import com.nanyin.nacos.search.services.operations.DiagnosticReport
+import com.nanyin.nacos.search.services.operations.DiagnosticSnapshot
+import com.nanyin.nacos.search.services.operations.EditSession
+import com.nanyin.nacos.search.services.operations.HistoryDetail
+import com.nanyin.nacos.search.services.operations.HistoryPage
+import com.nanyin.nacos.search.services.operations.HistoryQuery
 import com.nanyin.nacos.search.services.operations.NacosRequestExecutorProtocolTransport
 import com.nanyin.nacos.search.services.operations.OperationGateway
+import com.nanyin.nacos.search.services.operations.OperationGatewayPublishGateway
 import com.nanyin.nacos.search.services.operations.OperationTarget
+import com.nanyin.nacos.search.services.operations.PublishController
+import com.nanyin.nacos.search.services.operations.PublishResult
 import com.nanyin.nacos.search.services.operations.SummaryPage
 import com.nanyin.nacos.search.services.operations.SummaryQuery
 import com.nanyin.nacos.search.services.operations.V1ProtocolAdapter
@@ -654,9 +664,59 @@ class NacosApiService(
        }
    }
 
+    /**
+     * Resolves a locked [OperationTarget] for the given context/namespace,
+     * including AUTO → V3-first generation resolution. UI layers must use this
+     * (or an equivalent) so history/publish never dispatch against UNKNOWN.
+     */
+    suspend fun resolveOperationTarget(
+        context: NacosOperationContext,
+        namespaceId: String?
+    ): Result<OperationTarget> = withContext(Dispatchers.IO) {
+        resolvedReadTarget(context, namespaceId)
+    }
+
+    /** Identity-scoped gateway used by history browsing and controlled publish. */
+    fun operationGateway(): OperationGateway = v1Gateway
+
+    suspend fun listConfigurationHistory(
+        target: OperationTarget,
+        query: HistoryQuery
+    ): Result<HistoryPage> = withContext(Dispatchers.IO) {
+        v1Gateway.listHistory(target, query, forceRefresh = true, useCache = false)
+    }
+
+    suspend fun readConfigurationHistoryDetail(
+        target: OperationTarget,
+        historyId: String
+    ): Result<HistoryDetail> = withContext(Dispatchers.IO) {
+        v1Gateway.readHistoryDetail(target, historyId, forceRefresh = true, useCache = false)
+    }
+
+    /**
+     * Controlled publish through [PublishController]. Prefer this over
+     * [publishConfiguration] for locked V1/V3 paths.
+     */
+    suspend fun controlledPublish(session: EditSession): PublishResult = withContext(Dispatchers.IO) {
+        PublishController(OperationGatewayPublishGateway(v1Gateway)).publish(session)
+    }
+
+    /**
+     * Isolated connection diagnostic from an unapplied settings snapshot.
+     * Never mutates persisted profiles, sessions, cache, or the auth registry.
+     */
+    suspend fun diagnoseConnection(snapshot: DiagnosticSnapshot): DiagnosticReport = withContext(Dispatchers.IO) {
+        ConnectionDiagnostic(
+            resolver = generationResolver,
+            gateway = v1Gateway
+        ).diagnose(snapshot)
+    }
+
    /**
     * Publishes (creates or updates) a configuration to Nacos via POST.
      * Uses the Nacos Open API /nacos/v1/cs/configs endpoint.
+     *
+     * Locked V1/V3 generations reject this path — use [controlledPublish] instead.
      */
     suspend fun publishConfiguration(
         dataId: String,
@@ -672,7 +732,7 @@ class NacosApiService(
             )
            if (usesLockedGeneration(context)) {
                return@withContext Result.failure(
-                    ConfigurationRequired(listOf("The V1 path is read-only"))
+                    ConfigurationRequired(listOf("The V1 path is read-only; use controlledPublish"))
                 )
             }
             val params = buildMap {

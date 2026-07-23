@@ -356,9 +356,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 apiPolicy = migrated.apiPolicy,
                 authMode = migrated.authMode,
                 principal = migrated.principal,
+                writeIntent = server.writeIntent,
                 credentialSlotId = credentialSlotId,
                 credentialSlotVersion = credentialVersion
-            ) ?: migrated.copy(credentialSlotId = credentialSlotId, credentialSlotVersion = credentialVersion)
+            ) ?: migrated.copy(
+                credentialSlotId = credentialSlotId,
+                credentialSlotVersion = credentialVersion,
+                writeIntent = server.writeIntent
+            )
             // The fresh slot is durable before this map is assigned to
             // [profiles], which is the single publication point for readers.
             credentialSlots.stage(updated, server.password)
