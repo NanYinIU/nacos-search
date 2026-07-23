@@ -30,7 +30,12 @@ jobs:
       - name: Run unit tests
         # instrumentCode/instrumentTestCode share Ant taskdefs and race under
         # org.gradle.parallel=true (flaky "1 >= 1" / nested instrumentIdeaExtensions).
-        run: ./gradlew test --no-parallel
+        # testVintage is a separate JVM for JUnit4 ApplicationRule tests so they
+        # are not poisoned by JUnit5 @TestApplication tearing down the shared app
+        # ("Already shutdown" / PersistentFS). `test` finalizedBy testVintage.
+        # --no-configuration-cache: testVintage mirrors IntelliJ test classpath from
+        # the primary test task (Task↔Task), which configuration-cache cannot store.
+        run: ./gradlew test --no-parallel --no-configuration-cache
 
   live-smoke-v1:
     name: Live smoke V1 (Nacos 2.5.3)

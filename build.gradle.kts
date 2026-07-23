@@ -179,7 +179,14 @@ tasks {
     }
 
     test {
-        useJUnitPlatform()
+        useJUnitPlatform {
+            // JUnit5 @TestApplication disposes the shared IDE application when the
+            // Jupiter engine finishes. JUnit4 ApplicationRule tests (vintage) then
+            // fail to reconnect in the same JVM with "Already shutdown" on
+            // PersistentFS / AppScheduledExecutorService. Keep Jupiter here;
+            // vintage runs in an isolated JVM via testVintage below.
+            excludeEngines("junit-vintage")
+        }
         testLogging {
             events("passed", "skipped", "failed", "standardOut", "standardError")
             showExceptions = true
@@ -188,6 +195,49 @@ tasks {
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
             showStandardStreams = true
         }
+        // Always run ApplicationRule coverage after Jupiter, even on local `test`.
+        finalizedBy("testVintage")
+    }
+
+    val testVintage by registering(Test::class) {
+        group = "verification"
+        description =
+            "JUnit4 ApplicationRule tests in an isolated JVM (avoids @TestApplication teardown)"
+        dependsOn("testClasses")
+        useJUnitPlatform {
+            includeEngines("junit-vintage")
+        }
+        testLogging {
+            events("passed", "skipped", "failed", "standardOut", "standardError")
+            showExceptions = true
+            showCauses = true
+            showStackTraces = true
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+            showStandardStreams = true
+        }
+        shouldRunAfter("test")
+    }
+
+    // IntelliJ Platform attaches the instrumented classpath and module opens onto
+    // the primary `test` task; mirror them onto testVintage once that is ready.
+    // (Configuration-cache cannot store this Task↔Task mirror; CI runs test with
+    // --no-configuration-cache. See .github/workflows/ci.yml.)
+    afterEvaluate {
+        val mainTest = named<Test>("test").get()
+        named<Test>("testVintage").configure {
+            testClassesDirs = mainTest.testClassesDirs
+            classpath = mainTest.classpath
+            systemProperties.putAll(mainTest.systemProperties)
+            jvmArgs = buildList {
+                mainTest.jvmArgs?.let { addAll(it) }
+                mainTest.jvmArgumentProviders.forEach { addAll(it.asArguments()) }
+            }
+            environment(mainTest.environment)
+        }
+    }
+
+    named("check") {
+        dependsOn("testVintage")
     }
 
     // Ant instrumentIdeaExtensions is not thread-safe; parallel instrumentCode +
