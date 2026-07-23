@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Test
 
 class ReleaseGateSuiteTest {
@@ -98,17 +99,64 @@ class ReleaseGateSuiteTest {
     }
 
     @Test
-    fun `V1 and V3 contract suites cover all four operations`() {
-        val ops = listOf("probe", "listSummaries", "readDetail", "publish")
-        assertEquals(4, ops.size)
+    fun `the protocol contract declares the four P0 operations`() {
+        // Real contract assertion: the ProtocolAdapter interface — not a local
+        // list — is the source of truth for which operations every adapter must
+        // implement. It declares exactly the four P0 operations, and both
+        // concrete adapters satisfy it.
+        assertEquals(4, ProtocolAdapter::class.java.declaredMethods.size)
+        assertTrue(V1ProtocolAdapter(StubTransport()) is ProtocolAdapter)
+        assertTrue(V3ProtocolAdapter(StubTransport()) is ProtocolAdapter)
     }
 
     @Test
-    fun `V1 CAS conflict is tested and V3 no-CAS is tested`() {
-        val v1Outcomes: List<PublishOutcome> = listOf(PublishOutcome.Written("true"), PublishOutcome.CasConflict)
-        val v3Outcomes: List<PublishOutcome> = listOf(PublishOutcome.Written("true"))
-        assertTrue(v1Outcomes.contains(PublishOutcome.CasConflict))
-        assertFalse(v3Outcomes.contains(PublishOutcome.CasConflict))
+    fun `V1 CAS conflict is surfaced and V3 never fabricates CAS`() = runBlocking {
+        // V1 maps a "false" publish body to CasConflict; V3 has no CAS wire and
+        // its publish outcome is never CasConflict.
+        val v1Fixture = QueuedTransport(ProtocolResponse(200, "false"))
+        val v1Outcome = V1ProtocolAdapter(v1Fixture).publish(
+            v1AnonymousTarget(),
+            PublishCommand("app.yaml", "G", "new", "yaml", "public", "base-md5")
+        ).getOrThrow()
+        assertEquals(PublishOutcome.CasConflict, v1Outcome)
+
+        val v3Fixture = QueuedTransport(ProtocolResponse(200, """{"code":0,"message":"success","data":true}"""))
+        val v3Outcome = V3ProtocolAdapter(v3Fixture).publish(
+            v3AnonymousTarget(),
+            PublishCommand("app.yaml", "G", "new", "yaml", "public")
+        ).getOrThrow()
+        assertInstanceOf(PublishOutcome.Written::class.java, v3Outcome)
+    }
+
+    private fun v1AnonymousTarget(namespaceId: String = "public"): OperationTarget {
+        val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
+        val context = NacosOperationContext(
+            identity = AccessIdentity.ofProfile("p", 1, endpoint.value, NacosApiGeneration.V1, AuthMode.ANONYMOUS, "<anonymous>"),
+            endpoint = endpoint, credential = CredentialSnapshot(""), authMode = AuthMode.ANONYMOUS,
+            profileRevision = 1, accessRevision = 1, resolvedGeneration = NacosApiGeneration.V1
+        )
+        return OperationTarget(context, namespaceId)
+    }
+
+    private fun v3AnonymousTarget(namespaceId: String = "public"): OperationTarget {
+        val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
+        val context = NacosOperationContext(
+            identity = AccessIdentity.ofProfile("p", 1, endpoint.value, NacosApiGeneration.V3, AuthMode.ANONYMOUS, "<anonymous>"),
+            endpoint = endpoint, credential = CredentialSnapshot(""), authMode = AuthMode.ANONYMOUS,
+            profileRevision = 1, accessRevision = 1, resolvedGeneration = NacosApiGeneration.V3
+        )
+        return OperationTarget(context, namespaceId)
+    }
+
+    private class StubTransport : ProtocolTransport {
+        override suspend fun execute(request: ProtocolRequest) = ProtocolResponse(200, "{}")
+    }
+
+    private class QueuedTransport(private vararg val responses: ProtocolResponse) : ProtocolTransport {
+        private val queue = responses.toMutableList()
+        override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
+            return queue.removeAt(0)
+        }
     }
 
     @Test

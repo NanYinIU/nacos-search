@@ -243,6 +243,29 @@ class PublishControllerTest {
         assertTrue(!result.isDirty)
     }
 
+    @Test
+    fun `read-back matching draft content but losing metadata retains the draft`() = runBlocking {
+        // The write took (content == command content) but the server dropped the
+        // type the command carried. This is not a verified write and not a remote
+        // conflict; the draft must be retained until a new preflight confirms it.
+        val gateway = ScriptedPublishGateway(
+            preflightResult = Result.success(baseDetail()),
+            publishResult = Result.success(PublishOutcome.Written("true")),
+            readBackResult = Result.success(NacosConfiguration(
+                dataId = "app.yaml", group = "G",
+                content = "new content", md5 = "new-md5",
+                type = "" // command sends "yaml"; server returned empty -> metadata lost
+            ))
+        )
+        val controller = PublishController(gateway)
+        val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
+
+        val result = controller.publish(session)
+
+        assertEquals(PublishState.Dirty, result.state)
+        assertTrue(result.isDirty)
+    }
+
     // ---- helpers ----
 
     private fun baseDetail() = NacosConfiguration(

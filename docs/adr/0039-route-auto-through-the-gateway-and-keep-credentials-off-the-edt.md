@@ -1,0 +1,13 @@
+# Route AUTO through the gateway and keep credentials off the EDT
+
+The dual-stack adapters, generation resolver, tombstone, and publish state machine were built and unit-tested in isolation, but a release-gating review found that the production read path still bypassed them: the default `AUTO` policy fell through to the legacy V1 wire path (so a standard Nacos 3.2 server with no legacy adapter could not be read), and PSI/Swing hot paths read PasswordSafe on the EDT.
+
+Five wiring decisions close the gap:
+
+- **Transport preserves the real HTTP status.** `NacosRequestExecutorProtocolTransport` re-materialises thrown `NacosRequestError` into `ProtocolResponse(status, body)` so the adapter's status/envelope classification runs in production exactly as it does under the fake transports used in contract tests. A V3 state 404 therefore reaches `GenerationUnsupported` and authorises a V1 fallback instead of collapsing to a connection error. Genuine transport failures (connect/read timeout, DNS) carry no HTTP status and stay `RemoteOperationError.Connection`.
+- **AUTO resolves through the gateway.** `NacosApiService` resolves `AUTO` once via `GenerationResolver` (V3 first, V1 only on typed `GenerationUnsupported`) and routes list/detail/connection-test through the locked target, so a standard 3.2 server is browsed via V3 and never depends on the legacy V1 API.
+- **Tombstone gates cache writes.** `ProfileTombstoneRegistry` is an application service; `CacheService` rejects identity-keyed detail, list-page, and namespace-index writes for an entombed profile, and `NacosSettings.applyServers` entombs profiles before publishing the replacement set, so a late in-flight response cannot resurrect deleted state.
+- **Identity is credential-free on the EDT.** `OperationContextResolver.identityFromProfile` derives the `AccessIdentity` from the profile without touching PasswordSafe; PSI line markers and the namespace refresh service use it for the synchronous freshness check and capture the full request off-EDT inside the launched coroutine. UI handlers consume a cached operation-context snapshot refreshed off-EDT on profile/namespace/settings change.
+- **Publish reconciliation handles partial metadata loss.** A read-back that carries the command content but lost a preserved metadata field retains the draft (`Dirty`) instead of being misclassified as a remote conflict, removing the dead duplicate branch in `PublishController.reconcile`.
+
+These are production-wiring fixes for the existing design (ADR 0001–0038), not new product behaviour; the release-gating contract and live-smoke tests (issue #13) now exercise the same adapters the IDE uses.

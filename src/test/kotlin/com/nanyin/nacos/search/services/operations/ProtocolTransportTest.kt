@@ -72,4 +72,84 @@ class ProtocolTransportTest {
             return responseBody
         }
     }
+
+    // ---- S2: the production transport must preserve the real HTTP status so the
+    // adapter's status/envelope classification runs in production, not just tests ----
+
+    @Test
+    fun `GET preserves 404 status and body from a thrown client error`() = runBlocking {
+        val executor = NacosRequestExecutor(ThrowingTransport { throw NacosRequestError.Client(404, "{\"code\":20004}") })
+        val transport = NacosRequestExecutorProtocolTransport(executor)
+
+        val response = transport.execute(ProtocolRequest(
+            method = "GET", endpoint = "https://nacos.example",
+            path = "/nacos/v3/admin/core/state", query = emptyList(), headers = emptyMap()
+        ))
+
+        assertEquals(404, response.status)
+        assertEquals("{\"code\":20004}", response.body)
+    }
+
+    @Test
+    fun `GET preserves 403 status from a thrown authentication error`() = runBlocking {
+        val executor = NacosRequestExecutor(ThrowingTransport { throw NacosRequestError.Authentication(403) })
+        val transport = NacosRequestExecutorProtocolTransport(executor)
+
+        val response = transport.execute(ProtocolRequest(
+            method = "GET", endpoint = "https://nacos.example",
+            path = "/nacos/v3/admin/core/state", query = emptyList(), headers = emptyMap()
+        ))
+
+        assertEquals(403, response.status)
+    }
+
+    @Test
+    fun `GET preserves 500 status and body from a thrown server error`() = runBlocking {
+        val executor = NacosRequestExecutor(ThrowingTransport { throw NacosRequestError.Server(500, "boom") })
+        val transport = NacosRequestExecutorProtocolTransport(executor)
+
+        val response = transport.execute(ProtocolRequest(
+            method = "GET", endpoint = "https://nacos.example",
+            path = "/p", query = emptyList(), headers = emptyMap()
+        ))
+
+        assertEquals(500, response.status)
+        assertEquals("boom", response.body)
+    }
+
+    @Test
+    fun `genuine connection failure throws RemoteOperationError Connection`() {
+        val executor = NacosRequestExecutor(ThrowingTransport { throw NacosRequestError.Connection(RuntimeException("dns")) })
+        val transport = NacosRequestExecutorProtocolTransport(executor)
+
+        val thrown = assertThrows<RemoteOperationError.Connection> {
+            kotlinx.coroutines.runBlocking {
+                transport.execute(ProtocolRequest(
+                    method = "GET", endpoint = "https://nacos.example",
+                    path = "/p", query = emptyList(), headers = emptyMap()
+                ))
+            }
+        }
+        assertEquals("Connection failed", thrown.message)
+    }
+
+    @Test
+    fun `read timeout throws RemoteOperationError Connection`() {
+        val executor = NacosRequestExecutor(ThrowingTransport { throw NacosRequestError.ReadTimeout(RuntimeException("slow")) })
+        val transport = NacosRequestExecutorProtocolTransport(executor)
+
+        assertThrows<RemoteOperationError.Connection> {
+            kotlinx.coroutines.runBlocking {
+                transport.execute(ProtocolRequest(
+                    method = "GET", endpoint = "https://nacos.example",
+                    path = "/p", query = emptyList(), headers = emptyMap()
+                ))
+            }
+        }
+    }
+
+    private class ThrowingTransport(private val behavior: () -> String) : NacosRequestExecutor.HttpTransport {
+        override fun get(request: NacosRequestExecutor.TransportRequest): String = behavior()
+        override fun post(request: NacosRequestExecutor.TransportRequest): String = behavior()
+    }
 }

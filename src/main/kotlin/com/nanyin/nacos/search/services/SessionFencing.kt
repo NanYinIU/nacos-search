@@ -90,9 +90,12 @@ class OperationFence(private val registry: SessionEpochRegistry) {
  * re-creation with the same id so stale in-flight work can never resurrect
  * deleted state.
  */
+@com.intellij.openapi.components.Service(com.intellij.openapi.components.Service.Level.APP)
 class ProfileTombstoneRegistry(
     private val clock: () -> Long = System::currentTimeMillis
 ) {
+    constructor() : this(System::currentTimeMillis)
+
     private data class Tombstone(val profileId: String, val entombedAt: Long)
 
     private val tombstones = ConcurrentHashMap<String, Tombstone>()

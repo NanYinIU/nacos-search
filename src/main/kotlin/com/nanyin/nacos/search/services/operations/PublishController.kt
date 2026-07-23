@@ -153,11 +153,11 @@ class PublishController(private val gateway: PublishGateway) {
             return PublishResult(PublishState.Dirty, isDirty = true)
         }
 
-        // Content matches but metadata was partially lost. The command result
-        // is only partially visible, so this is neither verified nor a remote
-        // conflict. Retain the draft and require a new preflight.
-        if (readBackDetail.content == session.baselineContent &&
-            readBackDetail.md5 == session.baselineMd5) {
+        // The read-back carries the command's content but is missing metadata the
+        // command was supposed to preserve (type, appName, desc, or configTags).
+        // The write is only partially visible, so this is neither verified nor a
+        // remote conflict; retain the draft and require a new preflight.
+        if (readBackDetail.content == command.content && !metadataMatches(command, readBackDetail)) {
             return PublishResult(PublishState.Dirty, isDirty = true)
         }
 

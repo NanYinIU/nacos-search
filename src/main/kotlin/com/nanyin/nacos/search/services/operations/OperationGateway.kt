@@ -5,6 +5,7 @@ import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
+import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.network.RequestPolicy
 import java.util.concurrent.ConcurrentHashMap
@@ -230,21 +231,45 @@ class CacheServiceOperationCache(
     )
 }
 
-/** Production transport for both V1 and V3 read and write operations. */
+/** Production transport for both V1 and V3 read and write operations.
+ *
+ * The adapter contract is transport-agnostic: adapters inspect
+ * [ProtocolResponse.status] and the JSON envelope to classify failures. The
+ * underlying [NacosRequestExecutor] throws [NacosRequestError] for every
+ * non-2xx response, so this seam re-materialises the real HTTP status and body
+ * into a [ProtocolResponse] so the adapter's status/envelope mapping runs in
+ * production exactly as it does under the fake transports used in contract
+ * tests. Genuine transport failures (connect/read timeout, DNS) carry no HTTP
+ * status and are surfaced as [RemoteOperationError.Connection]. */
 class NacosRequestExecutorProtocolTransport(
     private val executor: NacosRequestExecutor,
     private val policy: RequestPolicy = RequestPolicy.INTERACTIVE
 ) : ProtocolTransport {
-    override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
-        return when (request.method) {
-            "GET" -> ProtocolResponse(200, executor.get(request.url, policy, request.headers))
-            "POST" -> {
-                val body = request.body ?: ""
-                val url = if (request.query.isEmpty()) request.url else request.url
-                ProtocolResponse(200, executor.post(url, body, policy, request.headers))
-            }
-            else -> throw RemoteOperationError.Unsupported("Unsupported HTTP method: ${'$'}{request.method}")
+    override suspend fun execute(request: ProtocolRequest): ProtocolResponse = when (request.method) {
+        "GET" -> try {
+            ProtocolResponse(200, executor.get(request.url, policy, request.headers))
+        } catch (error: Throwable) {
+            toResponseOrThrow(error)
         }
+        "POST" -> try {
+            ProtocolResponse(200, executor.post(request.url, request.body ?: "", policy, request.headers))
+        } catch (error: Throwable) {
+            toResponseOrThrow(error)
+        }
+        else -> throw RemoteOperationError.Unsupported("Unsupported HTTP method: ${'$'}{request.method}")
+    }
+
+    private fun toResponseOrThrow(error: Throwable): ProtocolResponse = when (error) {
+        is NacosRequestError.Client -> ProtocolResponse(error.status, error.body)
+        is NacosRequestError.Server -> ProtocolResponse(error.status, error.body)
+        is NacosRequestError.Authentication -> ProtocolResponse(error.status, "")
+        is NacosRequestError.RateLimited -> ProtocolResponse(429, "")
+        is NacosRequestError.ConnectTimeout,
+        is NacosRequestError.ReadTimeout,
+        is NacosRequestError.Connection -> throw RemoteOperationError.Connection(error)
+        is NacosRequestError.Protocol -> throw RemoteOperationError.Protocol(error.message ?: "Protocol failure", error)
+        is RemoteOperationError -> throw error
+        else -> throw RemoteOperationError.Connection(error)
     }
 }
 

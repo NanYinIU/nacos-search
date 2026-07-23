@@ -3,6 +3,8 @@ package com.nanyin.nacos.search.services.operations
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
 import com.nanyin.nacos.search.models.NacosApiGeneration
+import com.nanyin.nacos.search.services.network.NacosRequestError
+import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.CredentialSnapshot
 import com.nanyin.nacos.search.settings.NacosOperationContext
@@ -251,4 +253,45 @@ class GenerationResolverTest {
         override suspend fun publish(target: OperationTarget, command: PublishCommand) =
             Result.success(PublishOutcome.Written("true"))
     }
+    // ---- S2 integration: the real production transport must let a V1-only server
+    // (404 on the V3 state path) authorise a V1 fallback, not collapse to Connection ----
+
+    @Test
+    fun `AUTO falls back to V1 when the production transport returns 404 on V3 state`() = runBlocking {
+        val http = StateThrowingHttp(NacosRequestError.Client(404, "Not Found"))
+        val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
+        val v3Adapter = V3ProtocolAdapter(transport)
+        val v1Adapter = V1ProtocolAdapter(transport)
+        val resolver = GenerationResolver(v3Adapter, v1Adapter)
+
+        val result = resolver.resolve(autoTarget())
+
+        assertEquals(NacosApiGeneration.V1, result.getOrThrow())
+    }
+
+    @Test
+    fun `AUTO does not fall back when the production transport returns 403 on V3 state`() = runBlocking {
+        val http = StateThrowingHttp(NacosRequestError.Authentication(403))
+        val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
+        val v3Adapter = V3ProtocolAdapter(transport)
+        val v1Adapter = V1ProtocolAdapter(transport)
+        val resolver = GenerationResolver(v3Adapter, v1Adapter)
+
+        val error = resolver.resolve(autoTarget()).exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
+    }
+
+    /**
+     * Models a V1-only server: the V3 admin state path is absent (404), while
+     * every legacy V1 path answers normally. This is the case that must authorise
+     * a V1 fallback under AUTO.
+     */
+    private class StateThrowingHttp(private val error: NacosRequestError) : NacosRequestExecutor.HttpTransport {
+        override fun get(request: NacosRequestExecutor.TransportRequest): String =
+            if (request.url.contains("/v3/admin/core/state")) throw error else "[{\"namespace\":\"public\"}]"
+        override fun post(request: NacosRequestExecutor.TransportRequest): String =
+            if (request.url.contains("/v3/admin/core/state")) throw error else "true"
+    }
+
 }

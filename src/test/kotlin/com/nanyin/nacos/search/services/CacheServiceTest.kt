@@ -630,4 +630,21 @@ class CacheServiceTest {
         )
         cacheService.clearAll()
     }
+    @Test
+    fun `entombed profile rejects late cache writes while other identities persist`() = runBlocking {
+        val tombstones = ProfileTombstoneRegistry()
+        val cache = CacheService({ 0L }, tombstones)
+        val entombed = AccessIdentity.of("dev-srv", AuthMode.BASIC, "alice")
+        val survivor = AccessIdentity.of("prod-srv", AuthMode.BASIC, "bob")
+
+        tombstones.entomb(entombed.profileId, 1)
+
+        cache.putConfigDetail(entombed, "ns", NacosConfiguration("d", "g", "ns", "late", "text"))
+        cache.putConfigDetail(survivor, "ns", NacosConfiguration("d", "g", "ns", "kept", "text"))
+
+        assertNull(cache.getConfigDetail(entombed, "ns", "d", "g"))
+        assertEquals("kept", cache.getConfigDetail(survivor, "ns", "d", "g")?.content)
+        cache.dispose()
+    }
+
 }

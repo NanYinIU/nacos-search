@@ -310,4 +310,61 @@ class AccessSafetyTest {
         assertEquals("team-a", second.namespaceId)
         assertFalse(second.selectionWasExplicit)
     }
+    @Test
+    fun `identity can be derived from a profile without reading any credential`() {
+        // PSI/Swing hot paths must obtain the access identity without touching
+        // PasswordSafe (a slow EDT operation). Identity fields come entirely from
+        // the profile, so the credential is never needed and never read.
+        val profile = EnvironmentProfile(
+            id = "psi-profile",
+            displayName = "PSI",
+            canonicalEndpoint = "https://nacos.example",
+            apiPolicy = NacosApiPolicy.V3,
+            authMode = AuthMode.NACOS_PASSWORD,
+            principal = "bob",
+            accessRevision = 7
+        )
+
+        val identity = OperationContextResolver.identityFromProfile(profile)
+
+        assertEquals("psi-profile", identity.profileId)
+        assertEquals(7, identity.accessRevision)
+        assertEquals("https://nacos.example", identity.canonicalEndpoint)
+        assertEquals(NacosApiGeneration.V3, identity.resolvedGeneration)
+        assertEquals(AuthMode.NACOS_PASSWORD, identity.authMode)
+        assertEquals("bob", identity.principal)
+    }
+
+    @Test
+    fun `identity from an AUTO profile resolves to UNKNOWN generation without probing`() {
+        val profile = EnvironmentProfile(
+            id = "auto-profile",
+            displayName = "Auto",
+            canonicalEndpoint = "https://nacos.example",
+            apiPolicy = NacosApiPolicy.AUTO,
+            authMode = AuthMode.ANONYMOUS
+        )
+
+        val identity = OperationContextResolver.identityFromProfile(profile)
+
+        assertEquals(NacosApiGeneration.UNKNOWN, identity.resolvedGeneration)
+        assertEquals("<anonymous>", identity.principal)
+    }
+
+    @Test
+    fun `identity from a profile with a blank principal normalises to anonymous`() {
+        val profile = EnvironmentProfile(
+            id = "blank-principal",
+            displayName = "Blank",
+            canonicalEndpoint = "https://nacos.example",
+            apiPolicy = NacosApiPolicy.V1,
+            authMode = AuthMode.HTTP_BASIC,
+            principal = "   "
+        )
+
+        val identity = OperationContextResolver.identityFromProfile(profile)
+
+        assertEquals("<anonymous>", identity.principal)
+    }
+
 }

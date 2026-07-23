@@ -66,12 +66,13 @@ class ConfigDetailPanel internal constructor(
                 namespaceId = configuration.tenantId,
                 useCache = true,
                 forceRefresh = forceRefresh,
-                operationContext = project.getService(NacosProjectSession::class.java)
-                    ?.let { session ->
+                operationContext = withContext(Dispatchers.IO) {
+                    project.getService(NacosProjectSession::class.java)?.let { session ->
                         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
                         session.seedIfNew(settings.migrationDefaults())
                         settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
                     }
+                }
             )
         },
         ApplicationManager.getApplication().getService(CacheService::class.java),
@@ -84,11 +85,12 @@ class ConfigDetailPanel internal constructor(
     
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
     private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
-    private fun selectedOperationContext() = project.getService(NacosProjectSession::class.java)
-        ?.let { session ->
+    private suspend fun selectedOperationContext() = withContext(Dispatchers.IO) {
+        project.getService(NacosProjectSession::class.java)?.let { session ->
             session.seedIfNew(settings.migrationDefaults())
             settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
         }
+    }
     
     // UI Components
     private lateinit var metadataPanel: JPanel

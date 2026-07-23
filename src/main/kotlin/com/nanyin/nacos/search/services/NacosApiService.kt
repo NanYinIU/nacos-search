@@ -22,6 +22,7 @@ import com.nanyin.nacos.search.services.operations.OperationTarget
 import com.nanyin.nacos.search.services.operations.SummaryPage
 import com.nanyin.nacos.search.services.operations.SummaryQuery
 import com.nanyin.nacos.search.services.operations.V1ProtocolAdapter
+import com.nanyin.nacos.search.services.operations.GenerationResolver
 import com.nanyin.nacos.search.services.operations.V3ProtocolAdapter
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -48,20 +49,29 @@ class NacosApiService(
     private val executor = NacosRequestExecutor()
 
    private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
+
+   /**
+    * The V1 and V3 adapters are shared by the [v1Gateway] and the
+    * [generationResolver] so AUTO resolution and formal operations use the
+    * same transport, auth boundary, and error mapping.
+    */
+   private val v1Adapter by lazy {
+       V1ProtocolAdapter(NacosRequestExecutorProtocolTransport(executor), authService)
+   }
+   private val v3Adapter by lazy {
+       V3ProtocolAdapter(NacosRequestExecutorProtocolTransport(executor))
+   }
    private val v1Gateway by lazy {
        v1GatewayOverride ?: OperationGateway(
            mapOf(
-               NacosApiGeneration.V1 to V1ProtocolAdapter(
-                   NacosRequestExecutorProtocolTransport(executor),
-                   authService
-               ),
-               NacosApiGeneration.V3 to V3ProtocolAdapter(
-                   NacosRequestExecutorProtocolTransport(executor)
-               )
+               NacosApiGeneration.V1 to v1Adapter,
+               NacosApiGeneration.V3 to v3Adapter
            ),
            CacheServiceOperationCache(cacheService) { settings.getCacheTtlMillis() }
        )
    }
+   /** Resolves AUTO to a concrete generation by probing V3 first, then V1. */
+   private val generationResolver by lazy { GenerationResolver(v3Adapter, v1Adapter) }
   companion object {
        private const val CONFIG_ENDPOINT = "/nacos/v1/cs/configs"
        private const val CONFIG_LIST_ENDPOINT = "/nacos/v1/cs/configs"
@@ -108,12 +118,13 @@ class NacosApiService(
            if (usesLockedGeneration(context)) {
                return@withContext v1Gateway.probe(v1Target(context)).map { true }
            }
-           val url = "${context.endpoint.value}$NAMESPACE_ENDPOINT"
-           logger.info("Testing connection to: $url")
-           val response = executor.get(url, RequestPolicy.DIAGNOSTIC, diagnosticHeaders(context))
-
-           val apiResponse = gson.fromJson(response, NacosApiResponse::class.java)
-           Result.success(apiResponse.isSuccess())
+           // AUTO: resolve the generation by probing V3 first, then V1. A
+           // successful resolution (which already probed the server) proves
+           // reachability; the formal gateway probe confirms the adapter path.
+           val target = resolvedReadTarget(context, null).getOrElse { error ->
+               return@withContext Result.failure(error)
+           }
+           return@withContext v1Gateway.probe(target).map { true }
         } catch (e: Exception) {
             logger.warn("Connection test failed", e)
             Result.failure(e)
@@ -142,6 +153,19 @@ class NacosApiService(
             if (usesLockedGeneration(context)) {
                 return@withContext v1Gateway.readDetail(
                     v1Target(context, namespaceId),
+                    ConfigurationCoordinate(dataId, group),
+                    forceRefresh = forceRefresh,
+                    useCache = useCache
+                )
+            }
+            // AUTO: resolve to a concrete generation and read through the gateway
+            // so a standard 3.2 server (no legacy V1 API) is read via V3.
+            val resolvedTarget = resolvedReadTarget(context, namespaceId).getOrElse { error ->
+                return@withContext Result.failure(error)
+            }
+            if (resolvedTarget.context.resolvedGeneration != NacosApiGeneration.UNKNOWN) {
+                return@withContext v1Gateway.readDetail(
+                    resolvedTarget,
                     ConfigurationCoordinate(dataId, group),
                     forceRefresh = forceRefresh,
                     useCache = useCache
@@ -224,6 +248,19 @@ class NacosApiService(
             if (usesLockedGeneration(context)) {
                 return@withContext v1Gateway.listSummaries(
                     v1Target(context, namespaceId),
+                    SummaryQuery(pageNo, pageSize, dataId, group, appName, configTags, searchMode),
+                    forceRefresh = forceRefresh,
+                    useCache = useCache
+                ).map { it.toConfigListResponse() }
+            }
+            // AUTO: resolve to a concrete generation and list through the gateway
+            // so a standard 3.2 server is browsed via V3.
+            val resolvedTarget = resolvedReadTarget(context, namespaceId).getOrElse { error ->
+                return@withContext Result.failure(error)
+            }
+            if (resolvedTarget.context.resolvedGeneration != NacosApiGeneration.UNKNOWN) {
+                return@withContext v1Gateway.listSummaries(
+                    resolvedTarget,
                     SummaryQuery(pageNo, pageSize, dataId, group, appName, configTags, searchMode),
                     forceRefresh = forceRefresh,
                     useCache = useCache
@@ -702,6 +739,37 @@ class NacosApiService(
 
     private fun v1Target(context: NacosOperationContext, namespaceId: String? = null): OperationTarget =
         OperationTarget(context, namespaceId ?: "public")
+
+    /**
+     * Returns a target whose generation is locked to a concrete V1 or V3.
+     * Locked profiles (V1/V3) keep their captured generation. AUTO is resolved
+     * once by probing V3 first and falling back to V1 only on a typed
+     * `GenerationUnsupported`; any other V3 failure propagates without
+     * fallback (design §2.1). The resolved target is then routed through the
+     * gateway, so AUTO never depends on the legacy V1 wire path.
+     */
+    private suspend fun resolvedReadTarget(
+        context: NacosOperationContext,
+        namespaceId: String?
+    ): Result<OperationTarget> {
+        if (usesLockedGeneration(context)) return Result.success(v1Target(context, namespaceId))
+        val probeTarget = v1Target(context, namespaceId)
+        val generation = generationResolver.resolve(probeTarget).getOrElse { error ->
+            return Result.failure(error)
+        }
+        return Result.success(v1Target(lockedContext(context, generation), namespaceId))
+    }
+
+    private fun lockedContext(
+        context: NacosOperationContext,
+        generation: NacosApiGeneration
+    ): NacosOperationContext {
+        if (context.resolvedGeneration == generation) return context
+        return context.copy(
+            identity = context.identity.copy(resolvedGeneration = generation),
+            resolvedGeneration = generation
+        )
+    }
 
     private fun SummaryPage.toConfigListResponse(): ConfigListResponse = ConfigListResponse(
         totalCount = totalCount,

@@ -23,6 +23,7 @@ import com.nanyin.nacos.search.settings.NacosConfigurable
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosSettingsListener
 import com.nanyin.nacos.search.settings.NacosProjectSession
+import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.NacosUpgradeSummary
 import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.intellij.openapi.components.service
@@ -89,12 +90,29 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     // Coroutine scope for async operations
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
+    /**
+     * EDT-safe cached operation context. [captureOperationContext] reads
+     * PasswordSafe, which asserts against slow operations on the EDT. Swing
+     * handlers consume this prepared immutable snapshot instead of capturing
+     * fresh on the EDT (design §11/§19.7). It is refreshed off-EDT whenever the
+     * selected profile, namespace, or settings change.
+     */
+    @Volatile
+    private var operationContextSnapshot: NacosOperationContext? = null
+
     private fun selectedProfileId(): String {
         projectSession.seedIfNew(settings.migrationDefaults())
         return projectSession.sessionState.selectedProfileId
     }
 
-    private fun selectedOperationContext() = settings.captureOperationContext(selectedProfileId()).getOrNull()
+    private fun selectedOperationContext(): NacosOperationContext? = operationContextSnapshot
+
+    private suspend fun refreshOperationContextSnapshot() {
+        val profileId = selectedProfileId()
+        operationContextSnapshot = withContext(Dispatchers.IO) {
+            settings.captureOperationContext(profileId).getOrNull()
+        }
+    }
     
     init {
         projectSession.seedIfNew(settings.migrationDefaults())
@@ -102,6 +120,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         initializeComponents()
         setupLayout()
         setupEventHandlers()
+        coroutineScope.launch { refreshOperationContextSnapshot() }
         loadInitialData()
     }
     
@@ -321,6 +340,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // Switcher label reflects the new active environment immediately.
         SwingUtilities.invokeLater { environmentSwitcher.refresh() }
         coroutineScope.launch {
+            refreshOperationContextSnapshot()
             nacosApiService.clearCache()
             nacosSearchService.resetSearch()
             currentNamespace = null
@@ -343,6 +363,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
 
     private fun handleProjectEnvironmentSelectionChanged() {
         coroutineScope.launch {
+            refreshOperationContextSnapshot()
             nacosSearchService.resetSearch()
             currentNamespace = null
             currentConfiguration = null
@@ -425,8 +446,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             // Prefer cached list-page data when available — avoids a forced
             // remote API call on every namespace switch. The user can still
             // pull fresh data via the refresh button.
+            refreshOperationContextSnapshot()
             val profileId = selectedProfileId()
-            val operationContext = settings.captureOperationContext(profileId).getOrNull()
+            val operationContext = selectedOperationContext()
             val serverSnapshot = settings.captureServerSnapshot(profileId, operationContext)
             val request = NacosSearchService.SearchRequest(
                 namespace = newNamespace,

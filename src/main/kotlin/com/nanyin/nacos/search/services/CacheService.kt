@@ -25,9 +25,11 @@ import java.util.concurrent.atomic.AtomicLong
  */
 @Service(Service.Level.APP)
 class CacheService internal constructor(
-    private val currentTimeMillis: () -> Long
+    private val currentTimeMillis: () -> Long,
+    private val tombstones: ProfileTombstoneRegistry
 ) : Disposable {
-    constructor() : this(System::currentTimeMillis)
+    constructor() : this(System::currentTimeMillis, defaultTombstones())
+    internal constructor(currentTimeMillis: () -> Long) : this(currentTimeMillis, ProfileTombstoneRegistry())
 
     private val logger = thisLogger()
     private val gson = Gson()
@@ -47,6 +49,16 @@ class CacheService internal constructor(
     private val namespaceIndexCache = ConcurrentHashMap<String, CacheEntry<List<NacosConfiguration>>>()
     private val namespaceIndexAuthority = ConcurrentHashMap<String, Boolean>()
     private val modificationCount = AtomicLong(0)
+
+    /**
+     * A deleted profile's tombstone rejects late in-flight cache mutations so
+     * stale responses cannot resurrect the entombed profile's state (design
+     * §13.1, §19.2). Identity-keyed writes silently drop when the identity's
+     * profile has been entombed.
+     */
+    private fun isRejectedByTombstone(identity: AccessIdentity): Boolean =
+        tombstones.isEntombed(identity)
+
 
     private val cacheHits = AtomicLong(0)
     private val cacheMisses = AtomicLong(0)
@@ -229,6 +241,7 @@ class CacheService internal constructor(
         ttl: Long = DEFAULT_TTL,
         source: CacheSource = CacheSource.REMOTE
     ) {
+        if (isRejectedByTombstone(identity)) return
         cacheMutex.withLock {
             val key = listPageKey(identity, namespaceId, requestKey)
             listPageCache[key] = CacheEntry(CacheEntryType.LIST_PAGE, response, currentTimeMillis(), ttl, source)
@@ -317,6 +330,7 @@ class CacheService internal constructor(
         ttl: Long = DEFAULT_TTL,
         source: CacheSource = CacheSource.REMOTE
     ) {
+        if (isRejectedByTombstone(identity)) return
         putConfigDetailByKey(
             detailKey(identity, namespaceId, configuration.dataId, configuration.group),
             configuration,
@@ -461,6 +475,7 @@ class CacheService internal constructor(
         ttl: Long = DEFAULT_TTL,
         source: CacheSource = CacheSource.REMOTE
     ) {
+        if (isRejectedByTombstone(identity)) return
         putNamespaceIndexByIdentity(identity, identity.serverId, namespaceId, configurations, ttl, source)
     }
 
@@ -919,3 +934,11 @@ class CacheService internal constructor(
         val cacheMisses: Long = 0
     )
 }
+
+private fun defaultTombstones(): ProfileTombstoneRegistry =
+    try {
+        com.intellij.openapi.application.ApplicationManager.getApplication()
+            .getService(ProfileTombstoneRegistry::class.java) ?: ProfileTombstoneRegistry()
+    } catch (e: Exception) {
+        ProfileTombstoneRegistry()
+    }

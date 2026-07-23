@@ -1,6 +1,7 @@
 package com.nanyin.nacos.search.settings
 
 import com.intellij.openapi.components.PersistentStateComponent
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
@@ -239,11 +240,28 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     fun applyServers(newServers: List<NacosServerConfig>, newActiveId: String) {
         val previousIds = servers.map { it.id }.toSet()
         val previousPasswords = servers.associate { it.id to it.password }
+        val currentIds = newServers.map { it.id }.toSet()
+        // Entomb profiles that are about to disappear before publishing the new
+        // set, so late in-flight responses for the deleted identity cannot
+        // resurrect their cache, token, or session state (design §19.2).
+        (previousIds - currentIds).forEach { entombDeletedProfile(it) }
         servers = newServers.map { it.copy() }.toMutableList()
         activeServerId = newActiveId
         syncFromActiveServer()
         persistCredentials(previousIds)
         updateProfilesFromServers(previousPasswords)
+    }
+
+    /** Persists a deletion tombstone for a profile removed from the settings. */
+    private fun entombDeletedProfile(profileId: String) {
+        try {
+            ApplicationManager.getApplication()
+                .getService(com.nanyin.nacos.search.services.ProfileTombstoneRegistry::class.java)
+                ?.entomb(profileId, 0)
+        } catch (e: Exception) {
+            // Settings can be applied outside a fully initialised application
+            // (e.g. tests); the tombstone is best-effort within a live IDE.
+        }
     }
 
     /** Returns an immutable profile-migration result for a newly opened project. */

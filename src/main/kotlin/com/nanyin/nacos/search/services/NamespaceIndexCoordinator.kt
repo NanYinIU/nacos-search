@@ -11,6 +11,7 @@ import com.nanyin.nacos.search.models.DataSource
 import com.nanyin.nacos.search.models.DataFreshness
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.AuthMode
+import com.nanyin.nacos.search.settings.OperationContextResolver
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.RequestPolicy
@@ -58,16 +59,26 @@ internal fun NacosSettings.captureNamespaceIndexRequest(namespaceId: String?): N
     return captureNamespaceIndexRequest(namespaceId, captureServerSnapshot(operationContext = context), context)
 }
 
+/**
+ * Derives the access identity for PSI/Swing hot paths WITHOUT reading PasswordSafe.
+ * Reading a credential on the EDT triggers `SlowOperations` and is forbidden on
+ * the hot path (design §11/§19.7). Identity fields come entirely from the profile,
+ * so this resolves the selected profile and maps it through
+ * [OperationContextResolver.identityFromProfile], which never touches the
+ * credential store. A missing/invalid profile yields a stable sentinel identity.
+ */
 internal fun NacosSettings.captureAccessIdentity(profileId: String? = null): AccessIdentity {
-    return captureOperationContext(profileId)
-        .getOrNull()?.identity ?: AccessIdentity.ofProfile(
-        profileId = "<configuration-required>",
-        accessRevision = -1,
-        canonicalEndpoint = "<invalid>",
-        resolvedGeneration = NacosApiGeneration.UNKNOWN,
-        authMode = AuthMode.TOKEN,
-        principal = ""
-    )
+    val selectedProfileId = profileId?.trim()?.takeUnless { it.isNullOrBlank() } ?: activeServerId
+    val profile = getProfile(selectedProfileId)
+        ?: return AccessIdentity.ofProfile(
+            profileId = "<configuration-required>",
+            accessRevision = -1,
+            canonicalEndpoint = "<invalid>",
+            resolvedGeneration = NacosApiGeneration.UNKNOWN,
+            authMode = AuthMode.TOKEN,
+            principal = ""
+        )
+    return OperationContextResolver.identityFromProfile(profile)
 }
 
 internal fun NacosSettings.captureNamespaceIndexRequest(

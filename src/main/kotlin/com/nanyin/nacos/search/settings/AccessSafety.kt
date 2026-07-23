@@ -124,6 +124,32 @@ internal fun AuthMode.toV1AuthenticationStrategy(): V1AuthenticationStrategy = w
 class ConfigurationRequired(val reasons: List<String>) : IllegalStateException(reasons.joinToString("; "))
 
 object OperationContextResolver {
+
+    /**
+     * Derives the [AccessIdentity] from a profile without reading any credential.
+     * PSI/Swing hot paths call this so they never touch PasswordSafe on the EDT.
+     * Identity fields come entirely from the profile and its parsed endpoint; the
+     * credential is only needed for the full [NacosOperationContext] used by network
+     * operations.
+     */
+    fun identityFromProfile(profile: EnvironmentProfile): AccessIdentity {
+        val endpoint = CanonicalNacosEndpoint.parse(profile.canonicalEndpoint)
+            .getOrNull()?.value ?: "<invalid>"
+        val resolvedGeneration = when (profile.apiPolicy) {
+            NacosApiPolicy.V1 -> NacosApiGeneration.V1
+            NacosApiPolicy.V3 -> NacosApiGeneration.V3
+            NacosApiPolicy.AUTO -> NacosApiGeneration.UNKNOWN
+        }
+        return AccessIdentity.ofProfile(
+            profileId = profile.id,
+            accessRevision = profile.accessRevision,
+            canonicalEndpoint = endpoint,
+            resolvedGeneration = resolvedGeneration,
+            authMode = profile.authMode,
+            principal = profile.principal.trim().ifBlank { "<anonymous>" }
+        )
+    }
+
     fun resolve(profile: EnvironmentProfile, credential: String?): Result<NacosOperationContext> = runCatching {
         val endpoint = CanonicalNacosEndpoint.parse(profile.canonicalEndpoint).getOrElse {
             throw ConfigurationRequired(listOf("A valid Nacos endpoint is required"))

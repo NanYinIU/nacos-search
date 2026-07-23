@@ -252,7 +252,7 @@ class NacosValueLineMarkerProvider internal constructor(
                         .getCurrentNamespace()?.namespaceId
                 }
                 application.getService(NamespaceIndexRefreshService::class.java)
-                    .requestIfNeeded(settings.captureNamespaceIndexRequest(namespaceId), project)
+                    .requestIfNeeded(settings.captureAccessIdentity(namespaceId), namespaceId.orEmpty(), project)
             } catch (_: Exception) {
                 // Gutter calculation is best-effort and must never fail PSI analysis.
             }
