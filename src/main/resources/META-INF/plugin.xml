@@ -17,6 +17,10 @@
    ]]></description>
 
     <change-notes><![CDATA[
+        <b>1.3.7</b>
+        <ul>
+            <li><b>Compatibility</b>: History Diff loading state uses the public MessageDiffRequest API instead of internal LoadingDiffRequest (Marketplace verifier).</li>
+        </ul>
         <b>1.3.6</b>
         <ul>
             <li><b>Dual-stack</b>: V1/V3 protocol adapters with AUTO generation resolve, namespace discovery, and connection diagnostics from unsaved settings drafts.</li>
