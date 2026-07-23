@@ -1,0 +1,3 @@
+# Isolate API generations behind protocol adapters
+
+An operation resolves its API generation once and selects either the v1 or v3 protocol adapter from a registry. The adapter exclusively owns endpoints, parameters, response envelopes, token placement, and error mapping for the common P0 operations of login, state checking, namespace discovery, configuration listing and search, detail reads, and publishing; upper layers never branch on API generation, optional behavior is exposed as an explicit capability, and authentication, authorization, or transport failures never imply that a capability is unsupported.

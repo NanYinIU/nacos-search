@@ -1,0 +1,3 @@
+# Require per-profile opt-in for publishing
+
+Every new or migrated environment profile starts with writes disabled, keeping configuration details read-only until the user explicitly enables ordinary publishing for that profile. Both protocol adapters implement publish through this same opt-in; V3 requires neither a second acknowledgement nor CAS parity. Enabling expresses intent rather than proving server authorization or concurrent-write protection, changes only the profile revision, and P0 excludes delete, batch, import, gray-release, and cross-environment promotion operations, reducing accidental writes while retaining the existing feature behind a deliberate boundary.

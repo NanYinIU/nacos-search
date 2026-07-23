@@ -1,0 +1,3 @@
+# Use the v3 Admin API with manual namespace fallback
+
+Nacos Search uses the Nacos V3 Admin API as its stable V3 contract for configuration reads, searches, history, and writes, and does not automatically fall back to the page-oriented Console API. When an identity cannot enumerate namespaces but can read its explicitly configured namespace, the connection succeeds in a degraded-discovery state whose visible wording is “connected, using manual namespace, namespace discovery unavailable” rather than an empty namespace or connection failure; a separately configured Console endpoint may be considered later for discovery only if real demand justifies its extra port, context-path, and compatibility surface.

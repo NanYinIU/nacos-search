@@ -169,11 +169,11 @@ Two actions are registered in `plugin.xml` and added to the `ToolsMenu`:
 
 ### Issue tracker
 
-Issues and PRDs are tracked as local Markdown under `.scratch/`. See `docs/agents/issue-tracker.md`.
+Issues and PRDs are tracked in GitHub Issues; external PRs are also a triage surface. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Use the default five-role vocabulary. See `docs/agents/triage-labels.md`.
+Use the default five-role GitHub label vocabulary. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 

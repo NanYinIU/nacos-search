@@ -1,0 +1,3 @@
+# Load configuration metadata before details
+
+Configuration listing, search results, and namespace indexing operate on normalized ConfigSummary metadata, while ConfigDetail content is fetched independently only when a user selects or navigates to a configuration or when a write preflight requires it. Namespace-index completeness depends only on metadata pagination, an individual detail failure affects only that detail, and list rendering never prefetches content for previews; v1 and v3 adapters normalize their different response fields into these two domain models, removing the existing per-item N+1 detail load.

@@ -1,0 +1,3 @@
+# Canonicalize the public namespace
+
+The domain represents the default namespace only as `NamespaceId("public")`, normalizing null, blank, and the exact value `public` at its boundaries while keeping every other namespace ID case-sensitive and distinct. Requests, caches, single-flight keys, and project-session comparisons use only the canonical ID, and namespace display names never identify resources. At the wire boundary the V1 adapter encodes canonical `public` as its historical blank or omitted `tenant`, while the V3 adapter sends `namespaceId=public`; discovery results containing blank and `public` therefore collapse into one option without leaking the internal literal into V1 requests.

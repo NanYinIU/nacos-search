@@ -1,0 +1,3 @@
+# Report content-search coverage explicitly
+
+Identifier and group searches use configuration summaries or a complete namespace index, while content searches call the server only when the selected protocol adapter declares CONTENT_SEARCH and never trigger an implicit per-detail scan. Offline content search examines cached details only and reports the inspected and expected counts as partial coverage, so an empty partial result never means confirmed absence; P0 does not promise regex or case-sensitive content semantics that the adapter cannot guarantee, and an explicit warned full-content scan remains an uncommitted post-P0 option.

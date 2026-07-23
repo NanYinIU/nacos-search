@@ -1,0 +1,3 @@
+# Centralize transport and retry policy
+
+Every v1 and v3 request, including login and publish, crosses one cancellable transport seam; adapters only construct requests and parse responses. An idempotent read retries at most once for CONNECT, CONNECT_TIMEOUT, READ_TIMEOUT, 5xx, or a 429 whose Retry-After fits the remaining budget, while DNS, TLS, redirects, other non-auth-recoverable 4xx, malformed responses, login, and writes receive no transport retry. The separate one-time adapter-mapped authentication recovery shares the original request budget instead of resetting it; cancellation prevents every remaining wait or attempt, but cancellation after a write may have left the client is handled as an ambiguous write rather than an ordinary cancelled operation.
