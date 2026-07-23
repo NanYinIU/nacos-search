@@ -36,21 +36,31 @@ enum class NacosApiPolicy { AUTO, V1, V3 }
 /**
  * Application-wide reusable environment. Secrets are referenced by slot id and
  * deliberately never stored in this state object.
+ *
+ * Persisted inside [com.nanyin.nacos.search.settings.NacosSettings] via IntelliJ
+ * XmlSerializer, so every property is a `var` with a default (Bean / Instantiator
+ * friendly). Required-looking fields still validate at use sites.
  */
 data class EnvironmentProfile(
-    val id: String,
-    val displayName: String,
-    val canonicalEndpoint: String,
-    val apiPolicy: NacosApiPolicy = NacosApiPolicy.AUTO,
-    val authMode: AuthMode = AuthMode.TOKEN,
-    val principal: String = "",
-    val profileRevision: Long = 1,
-    val accessRevision: Long = 1,
-    val writeIntent: Boolean = false,
-    val credentialSlotId: String = "$id:v1",
-    val credentialSlotVersion: Long = 1,
-    val cacheTombstones: MutableList<String> = mutableListOf()
+    var id: String = "",
+    var displayName: String = "",
+    var canonicalEndpoint: String = "",
+    var apiPolicy: NacosApiPolicy = NacosApiPolicy.AUTO,
+    var authMode: AuthMode = AuthMode.TOKEN,
+    var principal: String = "",
+    var profileRevision: Long = 1,
+    var accessRevision: Long = 1,
+    var writeIntent: Boolean = false,
+    var credentialSlotId: String = "",
+    var credentialSlotVersion: Long = 1,
+    var cacheTombstones: MutableList<String> = mutableListOf()
 ) {
+    init {
+        if (credentialSlotId.isBlank() && id.isNotBlank()) {
+            credentialSlotId = "$id:v1"
+        }
+    }
+
     fun withUpdated(
         canonicalEndpoint: String = this.canonicalEndpoint,
         apiPolicy: NacosApiPolicy = this.apiPolicy,
@@ -81,16 +91,19 @@ data class EnvironmentProfile(
     }
 
     companion object {
-        fun fromLegacy(server: NacosServerConfig): EnvironmentProfile = EnvironmentProfile(
-            id = server.id.ifBlank { "default" },
-            displayName = server.displayName,
-            canonicalEndpoint = CanonicalNacosEndpoint.parse(server.serverUrl).getOrNull()?.value.orEmpty(),
-            apiPolicy = server.apiPolicy,
-            authMode = server.authMode,
-            principal = server.username.trim(),
-            writeIntent = server.writeIntent,
-            credentialSlotId = "${server.id.ifBlank { "default" }}:v1",
-            credentialSlotVersion = 1
-        )
+        fun fromLegacy(server: NacosServerConfig): EnvironmentProfile {
+            val profileId = server.id.ifBlank { "default" }
+            return EnvironmentProfile(
+                id = profileId,
+                displayName = server.displayName,
+                canonicalEndpoint = CanonicalNacosEndpoint.parse(server.serverUrl).getOrNull()?.value.orEmpty(),
+                apiPolicy = server.apiPolicy,
+                authMode = server.authMode,
+                principal = server.username.trim(),
+                writeIntent = server.writeIntent,
+                credentialSlotId = "$profileId:v1",
+                credentialSlotVersion = 1
+            )
+        }
     }
 }
