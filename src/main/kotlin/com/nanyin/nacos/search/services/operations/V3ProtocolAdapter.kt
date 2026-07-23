@@ -490,8 +490,14 @@ class V3ProtocolAdapter(
                     tenantId = normalizeTenant(item.tenant),
                     type = item.type,
                     md5 = item.md5,
-                    lastModified = item.lastModified ?: 0L,
-                    opType = item.opType
+                    lastModified = HistoryTimestamps.resolveMillis(
+                        lastModified = item.lastModified,
+                        modifyTime = item.modifyTime,
+                        createTime = item.createTime,
+                        lastModifiedTime = item.lastModifiedTime,
+                        createdTime = item.createdTime
+                    ),
+                    opType = item.opType?.trim()
                 )
             }
         )
@@ -511,8 +517,14 @@ class V3ProtocolAdapter(
             content = detail.content ?: "",
             type = detail.type,
             md5 = detail.md5,
-            lastModified = detail.lastModified ?: 0L,
-            opType = detail.opType
+            lastModified = HistoryTimestamps.resolveMillis(
+                lastModified = detail.lastModified,
+                modifyTime = detail.modifyTime,
+                createTime = detail.createTime,
+                lastModifiedTime = detail.lastModifiedTime,
+                createdTime = detail.createdTime
+            ),
+            opType = detail.opType?.trim()
         )
     }
 
@@ -667,6 +679,10 @@ class V3ProtocolAdapter(
         val md5: String? = null,
         val tenant: String? = null,
         val lastModified: Long? = null,
+        val modifyTime: Long? = null,
+        val createTime: Long? = null,
+        val lastModifiedTime: String? = null,
+        val createdTime: String? = null,
         val opType: String? = null
     )
 
@@ -679,6 +695,10 @@ class V3ProtocolAdapter(
         val type: String? = null,
         val md5: String? = null,
         val lastModified: Long? = null,
+        val modifyTime: Long? = null,
+        val createTime: Long? = null,
+        val lastModifiedTime: String? = null,
+        val createdTime: String? = null,
         val opType: String? = null
     )
 

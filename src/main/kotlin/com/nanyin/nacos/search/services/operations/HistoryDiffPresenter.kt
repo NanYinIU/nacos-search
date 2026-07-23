@@ -1,7 +1,13 @@
 package com.nanyin.nacos.search.services.operations
 
 import com.intellij.diff.DiffManager
+import com.intellij.diff.DiffRequestPanel
 import com.intellij.diff.contents.DocumentContent
+import com.intellij.diff.requests.DiffRequest
+import com.intellij.diff.requests.ErrorDiffRequest
+import com.intellij.diff.requests.LoadingDiffRequest
+import com.intellij.diff.requests.MessageDiffRequest
+import com.intellij.diff.requests.NoDiffRequest
 import com.intellij.diff.requests.SimpleDiffRequest
 import com.intellij.openapi.editor.impl.DocumentImpl
 import com.intellij.openapi.fileTypes.FileType
@@ -17,20 +23,45 @@ import com.intellij.openapi.project.Project
  */
 object HistoryDiffPresenter {
 
-    /**
-     * Builds and shows the diff dialog for [request] within [project].
-     */
-    fun show(project: Project?, request: HistoryDiffRequest) {
+    /** Builds a [DiffRequest] without opening a window (for embedded panels). */
+    fun toDiffRequest(request: HistoryDiffRequest): DiffRequest {
         val leftContent = createContent(request.left)
         val rightContent = createContent(request.right)
-        val diffRequest = SimpleDiffRequest(
+        return SimpleDiffRequest(
             request.left.title + " ↔ " + request.right.title,
             leftContent,
             rightContent,
             request.left.title,
             request.right.title
         )
-        DiffManager.getInstance().showDiff(project, diffRequest)
+    }
+
+    /** Applies [request] to an embedded [DiffRequestPanel]. */
+    fun showIn(panel: DiffRequestPanel, request: HistoryDiffRequest) {
+        panel.setRequest(toDiffRequest(request))
+    }
+
+    fun showLoading(panel: DiffRequestPanel, message: String) {
+        panel.setRequest(LoadingDiffRequest(message))
+    }
+
+    fun showEmpty(panel: DiffRequestPanel, message: String) {
+        panel.setRequest(MessageDiffRequest(message))
+    }
+
+    fun showError(panel: DiffRequestPanel, message: String) {
+        panel.setRequest(ErrorDiffRequest(message))
+    }
+
+    fun showNone(panel: DiffRequestPanel) {
+        panel.setRequest(NoDiffRequest.INSTANCE)
+    }
+
+    /**
+     * Builds and shows the diff dialog for [request] within [project].
+     */
+    fun show(project: Project?, request: HistoryDiffRequest) {
+        DiffManager.getInstance().showDiff(project, toDiffRequest(request))
     }
 
     private fun createContent(side: HistoryDiffSide): DocumentContent {
@@ -50,12 +81,12 @@ object HistoryDiffPresenter {
         right: HistoryDetail
     ): HistoryDiffRequest = HistoryDiffRequest(
         left = HistoryDiffSide(
-            title = "History ${left.id} (${formatTimestamp(left.lastModified)})",
+            title = sideTitle(left),
             content = left.content,
             contentType = left.type
         ),
         right = HistoryDiffSide(
-            title = "History ${right.id} (${formatTimestamp(right.lastModified)})",
+            title = sideTitle(right),
             content = right.content,
             contentType = right.type
         )
@@ -68,7 +99,7 @@ object HistoryDiffPresenter {
         currentType: String?
     ): HistoryDiffRequest = HistoryDiffRequest(
         left = HistoryDiffSide(
-            title = "History ${history.id} (${formatTimestamp(history.lastModified)})",
+            title = sideTitle(history),
             content = history.content,
             contentType = history.type
         ),
@@ -79,8 +110,6 @@ object HistoryDiffPresenter {
         )
     )
 
-    private fun formatTimestamp(millis: Long): String {
-        val instant = java.time.Instant.ofEpochMilli(millis)
-        return java.time.format.DateTimeFormatter.ISO_INSTANT.format(instant)
-    }
+    private fun sideTitle(detail: HistoryDetail): String =
+        "History ${detail.id} (${HistoryTimestamps.formatForDisplay(detail.lastModified)})"
 }

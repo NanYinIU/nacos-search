@@ -125,6 +125,19 @@ class V1HistoryAdapterTest {
         assertInstanceOf(HistoryCapability::class.java, adapter)
     }
 
+    @Test
+    fun `V1 history list parses official lastModifiedTime string wire format`() = runBlocking {
+        val fixture = RecordingTransport(ProtocolResponse(200, V1_HISTORY_LIST_WIRE_JSON))
+        val page = V1ProtocolAdapter(fixture)
+            .listHistory(anonymousPublicTarget(), HistoryQuery(ConfigurationCoordinate("nacos.example", "com.alibaba.nacos")))
+            .getOrThrow()
+
+        val entry = page.items.single()
+        assertEquals("203", entry.id)
+        assertEquals("U", entry.opType)
+        assertEquals(1607132883380L, entry.lastModified)
+    }
+
     // ---- helpers ----
 
     private fun anonymousPublicTarget(namespaceId: String = "public"): OperationTarget {
@@ -169,5 +182,10 @@ class V1HistoryAdapterTest {
             """{"id":"122","dataId":"app.yaml","group":"DEFAULT_GROUP","tenant":"","md5":"def456","lastModified":1699999000000,"type":"yaml","opType":"I"}]}"""
 
         const val V1_HISTORY_DETAIL_JSON = """{"id":"123","dataId":"app.yaml","group":"DEFAULT_GROUP","tenant":"","content":"enabled: true","md5":"abc123","lastModified":1700000000000,"type":"yaml","opType":"PUBLISH","srcUser":"alice","srcIp":"10.0.0.1"}"""
+
+        const val V1_HISTORY_LIST_WIRE_JSON = """{"totalCount":1,"pageNumber":1,"pagesAvailable":1,"pageItems":[""" +
+            """{"id":"203","lastId":-1,"dataId":"nacos.example","group":"com.alibaba.nacos","tenant":"","appName":"",""" +
+            """"md5":null,"content":null,"srcIp":"0:0:0:0:0:0:0:1","srcUser":null,"opType":"U         ",""" +
+            """"createdTime":"2010-05-04T16:00:00.000+0000","lastModifiedTime":"2020-12-05T01:48:03.380+0000"}]}"""
     }
 }
