@@ -300,11 +300,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     /** Persists a deletion tombstone for a profile removed from the settings. */
     private fun entombDeletedProfile(profileId: String) {
         try {
-            ApplicationManager.getApplication()
-                .getService(com.nanyin.nacos.search.services.ProfileTombstoneRegistry::class.java)
+            val app = ApplicationManager.getApplication() ?: return
+            // Only the live application settings component may write the shared
+            // tombstone registry. Throwaway NacosSettings() copies used in tests
+            // must not poison CacheService for the rest of the suite.
+            if (app.getService(NacosSettings::class.java) !== this) return
+            app.getService(com.nanyin.nacos.search.services.ProfileTombstoneRegistry::class.java)
                 ?.entomb(profileId, 0)
-            ApplicationManager.getApplication()
-                .getService(com.nanyin.nacos.search.services.LastKnownGenerationStore::class.java)
+            app.getService(com.nanyin.nacos.search.services.LastKnownGenerationStore::class.java)
                 ?.clearProfile(profileId)
         } catch (e: Exception) {
             // Settings can be applied outside a fully initialised application

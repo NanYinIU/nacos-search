@@ -75,6 +75,13 @@ class NamespaceIndexCoordinatorTest {
             assertNotEquals(settings.getActiveServer().serverUrl, captured.server.serverUrl)
         } finally {
             settings.applyServers(originalServers, originalActive)
+            // applyServers entombs removed ids and never lifts them on restore
+            // (by design for production). Clear the restored profiles so later
+            // tests can write the shared CacheService again.
+            val tombstones = com.intellij.openapi.application.ApplicationManager
+                .getApplication()
+                .getService(ProfileTombstoneRegistry::class.java)
+            originalServers.forEach { tombstones.clear(it.id) }
         }
     }
 
