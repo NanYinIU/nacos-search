@@ -132,6 +132,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             ))
             activeServerId = "default"
         }
+        sanitizeLoadedProfiles()
         // Load passwords from PasswordSafe, migrating any legacy plaintext that
         // was read from the XML into the credential store on first run.
         loadAndMigrateCredentials()
@@ -141,9 +142,37 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     /**
+     * XmlSerializer Instantiator builds [EnvironmentProfile] with defaults then
+     * applies setters. Drop blank-id rows (corrupt / pre-migration debris) and
+     * backfill credential slots that were omitted from older XML.
+     */
+    private fun sanitizeLoadedProfiles() {
+        if (profiles.isEmpty()) return
+        val repaired = profiles.mapNotNull { profile ->
+            if (profile.id.isBlank()) return@mapNotNull null
+            if (profile.credentialSlotId.isBlank()) {
+                profile.copy(credentialSlotId = "${profile.id}:v1")
+            } else {
+                profile
+            }
+        }.toMutableList()
+        if (repaired.size != profiles.size || repaired.zip(profiles).any { it.first !== it.second }) {
+            profiles = repaired
+            // Force migration from servers when every profile row was unusable.
+            if (profiles.isEmpty()) {
+                profileMigrationCompleted = false
+            }
+        }
+    }
+
+    /**
      * Populates each server's in-memory password from [NacosCredentialStore].
      * When no stored credential exists but the legacy XML still carried a
      * plaintext password, it is migrated into the credential store once.
+     *
+     * Also backfills revision-pinned profile slots (`id:v1`) from the legacy
+     * server-id keys when those slots are missing — otherwise a settings reload
+     * that skipped [migrateLegacyProfiles] leaves search with an empty secret.
      */
     private fun loadAndMigrateCredentials() {
         for (server in servers) {
@@ -151,6 +180,20 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             when {
                 !stored.isNullOrEmpty() -> server.password = stored
                 server.password.isNotEmpty() -> NacosCredentialStore.set(server.id, server.password)
+            }
+        }
+        for (profile in profiles) {
+            if (profile.id.isBlank()) continue
+            val slotId = profile.credentialSlotId.ifBlank { "${profile.id}:v1" }
+            if (slotId != profile.credentialSlotId) {
+                profile.credentialSlotId = slotId
+            }
+            if (!NacosCredentialStore.get(slotId).isNullOrEmpty()) continue
+            val legacy = servers.find { it.id == profile.id }?.password
+                ?: NacosCredentialStore.get(profile.id)
+                ?: ""
+            if (legacy.isNotEmpty()) {
+                NacosCredentialStore.set(slotId, legacy)
             }
         }
     }

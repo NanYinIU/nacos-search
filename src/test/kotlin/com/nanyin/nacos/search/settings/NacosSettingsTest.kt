@@ -378,4 +378,127 @@ class NacosSettingsTest {
         assertTrue(str.contains("serverUrl"))
         assertFalse(str.contains("secret"))
     }
+
+    @Test
+    fun `xml serializer round trips environment profiles without Instantiator failure`() {
+        settings.applyServers(
+            listOf(
+                NacosServerConfig(
+                    id = "s_prod",
+                    displayName = "Prod",
+                    serverUrl = "http://47.95.169.10:8848",
+                    username = "nacos",
+                    password = "nacos",
+                    authMode = AuthMode.TOKEN
+                )
+            ),
+            "s_prod"
+        )
+        val profile = settings.getActiveProfile()
+        assertNotNull(profile)
+        assertEquals("s_prod", profile!!.id)
+        assertEquals("s_prod:v1", profile.credentialSlotId)
+
+        // Persist the way the IDE does (XML), not a same-JVM bean copy.
+        val element = com.intellij.util.xmlb.XmlSerializer.serialize(settings.getState())
+        val restored = com.intellij.util.xmlb.XmlSerializer.deserialize(element, NacosSettings::class.java)
+        val loaded = NacosSettings()
+        loaded.loadState(restored)
+
+        val restoredProfile = loaded.getActiveProfile()
+        assertNotNull(restoredProfile)
+        assertEquals("s_prod", restoredProfile!!.id)
+        assertEquals("Prod", restoredProfile.displayName)
+        assertEquals("http://47.95.169.10:8848", restoredProfile.canonicalEndpoint)
+        assertEquals("s_prod:v1", restoredProfile.credentialSlotId)
+        assertEquals(AuthMode.TOKEN, restoredProfile.authMode)
+        assertEquals("nacos", restoredProfile.principal)
+    }
+
+    @Test
+    fun `loadState drops blank-id profiles and remigrates from servers`() {
+        settings.applyServers(
+            listOf(
+                NacosServerConfig(
+                    id = "s_ok",
+                    displayName = "OK",
+                    serverUrl = "http://localhost:8848",
+                    username = "nacos",
+                    password = "secret"
+                )
+            ),
+            "s_ok"
+        )
+        val state = settings.getState()
+        // Simulate corrupt XML debris that Instantiator used to blow up on, or
+        // partially written profile rows with an empty id.
+        state.profiles = mutableListOf(
+            com.nanyin.nacos.search.models.EnvironmentProfile(
+                id = "",
+                displayName = "broken",
+                canonicalEndpoint = "http://localhost:8848"
+            )
+        )
+        state.profileMigrationCompleted = true
+
+        val loaded = NacosSettings()
+        loaded.loadState(state)
+
+        val profile = loaded.getActiveProfile()
+        assertNotNull(profile)
+        assertEquals("s_ok", profile!!.id)
+        assertEquals("OK", profile.displayName)
+        assertTrue(profile.credentialSlotId.isNotBlank())
+    }
+
+    @Test
+    fun `environment profile no-arg construction is Instantiator safe`() {
+        val blank = com.nanyin.nacos.search.models.EnvironmentProfile()
+        assertEquals("", blank.id)
+        assertEquals("", blank.credentialSlotId)
+
+        val withId = com.nanyin.nacos.search.models.EnvironmentProfile(id = "srv_1")
+        assertEquals("srv_1:v1", withId.credentialSlotId)
+    }
+
+    @Test
+    fun `loadState backfills missing profile credential slots from legacy server secrets`() {
+        settings.applyServers(
+            listOf(
+                NacosServerConfig(
+                    id = "s_auth",
+                    displayName = "Auth",
+                    serverUrl = "http://47.95.169.10:8848",
+                    username = "nacos",
+                    password = "correct-horse"
+                )
+            ),
+            "s_auth"
+        )
+        val state = settings.getState()
+        // Profiles present (migration already done) but the revision-pinned slot
+        // was never written — the failure mode after Instantiator aborted mid-save.
+        state.profiles = mutableListOf(
+            com.nanyin.nacos.search.models.EnvironmentProfile(
+                id = "s_auth",
+                displayName = "Auth",
+                canonicalEndpoint = "http://47.95.169.10:8848",
+                authMode = AuthMode.TOKEN,
+                principal = "nacos",
+                credentialSlotId = "s_auth:v1"
+            )
+        )
+        state.profileMigrationCompleted = true
+        state.credentialSlotsPublished = true
+        NacosCredentialStore.remove("s_auth:v1")
+        NacosCredentialStore.set("s_auth", "correct-horse")
+
+        val loaded = NacosSettings()
+        loaded.loadState(state)
+
+        assertEquals("correct-horse", NacosCredentialStore.get("s_auth:v1"))
+        val context = loaded.captureOperationContext("s_auth").getOrThrow()
+        assertEquals("correct-horse", context.credential.secret)
+        assertEquals("nacos", context.identity.principal)
+    }
 }
