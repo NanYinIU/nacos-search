@@ -38,6 +38,7 @@ import com.nanyin.nacos.search.services.operations.PublishState
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
+import com.nanyin.nacos.search.settings.selectedNacosProfileId
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.ActionEvent
@@ -93,6 +94,22 @@ class ConfigDetailPanel internal constructor(
             session.healSelection(settings)
             settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
         }
+    }
+
+    /** Project-selected profile — not the app-wide Settings "active"/default. */
+    private fun selectedProfile() = settings.getProfile(project.selectedNacosProfileId(settings))
+
+    /**
+     * Namespace for history/publish. Prefer the config's tenant; when list APIs
+     * omit tenant, fall back to this project's session namespace — never assume
+     * public while the tool window is browsing another namespace.
+     */
+    private fun operationNamespaceId(config: NacosConfiguration): String {
+        config.tenantId?.takeIf { it.isNotBlank() }?.let { return it }
+        project.getService(NacosProjectSession::class.java)?.sessionState?.namespaceId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+        return "public"
     }
     
     // UI Components
@@ -450,7 +467,7 @@ class ConfigDetailPanel internal constructor(
     * hides #editBtn while editing.
     */
   private fun enterEditMode() {
-      val profile = settings.getActiveProfile()
+      val profile = selectedProfile()
       if (profile == null || !profile.writeIntent) {
           com.intellij.openapi.ui.Messages.showInfoMessage(
               NacosSearchBundle.message("config.detail.publish.writes.disabled"),
@@ -470,7 +487,7 @@ class ConfigDetailPanel internal constructor(
               return@launch
           }
           val config = currentConfiguration ?: return@launch
-          val namespaceId = config.tenantId?.takeIf { it.isNotBlank() } ?: "public"
+          val namespaceId = operationNamespaceId(config)
           val targetResult = nacosApiService.resolveOperationTarget(context, namespaceId)
           withContext(Dispatchers.Main) {
               val target = targetResult.getOrElse {
@@ -1207,7 +1224,7 @@ class ConfigDetailPanel internal constructor(
         val config = currentConfiguration ?: return
         val textToSave = editor?.document?.text ?: config.content
         if (textToSave == originalContent) return
-        val profile = settings.getActiveProfile()
+        val profile = selectedProfile()
         if (profile == null || !profile.writeIntent) {
             com.intellij.openapi.ui.Messages.showInfoMessage(
                 NacosSearchBundle.message("config.detail.publish.writes.disabled"),
@@ -1220,12 +1237,12 @@ class ConfigDetailPanel internal constructor(
                 val target = boundEditTarget ?: run {
                     val context = selectedOperationContext()
                         ?: return@launch showSaveError(NacosSearchBundle.message("error.connection.incomplete"))
-                    val namespaceId = config.tenantId?.takeIf { it.isNotBlank() } ?: "public"
+                    val namespaceId = operationNamespaceId(config)
                     nacosApiService.resolveOperationTarget(context, namespaceId).getOrElse {
                         return@launch showSaveError(it.message ?: it.toString())
                     }
                 }
-                val namespaceId = config.tenantId?.takeIf { it.isNotBlank() } ?: "public"
+                val namespaceId = operationNamespaceId(config)
                 val confirm = withContext(Dispatchers.Main) {
                     com.intellij.openapi.ui.Messages.showYesNoDialog(
                         project,
@@ -1341,7 +1358,7 @@ class ConfigDetailPanel internal constructor(
                 }
                 return@launch
             }
-            val namespaceId = config.tenantId?.takeIf { it.isNotBlank() } ?: "public"
+            val namespaceId = operationNamespaceId(config)
             val target = nacosApiService.resolveOperationTarget(context, namespaceId).getOrElse {
                 withContext(Dispatchers.Main) {
                     com.intellij.openapi.ui.Messages.showErrorDialog(
