@@ -30,8 +30,8 @@ jobs:
       - name: Run unit tests
         run: ./gradlew test
 
-  live-smoke:
-    name: Dual-stack live smoke (Nacos 2.5.3 + 3.2.3)
+  live-smoke-v1:
+    name: Live smoke V1 (Nacos 2.5.3)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,20 +52,44 @@ jobs:
         run: |
           docker run -d --name nacos-v1 \
             -e MODE=standalone \
-            -e PREFER_HOST_MODE=hostname \
+            -e JVM_XMS=512m -e JVM_XMX=512m \
+            -e JVM_XMN=256m \
             -p 8848:8848 \
             nacos/nacos-server:v2.5.3
           timeout 180 bash -c 'until curl -sf http://localhost:8848/nacos/v1/console/namespaces 2>/dev/null; do echo "waiting for Nacos 2.5.3..."; sleep 3; done'
+      - name: Run V1 live smoke
+        env:
+          NACOS_LIVE_V1_ENDPOINT: http://localhost:8848/nacos
+        run: ./gradlew test --tests "com.nanyin.nacos.search.services.operations.LiveSmokeTest.V1*"
+
+  live-smoke-v3:
+    name: Live smoke V3 (Nacos 3.2.3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', 'gradle.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
       - name: Start Nacos 3.2.3
         run: |
           docker run -d --name nacos-v3 \
             -e MODE=standalone \
-            -e PREFER_HOST_MODE=hostname \
-            -p 9848:8848 \
+            -e JVM_XMS=512m -e JVM_XMX=512m \
+            -e JVM_XMN=256m \
+            -p 8848:8848 \
             nacos/nacos-server:v3.2.3
-          timeout 240 bash -c 'until curl -sf http://localhost:9848/nacos/v3/admin/core/state 2>/dev/null; do echo "waiting for Nacos 3.2.3..."; sleep 5; done'
-      - name: Run live smoke tests
+          timeout 300 bash -c 'until curl -sf http://localhost:8848/nacos/v3/admin/core/state 2>/dev/null; do echo "waiting for Nacos 3.2.3..."; sleep 5; done'
+      - name: Run V3 live smoke
         env:
-          NACOS_LIVE_V1_ENDPOINT: http://localhost:8848/nacos
-          NACOS_LIVE_V3_ENDPOINT: http://localhost:9848/nacos
-        run: ./gradlew test --tests "com.nanyin.nacos.search.services.operations.LiveSmokeTest"
+          NACOS_LIVE_V3_ENDPOINT: http://localhost:8848/nacos
+        run: ./gradlew test --tests "com.nanyin.nacos.search.services.operations.LiveSmokeTest.V3*"
