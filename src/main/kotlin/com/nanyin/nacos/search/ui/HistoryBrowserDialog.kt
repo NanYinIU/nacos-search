@@ -15,11 +15,13 @@ import com.nanyin.nacos.search.services.operations.HistoryEntry
 import com.nanyin.nacos.search.services.operations.HistoryQuery
 import com.nanyin.nacos.search.services.operations.OperationGateway
 import com.nanyin.nacos.search.services.operations.OperationTarget
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.time.Instant
@@ -108,38 +110,49 @@ class HistoryBrowserDialog(
         statusLabel.text = NacosSearchBundle.message("history.loading")
         listModel.clear()
         scope.launch {
-            val outcome = controller.loadPage(
-                target,
-                HistoryQuery(ConfigurationCoordinate(configuration.dataId, configuration.group)),
-                expectedGeneration
-            )
-            when (outcome) {
-                is HistoryBrowserController.Outcome.Stale -> {
-                    statusLabel.text = NacosSearchBundle.message("history.stale")
-                }
-                is HistoryBrowserController.Outcome.Empty -> {
-                    statusLabel.text = NacosSearchBundle.message("history.empty")
-                }
-                is HistoryBrowserController.Outcome.PermissionDenied -> {
-                    statusLabel.text = NacosSearchBundle.message("history.permission.denied")
-                }
-                is HistoryBrowserController.Outcome.Unsupported -> {
-                    statusLabel.text = NacosSearchBundle.message("history.unsupported")
-                }
-                is HistoryBrowserController.Outcome.Failed -> {
-                    statusLabel.text = NacosSearchBundle.message("history.failed", outcome.message)
-                }
-                is HistoryBrowserController.Outcome.Body -> {
-                    entries = outcome.page.items
-                    listModel.clear()
-                    entries.forEach { listModel.addElement(it) }
-                    statusLabel.text = NacosSearchBundle.message(
-                        "history.loaded",
-                        outcome.page.totalCount
+            try {
+                val outcome = withContext(Dispatchers.IO) {
+                    controller.loadPage(
+                        target,
+                        HistoryQuery(ConfigurationCoordinate(configuration.dataId, configuration.group)),
+                        expectedGeneration
                     )
-                    updateActionEnabled()
                 }
-                HistoryBrowserController.Outcome.Loading -> Unit
+                when (outcome) {
+                    is HistoryBrowserController.Outcome.Stale -> {
+                        statusLabel.text = NacosSearchBundle.message("history.stale")
+                    }
+                    is HistoryBrowserController.Outcome.Empty -> {
+                        statusLabel.text = NacosSearchBundle.message("history.empty")
+                    }
+                    is HistoryBrowserController.Outcome.PermissionDenied -> {
+                        statusLabel.text = NacosSearchBundle.message("history.permission.denied")
+                    }
+                    is HistoryBrowserController.Outcome.Unsupported -> {
+                        statusLabel.text = NacosSearchBundle.message("history.unsupported")
+                    }
+                    is HistoryBrowserController.Outcome.Failed -> {
+                        statusLabel.text = NacosSearchBundle.message("history.failed", outcome.message)
+                    }
+                    is HistoryBrowserController.Outcome.Body -> {
+                        entries = outcome.page.items
+                        listModel.clear()
+                        entries.forEach { listModel.addElement(it) }
+                        statusLabel.text = NacosSearchBundle.message(
+                            "history.loaded",
+                            outcome.page.totalCount
+                        )
+                        updateActionEnabled()
+                    }
+                    HistoryBrowserController.Outcome.Loading -> Unit
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                statusLabel.text = NacosSearchBundle.message(
+                    "history.failed",
+                    error.message ?: error.toString()
+                )
             }
         }
     }
