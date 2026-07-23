@@ -6,9 +6,12 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 
 /**
- * Lightweight context extracted near a Nacos placeholder usage. It is used only
- * as a ranking hint; unresolved or unsupported attributes fall back to the
- * active namespace/group behavior.
+ * Lightweight context extracted near a Nacos placeholder usage
+ * (typically `@NacosPropertySource`).
+ *
+ * [group] / [namespaceId] remain soft ranking hints. [dataId] is a hard
+ * constraint when the cache has matching hits for that key; otherwise it
+ * soft-ranks first so a stale PropertySource still falls back to discovery.
  */
 data class NacosCodeContext(
     val dataId: String? = null,

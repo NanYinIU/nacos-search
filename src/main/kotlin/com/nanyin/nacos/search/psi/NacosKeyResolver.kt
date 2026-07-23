@@ -70,6 +70,8 @@ object NacosKeyResolver {
      * Resolves [key] against every cached configuration.
      *
      * @param activeNamespaceId when non-null, hits in this namespace sort first
+     * @param preferredDataId when present and any hit matches, hard-filter to those
+     *   hits (typical `@NacosPropertySource`); otherwise soft-rank that dataId first
      */
     fun resolve(
         key: String,
@@ -78,16 +80,18 @@ object NacosKeyResolver {
         activeNamespaceId: String? = currentNamespaceId(),
         preferredGroup: String? = null,
         preferredNamespaceId: String? = null,
+        preferredDataId: String? = null,
         allowCrossNamespace: Boolean = true,
         activeIdentity: AccessIdentity? = null
     ): List<KeyHit> {
         if (key.isBlank()) return emptyList()
         val index = currentIndex(cacheService, activeServerUrl, activeIdentity) ?: return emptyList()
         val now = cacheService.cacheTimeMillis()
-        return index.hitsByKey[key]
+        val scoped = index.hitsByKey[key]
             .orEmpty()
             .filter { allowCrossNamespace || sameNamespace(it.namespaceId, activeNamespaceId) }
-            .sortedWith(hitComparator(activeNamespaceId, preferredGroup, preferredNamespaceId))
+        return preferDataIdHits(scoped, preferredDataId)
+            .sortedWith(hitComparator(activeNamespaceId, preferredGroup, preferredNamespaceId, preferredDataId))
             .map { it.atTime(now) }
     }
 
@@ -96,17 +100,29 @@ object NacosKeyResolver {
         cacheService: CacheService = ApplicationManager.getApplication().getService(CacheService::class.java),
         activeServerUrl: String? = null,
         activeNamespaceId: String? = currentNamespaceId(),
+        preferredDataId: String? = null,
         allowCrossNamespace: Boolean = true,
         activeIdentity: AccessIdentity? = null
     ): ConfigResolution {
         if (key.isBlank()) return ConfigResolution(ConfigReferenceStatus.UNRESOLVED, emptyList())
         val index = currentIndex(cacheService, activeServerUrl, activeIdentity)
             ?: return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
-        val hits = index.hitsByKey[key]
+        val scoped = index.hitsByKey[key]
             .orEmpty()
             .filter { allowCrossNamespace || sameNamespace(it.namespaceId, activeNamespaceId) }
+        val hits = preferDataIdHits(scoped, preferredDataId)
             .map { it.atTime(cacheService.cacheTimeMillis()) }
         return resolutionFromHits(hits)
+    }
+
+    /**
+     * Declared dataId with cache hits → hard constraint; otherwise keep all hits
+     * so a stale/wrong PropertySource still degrades to soft discovery.
+     */
+    internal fun preferDataIdHits(hits: List<KeyHit>, preferredDataId: String?): List<KeyHit> {
+        val dataId = preferredDataId?.takeIf { it.isNotBlank() } ?: return hits
+        val matched = hits.filter { it.config.dataId == dataId }
+        return matched.ifEmpty { hits }
     }
 
    fun hasKey(
@@ -161,22 +177,28 @@ object NacosKeyResolver {
     private fun hitComparator(
         activeNamespaceId: String?,
         preferredGroup: String?,
-        preferredNamespaceId: String?
+        preferredNamespaceId: String?,
+        preferredDataId: String? = null
     ): Comparator<KeyHit> {
         val active = activeNamespaceId?.takeIf { it.isNotBlank() && it != "public" }
         val group = preferredGroup?.takeIf { it.isNotBlank() }
         val namespace = preferredNamespaceId?.takeIf { it.isNotBlank() && it != "public" }
+        val dataId = preferredDataId?.takeIf { it.isNotBlank() }
         return Comparator { a, b ->
             compareValuesBy(
                 a,
                 b,
                 { namespaceTier(it, active, namespace) },
                 { groupTier(it, group) },
+                { dataIdTier(it, dataId) },
                 { it.config.dataId },
                 { it.config.group }
             )
         }
     }
+
+    private fun dataIdTier(hit: KeyHit, preferredDataId: String?): Int =
+        if (preferredDataId != null && hit.config.dataId == preferredDataId) 0 else 1
 
     private fun namespaceTier(hit: KeyHit, activeNamespaceId: String?, preferredNamespaceId: String?): Int = when {
         preferredNamespaceId != null && hit.namespaceId == preferredNamespaceId -> 0

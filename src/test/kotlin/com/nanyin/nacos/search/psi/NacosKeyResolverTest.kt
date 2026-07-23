@@ -328,6 +328,48 @@ class NacosKeyResolverTest {
     }
 
     @Test
+    fun `preferred dataId hard-filters when that file defines the key`() = runBlocking {
+        seedConfigurations(
+            listOf(
+                cfg("common.properties", "DEFAULT_GROUP", "uxinlive", "common.new.anchor.flow.min.fans.count=50\n", "properties"),
+                cfg("klive.common.properties", "DEFAULT_GROUP", "uxinlive", "common.new.anchor.flow.min.fans.count=50\n", "properties")
+            )
+        )
+
+        val hits = NacosKeyResolver.resolve(
+            key = "common.new.anchor.flow.min.fans.count",
+            cacheService = cache,
+            preferredDataId = "common.properties",
+            activeNamespaceId = "uxinlive",
+            allowCrossNamespace = false
+        )
+
+        assertEquals(1, hits.size)
+        assertEquals("common.properties", hits.single().config.dataId)
+    }
+
+    @Test
+    fun `preferred dataId soft-falls back when that file lacks the key`() = runBlocking {
+        seedConfigurations(
+            listOf(
+                cfg("common.properties", "DEFAULT_GROUP", null, "other.key=1\n", "properties"),
+                cfg("klive.common.properties", "DEFAULT_GROUP", null, "timeout=50\n", "properties"),
+                cfg("shared.properties", "DEFAULT_GROUP", null, "timeout=100\n", "properties")
+            )
+        )
+
+        val hits = NacosKeyResolver.resolve(
+            key = "timeout",
+            cacheService = cache,
+            preferredDataId = "common.properties"
+        )
+
+        assertEquals(2, hits.size)
+        assertEquals("klive.common.properties", hits[0].config.dataId)
+        assertEquals("shared.properties", hits[1].config.dataId)
+    }
+
+    @Test
     fun `public sorts before non active namespaces`() = runBlocking {
         seedConfigurations(
             listOf(

@@ -103,6 +103,7 @@ class NacosValueLineMarkerProvider internal constructor(
     ): ConfigResolution =
         NacosKeyResolver.resolveCurrentState(
             key,
+            preferredDataId = codeContext.dataId,
             allowCrossNamespace = project.allowCrossNamespaceNavigation(),
             activeNamespaceId = project.selectedNacosNamespaceId(),
             activeIdentity = project.captureSelectedAccessIdentity()
