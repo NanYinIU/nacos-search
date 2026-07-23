@@ -30,12 +30,11 @@ jobs:
       - name: Run unit tests
         # instrumentCode/instrumentTestCode share Ant taskdefs and race under
         # org.gradle.parallel=true (flaky "1 >= 1" / nested instrumentIdeaExtensions).
-        # testVintage is a separate JVM for JUnit4 ApplicationRule tests so they
-        # are not poisoned by JUnit5 @TestApplication tearing down the shared app
-        # ("Already shutdown" / PersistentFS). `test` finalizedBy testVintage.
-        # --no-configuration-cache: testVintage mirrors IntelliJ test classpath from
-        # the primary test task (Task↔Task), which configuration-cache cannot store.
-        run: ./gradlew test --no-parallel --no-configuration-cache
+        # testVintage: JUnit4 ApplicationRule in a separate JVM so @TestApplication
+        # teardown cannot poison PersistentFS ("Already shutdown").
+        # --no-configuration-cache: testVintage mirrors IntelliJ test classpath at
+        # configuration time (ExtractorService), which configuration-cache rejects.
+        run: ./gradlew test testVintage --no-parallel --no-configuration-cache
 
   live-smoke-v1:
     name: Live smoke V1 (Nacos 2.5.3)
@@ -70,7 +69,10 @@ jobs:
       - name: Run V1 live smoke
         env:
           NACOS_LIVE_V1_ENDPOINT: http://localhost:8848
-        run: ./gradlew test --no-parallel --tests "com.nanyin.nacos.search.services.operations.LiveSmokeTest.V1*"
+        # --no-configuration-cache: build.gradle.kts mirrors IntelliJ test JVM opens
+        # onto testVintage at configuration time (ExtractorService), which breaks CC
+        # even when this job only runs filtered Jupiter smoke tests.
+        run: ./gradlew test --no-parallel --no-configuration-cache --tests "com.nanyin.nacos.search.services.operations.LiveSmokeTest.V1*"
 
   live-smoke-v3:
     name: Live smoke V3 (Nacos 3.2.3)
@@ -117,4 +119,6 @@ jobs:
       - name: Run V3 live smoke
         env:
           NACOS_LIVE_V3_ENDPOINT: http://localhost:8848
-        run: ./gradlew test --no-parallel --tests "com.nanyin.nacos.search.services.operations.LiveSmokeTest.V3*"
+        # --no-configuration-cache: same ExtractorService / testVintage mirror issue
+        # as the V1 smoke job (see above).
+        run: ./gradlew test --no-parallel --no-configuration-cache --tests "com.nanyin.nacos.search.services.operations.LiveSmokeTest.V3*"

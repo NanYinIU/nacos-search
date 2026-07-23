@@ -184,7 +184,8 @@ tasks {
             // Jupiter engine finishes. JUnit4 ApplicationRule tests (vintage) then
             // fail to reconnect in the same JVM with "Already shutdown" on
             // PersistentFS / AppScheduledExecutorService. Keep Jupiter here;
-            // vintage runs in an isolated JVM via testVintage below.
+            // vintage runs in an isolated JVM via testVintage (CI unit-tests /
+            // local `check` only — not finalizedBy, so filtered smoke jobs stay lean).
             excludeEngines("junit-vintage")
         }
         testLogging {
@@ -195,8 +196,6 @@ tasks {
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
             showStandardStreams = true
         }
-        // Always run ApplicationRule coverage after Jupiter, even on local `test`.
-        finalizedBy("testVintage")
     }
 
     val testVintage by registering(Test::class) {
@@ -220,8 +219,9 @@ tasks {
 
     // IntelliJ Platform attaches the instrumented classpath and module opens onto
     // the primary `test` task; mirror them onto testVintage once that is ready.
-    // (Configuration-cache cannot store this Task↔Task mirror; CI runs test with
-    // --no-configuration-cache. See .github/workflows/ci.yml.)
+    // Accessing those providers at configuration time is incompatible with the
+    // configuration cache (ExtractorService). CI test steps pass
+    // --no-configuration-cache; see .github/workflows/ci.yml.
     afterEvaluate {
         val mainTest = named<Test>("test").get()
         named<Test>("testVintage").configure {
