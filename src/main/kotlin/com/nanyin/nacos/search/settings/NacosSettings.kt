@@ -240,6 +240,15 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     fun setActiveServer(serverId: String) {
         if (servers.any { it.id == serverId }) {
             activeServerId = serverId
+            // Keep the profile-migration default aligned with the active server so
+            // resolveDefaultProfileId() / Settings blue-dot badge track tool-window
+            // environment switches (activeServerId alone is not enough when a stale
+            // migratedDefaultProfileId still points at Local).
+            migrateLegacyProfiles()
+            ensureProfilesForServers()
+            if (profiles.any { it.id == serverId }) {
+                migratedDefaultProfileId = serverId
+            }
             syncFromActiveServer()
         }
     }

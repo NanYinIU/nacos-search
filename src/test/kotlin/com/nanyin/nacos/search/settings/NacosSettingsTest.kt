@@ -66,6 +66,26 @@ class NacosSettingsTest {
     }
 
     @Test
+    fun `setActiveServer updates profile default so Settings badge tracks tool window`() {
+        settings.applyServers(
+            listOf(
+                NacosServerConfig(id = "s_local", displayName = "本地 Local", serverUrl = "http://localhost:8848"),
+                NacosServerConfig(id = "s_qa", displayName = "QA", serverUrl = "http://47.95.169.10:8848")
+            ),
+            "s_local"
+        )
+        assertEquals("s_local", settings.activeServerId)
+        assertEquals("s_local", settings.resolveDefaultProfileId())
+
+        settings.setActiveServer("s_qa")
+
+        assertEquals("s_qa", settings.activeServerId)
+        assertEquals("s_qa", settings.migratedDefaultProfileId)
+        assertEquals("s_qa", settings.resolveDefaultProfileId())
+        assertEquals("http://47.95.169.10:8848", settings.serverUrl)
+    }
+
+    @Test
     fun `server config cross namespace navigation defaults off and copies`() {
         val server = NacosServerConfig.createDefault()
 
