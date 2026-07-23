@@ -183,7 +183,7 @@ class NamespacePanel(
 
         return try {
             val result = projectSession?.let { session ->
-                session.seedIfNew(settings.migrationDefaults())
+                session.healSelection(settings)
                 namespaceService.loadNamespacesAsync(
                     settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
                 )
@@ -221,7 +221,7 @@ class NamespacePanel(
             // Restore this project's selection, otherwise keep the local
             // selection, otherwise default to the first. Never adopt another
             // project's app-wide NamespaceService state.
-            projectSession?.seedIfNew(settings.migrationDefaults())
+            projectSession?.healSelection(settings)
             val projectSelection = projectSession?.sessionState?.namespaceId
                 ?.let { selectedId -> namespaces.find { it.namespaceId == selectedId } }
             val toSelect: NamespaceInfo? = projectSelection ?: currentNamespace
@@ -274,8 +274,9 @@ class NamespacePanel(
     private fun onNamespaceSelected(namespace: NamespaceInfo) {
         coroutineScope.launch {
             try {
-                projectSession?.seedIfNew(settings.migrationDefaults())
-                val profileId = projectSession?.sessionState?.selectedProfileId.orEmpty().ifBlank { settings.activeServerId }
+                projectSession?.healSelection(settings)
+                val profileId = projectSession?.sessionState?.selectedProfileId.orEmpty()
+                    .ifBlank { settings.resolveDefaultProfileId() }
                 projectSession?.select(profileId, namespace.namespaceId)
                 project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)?.bump()
                 onSelectionChanged?.invoke(namespace)

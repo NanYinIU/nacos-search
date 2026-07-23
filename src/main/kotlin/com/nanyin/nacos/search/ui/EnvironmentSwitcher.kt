@@ -90,8 +90,9 @@ class EnvironmentSwitcher(
      * Call after settings change (e.g. switching environment or applying settings).
      */
     fun refresh() {
-        projectSession?.seedIfNew(settings.migrationDefaults())
-        val selectedProfileId = projectSession?.sessionState?.selectedProfileId.orEmpty().ifBlank { settings.activeServerId }
+        projectSession?.healSelection(settings)
+        val selectedProfileId = projectSession?.sessionState?.selectedProfileId.orEmpty()
+            .ifBlank { settings.resolveDefaultProfileId() }
         val active = settings.cloneServers().firstOrNull { it.id == selectedProfileId } ?: settings.getActiveServer()
         val name = active.displayName.ifBlank {
             active.serverUrl.ifBlank { NacosSearchBundle.message("toolwindow.env.none") }
@@ -106,8 +107,9 @@ class EnvironmentSwitcher(
 
     private fun showPopup() {
         if (!envButton.isShowing) return
-        projectSession?.seedIfNew(settings.migrationDefaults())
-        val activeId = projectSession?.sessionState?.selectedProfileId.orEmpty().ifBlank { settings.activeServerId }
+        projectSession?.healSelection(settings)
+        val activeId = projectSession?.sessionState?.selectedProfileId.orEmpty()
+            .ifBlank { settings.resolveDefaultProfileId() }
         val entries = settings.cloneServers()
             .map { EnvEntry.Server(it, it.id == activeId) } + EnvEntry.Manage
         val popup = JBPopupFactory.getInstance().createListPopup(EnvListStep(entries))
@@ -157,9 +159,11 @@ class EnvironmentSwitcher(
         override fun getDefaultOptionIndex(): Int =
             items.indexOfFirst { it is EnvEntry.Server && it.active }.coerceAtLeast(0)
         override fun onChosen(selectedValue: EnvEntry?, finalChoice: Boolean): PopupStep<*>? {
+            // Defer dialogs / selection work out of handleSelect so focus is not
+            // stolen while the popup is still tearing down (PopupImplUtil).
             return when (selectedValue) {
-                is EnvEntry.Server -> { handleSelectServer(selectedValue); null }
-                is EnvEntry.Manage -> { openSettings(); null }
+                is EnvEntry.Server -> doFinalStep { handleSelectServer(selectedValue) }
+                is EnvEntry.Manage -> doFinalStep { openSettings() }
                 null -> null
             }
         }

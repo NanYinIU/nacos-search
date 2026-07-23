@@ -144,6 +144,22 @@ class V3ProtocolAdapterTest {
     }
 
     @Test
+    fun `V3 probe login envelope code minus one is generation unsupported`() = runBlocking {
+        // Non-V3 / legacy fronts often answer /v3/auth/user/login with
+        // {code:-1,message:"No message available"}. AUTO must be allowed to
+        // try V1 rather than sticking on a Protocol failure.
+        val fixture = RecordingTransport(
+            ProtocolResponse(200, """{"code":-1,"message":"No message available","data":null}""")
+        )
+
+        val error = V3ProtocolAdapter(fixture)
+            .probe(passwordTarget())
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.GenerationUnsupported::class.java, error)
+    }
+
+    @Test
     fun `V3 probe four-zero-four with access-denied envelope does not trigger generation fallback`() = runBlocking {
         // A V3 server returning 404 with envelope code 10001 (access denied)
         // is still a V3 server. This must NOT become GenerationUnsupported.

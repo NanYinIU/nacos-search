@@ -501,4 +501,71 @@ class NacosSettingsTest {
         assertEquals("correct-horse", context.credential.secret)
         assertEquals("nacos", context.identity.principal)
     }
+
+    @Test
+    fun `captureOperationContext heals stale profile ids to a live default`() {
+        settings.applyServers(
+            listOf(
+                NacosServerConfig(
+                    id = "s_live",
+                    displayName = "Live",
+                    serverUrl = "http://localhost:8848",
+                    username = "nacos",
+                    password = "secret"
+                )
+            ),
+            "s_live"
+        )
+        settings.credentialSlotsPublished = true
+
+        val context = settings.captureOperationContext("deleted-profile").getOrThrow()
+        assertEquals("s_live", context.identity.profileId)
+        assertEquals("secret", context.credential.secret)
+    }
+
+    @Test
+    fun `reconcile recreates missing profiles for existing servers`() {
+        settings.applyServers(
+            listOf(
+                NacosServerConfig(
+                    id = "s_only",
+                    displayName = "Only",
+                    serverUrl = "http://localhost:8848",
+                    username = "nacos",
+                    password = "pw"
+                )
+            ),
+            "s_only"
+        )
+        settings.profiles = mutableListOf()
+        settings.profileMigrationCompleted = true
+
+        val profile = settings.getProfile("s_only")
+        assertNotNull(profile)
+        assertEquals("Only", profile!!.displayName)
+        assertEquals("pw", NacosCredentialStore.get(profile.credentialSlotId))
+    }
+
+    @Test
+    fun `project session healSelection replaces blank or missing profile ids`() {
+        settings.applyServers(
+            listOf(
+                NacosServerConfig(
+                    id = "s_ok",
+                    displayName = "OK",
+                    serverUrl = "http://localhost:8848",
+                    username = "nacos",
+                    password = "pw"
+                )
+            ),
+            "s_ok"
+        )
+        val session = NacosProjectSessionState(
+            selectedProfileId = "ghost",
+            namespaceId = "public",
+            selectionWasExplicit = true
+        )
+        session.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
+        assertEquals("s_ok", session.selectedProfileId)
+    }
 }
