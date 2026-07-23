@@ -23,7 +23,7 @@ class NacosSettingsTest {
         assertEquals("", settings.username)
         assertEquals("", settings.password)
         assertEquals("public", settings.namespace)
-        assertEquals(AuthMode.TOKEN, settings.authMode)
+        assertEquals(AuthMode.ANONYMOUS, settings.authMode)
         assertTrue(settings.enableTokenAuth)
         assertEquals(30, settings.tokenCacheDurationMinutes)
         assertTrue(settings.autoTokenRefresh)
@@ -424,7 +424,8 @@ class NacosSettingsTest {
                     displayName = "OK",
                     serverUrl = "http://localhost:8848",
                     username = "nacos",
-                    password = "secret"
+                    password = "secret",
+                    authMode = AuthMode.NACOS_PASSWORD
                 )
             ),
             "s_ok"
@@ -470,7 +471,8 @@ class NacosSettingsTest {
                     displayName = "Auth",
                     serverUrl = "http://47.95.169.10:8848",
                     username = "nacos",
-                    password = "correct-horse"
+                    password = "correct-horse",
+                    authMode = AuthMode.NACOS_PASSWORD
                 )
             ),
             "s_auth"
@@ -511,7 +513,8 @@ class NacosSettingsTest {
                     displayName = "Live",
                     serverUrl = "http://localhost:8848",
                     username = "nacos",
-                    password = "secret"
+                    password = "secret",
+                    authMode = AuthMode.NACOS_PASSWORD
                 )
             ),
             "s_live"
@@ -532,7 +535,8 @@ class NacosSettingsTest {
                     displayName = "Only",
                     serverUrl = "http://localhost:8848",
                     username = "nacos",
-                    password = "pw"
+                    password = "pw",
+                    authMode = AuthMode.NACOS_PASSWORD
                 )
             ),
             "s_only"
@@ -555,7 +559,8 @@ class NacosSettingsTest {
                     displayName = "OK",
                     serverUrl = "http://localhost:8848",
                     username = "nacos",
-                    password = "pw"
+                    password = "pw",
+                    authMode = AuthMode.NACOS_PASSWORD
                 )
             ),
             "s_ok"
