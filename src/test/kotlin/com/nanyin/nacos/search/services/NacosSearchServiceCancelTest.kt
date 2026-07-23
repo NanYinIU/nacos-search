@@ -1,13 +1,16 @@
 package com.nanyin.nacos.search.services
 
 import com.intellij.testFramework.junit5.TestApplication
+import com.intellij.openapi.application.ApplicationManager
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
@@ -19,6 +22,11 @@ import org.junit.jupiter.api.Assertions.assertTrue
 
 @TestApplication
 class NacosSearchServiceCancelTest {
+
+    @BeforeEach
+    fun resetSharedSettingsToAnonymousDefaults() {
+        ApplicationManager.getApplication().getService(NacosSettings::class.java).resetToDefaults()
+    }
 
     private fun stubApi(): NacosApiService {
         val response = NacosApiService.ConfigListResponse(

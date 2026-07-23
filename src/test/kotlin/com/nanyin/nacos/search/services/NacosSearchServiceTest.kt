@@ -16,14 +16,21 @@ import org.mockito.kotlin.whenever
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosSettings
+import com.intellij.openapi.application.ApplicationManager
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 @TestApplication
 class NacosSearchServiceTest {
+
+    @BeforeEach
+    fun resetSharedSettingsToAnonymousDefaults() {
+        ApplicationManager.getApplication().getService(NacosSettings::class.java).resetToDefaults()
+    }
 
     @Test
     fun `search request normalizes wildcard and prefix fuzzy dataId`() {
