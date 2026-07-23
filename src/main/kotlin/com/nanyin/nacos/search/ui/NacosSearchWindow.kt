@@ -101,8 +101,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private var operationContextSnapshot: NacosOperationContext? = null
 
     private fun selectedProfileId(): String {
-        projectSession.seedIfNew(settings.migrationDefaults())
-        return projectSession.sessionState.selectedProfileId
+        projectSession.healSelection(settings)
+        return projectSession.sessionState.selectedProfileId.ifBlank { settings.resolveDefaultProfileId() }
     }
 
     private fun selectedOperationContext(): NacosOperationContext? = operationContextSnapshot
@@ -115,7 +115,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
     
     init {
-        projectSession.seedIfNew(settings.migrationDefaults())
+        projectSession.healSelection(settings)
         NacosUpgradeSummary.showOnce(project, projectSession, settings)
         initializeComponents()
         setupLayout()

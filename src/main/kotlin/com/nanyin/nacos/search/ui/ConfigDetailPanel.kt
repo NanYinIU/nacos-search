@@ -72,7 +72,7 @@ class ConfigDetailPanel internal constructor(
                 operationContext = withContext(Dispatchers.IO) {
                     project.getService(NacosProjectSession::class.java)?.let { session ->
                         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-                        session.seedIfNew(settings.migrationDefaults())
+                        session.healSelection(settings)
                         settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
                     }
                 }
@@ -90,7 +90,7 @@ class ConfigDetailPanel internal constructor(
     private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
     private suspend fun selectedOperationContext() = withContext(Dispatchers.IO) {
         project.getService(NacosProjectSession::class.java)?.let { session ->
-            session.seedIfNew(settings.migrationDefaults())
+            session.healSelection(settings)
             settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
         }
     }
