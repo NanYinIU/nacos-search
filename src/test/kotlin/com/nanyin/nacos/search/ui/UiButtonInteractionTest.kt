@@ -14,6 +14,7 @@ import kotlinx.coroutines.CompletableDeferred
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Test
 import java.awt.Dimension
 import java.awt.Rectangle
@@ -195,7 +196,8 @@ class UiButtonInteractionTest {
 
        assertEquals(Dimension(24, 22), previousButton.preferredSize)
        assertEquals(Dimension(24, 22), nextButton.preferredSize)
-        assertEquals(Dimension(72, 22), pageSizeComboBox.preferredSize)
+        assertEquals(Dimension(56, 22), pageSizeComboBox.preferredSize)
+        assertEquals(Dimension(56, 22), pageSizeComboBox.maximumSize)
 
         panel.onPreviousPage = { calls.add("previous") }
         panel.onNextPage = { calls.add("next") }
@@ -227,12 +229,19 @@ class UiButtonInteractionTest {
         val panel = ConfigDetailPanel(mockProject)
         try {
             val refreshButton = privateField<JButton>(panel, "refreshButton")
+            val historyButton = privateField<JButton>(panel, "historyButton")
             val copyButton = privateField<JButton>(panel, "copyButton")
             val saveButton = privateField<JButton>(panel, "saveButton")
             val editButton = privateField<JButton>(panel, "editButton")
             val revertButton = privateField<JButton>(panel, "revertButton")
 
-            assertEquals(Dimension(26, 26), refreshButton.preferredSize)
+            // Secondary tools are icon-only toolbar buttons; mode actions stay text.
+            assertEquals(Dimension(28, 24), refreshButton.preferredSize)
+            assertEquals(Dimension(28, 24), historyButton.preferredSize)
+            assertEquals("", refreshButton.text)
+            assertEquals("", historyButton.text)
+            assertNotNull(refreshButton.icon)
+            assertNotNull(historyButton.icon)
             assertEquals(Dimension(72, 26), copyButton.preferredSize)
             assertEquals(Dimension(72, 26), saveButton.preferredSize)
             assertEquals(Dimension(72, 26), editButton.preferredSize)
@@ -354,6 +363,11 @@ class UiButtonInteractionTest {
         var refreshCount = 0
 
         panel.onRefreshRequested = { refreshCount++ }
+
+        assertEquals(Dimension(28, 24), refreshButton.preferredSize)
+        assertEquals("toolbar", refreshButton.getClientProperty("JButton.buttonType"))
+        assertFalse(refreshButton.isBorderPainted)
+        assertFalse(refreshButton.isContentAreaFilled)
 
         runOnEdt {
             refreshButton.doClick()

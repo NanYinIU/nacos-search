@@ -21,6 +21,7 @@ import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
+import javax.swing.plaf.basic.BasicButtonUI
 import java.util.concurrent.ConcurrentHashMap
 import javax.swing.border.EmptyBorder
 
@@ -98,7 +99,14 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
 
         refreshButton = JButton(AllIcons.Actions.Refresh).apply {
             toolTipText = NacosSearchBundle.message("config.list.refresh")
-            preferredSize = Dimension(26, 26)
+            putClientProperty("JButton.buttonType", "toolbar")
+            ui = BasicButtonUI()
+            preferredSize = Dimension(28, 24)
+            minimumSize = Dimension(28, 24)
+            border = JBUI.Borders.empty()
+            isContentAreaFilled = false
+            isBorderPainted = false
+            isFocusPainted = false
         }
 
         emptyStatePanel = createEmptyStatePanel()
@@ -115,9 +123,7 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         val headerPanel = JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(3, 6, 3, 6)
             add(headerLabel, BorderLayout.CENTER)
-            add(refreshButton.apply {
-                preferredSize = Dimension(24, 24)
-            }, BorderLayout.EAST)
+            add(refreshButton, BorderLayout.EAST)
         }
 
         // Center: list / loading / empty

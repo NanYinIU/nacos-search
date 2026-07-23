@@ -45,6 +45,7 @@ import java.awt.event.ActionEvent
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import javax.swing.*
+import javax.swing.plaf.basic.BasicButtonUI
 import kotlin.concurrent.withLock
 
 
@@ -85,6 +86,21 @@ class ConfigDetailPanel internal constructor(
 
     companion object {
         private const val DETAIL_HORIZONTAL_INSET = 10
+
+        private fun toolbarIconButton(icon: Icon, tooltip: String): JButton {
+            return JButton(icon).apply {
+                toolTipText = tooltip
+                putClientProperty("JButton.buttonType", "toolbar")
+                ui = BasicButtonUI()
+                preferredSize = Dimension(28, 24)
+                minimumSize = Dimension(28, 24)
+                maximumSize = Dimension(28, 24)
+                border = JBUI.Borders.empty()
+                isContentAreaFilled = false
+                isBorderPainted = false
+                isFocusPainted = false
+            }
+        }
     }
     
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
@@ -253,15 +269,16 @@ class ConfigDetailPanel internal constructor(
         // Error state
         errorPanel = createErrorPanel()
         
-        // Action buttons
-        refreshButton = JButton(AllIcons.Actions.Refresh).apply {
-            toolTipText = NacosSearchBundle.message("config.detail.refresh")
-            preferredSize = Dimension(26, 26)
-            minimumSize = Dimension(26, 26)
-            border = JBUI.Borders.empty()
-            isContentAreaFilled = false
-        }
-        
+        // Secondary actions: icon-only toolbar buttons (IntelliJ editor convention)
+        refreshButton = toolbarIconButton(
+            AllIcons.Actions.Refresh,
+            NacosSearchBundle.message("config.detail.refresh")
+        )
+        historyButton = toolbarIconButton(
+            AllIcons.Vcs.History,
+            NacosSearchBundle.message("config.detail.action.history.tooltip")
+        ).apply { isEnabled = false }
+
         copyButton = JButton(NacosSearchBundle.message("config.detail.action.copy")).apply {
             toolTipText = NacosSearchBundle.message("config.detail.copy")
             icon = null
@@ -279,7 +296,7 @@ class ConfigDetailPanel internal constructor(
            isEnabled = false
        }
 
-       // Edit button — toggles editor editable mode
+       // Edit — primary mode CTA as a text button; keeps visual weight vs icon tools
        editButton = JButton(NacosSearchBundle.message("config.detail.action.edit")).apply {
            toolTipText = NacosSearchBundle.message("config.detail.action.edit")
             preferredSize = Dimension(72, 26)
@@ -294,13 +311,6 @@ class ConfigDetailPanel internal constructor(
             minimumSize = Dimension(60, 26)
            isEnabled = false
        }
-
-        historyButton = JButton(NacosSearchBundle.message("config.detail.action.history")).apply {
-            toolTipText = NacosSearchBundle.message("config.detail.action.history.tooltip")
-            preferredSize = Dimension(80, 26)
-            minimumSize = Dimension(60, 26)
-            isEnabled = false
-        }
 
         // Format tag label
         formatTagLabel = JBLabel("").apply {
@@ -368,20 +378,30 @@ class ConfigDetailPanel internal constructor(
             add(metadataPanel)
         }
 
-        // ===== Action bar: format tag | edit + save + revert | copy =====
+        // ===== Action bar: format | icon tools · primary text actions =====
+        // Secondary (Refresh/History) stay icon-only; Edit/Save/Revert/Copy stay text
+        // so the mode CTA is not competing with a same-weight History label.
         val actionBar = JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(3, DETAIL_HORIZONTAL_INSET)
             val leftPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                 add(formatTagLabel)
             }
-            // Design order: History / Edit / Save / Revert / Copy
-            val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+            val iconTools = JPanel(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
+                isOpaque = false
                 add(refreshButton)
                 add(historyButton)
+            }
+            val primaryActions = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                isOpaque = false
                 add(editButton)
                 add(saveButton)
                 add(revertButton)
                 add(copyButton)
+            }
+            val rightPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0)).apply {
+                isOpaque = false
+                add(iconTools)
+                add(primaryActions)
             }
             add(leftPanel, BorderLayout.WEST)
             add(rightPanel, BorderLayout.EAST)
@@ -1496,6 +1516,7 @@ class ConfigDetailPanel internal constructor(
             
             // Update button tooltips
             refreshButton.toolTipText = NacosSearchBundle.message("config.detail.refresh")
+            historyButton.toolTipText = NacosSearchBundle.message("config.detail.action.history.tooltip")
             copyButton.toolTipText = NacosSearchBundle.message("config.detail.copy")
             
             // Update size label if there's content
@@ -1566,6 +1587,7 @@ class ConfigDetailPanel internal constructor(
     private fun updateButtonTooltips() {
         SwingUtilities.invokeLater {
             refreshButton.toolTipText = NacosSearchBundle.message("config.detail.refresh")
+            historyButton.toolTipText = NacosSearchBundle.message("config.detail.action.history.tooltip")
             copyButton.toolTipText = NacosSearchBundle.message("config.detail.copy")
         }
     }

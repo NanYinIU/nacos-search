@@ -153,13 +153,14 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun setupLayout() {
         border = JBUI.Borders.empty()
 
-       // ===== Header bar: title + icon toolbar =====
+       // ===== Header bar: environment + settings/more =====
+       // Full refresh lives under More (and scoped refresh on namespace/list/detail);
+       // a duplicate header Refresh added no unique action.
        val headerBar = JPanel(BorderLayout()).apply {
            border = JBUI.Borders.empty(2, 8)
            add(environmentSwitcher, BorderLayout.WEST)
            val iconBar = JPanel(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
                 isOpaque = false
-                add(iconButton(AllIcons.Actions.Refresh, NacosSearchBundle.message("toolwindow.refresh.all"), "nacos.toolwindow.refreshAll") { refreshAll() })
                 add(iconButton(AllIcons.General.Settings, NacosSearchBundle.message("toolwindow.settings"), "nacos.toolwindow.settings") { openSettings() })
                 add(iconButton(AllIcons.Actions.More, NacosSearchBundle.message("toolwindow.more"), "nacos.toolwindow.more") { showMoreMenu(this) })
             }
