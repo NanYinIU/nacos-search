@@ -146,7 +146,7 @@ class EnvironmentSwitcher(
     }
 
     private fun openSettings() {
-        ShowSettingsUtil.getInstance().editConfigurable(project, NacosConfigurable())
+        ShowSettingsUtil.getInstance().editConfigurable(project, NacosConfigurable(project))
     }
 
     private inner class EnvListStep(private val items: List<EnvEntry>) :
