@@ -266,7 +266,9 @@ class NacosSearchService(
                 request.toApiListPageCacheKey()
             )
             if (cached != null) {
-                val configurations = cached.pageItems.map { it.toMetadataConfiguration() }
+                val configurations = cached.pageItems.map {
+                    it.toMetadataConfiguration(request.namespace?.namespaceId)
+                }
                 lastCompletedRequestKey = requestKey
                 return Result.success(
                     SearchExecutionResult(
@@ -311,7 +313,9 @@ class NacosSearchService(
 
         if (result.isSuccess) {
             val response = result.getOrNull()!!
-            val configurations = response.pageItems.map { it.toMetadataConfiguration() }
+            val configurations = response.pageItems.map {
+                it.toMetadataConfiguration(request.namespace?.namespaceId)
+            }
             lastCompletedRequestKey = requestKey
             return Result.success(
                 SearchExecutionResult(
@@ -331,7 +335,9 @@ class NacosSearchService(
             allowStale = true
         )
         if (stale != null) {
-            val configurations = stale.pageItems.map { it.toMetadataConfiguration() }
+            val configurations = stale.pageItems.map {
+                it.toMetadataConfiguration(request.namespace?.namespaceId)
+            }
             return Result.success(
                 SearchExecutionResult(
                     stale,
@@ -658,12 +664,19 @@ class NacosSearchService(
         val coverage: SearchCoverage? = null
     )
 
-    private fun NacosApiService.ConfigItem.toMetadataConfiguration(): NacosConfiguration =
-        NacosConfiguration(
+    private fun NacosApiService.ConfigItem.toMetadataConfiguration(
+        requestNamespaceId: String? = null
+    ): NacosConfiguration {
+        val fromItem = tenant?.takeUnless { it.isBlank() }
+        val fromRequest = requestNamespaceId?.takeUnless {
+            it.isBlank() || it == "public"
+        }
+        return NacosConfiguration(
             dataId = dataId,
             group = group,
-            tenantId = tenant,
+            tenantId = fromItem ?: fromRequest,
             content = content.orEmpty(),
             type = type
         )
+    }
 }

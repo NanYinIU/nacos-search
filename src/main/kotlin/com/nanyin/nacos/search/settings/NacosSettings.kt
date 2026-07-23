@@ -355,16 +355,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         migrateLegacyProfiles()
         ensureProfilesForServers()
         val requested = profileId?.trim().takeUnless { it.isNullOrBlank() }
+        // Explicit project selections must fail closed when the profile is
+        // missing — never silently retarget to the app-wide default (Local).
+        // That made History/Diff/publish hit the wrong server while the tool
+        // window still showed QA. Null profileId keeps legacy default capture.
         val selectedProfileId = when {
-            requested != null && getProfile(requested) != null -> requested
-            requested != null && servers.any { it.id == requested } -> {
-                // Session pointed at a live server whose profile row was missing;
-                // reconcile above should have created it.
-                requested.takeIf { getProfile(it) != null } ?: resolveDefaultProfileId()
-            }
-            requested == null -> resolveDefaultProfileId()
-            else -> resolveDefaultProfileId().takeIf { it.isNotBlank() && getProfile(it) != null }
+            requested != null -> getProfile(requested)?.id
                 ?: return Result.failure(ConfigurationRequired(listOf("Select a Nacos environment profile")))
+            else -> resolveDefaultProfileId()
         }
         val configuredProfile = getProfile(selectedProfileId)
         val persistedProfile = configuredProfile ?: if (requested == null) {

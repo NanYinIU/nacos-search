@@ -505,7 +505,7 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `captureOperationContext heals stale profile ids to a live default`() {
+    fun `captureOperationContext fails closed for missing explicit profile ids`() {
         settings.applyServers(
             listOf(
                 NacosServerConfig(
@@ -521,9 +521,9 @@ class NacosSettingsTest {
         )
         settings.credentialSlotsPublished = true
 
-        val context = settings.captureOperationContext("deleted-profile").getOrThrow()
-        assertEquals("s_live", context.identity.profileId)
-        assertEquals("secret", context.credential.secret)
+        val result = settings.captureOperationContext("deleted-profile")
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is ConfigurationRequired)
     }
 
     @Test
