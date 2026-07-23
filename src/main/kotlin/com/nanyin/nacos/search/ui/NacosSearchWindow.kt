@@ -216,7 +216,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
 
     private fun openSettings() {
-        ShowSettingsUtil.getInstance().editConfigurable(project, NacosConfigurable())
+        ShowSettingsUtil.getInstance().editConfigurable(project, NacosConfigurable(project))
     }
 
     private fun showMoreMenu(invoker: JComponent) {

@@ -4,13 +4,17 @@ import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.models.NacosApiPolicy
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.LanguageService
+import com.nanyin.nacos.search.services.ProjectSessionEpochs
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.wm.IdeFocusManager
 import com.intellij.icons.AllIcons
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBList
@@ -34,8 +38,14 @@ import javax.swing.event.ListSelectionListener
  *
  * Uses a draft model: edits go into an in-memory draft list; Apply/OK
  * commit to NacosSettings, Cancel rolls back.
+ *
+ * The blue-dot "active" marker follows the **current project's** selected
+ * environment (when a project context is available). Orange dirty dots still
+ * mark unsaved draft edits relative to the persisted server list.
  */
-class NacosConfigurable : Configurable {
+class NacosConfigurable @JvmOverloads constructor(
+    private val project: Project? = null
+) : Configurable {
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
     private val apiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
     private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
@@ -107,13 +117,49 @@ class NacosConfigurable : Configurable {
         draftServers = settings.cloneServers().onEach {
             it.authMode = AuthStrategyFormPolicy.normalizeStored(it.authMode, settings.enableTokenAuth)
         }.toMutableList()
-        draftActiveId = settings.activeServerId
         if (draftServers.isEmpty()) {
             val default = NacosServerConfig(id = "default", displayName = "Local")
             draftServers.add(default)
             draftActiveId = "default"
+            selectedServerId = draftActiveId
+            return
         }
+        // Blue-dot = environment for the current project. Align the persisted
+        // app-wide activeServerId so opening Settings does not look "dirty"
+        // solely because project session and default drifted apart.
+        val preferred = resolveSettingsBlueDotId(
+            servers = draftServers,
+            projectProfileId = resolveProjectProfileId(),
+            activeServerId = settings.activeServerId
+        )
+        if (preferred != settings.activeServerId) {
+            settings.setActiveServer(preferred)
+        }
+        draftActiveId = preferred
         selectedServerId = draftActiveId
+    }
+
+    /**
+     * Profile id selected by the tool window for [project], or the focused /
+     * sole open project when this configurable was constructed without one
+     * (IDE Preferences → Tools → Nacos Search).
+     */
+    private fun resolveProjectProfileId(): String? {
+        val context = project
+            ?: IdeFocusManager.getGlobalInstance().lastFocusedFrame?.project
+            ?: ProjectManager.getInstance().openProjects.singleOrNull()
+            ?: return null
+        if (context.isDisposed) return null
+        val session = context.getService(NacosProjectSession::class.java) ?: return null
+        session.healSelection(settings)
+        return session.sessionState.selectedProfileId.takeIf { it.isNotBlank() }
+    }
+
+    private fun contextProject(): Project? {
+        val candidate = project
+            ?: IdeFocusManager.getGlobalInstance().lastFocusedFrame?.project
+            ?: ProjectManager.getInstance().openProjects.singleOrNull()
+        return candidate?.takeUnless { it.isDisposed }
     }
 
     private fun selectedDraft(): NacosServerConfig? {
@@ -881,6 +927,17 @@ class NacosConfigurable : Configurable {
         // Apply draft to settings
         settings.applyServers(draftServers, draftActiveId)
 
+        // Keep the current project's tool-window selection on the same profile
+        // as the blue-dot so Settings and the search panel stay aligned.
+        contextProject()?.let { ctx ->
+            val session = ctx.getService(NacosProjectSession::class.java) ?: return@let
+            val namespace = session.sessionState.namespaceId.ifBlank { "public" }
+            if (session.sessionState.selectedProfileId != draftActiveId) {
+                session.select(draftActiveId, namespace)
+                ctx.getService(ProjectSessionEpochs::class.java)?.bump()
+            }
+        }
+
         // Apply language
         val selectedLanguage = languageComboBox.selectedItem as LanguageService.SupportedLanguage
         languageService.setLanguage(selectedLanguage.code)
@@ -1041,4 +1098,20 @@ class NacosConfigurable : Configurable {
         NacosApiPolicy.V1 -> "settings.api.generation.v1.tooltip"
         NacosApiPolicy.V3 -> "settings.api.generation.v3.tooltip"
     }
+}
+
+/**
+ * Blue-dot id for the Settings server list: prefer the project tool-window
+ * selection when it still exists in [servers], otherwise the persisted
+ * app-wide active server, otherwise the first row.
+ */
+internal fun resolveSettingsBlueDotId(
+    servers: List<NacosServerConfig>,
+    projectProfileId: String?,
+    activeServerId: String
+): String {
+    if (servers.isEmpty()) return ""
+    return projectProfileId?.takeIf { id -> servers.any { it.id == id } }
+        ?: activeServerId.takeIf { id -> servers.any { it.id == id } }
+        ?: servers.first().id
 }
