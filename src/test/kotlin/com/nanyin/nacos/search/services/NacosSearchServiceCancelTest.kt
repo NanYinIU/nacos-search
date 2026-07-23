@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.services
 import com.intellij.testFramework.junit5.TestApplication
 import com.intellij.openapi.application.ApplicationManager
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +26,13 @@ class NacosSearchServiceCancelTest {
 
     @BeforeEach
     fun resetSharedSettingsToAnonymousDefaults() {
-        ApplicationManager.getApplication().getService(NacosSettings::class.java).resetToDefaults()
+        // Product defaults are NACOS_PASSWORD; these mocked search paths still exercise
+        // anonymous credential-less stubs, so force ANONYMOUS after reset.
+        ApplicationManager.getApplication().getService(NacosSettings::class.java).apply {
+            resetToDefaults()
+            authMode = AuthMode.ANONYMOUS
+            getActiveServer().authMode = AuthMode.ANONYMOUS
+        }
     }
 
     private fun stubApi(): NacosApiService {
