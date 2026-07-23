@@ -7,6 +7,7 @@ import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.network.RequestPolicy
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Generation-neutral boundary for read operations. Callers pass an immutable
@@ -16,7 +17,9 @@ import com.nanyin.nacos.search.services.network.RequestPolicy
 class OperationGateway(
     private val adapters: Map<NacosApiGeneration, ProtocolAdapter>,
     private val cache: OperationCache = NoOperationCache,
-    private val historyCache: HistoryMemoryCache = HistoryMemoryCache()
+    private val historyCache: HistoryMemoryCache = HistoryMemoryCache(),
+    private val observationSequence: ObservationSequence = ObservationSequence(),
+    private val observationGates: ConcurrentHashMap<String, ObservationGate> = ConcurrentHashMap()
 ) {
     suspend fun probe(target: OperationTarget): Result<Unit> =
         adapterFor(target)?.probe(target) ?: unsupportedGeneration(target)
@@ -33,8 +36,11 @@ class OperationGateway(
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
+        val seq = observationSequence.next()
         return adapter.listSummaries(target, query).onSuccess { page ->
-            if (useCache) cache.putSummaries(target.context.identity, target.namespaceId, query.cacheKey(), page)
+            if (useCache && acceptObservation(summaryGateKey(target, query), seq)) {
+                cache.putSummaries(target.context.identity, target.namespaceId, query.cacheKey(), page)
+            }
         }
     }
 
@@ -50,8 +56,9 @@ class OperationGateway(
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
+        val seq = observationSequence.next()
         return adapter.readDetail(target, coordinate).onSuccess { detail ->
-            if (useCache && detail != null) {
+            if (useCache && detail != null && acceptObservation(detailGateKey(target, coordinate), seq)) {
                 cache.putDetail(target.context.identity, target.namespaceId, detail)
             }
         }
@@ -107,6 +114,19 @@ class OperationGateway(
             }
         }
     }
+
+    private fun acceptObservation(key: String, seq: Long): Boolean =
+        observationGates.computeIfAbsent(key) { ObservationGate() }.acceptIfNewer(seq)
+
+    private fun summaryGateKey(target: OperationTarget, query: SummaryQuery): String =
+        "summary|" + target.context.identity.profileId + "|" +
+            target.context.identity.accessRevision + "|" +
+            target.namespaceId + "|" + query.cacheKey()
+
+    private fun detailGateKey(target: OperationTarget, coordinate: ConfigurationCoordinate): String =
+        "detail|" + target.context.identity.profileId + "|" +
+            target.context.identity.accessRevision + "|" +
+            target.namespaceId + "|" + coordinate.dataId + "|" + coordinate.group
 
     private fun adapterFor(target: OperationTarget): ProtocolAdapter? = adapters[target.context.resolvedGeneration]
 
@@ -210,14 +230,21 @@ class CacheServiceOperationCache(
     )
 }
 
-/** Production GET transport used by V1 while fixtures use [ProtocolTransport] directly. */
+/** Production transport for both V1 and V3 read and write operations. */
 class NacosRequestExecutorProtocolTransport(
     private val executor: NacosRequestExecutor,
     private val policy: RequestPolicy = RequestPolicy.INTERACTIVE
 ) : ProtocolTransport {
     override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
-        require(request.method == "GET") { "Only GET is supported by the V1 anonymous read transport" }
-        return ProtocolResponse(200, executor.get(request.url, policy, request.headers))
+        return when (request.method) {
+            "GET" -> ProtocolResponse(200, executor.get(request.url, policy, request.headers))
+            "POST" -> {
+                val body = request.body ?: ""
+                val url = if (request.query.isEmpty()) request.url else request.url
+                ProtocolResponse(200, executor.post(url, body, policy, request.headers))
+            }
+            else -> throw RemoteOperationError.Unsupported("Unsupported HTTP method: ${'$'}{request.method}")
+        }
     }
 }
 

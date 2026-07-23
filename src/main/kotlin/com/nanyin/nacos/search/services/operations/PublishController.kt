@@ -134,8 +134,11 @@ class PublishController(private val gateway: PublishGateway) {
             return PublishResult(PublishState.TargetDeleted, isDirty = true)
         }
 
-        // Read-back matches the draft content: verified
-        if (readBackDetail.content == command.content) {
+        // Read-back matches the draft content AND all readable metadata that
+        // the adapter was supposed to preserve (design §16.3 step 10). Only
+        // full semantic equality reaches VERIFIED; a silently lost type, tag,
+        // or description is not a clean write.
+        if (readBackDetail.content == command.content && metadataMatches(command, readBackDetail)) {
             return PublishResult(
                 PublishState.Verified,
                 isDirty = false,
@@ -150,10 +153,41 @@ class PublishController(private val gateway: PublishGateway) {
             return PublishResult(PublishState.Dirty, isDirty = true)
         }
 
+        // Content matches but metadata was partially lost. The command result
+        // is only partially visible, so this is neither verified nor a remote
+        // conflict. Retain the draft and require a new preflight.
+        if (readBackDetail.content == session.baselineContent &&
+            readBackDetail.md5 == session.baselineMd5) {
+            return PublishResult(PublishState.Dirty, isDirty = true)
+        }
+
         // Third value: someone else wrote something different
         return PublishResult(
             PublishState.RemoteConflict(readBackDetail.content, readBackDetail.md5),
             isDirty = true
         )
     }
+
+    /**
+     * Checks whether all readable metadata the command intended to preserve
+     * was actually persisted and read back. A null on the server side where
+     * the command sent a value means the field was silently lost.
+     */
+    private fun metadataMatches(command: PublishCommand, detail: NacosConfiguration): Boolean {
+        // Type is always sent (defaults to "text"), so it must be preserved.
+        if (!valuesEqual(command.type, detail.type)) return false
+        // appName, desc, configTags are nullable. If the command carried a
+        // value the server must echo it back. Null commands with null server
+        // values are both absent and therefore equal.
+        if (!optionalValuesEqual(command.appName, detail.appName)) return false
+        if (!optionalValuesEqual(command.desc, detail.desc)) return false
+        if (!optionalValuesEqual(command.configTags, detail.configTags)) return false
+        return true
+    }
+
+    private fun valuesEqual(commandValue: String, serverValue: String?): Boolean =
+        commandValue.equals(serverValue ?: "", ignoreCase = true)
+
+    private fun optionalValuesEqual(commandValue: String?, serverValue: String?): Boolean =
+        commandValue.orEmpty().equals(serverValue.orEmpty(), ignoreCase = true)
 }

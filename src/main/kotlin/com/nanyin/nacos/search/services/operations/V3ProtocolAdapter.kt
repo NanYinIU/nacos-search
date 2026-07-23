@@ -37,9 +37,7 @@ class V3ProtocolAdapter(
             // response means we are not talking to a V3 server.
             when (response.status) {
                 in 200..299 -> parseRawStateMap(response.body)
-                404 -> throw RemoteOperationError.GenerationUnsupported(
-                    "V3 state endpoint returned 404"
-                )
+                404 -> classifyStateNotFound(response)
                 else -> throw mapStatusFailure(response)
             }
         } catch (error: CancellationException) {
@@ -243,6 +241,22 @@ class V3ProtocolAdapter(
         if (!parsed.isJsonObject) {
             throw RemoteOperationError.GenerationUnsupported("V3 state response was not a JSON object")
         }
+    }
+
+    /**
+     * A 404 on the state endpoint can mean two different things:
+     * - The server genuinely does not have this route (no V3, or a wrong
+     *   context path) -> GenerationUnsupported, authorising a V1 fallback.
+     * - The server IS V3 but returned a 404 with an envelope code (e.g.
+     *   resource not found, access denied) -> map the envelope code; this
+     *   must NOT trigger a generation fallback.
+     */
+    private fun classifyStateNotFound(response: ProtocolResponse) {
+        val envelope = runCatching { gson.fromJson(response.body, V3Envelope::class.java) }.getOrNull()
+        if (envelope != null && envelope.code != -1) {
+            throw mapEnvelopeCode(envelope.code, envelope.message)
+        }
+        throw RemoteOperationError.GenerationUnsupported("V3 state endpoint returned 404")
     }
 
     private fun unwrapEnvelope(response: ProtocolResponse, operation: String): JsonObject {

@@ -9,6 +9,7 @@ import com.nanyin.nacos.search.settings.CredentialSnapshot
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -188,6 +189,58 @@ class PublishControllerTest {
 
         assertInstanceOf<PublishState.ReadOnly>(result.state)
         assertTrue(result.isDirty)
+    }
+
+    @Test
+    fun `read-back with matching content but lost type is not verified`() = runBlocking {
+        // Spec §16.3 step 10: VERIFIED requires metadata equality, not just
+        // content equality. Content matches but type was lost by the server.
+        val base = NacosConfiguration(
+            dataId = "app.yaml", group = "G", content = "original",
+            md5 = "base-md5", type = "yaml", appName = "myapp",
+            desc = "description", configTags = "tag1,tag2"
+        )
+        val gateway = ScriptedPublishGateway(
+            preflightResult = Result.success(base),
+            publishResult = Result.success(PublishOutcome.Written("true")),
+            readBackResult = Result.success(NacosConfiguration(
+                dataId = "app.yaml", group = "G", content = "new content",
+                md5 = "new-md5", type = null,
+                appName = "myapp", desc = "description", configTags = "tag1,tag2"
+            ))
+        )
+        val controller = PublishController(gateway)
+        val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
+
+        val result = controller.publish(session)
+
+        assertNotEquals(PublishState.Verified, result.state)
+        assertTrue(result.isDirty)
+    }
+
+    @Test
+    fun `read-back with matching content and all metadata is verified`() = runBlocking {
+        val base = NacosConfiguration(
+            dataId = "app.yaml", group = "G", content = "original",
+            md5 = "base-md5", type = "yaml", appName = "myapp",
+            desc = "description", configTags = "tag1,tag2"
+        )
+        val gateway = ScriptedPublishGateway(
+            preflightResult = Result.success(base),
+            publishResult = Result.success(PublishOutcome.Written("true")),
+            readBackResult = Result.success(NacosConfiguration(
+                dataId = "app.yaml", group = "G", content = "new content",
+                md5 = "new-md5", type = "yaml", appName = "myapp",
+                desc = "description", configTags = "tag1,tag2"
+            ))
+        )
+        val controller = PublishController(gateway)
+        val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
+
+        val result = controller.publish(session)
+
+        assertEquals(PublishState.Verified, result.state)
+        assertTrue(!result.isDirty)
     }
 
     // ---- helpers ----

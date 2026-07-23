@@ -144,6 +144,21 @@ class V3ProtocolAdapterTest {
     }
 
     @Test
+    fun `V3 probe four-zero-four with access-denied envelope does not trigger generation fallback`() = runBlocking {
+        // A V3 server returning 404 with envelope code 10001 (access denied)
+        // is still a V3 server. This must NOT become GenerationUnsupported.
+        val fixture = RecordingTransport(ProtocolResponse(
+            404, """{"code":10001,"message":"access denied","data":null}"""
+        ))
+
+        val error = V3ProtocolAdapter(fixture)
+            .probe(anonymousPublicTarget())
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
+    }
+
+    @Test
     fun `V3 probe success accepts a raw state map without envelope`() = runBlocking {
         val fixture = RecordingTransport(ProtocolResponse(200, RAW_STATE_MAP))
 

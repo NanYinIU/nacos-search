@@ -28,6 +28,13 @@ class NacosRequestExecutor(
          */
         @Throws(NacosRequestError::class)
         fun get(request: TransportRequest): String
+
+        /**
+         * Performs one HTTP POST. Returns the raw body on 2xx.
+         * Throws [NacosRequestError] subtypes for classified failures.
+         */
+        @Throws(NacosRequestError::class)
+        fun post(request: TransportRequest): String = throw UnsupportedOperationException("POST not supported")
     }
 
     data class TransportRequest(
@@ -35,7 +42,8 @@ class NacosRequestExecutor(
         val connectTimeoutMs: Int,
  val readTimeoutMs: Int,
         val authHeaders: Map<String, String>,
-        val attempt: Int
+        val attempt: Int,
+        val postBody: String? = null
     )
 
     /**
@@ -85,6 +93,28 @@ class NacosRequestExecutor(
        }
    }
 
+    /**
+     * Executes a POST request under [policy]. POST is never retried because
+     * a write may have left the client after a timeout or disconnect.
+     */
+    suspend fun post(
+        url: String,
+        body: String,
+        policy: RequestPolicy,
+        authHeaders: Map<String, String> = emptyMap()
+    ): String = coroutineScope {
+        withTimeout(policy.totalBudgetMs) {
+            transport.post(TransportRequest(
+                url = url,
+                connectTimeoutMs = policy.connectTimeoutMs,
+                readTimeoutMs = policy.readTimeoutMs,
+                authHeaders = authHeaders,
+                attempt = 1,
+                postBody = body
+            ))
+        }
+    }
+
    private fun isRetriable(error: NacosRequestError): Boolean = when (error) {
        is NacosRequestError.ConnectTimeout -> true
         is NacosRequestError.ReadTimeout -> true
@@ -130,6 +160,45 @@ object DefaultHttpTransport : NacosRequestExecutor.HttpTransport {
                     }
                 }
                 .readString()
+        } catch (e: java.net.SocketTimeoutException) {
+            if (e.message?.contains("connect") == true) {
+                throw NacosRequestError.ConnectTimeout(e)
+            }
+            throw NacosRequestError.ReadTimeout(e)
+        } catch (e: java.net.ConnectException) {
+            throw NacosRequestError.Connection(e)
+        } catch (e: java.io.IOException) {
+            val status = extractStatus(e)
+            if (status != null) {
+                throw classifyStatus(status, e.message ?: "")
+            }
+            throw NacosRequestError.Connection(e)
+        }
+    }
+
+    override fun post(request: NacosRequestExecutor.TransportRequest): String {
+        // POST uses HttpURLConnection directly because the IntelliJ HttpRequests
+        // write/read split makes a single write-then-read round-trip awkward.
+        val conn = (java.net.URL(request.url).openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "POST"
+            instanceFollowRedirects = false
+            connectTimeout = request.connectTimeoutMs
+            readTimeout = request.readTimeoutMs
+            doOutput = true
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            setRequestProperty("Connection", "close")
+            request.authHeaders.forEach { (key, value) -> setRequestProperty(key, value) }
+        }
+        try {
+            conn.outputStream.use { it.write((request.postBody ?: "").toByteArray(Charsets.UTF_8)) }
+            val status = conn.responseCode
+            val body = (if (status in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            if (status !in 200..299) {
+                throw classifyStatus(status, body)
+            }
+            return body
         } catch (e: java.net.SocketTimeoutException) {
             if (e.message?.contains("connect") == true) {
                 throw NacosRequestError.ConnectTimeout(e)

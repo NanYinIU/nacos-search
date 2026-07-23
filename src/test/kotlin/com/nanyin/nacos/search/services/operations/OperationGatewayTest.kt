@@ -63,6 +63,33 @@ class OperationGatewayTest {
         )
     }
 
+
+    @Test
+    fun `older observation does not overwrite newer cache entry`() = runBlocking {
+        val cache = InMemoryOperationCache()
+        val adapter = SequencedAdapter()
+        val gateway = OperationGateway(
+            mapOf(NacosApiGeneration.V1 to adapter),
+            cache
+        )
+        val target = anonymousTarget("dev", "https://dev.nacos.example", "public")
+        val query = SummaryQuery(pageNo = 1, pageSize = 1)
+
+        // Two concurrent reads: newer completes first, older completes second.
+        adapter.enqueue(SummaryPage(1, 1, 1, listOf(
+            ConfigurationSummary("newer", "G", "public", "c", "yaml")
+        )))
+        adapter.enqueue(SummaryPage(1, 1, 1, listOf(
+            ConfigurationSummary("older", "G", "public", "c", "yaml")
+        )))
+
+        gateway.listSummaries(target, query, useCache = true).getOrThrow()
+        gateway.listSummaries(target, query, useCache = true).getOrThrow()
+
+        val cached = cache.getSummaries(target.context.identity, target.namespaceId, query.cacheKey())
+        assertEquals("newer", cached!!.items.first().dataId)
+    }
+
     private class ScriptedAdapter : ProtocolAdapter {
         val summaryTargets = mutableListOf<OperationTarget>()
         val detailTargets = mutableListOf<OperationTarget>()
@@ -93,5 +120,29 @@ class OperationGatewayTest {
 
         override suspend fun publish(target: OperationTarget, command: PublishCommand) =
             Result.success(PublishOutcome.Written("true"))
+    }
+
+
+    private class SequencedAdapter : ProtocolAdapter {
+        private val queue = ArrayDeque<SummaryPage>()
+
+        fun enqueue(page: SummaryPage) { queue.addLast(page) }
+
+        override suspend fun probe(target: OperationTarget) = Result.success(Unit)
+
+        override suspend fun listSummaries(
+            target: OperationTarget,
+            query: SummaryQuery
+        ): Result<SummaryPage> = Result.success(queue.removeFirst())
+
+        override suspend fun readDetail(
+            target: OperationTarget,
+            coordinate: ConfigurationCoordinate
+        ): Result<NacosConfiguration?> = Result.success(null)
+
+        override suspend fun publish(
+            target: OperationTarget,
+            command: PublishCommand
+        ): Result<PublishOutcome> = Result.success(PublishOutcome.Written("true"))
     }
 }
