@@ -315,7 +315,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     /** Returns an immutable profile-migration result for a newly opened project. */
     fun migrationDefaults(): LegacyMigrationResult {
         migrateLegacyProfiles()
-        reconcileProfilesWithServers()
+        ensureProfilesForServers()
         val defaultId = resolveDefaultProfileId()
         if (migratedDefaultProfileId != defaultId) {
             migratedDefaultProfileId = defaultId
@@ -332,7 +332,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
      */
     fun resolveDefaultProfileId(): String {
         migrateLegacyProfiles()
-        reconcileProfilesWithServers()
+        ensureProfilesForServers()
         return migratedDefaultProfileId.takeIf { id -> profiles.any { it.id == id } }
             ?: activeServerId.takeIf { id -> profiles.any { it.id == id } }
             ?: profiles.firstOrNull()?.id
@@ -341,7 +341,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
 
     fun getProfile(profileId: String): EnvironmentProfile? {
         migrateLegacyProfiles()
-        reconcileProfilesWithServers()
+        ensureProfilesForServers()
         return profiles.firstOrNull { it.id == profileId }
     }
 
@@ -350,7 +350,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     /** Captures a complete immutable context before cache reads or network I/O. */
     fun captureOperationContext(profileId: String? = null): Result<NacosOperationContext> {
         migrateLegacyProfiles()
-        reconcileProfilesWithServers()
+        ensureProfilesForServers()
         val requested = profileId?.trim().takeUnless { it.isNullOrBlank() }
         val selectedProfileId = when {
             requested != null && getProfile(requested) != null -> requested
@@ -389,20 +389,17 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         }
         if (!credentialSlotsPublished) {
             // Compatibility captures remain available while legacy flat fields
-            // are first being migrated. Prefer the active server entry over the
-            // possibly-stale flat mirrors so callers that only mutate `servers`
-            // still capture a complete context.
-            val active = getActiveServer()
+            // are first being migrated. Each writes the active slot before resolving
+            // it, so no request can combine a new endpoint/principal with an
+            // older or missing profile credential. Flat mirrors are intentional
+            // here: legacy callers/tests update them without syncing servers.
             val legacyProfile = persistedProfile.withUpdated(
-                canonicalEndpoint = com.nanyin.nacos.search.models.CanonicalNacosEndpoint.parse(active.serverUrl)
-                    .getOrNull()?.value
-                    ?: com.nanyin.nacos.search.models.CanonicalNacosEndpoint.parse(serverUrl)
-                        .getOrNull()?.value.orEmpty(),
-                authMode = active.authMode,
-                principal = active.username.trim().ifBlank { username.trim() }
+                canonicalEndpoint = com.nanyin.nacos.search.models.CanonicalNacosEndpoint.parse(serverUrl)
+                    .getOrNull()?.value.orEmpty(),
+                authMode = authMode,
+                principal = username.trim()
             )
-            val secret = active.password.ifEmpty { password }
-            PasswordSafeCredentialSlots.put(legacyProfile.credentialSlotId, secret)
+            PasswordSafeCredentialSlots.put(legacyProfile.credentialSlotId, password)
             return OperationContextResolver.resolve(
                 legacyProfile,
                 PasswordSafeCredentialSlots[legacyProfile.credentialSlotId]
@@ -428,54 +425,30 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     /**
-     * Ensures every [servers] entry has a matching [profiles] row. Sandbox /
-     * Instantiator recoveries can leave servers without profiles, which then
-     * surfaces as "Select a Nacos environment profile" on every search.
+     * Adds any missing profile rows for current [servers]. Additive only: never
+     * deletes orphans and never restages an existing credential slot (published
+     * slots must fail closed when empty — see AccessSafetyTest).
      */
-    private fun reconcileProfilesWithServers() {
+    private fun ensureProfilesForServers() {
         if (servers.isEmpty()) return
-        val existing = profiles.associateBy { it.id }
-        var changed = false
-        val reconciled = servers.map { server ->
+        val existingIds = profiles.map { it.id }.toHashSet()
+        var added = false
+        for (server in servers) {
             val id = server.id.ifBlank { "default" }
-            val normalized = server.copy(id = id)
-            val current = existing[id]
-            if (current == null) {
-                changed = true
-                val created = EnvironmentProfile.fromLegacy(normalized)
-                stageSecretForProfile(created, normalized)
-                created
-            } else {
-                // Keep the published revisions, but never leave a live server
-                // with an empty credential slot when the in-memory server still
-                // carries a password (tests / partial migrations).
-                stageSecretForProfile(current, normalized)
-                if (current.displayName != normalized.displayName && normalized.displayName.isNotBlank()) {
-                    changed = true
-                    current.copy(displayName = normalized.displayName)
-                } else {
-                    current
-                }
+            if (!existingIds.add(id)) continue
+            val created = EnvironmentProfile.fromLegacy(server.copy(id = id))
+            val secret = server.password.ifEmpty { NacosCredentialStore.get(id).orEmpty() }
+            if (secret.isNotEmpty()) {
+                NacosCredentialStore.set(created.credentialSlotId, secret)
             }
+            profiles.add(created)
+            added = true
         }
-        if (changed || reconciled.size != profiles.size) {
-            profiles = reconciled.toMutableList()
+        if (added) {
+            profileMigrationCompleted = true
             if (migratedDefaultProfileId.isBlank() || profiles.none { it.id == migratedDefaultProfileId }) {
                 migratedDefaultProfileId = activeServerId.ifBlank { profiles.firstOrNull()?.id.orEmpty() }
             }
-            profileMigrationCompleted = true
-        }
-    }
-
-    private fun stageSecretForProfile(profile: EnvironmentProfile, server: NacosServerConfig) {
-        val slotId = profile.credentialSlotId.ifBlank { "${profile.id}:v1" }
-        if (slotId != profile.credentialSlotId) {
-            profile.credentialSlotId = slotId
-        }
-        if (!NacosCredentialStore.get(slotId).isNullOrEmpty()) return
-        val secret = server.password.ifEmpty { NacosCredentialStore.get(server.id).orEmpty() }
-        if (secret.isNotEmpty()) {
-            NacosCredentialStore.set(slotId, secret)
         }
     }
 
