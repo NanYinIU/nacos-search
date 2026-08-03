@@ -1,0 +1,25 @@
+CONTEXT.md
+  s_df9a032f9a94b2::t_46479333bec61f 240,267-274
+docs/adr/0042-keep-the-prefetch-toggle-out-of-the-environment-profile.md
+  s_df9a032f9a94b2::t_d27ec3971d8f6b 1-3
+docs/adr/0043-trigger-the-navigation-detail-prefetch-independently.md
+  s_df9a032f9a94b2::t_9829e98f19446a 1-3
+docs/adr/0044-enforce-the-cache-entry-observation-gate-inside-the-cache.md
+  s_df9a032f9a94b2::t_8d43fa4ce4b142 1-3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "0a857a3cdb0d1b88f5e96bb1bea536f3ab77e5d8",
+  "prompts": {},
+  "sessions": {
+    "s_df9a032f9a94b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cc5aa76b-0505-49ea-b638-da7f2b426e7c",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
