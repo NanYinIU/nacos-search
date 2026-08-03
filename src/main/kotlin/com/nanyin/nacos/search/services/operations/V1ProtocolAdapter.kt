@@ -260,7 +260,15 @@ class V1ProtocolAdapter(
             body = formData
         )
 
+        // Deliberately off the replaying [execute]: a rejected token cannot prove
+        // the write never reached the configuration store, and ADR-0011 forbids
+        // replaying a write on an authentication failure. The token is still
+        // evicted, so the next attempt logs in again instead of presenting a
+        // credential the server has already refused.
         val response = executeWithinBudget(request, deadline)
+        if (recoverableNacosPasswordTokenFailure(target, response) != null) {
+            authenticator.invalidate(target.context)
+        }
         when (val body = ensureSuccess(response).trim().lowercase()) {
             "true" -> PublishOutcome.Written(response.body)
             "false" -> PublishOutcome.CasConflict

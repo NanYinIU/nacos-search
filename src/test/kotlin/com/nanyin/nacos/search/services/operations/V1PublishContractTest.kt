@@ -66,6 +66,56 @@ class V1PublishContractTest {
     }
 
     @Test
+    fun `V1 publish is never replayed after an invalid token response`() = runBlocking {
+        val fixture = QueuedTransport(
+            ProtocolResponse(403, """{"code":403,"message":"token is invalid"}"""),
+            // A replaying adapter would consume this by POSTing the same content again.
+            ProtocolResponse(200, "true")
+        )
+        val authenticator = TokenCachingV1Authenticator(listOf("stale-token", "fresh-token"))
+
+        val error = V1ProtocolAdapter(fixture, authenticator)
+            .publish(passwordTarget(), publishCommand())
+            .exceptionOrNull()
+
+        assertEquals(1, fixture.requests.size, "publish must reach the wire exactly once")
+        assertEquals("POST", fixture.requests.single().method)
+        assertInstanceOf(RemoteOperationError.InvalidOrExpiredNacosPasswordToken::class.java, error)
+    }
+
+    @Test
+    fun `V1 publish invalidates the rejected token so the next attempt logs in again`() = runBlocking {
+        val fixture = QueuedTransport(
+            ProtocolResponse(403, """{"code":403,"message":"token is invalid"}"""),
+            ProtocolResponse(200, "true")
+        )
+        val authenticator = TokenCachingV1Authenticator(listOf("stale-token", "fresh-token"))
+        val adapter = V1ProtocolAdapter(fixture, authenticator)
+        val target = passwordTarget()
+
+        adapter.publish(target, publishCommand()).exceptionOrNull()
+        adapter.publish(target, publishCommand()).getOrThrow()
+
+        assertEquals(1, authenticator.invalidations)
+        assertEquals(2, authenticator.logins, "a rejected token must not be reused by the next write")
+        assertEquals("stale-token", fixture.requests[0].query.single { it.first == "accessToken" }.second)
+        assertEquals("fresh-token", fixture.requests[1].query.single { it.first == "accessToken" }.second)
+    }
+
+    @Test
+    fun `V1 publish keeps the token when the server denies permission`() = runBlocking {
+        val fixture = QueuedTransport(ProtocolResponse(403, """{"code":403,"message":"permission denied"}"""))
+        val authenticator = TokenCachingV1Authenticator(listOf("valid-token"))
+
+        val error = V1ProtocolAdapter(fixture, authenticator)
+            .publish(passwordTarget(), publishCommand())
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
+        assertEquals(0, authenticator.invalidations, "a permission denial says nothing about the token")
+    }
+
+    @Test
     fun `V1 publish encodes manual namespace as tenant in form data`() = runBlocking {
         val fixture = QueuedTransport(ProtocolResponse(200, "true"))
         val adapter = V1ProtocolAdapter(fixture)
@@ -78,6 +128,27 @@ class V1PublishContractTest {
 
         assert(fixture.requests.single().body!!.contains("tenant=team-manual"))
         Unit
+    }
+
+    private fun publishCommand(): PublishCommand = PublishCommand(
+        dataId = "app.yaml", group = "G", content = "new", type = "yaml",
+        namespaceId = "public", casMd5 = "base-md5"
+    )
+
+    private fun passwordTarget(namespaceId: String = "public"): OperationTarget {
+        val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
+        val context = NacosOperationContext(
+            identity = AccessIdentity.ofProfile(
+                profileId = "password-v1", accessRevision = 1,
+                canonicalEndpoint = endpoint.value,
+                resolvedGeneration = NacosApiGeneration.V1,
+                authMode = AuthMode.TOKEN, principal = "alice"
+            ),
+            endpoint = endpoint, credential = CredentialSnapshot("p@ss&word"),
+            authMode = AuthMode.TOKEN, profileRevision = 1, accessRevision = 1,
+            resolvedGeneration = NacosApiGeneration.V1
+        )
+        return OperationTarget(context, namespaceId)
     }
 
     private fun anonymousV1Target(namespaceId: String = "public"): OperationTarget {
@@ -103,6 +174,29 @@ class V1PublishContractTest {
         override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
             requests += request
             return queued.removeFirst()
+        }
+    }
+
+    /**
+     * Models the caching the real authenticator performs: a token is reused until
+     * something invalidates it. An adapter that fails to invalidate a rejected
+     * token therefore keeps presenting it, which is what these tests detect.
+     */
+    private class TokenCachingV1Authenticator(tokens: List<String>) : V1Authenticator {
+        private val tokenSequence = ArrayDeque(tokens)
+        private var cached: String? = null
+        var logins = 0
+        var invalidations = 0
+
+        override suspend fun accessToken(context: NacosOperationContext): String? {
+            cached?.let { return it }
+            logins += 1
+            return tokenSequence.removeFirst().also { cached = it }
+        }
+
+        override fun invalidate(context: NacosOperationContext) {
+            invalidations += 1
+            cached = null
         }
     }
 }

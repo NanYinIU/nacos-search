@@ -127,7 +127,11 @@ class V3ProtocolAdapter(
             ),
             body = formData
         )
-        val response = executeAuthenticated(target) { auth -> applyAuth(baseRequest, auth) }
+        // One write, never replayed: see executeOnce.
+        val response = executeOnce(target) { auth -> applyAuth(baseRequest, auth) }
+        if (rejectedNacosPasswordToken(target, response)) {
+            invalidateAccessToken(target)
+        }
         // V3 publish response data is a boolean, not a JSON object.
         verifyV3EnvelopeSuccess(response, "publish")
         // V3 has no CAS parameter; ordinary publish success only.
@@ -268,20 +272,44 @@ class V3ProtocolAdapter(
 
     // ---- authentication ----
 
+    /**
+     * Idempotent reads only. A NACOS_PASSWORD token that the server rejects is
+     * refreshed once and the request replayed (ADR-0011). Writes must use
+     * [executeOnce] instead — see the note there.
+     */
     private suspend fun executeAuthenticated(
         target: OperationTarget,
         build: (RequestAuthentication) -> ProtocolRequest
     ): ProtocolResponse {
-        val firstAuth = authenticationFor(target, forceRefresh = false)
-        val firstResponse = transport.execute(build(firstAuth))
-        if (
-            target.context.authenticationStrategy == V1AuthenticationStrategy.NACOS_PASSWORD &&
-            isInvalidOrExpiredToken(firstResponse)
-        ) {
+        val firstResponse = executeOnce(target, build)
+        if (rejectedNacosPasswordToken(target, firstResponse)) {
             val refreshed = authenticationFor(target, forceRefresh = true)
             return transport.execute(build(refreshed))
         }
         return firstResponse
+    }
+
+    /**
+     * Sends the request exactly once, whatever the response says.
+     *
+     * Writes go through here rather than [executeAuthenticated]: a rejected
+     * token cannot prove the first request never reached the configuration
+     * store, so replaying it risks applying the same write twice. ADR-0011
+     * forbids that, and V1 keeps its publish off the replaying `execute` for
+     * the same reason. The rejected token is still evicted so the next attempt
+     * logs in again instead of reusing a credential the server has refused.
+     */
+    private suspend fun executeOnce(
+        target: OperationTarget,
+        build: (RequestAuthentication) -> ProtocolRequest
+    ): ProtocolResponse = transport.execute(build(authenticationFor(target, forceRefresh = false)))
+
+    private fun rejectedNacosPasswordToken(target: OperationTarget, response: ProtocolResponse): Boolean =
+        target.context.authenticationStrategy == V1AuthenticationStrategy.NACOS_PASSWORD &&
+            isInvalidOrExpiredToken(response)
+
+    private fun invalidateAccessToken(target: OperationTarget) {
+        tokenCache.remove(tokenCacheKey(target))
     }
 
     private fun applyAuth(request: ProtocolRequest, auth: RequestAuthentication): ProtocolRequest =
@@ -311,12 +339,14 @@ class V3ProtocolAdapter(
         )
     }
 
+    private fun tokenCacheKey(target: OperationTarget): String = listOf(
+        target.context.endpoint.value,
+        target.context.identity.principal,
+        target.context.accessRevision.toString()
+    ).joinToString("|")
+
     private suspend fun loginAccessToken(target: OperationTarget, forceRefresh: Boolean): String? {
-        val cacheKey = listOf(
-            target.context.endpoint.value,
-            target.context.identity.principal,
-            target.context.accessRevision.toString()
-        ).joinToString("|")
+        val cacheKey = tokenCacheKey(target)
         if (!forceRefresh) {
             tokenCache[cacheKey]?.takeIf { it.expiresAtEpochMs > System.currentTimeMillis() }?.let {
                 return it.accessToken

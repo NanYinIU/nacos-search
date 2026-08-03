@@ -306,6 +306,76 @@ class V3ProtocolAdapterTest {
     }
 
     @Test
+    fun `V3 publish is never replayed after an invalid token response`() = runBlocking {
+        val fixture = ScriptedTransport(
+            listOf(
+                ProtocolResponse(200, """{"accessToken":"stale-token","tokenTtl":18000}"""),
+                ProtocolResponse(401, """{"code":401,"message":"token invalid","data":null}"""),
+                // A replaying adapter would consume these two: a second login and
+                // a second POST of the same configuration content.
+                ProtocolResponse(200, """{"accessToken":"fresh-token","tokenTtl":18000}"""),
+                ProtocolResponse(200, """{"code":0,"message":"success","data":true}""")
+            )
+        )
+
+        val error = V3ProtocolAdapter(fixture)
+            .publish(passwordTarget(), publishCommand())
+            .exceptionOrNull()
+
+        val writes = fixture.requests.filter { it.path == "/nacos/v3/admin/cs/config" }
+        assertEquals(1, writes.size, "publish must reach the wire exactly once")
+        assertEquals("POST", writes.single().method)
+        assertInstanceOf(RemoteOperationError.Authentication::class.java, error)
+    }
+
+    @Test
+    fun `V3 publish invalidates the rejected token so the next attempt logs in again`() = runBlocking {
+        val fixture = ScriptedTransport(
+            listOf(
+                ProtocolResponse(200, """{"accessToken":"stale-token","tokenTtl":18000}"""),
+                ProtocolResponse(401, """{"code":401,"message":"token invalid","data":null}"""),
+                ProtocolResponse(200, """{"accessToken":"fresh-token","tokenTtl":18000}"""),
+                ProtocolResponse(200, """{"code":0,"message":"success","data":true}""")
+            )
+        )
+        val adapter = V3ProtocolAdapter(fixture)
+        val target = passwordTarget()
+
+        adapter.publish(target, publishCommand()).exceptionOrNull()
+        adapter.publish(target, publishCommand()).getOrThrow()
+
+        val logins = fixture.requests.filter { it.path == "/nacos/v3/auth/user/login" }
+        assertEquals(2, logins.size, "a rejected token must not be reused by the next write")
+        val writes = fixture.requests.filter { it.path == "/nacos/v3/admin/cs/config" }
+        assertEquals(2, writes.size)
+        assertTrue(writes[1].query.any { it == "accessToken" to "fresh-token" })
+    }
+
+    @Test
+    fun `V3 idempotent reads still recover once from an invalid token`() = runBlocking {
+        val fixture = ScriptedTransport(
+            listOf(
+                ProtocolResponse(200, """{"accessToken":"stale-token","tokenTtl":18000}"""),
+                ProtocolResponse(401, """{"code":401,"message":"token invalid","data":null}"""),
+                ProtocolResponse(200, """{"accessToken":"fresh-token","tokenTtl":18000}"""),
+                ProtocolResponse(
+                    200,
+                    """{"code":0,"message":"success","data":{"dataId":"app.properties","group":"DEFAULT_GROUP","content":"a=1"}}"""
+                )
+            )
+        )
+
+        val detail = V3ProtocolAdapter(fixture)
+            .readDetail(passwordTarget(), ConfigurationCoordinate("app.properties", "DEFAULT_GROUP"))
+            .getOrThrow()
+
+        assertEquals("a=1", detail?.content)
+        val reads = fixture.requests.filter { it.path == "/nacos/v3/admin/cs/config" }
+        assertEquals(2, reads.size, "an idempotent read may be replayed exactly once")
+        assertTrue(reads[1].query.any { it == "accessToken" to "fresh-token" })
+    }
+
+    @Test
     fun `V3 discoverNamespaces parses admin namespace list`() = runBlocking {
         val fixture = RecordingTransport(
             ProtocolResponse(
@@ -319,6 +389,14 @@ class V3ProtocolAdapterTest {
         assertEquals("team-a", namespaces[1].namespaceId)
         assertEquals("/nacos/v3/admin/core/namespace/list", fixture.lastRequest.path)
     }
+
+    private fun publishCommand(): PublishCommand = PublishCommand(
+        dataId = "app.properties",
+        group = "DEFAULT_GROUP",
+        content = "a=2",
+        type = "properties",
+        namespaceId = "public"
+    )
 
     private fun anonymousPublicTarget(namespaceId: String = "public"): OperationTarget {
         val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
