@@ -1,0 +1,46 @@
+docs/adr/0047-judge-paintability-by-epoch-coordinate-and-sequence.md
+  s_9388b6a8cc2e4d::t_f06bd7b2deff5d 1-5
+docs/adr/0046-own-edit-and-search-session-state-outside-the-ui.md
+  s_9388b6a8cc2e4d::t_d145f7a4840aac 1-5
+CONTEXT.md
+  s_9388b6a8cc2e4d::t_8b22499677600c 268
+  s_9388b6a8cc2e4d::t_064973b2ff471d 267,269-270
+docs/adr/0045-collapse-cache-writes-into-one-gated-entry-point.md
+  s_9388b6a8cc2e4d::t_fbf8c4f1dc4b3b 1-3
+.intellijPlatform/self-update.lock
+  s_ea381965fd508c::t_97a6f5e4014be2 1
+gradle/wrapper/gradle-wrapper.properties
+  s_05ec9bbe60d4ba::t_93372b4f481e33 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "e85cfa948da5f48fbb221bc5c6eccc26aacf9807",
+  "prompts": {},
+  "sessions": {
+    "s_05ec9bbe60d4ba": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-ad2a4a7890ee17a38",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_9388b6a8cc2e4d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fee94daa-a1fa-44d7-95b8-b379a5f6ec74",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_ea381965fd508c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d12ab514-16d5-4e73-b027-14a25d69e430",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
