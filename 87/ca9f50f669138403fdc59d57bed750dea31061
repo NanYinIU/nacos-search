@@ -1,0 +1,39 @@
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V3ProtocolAdapter.kt
+  s_59819da7838d8c::t_3ec0bd3ff73124 342-347,349
+  s_59819da7838d8c::t_589c1e6159066c 130-134
+  s_59819da7838d8c::t_d7e1134f2d2d77 275-279,284-285,292-312
+  s_59819da7838d8c::t_5bb2df85d526b4 313-314
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V1ProtocolAdapter.kt
+  s_df9a032f9a94b2::t_25481c272abbc4 263-267,269-271
+src/test/kotlin/com/nanyin/nacos/search/services/operations/V3ProtocolAdapterTest.kt
+  s_59819da7838d8c::t_8bce214a603659 308-377
+  s_59819da7838d8c::t_911c75dd262c3e 393-400
+src/test/kotlin/com/nanyin/nacos/search/services/operations/V1PublishContractTest.kt
+  s_df9a032f9a94b2::t_04314f07963c33 179-201
+  s_df9a032f9a94b2::t_7e7428a5729873 68-117
+  s_df9a032f9a94b2::t_4cd696e4b60a36 133-153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "87ca9f50f669138403fdc59d57bed750dea31061",
+  "prompts": {},
+  "sessions": {
+    "s_59819da7838d8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "46b44120-a4f1-461a-94bb-d9acbb2591d1",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_df9a032f9a94b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cc5aa76b-0505-49ea-b638-da7f2b426e7c",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
