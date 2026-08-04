@@ -1,0 +1,31 @@
+src/main/kotlin/com/nanyin/nacos/search/NacosSearchPlugin.kt
+  s_909a21c3784410::t_b8488ec41e88d6 182-184
+src/main/kotlin/com/nanyin/nacos/search/services/operations/OperationGateway.kt
+  s_909a21c3784410::t_2aa5acc1d65756 143-156,159,162-163
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
+  s_909a21c3784410::t_56af6d2ea7cb45 161,165-168
+  s_909a21c3784410::t_b804fff96c4003 238-243,269-272,275
+src/test/kotlin/com/nanyin/nacos/search/services/SessionGenerationIntegrationTest.kt
+  s_909a21c3784410::t_a81bde96884af8 120-126,129-144,146-150,153-158
+  s_909a21c3784410::t_3e0ef43af78210 99,103-119,127-128,145,151-152,159
+src/test/kotlin/com/nanyin/nacos/search/services/SessionGenerationHarness.kt
+  s_909a21c3784410::t_ec7ea6e31a78ac 128-133
+  s_909a21c3784410::t_b6ca3c81d2b8dd 9
+  s_909a21c3784410::t_e28e15c5e92a8d 62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "aa2d8bbf82ddb8c561e656079ea1d81c10128282",
+  "prompts": {},
+  "sessions": {
+    "s_909a21c3784410": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cef08f1f-9c3d-44f6-be0b-800d9f9b7ba3",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
