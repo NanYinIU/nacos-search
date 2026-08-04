@@ -229,6 +229,40 @@ class AccessSafetyTest {
     }
 
     @Test
+    fun `credential snapshot is redacted and does not participate in content equality`() {
+        // Issue #53 / ADR-0009: credential snapshots are memory-only and take no
+        // part in equality, logging, persistence, or cache keys. Two snapshots
+        // with the same secret are not content-equal (reference equality only).
+        val a = OperationContextResolver.resolve(
+            EnvironmentProfile(
+                id = "a",
+                displayName = "A",
+                canonicalEndpoint = "https://nacos.example",
+                apiPolicy = NacosApiPolicy.V1,
+                authMode = AuthMode.NACOS_PASSWORD,
+                principal = "alice"
+            ),
+            "same-secret"
+        ).getOrThrow().credential
+        val b = OperationContextResolver.resolve(
+            EnvironmentProfile(
+                id = "b",
+                displayName = "B",
+                canonicalEndpoint = "https://nacos.example",
+                apiPolicy = NacosApiPolicy.V1,
+                authMode = AuthMode.NACOS_PASSWORD,
+                principal = "bob"
+            ),
+            "same-secret"
+        ).getOrThrow().credential
+
+        assertEquals("CredentialSnapshot(***)", a.toString())
+        assertFalse(a.toString().contains("same-secret"))
+        assertFalse(a == b)
+        assertFalse(a.hashCode() == "same-secret".hashCode())
+    }
+
+    @Test
     fun `V1 bearer token context permits a secret without a username`() {
         val profile = EnvironmentProfile(
             id = "bearer-v1",
