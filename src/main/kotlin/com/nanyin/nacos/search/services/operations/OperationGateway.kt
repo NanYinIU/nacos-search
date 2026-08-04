@@ -7,6 +7,7 @@ import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.CacheMutation
+import com.nanyin.nacos.search.services.CacheWriteAccess
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.network.RequestPolicy
@@ -247,7 +248,14 @@ class InMemoryOperationCache : OperationCache {
     )
 }
 
-/** Adapts the persistent cache's one gated write entry point to this seam. */
+/**
+ * Adapts the persistent cache's one gated write entry point to this seam.
+ *
+ * This is the gateway's cache-facing adapter and therefore one of the few
+ * places entitled to [CacheWriteAccess]: every write it makes carries the
+ * observation sequence of the read that produced it (ADR-0052).
+ */
+@OptIn(CacheWriteAccess::class)
 class CacheServiceOperationCache(
     private val cacheService: CacheService,
     private val ttlMillis: () -> Long

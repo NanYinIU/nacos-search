@@ -37,12 +37,17 @@ import java.util.concurrent.atomic.AtomicLong
  * argument for collapsing writes is that the gate must be unbypassable, and
  * reads have no such property.
  *
+ * That entry point carries [CacheWriteAccess], so it is reachable only from the
+ * operation layer (ADR-0052). Reads carry nothing: the UI and code-navigation
+ * layers read this cache freely.
+ *
  * Callers that cache a derivation of this cache take a [CacheSnapshot], which
  * carries its own version and as-of instant. The cache lends out no
  * modification counter, no clock, and no coroutine scope, so no caller can
  * assemble an invalidation rule out of its internals (issue #64).
  */
 @Service(Service.Level.APP)
+@OptIn(CacheWriteAccess::class)
 class CacheService internal constructor(
     private val currentTimeMillis: () -> Long,
     private val tombstones: ProfileTombstoneRegistry,
@@ -104,7 +109,12 @@ class CacheService internal constructor(
      * **when it started**, so a later-started mutation wins even if an earlier
      * one completes after it (ADR-0020). Returns false when the mutation was
      * gated away or rejected by a tombstone, in which case nothing was written.
+     *
+     * It requires [CacheWriteAccess]: only a caller that performed the remote
+     * operation holds the sequence that orders the write, so only such a caller
+     * has anything to say here (ADR-0052).
      */
+    @CacheWriteAccess
     suspend fun applyMutation(mutation: CacheMutation, observation: Long): Boolean {
         // The tombstone is absolute and independent of ordering: no observation
         // sequence, however recent, outranks it (ADR-0025).

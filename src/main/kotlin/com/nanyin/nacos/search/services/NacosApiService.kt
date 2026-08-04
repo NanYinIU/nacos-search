@@ -391,6 +391,7 @@ class NacosApiService(
      * started before the gesture loses to it while one started afterwards lands
      * normally — clear-then-reload behaves as the obvious gesture (ADR-0045).
      */
+    @OptIn(CacheWriteAccess::class)
     suspend fun clearCache(namespace: String? = null) {
         val observation = ObservationSequence.process.next()
         if (namespace == null) {

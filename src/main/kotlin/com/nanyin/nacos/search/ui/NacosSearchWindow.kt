@@ -11,9 +11,7 @@ import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 // import com.nanyin.nacos.search.services.NacosConfigService // Not needed
 import com.nanyin.nacos.search.services.NacosSearchService
-import com.nanyin.nacos.search.services.CacheMutation
 import com.nanyin.nacos.search.services.CacheService
-import com.nanyin.nacos.search.services.operations.ObservationSequence
 import com.nanyin.nacos.search.services.IndexOutcome
 import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
 import com.nanyin.nacos.search.services.NamespaceIndexRequest

@@ -18,7 +18,12 @@ import com.nanyin.nacos.search.models.NacosConfiguration
  * Reading, and the cache reconstituting an entry from its own persistent store,
  * are **not** mutations: the second is an observation of the cache's own store
  * rather than of the server, and it stays private behind the read path.
+ *
+ * Naming this type requires [CacheWriteAccess] (issue #65), so a module that
+ * performs no remote operation cannot even assemble a mutation, let alone
+ * apply one.
  */
+@CacheWriteAccess
 sealed interface CacheMutation {
     /** Writes one configuration detail at its coordinate. */
     data class WriteDetail(

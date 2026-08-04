@@ -151,6 +151,7 @@ class NavigationDetailPrefetchService internal constructor(
         }
     }
 
+    @OptIn(CacheWriteAccess::class)
     private suspend fun executePrefetch(
         key: PrefetchKey,
         project: Project,

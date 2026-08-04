@@ -11,13 +11,13 @@ import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.nanyin.nacos.search.services.NacosApiService
-import com.nanyin.nacos.search.services.CacheMutation
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.CacheSnapshot
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NamespaceIndexRefreshService
 import com.nanyin.nacos.search.services.captureAccessIdentity
+import com.nanyin.nacos.search.services.operations.ObservedDetailRecorder
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.allowCrossNamespaceNavigation
 import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
@@ -188,18 +188,20 @@ class NacosValueLineMarkerProvider internal constructor(
             val config = observed?.value ?: return@executeOnPooledThread
 
             // The gutter marker decides resolved vs. unresolved from the cache,
-            // so the fetched config has to be there. The gateway read normally
-            // writes it already; this covers the case where it did not, and it
-            // carries that read's own observation sequence, so it can neither
-            // outrank a newer read nor restamp what the gateway just wrote.
+            // so the fetched config has to be there under the identity *this*
+            // layer reads with. That is not always the identity the gateway
+            // wrote under: an AUTO profile resolves its generation per
+            // operation, while captureAccessIdentity leaves it UNKNOWN because
+            // the hot path may not touch PasswordSafe, and the generation is
+            // part of the cache key. Recording it carries the read's own
+            // observation sequence, so it can neither outrank a newer read nor
+            // restamp what the gateway already wrote (issue #65).
             runBlocking {
-                cacheService.applyMutation(
-                    CacheMutation.WriteDetail(
-                        accessIdentity,
-                        namespaceId,
-                        config,
-                        settings.getCacheTtlMillis()
-                    ),
+                ObservedDetailRecorder(cacheService).recordDetail(
+                    accessIdentity,
+                    namespaceId,
+                    config,
+                    settings.getCacheTtlMillis(),
                     observed.observation
                 )
             }
