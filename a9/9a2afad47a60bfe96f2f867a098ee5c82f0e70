@@ -1,0 +1,81 @@
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinatorTest.kt
+  s_3fd2c31f550223::t_7aa0988240c6fa 163,168
+src/main/kotlin/com/nanyin/nacos/search/services/operations/HistoryMemoryCache.kt
+  s_3fd2c31f550223::t_6cbb03733b738d 48,70
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_3fd2c31f550223::t_6cbb03733b738d 139-140
+  s_3fd2c31f550223::t_1dae35d401429b 119-122
+  s_3fd2c31f550223::t_d01510726f9492 400
+  s_3fd2c31f550223::t_7aa0988240c6fa 397
+CLAUDE.md
+  s_3fd2c31f550223::t_8dd08401e8d19e 100,104-105
+  s_3fd2c31f550223::t_48513f0409011c 98
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_3fd2c31f550223::t_00d536dd96aa20 138,221-225,295,668
+  s_3fd2c31f550223::t_eed3cb697b3253 91,94,98-99,101,106-120
+  s_3fd2c31f550223::t_031553346575f3 121-122,669
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanel.kt
+  s_3fd2c31f550223::t_d01510726f9492 929
+src/test/kotlin/com/nanyin/nacos/search/services/CacheMutationHelpers.kt
+  s_3fd2c31f550223::t_3849807c2c2f17 26,36,48,57,65,71,75
+  s_3fd2c31f550223::t_7aa0988240c6fa 15
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProvider.kt
+  s_3fd2c31f550223::t_d01510726f9492 185
+  s_3fd2c31f550223::t_1dae35d401429b 179-183
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchWindow.kt
+  s_3fd2c31f550223::t_6cbb03733b738d 239-241
+src/main/kotlin/com/nanyin/nacos/search/services/NavigationDetailPrefetchService.kt
+  s_3fd2c31f550223::t_1dae35d401429b 229-233
+  s_3fd2c31f550223::t_d01510726f9492 242
+src/main/kotlin/com/nanyin/nacos/search/NacosSearchPlugin.kt
+  s_3fd2c31f550223::t_7aa0988240c6fa 249
+src/main/kotlin/com/nanyin/nacos/search/services/CacheMutation.kt
+  s_3fd2c31f550223::t_e10a6f9b37241b 34,48,60,66,74,84
+  s_3fd2c31f550223::t_7aa0988240c6fa 10
+  s_3fd2c31f550223::t_f2b5ff061dc9d5 25
+src/main/kotlin/com/nanyin/nacos/search/services/operations/ObservationHighWater.kt
+  s_3fd2c31f550223::t_4f7d92e87e25f1 35-40,42-46
+  s_3fd2c31f550223::t_352d3848d9de0d 69-81,87-100
+  s_3fd2c31f550223::t_40cfb9b9a5871a 101
+src/test/kotlin/com/nanyin/nacos/search/services/operations/OperationGatewayTest.kt
+  s_3fd2c31f550223::t_f2343232ed0552 73,75-76,80-81,83-85,87-89,95-96,99-126,129-131,237
+  s_3fd2c31f550223::t_c597000ce57efc 10-13,16
+  s_3fd2c31f550223::t_0a32a263348a5f 82,86,90-94
+  s_3fd2c31f550223::t_538bc576dce723 172-173,175-177,180-182,192-193
+  s_3fd2c31f550223::t_b60ebf06992ebc 166-171,178,183,190-191,194-195,207-236
+  s_3fd2c31f550223::t_deb3e613763b3c 132
+  s_3fd2c31f550223::t_84e2229fbe0ff2 179
+src/main/kotlin/com/nanyin/nacos/search/services/operations/OperationGateway.kt
+  s_3fd2c31f550223::t_7f1967c7fe6b4a 46,50,67,71,89,98,117,126
+  s_3fd2c31f550223::t_d01510726f9492 268,289
+  s_3fd2c31f550223::t_e152eda609c292 19-27
+  s_3fd2c31f550223::t_6cbb03733b738d 220,238
+CONTEXT.md
+  s_3fd2c31f550223::t_cc2e6a8f779d78 268,271-274,280
+src/test/kotlin/com/nanyin/nacos/search/services/operations/OperationGatewayPublishTest.kt
+  s_3fd2c31f550223::t_59947b434d068f 70-110
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
+  s_3fd2c31f550223::t_d01510726f9492 228,284
+src/test/kotlin/com/nanyin/nacos/search/services/CacheWriteGateTest.kt
+  s_3fd2c31f550223::t_f922afbc35fbf7 9-10,18
+  s_3fd2c31f550223::t_d01510726f9492 62,67,109,339,355,367,431
+  s_3fd2c31f550223::t_cab950d5ac9d2b 380
+  s_3fd2c31f550223::t_44f18c5e49488e 391-413
+  s_3fd2c31f550223::t_7aa0988240c6fa 82,85,94,96,112,121,124,130,142,144,158,161,180,184,201,212,227,230,235,248-250,260-261,264,267,283,296,311,321,336-337,354,366,370,459
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "a99a2afad47a60bfe96f2f867a098ee5c82f0e70",
+  "prompts": {},
+  "sessions": {
+    "s_3fd2c31f550223": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8bcce007-daf7-4e73-a686-3799993145c4",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
