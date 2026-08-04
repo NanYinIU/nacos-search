@@ -1,0 +1,38 @@
+src/main/kotlin/com/nanyin/nacos/search/NacosSearchPlugin.kt
+  h_231225c3625e99 78-79,82-86,88,152,182-186
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  h_231225c3625e99 153-157,159-160,165,355-357,366-369,374,376,382,392-396,415,505-507,509,511,1016-1018,1023,1035,1044
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  h_231225c3625e99 369
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
+  h_231225c3625e99 14,19,35-40,53-57,61,64-68,70-86,111-115,163-166,191,198,235,237-245,251-253,259-262,266-279,315-318
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceService.kt
+  h_231225c3625e99 35-36,101-108
+src/main/kotlin/com/nanyin/nacos/search/services/operations/OperationGateway.kt
+  h_231225c3625e99 142-159,173-177
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchWindow.kt
+  h_231225c3625e99 454-459,461,776,781,783
+src/test/kotlin/com/nanyin/nacos/search/services/NacosApiServiceTest.kt
+  h_231225c3625e99 190-191,194,275,286-287,289,296,315,318,338
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinatorTest.kt
+  h_231225c3625e99 33-49,62-71,73,96-97,99-100,133-134,144,146-151,176-177,184,186-191,225-226,238,240-245,299-300,314
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexRoutingTest.kt
+  h_231225c3625e99 4,9,11-12,20-36,38-40
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceServiceTest.kt
+  h_231225c3625e99 3-5,9-11,24-39,294,300-301,318,325
+src/test/kotlin/com/nanyin/nacos/search/services/SessionGenerationHarness.kt
+  h_231225c3625e99 17,21-22,53,59-64,130
+src/test/kotlin/com/nanyin/nacos/search/services/SessionGenerationIntegrationTest.kt
+  h_231225c3625e99 44-45,48-56,60-91,93-94,98-112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "04117c6183f74edda8c22008baa606c03e1a0289",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
