@@ -29,15 +29,20 @@ import java.util.concurrent.atomic.AtomicLong
  * and the key list that names them together, so the cache cannot leave a payload
  * behind that no reclamation path can see (issue #61).
  *
- * **Writes go through [apply] and nowhere else** (ADR-0045). It takes a
+ * **Writes go through [applyMutation] and nowhere else** (ADR-0045). It takes a
  * [CacheMutation] together with the observation sequence of the operation that
  * produced it, and both the cache-entry gate and the profile-deletion tombstone
  * check live inside it, so the gate's scope equals the mutation's coordinate by
  * construction. Reads stay named operations returning their own types: the
  * argument for collapsing writes is that the gate must be unbypassable, and
  * reads have no such property.
+ *
+ * That entry point carries [CacheWriteAccess], so it is reachable only from the
+ * operation layer (ADR-0051). Reads carry nothing: the UI and code-navigation
+ * layers read this cache freely.
  */
 @Service(Service.Level.APP)
+@OptIn(CacheWriteAccess::class)
 class CacheService internal constructor(
     private val currentTimeMillis: () -> Long,
     private val tombstones: ProfileTombstoneRegistry,
@@ -87,7 +92,12 @@ class CacheService internal constructor(
      * **when it started**, so a later-started mutation wins even if an earlier
      * one completes after it (ADR-0020). Returns false when the mutation was
      * gated away or rejected by a tombstone, in which case nothing was written.
+     *
+     * It requires [CacheWriteAccess]: only a caller that performed the remote
+     * operation holds the sequence that orders the write, so only such a caller
+     * has anything to say here (ADR-0051).
      */
+    @CacheWriteAccess
     suspend fun applyMutation(mutation: CacheMutation, observation: Long): Boolean {
         // The tombstone is absolute and independent of ordering: no observation
         // sequence, however recent, outranks it (ADR-0025).

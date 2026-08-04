@@ -11,7 +11,6 @@ import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.nanyin.nacos.search.services.NacosApiService
-import com.nanyin.nacos.search.services.CacheMutation
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.NamespaceService
@@ -177,22 +176,10 @@ class NacosValueLineMarkerProvider internal constructor(
             val config = observed?.value ?: return@executeOnPooledThread
 
             // The gutter marker decides resolved vs. unresolved from the cache,
-            // so the fetched config has to be there. The gateway read normally
-            // writes it already; this covers the case where it did not, and it
-            // carries that read's own observation sequence, so it can neither
-            // outrank a newer read nor restamp what the gateway just wrote.
-            runBlocking {
-                cacheService.applyMutation(
-                    CacheMutation.WriteDetail(
-                        accessIdentity,
-                        namespaceId,
-                        config,
-                        settings.getCacheTtlMillis()
-                    ),
-                    observed.observation
-                )
-            }
-
+            // and the read above already cached this detail under the observation
+            // sequence it took. This layer navigates; it does not write to the
+            // cache (issue #65).
+            //
             // Rebuild the key index synchronously. We are on a pooled thread
             // (never the highlighter/dispatch thread), so a blocking rebuild is
             // safe and makes hasKey()/resolve() reflect the freshly cached

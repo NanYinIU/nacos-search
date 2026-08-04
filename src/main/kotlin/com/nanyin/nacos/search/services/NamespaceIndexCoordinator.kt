@@ -189,6 +189,7 @@ class NamespaceIndexCoordinator internal constructor(
         }
     }
 
+    @OptIn(CacheWriteAccess::class)
     private suspend fun executeIndex(request: NamespaceIndexRequest): IndexOutcome {
         val key = request.key
         val context = request.operationContext
@@ -280,6 +281,7 @@ class NamespaceIndexCoordinator internal constructor(
      * become undecidable — and even that is ordered, so a late failure cannot
      * demote an index a later-started load already completed.
      */
+    @OptIn(CacheWriteAccess::class)
     private suspend fun markNonAuthoritative(key: NamespaceIndexKey, observation: Long) {
         cacheService.applyMutation(
             CacheMutation.MarkNamespaceIndexNonAuthoritative(key.identity, key.namespaceId),

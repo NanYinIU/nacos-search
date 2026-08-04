@@ -1,9 +1,7 @@
 package com.nanyin.nacos.search
 
-import com.nanyin.nacos.search.services.CacheMutation
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
-import com.nanyin.nacos.search.services.operations.ObservationSequence
 import com.nanyin.nacos.search.services.SearchService
 import com.nanyin.nacos.search.services.IndexOutcome
 import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
@@ -245,8 +243,10 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         try {
             // A user's clear is a cache mutation and takes an observation
             // sequence, so a read already in flight cannot write its result
-            // back afterwards (ADR-0045).
-            cacheService.applyMutation(CacheMutation.Clear, ObservationSequence.process.next())
+            // back afterwards (ADR-0045). Issuing it is the operation layer's
+            // job — this class asks for the gesture, it does not perform the
+            // mutation (ADR-0051).
+            apiService.clearCache()
             logger.info("Cache cleared")
         } catch (e: Exception) {
             logger.error("Error clearing cache", e)

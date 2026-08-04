@@ -1,3 +1,5 @@
+@file:OptIn(CacheWriteAccess::class)
+
 package com.nanyin.nacos.search.services
 
 import com.nanyin.nacos.search.models.AccessIdentity

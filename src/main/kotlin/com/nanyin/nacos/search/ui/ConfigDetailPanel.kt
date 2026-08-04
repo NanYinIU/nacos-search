@@ -34,10 +34,10 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
-import com.nanyin.nacos.search.services.CacheMutation
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
+import com.nanyin.nacos.search.services.operations.MissingDetailRecorder
 import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.services.operations.EditSession
 import com.nanyin.nacos.search.services.operations.OperationTarget
@@ -95,10 +95,17 @@ class ConfigDetailPanel internal constructor(
         ApplicationManager.getApplication().getService(NacosSettings::class.java)
     )
 
+    /**
+     * The panel reads the cache directly but never writes to it. Reporting an
+     * authoritative not-found is a cache mutation, and mutations belong to the
+     * operation layer (issue #65).
+     */
+    private val missingDetailRecorder = MissingDetailRecorder(cacheService)
+
     companion object {
         private const val DETAIL_HORIZONTAL_INSET = 10
     }
-    
+
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
     private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
     private suspend fun selectedOperationContext() = withContext(Dispatchers.IO) {
@@ -926,13 +933,11 @@ private fun setupEventHandlers() {
                             // under the sequence of the read that proved it gone,
                             // so a later-started read can still restore a
                             // recreated configuration (ADR-0020).
-                            cacheService.applyMutation(
-                                CacheMutation.DeleteDetailNotFound(
-                                    project.captureSelectedAccessIdentity(settings),
-                                    configuration.tenantId,
-                                    configuration.dataId,
-                                    configuration.group
-                                ),
+                            missingDetailRecorder.recordMissing(
+                                project.captureSelectedAccessIdentity(settings),
+                                configuration.tenantId,
+                                configuration.dataId,
+                                configuration.group,
                                 observed.observation
                             )
                             showFreshnessStatus("config.detail.cache.deleted")
