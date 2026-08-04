@@ -209,10 +209,13 @@ class ReleaseGateSuiteTest {
 
     @Test
     fun `observation high-water ordering prevents late overwrites`() {
-        val gate = ObservationGate()
-        assertTrue(gate.acceptIfNewer(10))
-        assertFalse(gate.acceptIfNewer(5))
-        assertTrue(gate.acceptIfNewer(15))
+        val highWater = ObservationHighWater()
+        val scope = listOf("coordinate")
+
+        assertTrue(highWater.accepts(scope, 10))
+        highWater.raise("coordinate", 10)
+        assertFalse(highWater.accepts(scope, 5))
+        assertTrue(highWater.accepts(scope, 15))
     }
 
     @Test

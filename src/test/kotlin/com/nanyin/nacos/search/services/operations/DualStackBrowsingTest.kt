@@ -22,7 +22,7 @@ class DualStackBrowsingTest {
         val gateway = OperationGateway(mapOf(NacosApiGeneration.V3 to adapter))
         val target = v3Target()
 
-        val page = gateway.listSummaries(target, SummaryQuery(pageSize = 20)).getOrThrow()
+        val page = gateway.listSummaries(target, SummaryQuery(pageSize = 20)).getOrThrow().value
 
         assertEquals(1, page.totalCount)
         assertEquals("app.yaml", page.items.single().dataId)
@@ -34,7 +34,7 @@ class DualStackBrowsingTest {
         val gateway = OperationGateway(mapOf(NacosApiGeneration.V3 to adapter))
         val target = v3Target("team-manual")
 
-        val page = gateway.listSummaries(target, SummaryQuery()).getOrThrow()
+        val page = gateway.listSummaries(target, SummaryQuery()).getOrThrow().value
         assertEquals("team-manual", page.items.single().tenantId)
     }
 
@@ -81,8 +81,8 @@ class DualStackBrowsingTest {
         val v1Target = lockedTarget(NacosApiGeneration.V1, "public")
         val v3Target = lockedTarget(NacosApiGeneration.V3, "public")
 
-        gateway.listSummaries(v1Target, SummaryQuery()).getOrThrow()
-        gateway.listSummaries(v3Target, SummaryQuery()).getOrThrow()
+        gateway.listSummaries(v1Target, SummaryQuery()).getOrThrow().value
+        gateway.listSummaries(v3Target, SummaryQuery()).getOrThrow().value
 
         // Both cached but by different identities
         val v1Key = SummaryQuery().cacheKey()
@@ -98,8 +98,8 @@ class DualStackBrowsingTest {
         val gateway = OperationGateway(mapOf(NacosApiGeneration.V3 to adapter))
         val target = v3Target()
 
-        gateway.listSummaries(target, SummaryQuery()).getOrThrow()
-        gateway.readDetail(target, ConfigurationCoordinate("app.yaml", "G")).getOrThrow()
+        gateway.listSummaries(target, SummaryQuery()).getOrThrow().value
+        gateway.readDetail(target, ConfigurationCoordinate("app.yaml", "G")).getOrThrow().value
 
         assertEquals(1, adapter.detailCalls)
         assertEquals(1, adapter.summaryCalls)

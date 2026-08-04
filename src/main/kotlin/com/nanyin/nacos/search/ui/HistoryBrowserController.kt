@@ -35,7 +35,8 @@ class HistoryBrowserController(
         val result = gateway.listHistory(target, query, forceRefresh = true, useCache = false)
         if (generation() != expectedGeneration) return Outcome.Stale
         return result.fold(
-            onSuccess = { page ->
+            onSuccess = { observed ->
+                val page = observed.value
                 if (page.totalCount <= 0 || page.items.isEmpty()) Outcome.Empty
                 else Outcome.Body(page)
             },
@@ -59,7 +60,7 @@ class HistoryBrowserController(
         if (generation() != expectedGeneration) {
             return Result.failure(RemoteOperationError.Cancelled("History detail dropped after session change"))
         }
-        return result
+        return result.map { it.value }
     }
 
     fun selectedEntries(entries: List<HistoryEntry>, indices: IntArray): List<HistoryEntry> =

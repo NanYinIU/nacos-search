@@ -44,7 +44,7 @@ class NacosApiServiceV1AnonymousTest {
         ).getOrThrow()
 
         assertEquals("team-manual", summaries.pageItems.single().tenant)
-        assertEquals("enabled: true", detail?.content)
+        assertEquals("enabled: true", detail.value?.content)
         assertEquals(listOf("GET", "GET"), fixture.requests.map { it.method })
         assertEquals(listOf("/nacos/v1/cs/configs", "/nacos/v1/cs/configs"), fixture.requests.map { it.path })
         assertEquals("tenant" to "team-manual", fixture.requests[0].query.last())

@@ -24,6 +24,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import com.nanyin.nacos.search.services.writeDetail
+import com.nanyin.nacos.search.services.replaceNamespaceIndex
+import com.nanyin.nacos.search.services.clearAll
 
 class NacosValueLineMarkerProviderTest {
 
@@ -59,7 +62,7 @@ class NacosValueLineMarkerProviderTest {
     private fun cacheAndRefresh(configuration: NacosConfiguration) = runBlocking {
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        cache.putConfigDetail(settings.captureAccessIdentity(), null, configuration)
+        cache.writeDetail(settings.captureAccessIdentity(), null, configuration)
         NacosKeyResolver.refreshIndex(cache, settings.captureAccessIdentity())
     }
 
@@ -83,7 +86,7 @@ class NacosValueLineMarkerProviderTest {
     fun `test stale resolved key uses stale gutter icon`() = runBlocking {
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        cache.putConfigDetail(
+        cache.writeDetail(
             settings.captureAccessIdentity(),
             null,
             NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo", "properties"),
@@ -108,7 +111,7 @@ class NacosValueLineMarkerProviderTest {
     fun `stale gutter observation requests background refresh without blocking PSI`() = runBlocking {
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        cache.putConfigDetail(
+        cache.writeDetail(
             settings.captureAccessIdentity(),
             null,
             NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo", "properties"),
@@ -142,7 +145,7 @@ class NacosValueLineMarkerProviderTest {
         selectProjectNamespace("qa-ns")
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
-            cache.putConfigDetail(
+            cache.writeDetail(
                 identity = settings.captureAccessIdentity(),
                 namespaceId = "qa-ns",
                 configuration = NacosConfiguration(
@@ -189,7 +192,7 @@ class NacosValueLineMarkerProviderTest {
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
             val qaIdentity = settings.captureAccessIdentity("qa")
-            cache.putConfigDetail(
+            cache.writeDetail(
                 identity = qaIdentity,
                 namespaceId = null,
                 configuration = NacosConfiguration(
@@ -239,7 +242,7 @@ class NacosValueLineMarkerProviderTest {
        runBlocking {
            val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
            val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-           cache.putNamespaceIndex(
+           cache.replaceNamespaceIndex(
                settings.captureAccessIdentity(),
                null,
                listOf(NacosConfiguration("other.properties", "DEFAULT_GROUP", null, "other.key=val\n", "properties"))
@@ -313,7 +316,7 @@ class NacosValueLineMarkerProviderTest {
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-            cache.putConfigDetail(
+            cache.writeDetail(
                 identity = settings.captureAccessIdentity(),
                 namespaceId = null,
                 configuration = NacosConfiguration("datasource.properties", "DEFAULT_GROUP", null, "db.url=jdbc:test\n", "properties")
@@ -409,13 +412,13 @@ class NacosValueLineMarkerProviderTest {
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-            cache.putConfigDetail(
+            cache.writeDetail(
                 identity = settings.captureAccessIdentity(),
                 namespaceId = "namespace1",
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace1", "room.key=one\n", "properties"),
                 ttl = 60_000L
             )
-            cache.putConfigDetail(
+            cache.writeDetail(
                 identity = settings.captureAccessIdentity(),
                 namespaceId = "namespace2",
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
@@ -441,13 +444,13 @@ class NacosValueLineMarkerProviderTest {
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-            cache.putConfigDetail(
+            cache.writeDetail(
                 identity = settings.captureAccessIdentity(),
                 namespaceId = "namespace1",
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace1", "room.key=one\n", "properties"),
                 ttl = 60_000L
             )
-            cache.putConfigDetail(
+            cache.writeDetail(
                 identity = settings.captureAccessIdentity(),
                 namespaceId = "namespace2",
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
@@ -504,7 +507,7 @@ class NacosValueLineMarkerProviderTest {
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-            cache.putConfigDetail(
+            cache.writeDetail(
                 identity = settings.captureAccessIdentity(),
                 namespaceId = "namespace2",
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),

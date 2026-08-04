@@ -93,6 +93,21 @@ The persistent layer sits behind one interface, `CacheStore`, injected into `Cac
 
 Cache loads run in the background; read methods await a `CompletableDeferred` load signal before serving results that depend on the full load, while single-key reads resolve from the store immediately. Enforced limits: max 1,000 entries, 5-minute default TTL, lock-free reads with background expiry reclamation.
 
+#### One gated write entry point
+
+`CacheService` has exactly **one** write method — `applyMutation(mutation: CacheMutation, observation: Long)` (ADR-0044 / ADR-0045). `CacheMutation` is a closed set: write a detail, write a list page, replace a namespace index, mark an index non-authoritative, delete a detail on an authoritative not-found, invalidate a namespace, and clear. Both the cache-entry gate and the profile-deletion tombstone check live inside `applyMutation`, so the gate's scope equals the mutation's coordinate by construction and a new mutation kind cannot be added without passing both. Do not add a second write method — six named writers each calling a private gate has already failed twice in this module. Reads stay named operations returning their own types; the collapse buys unbypassability, which reads do not need.
+
+`observation` is the sequence the operation took **when it started** (`ObservationSequence.process`, or `OperationGateway.beginObservation()`), never when it writes. A gateway read returns it alongside the payload as `Observed<T>` so painting a result and writing the cache entry derived from the same read are ordered by one number (ADR-0047). `ObservationHighWater` is the single gate implementation, keyed on the complete access identity plus the coordinate; a mutation must outrank every scope on its chain (global → namespace → coordinate) and raises only its own, and only once it has actually landed. `HistoryMemoryCache` holds one for the read-only history path.
+
+Consequences worth knowing:
+
+- Only a read that reaches the **server** takes a sequence. A read served from cache returns `Observed.NO_OBSERVATION`, which can never outrank any mark — so a caller that derives a write from a cache hit is silently dropped instead of restamping the entry it just read and locking out a genuine remote read that started earlier.
+- A user's clear is a mutation. A read that started before it is dropped; one started afterwards lands, so clear-then-reload works. It also collapses the per-coordinate marks into the global one, which is what keeps the gate's map from growing for the life of the IDE.
+- Reconstituting an entry from the cache's own store is **not** a mutation. It is private behind the read path, takes no lock (a go-to-declaration lookup must not queue behind the background full load), carries no sequence, and is discarded if a clear or invalidation ran while it was reading.
+- A complete namespace index reclaims details it no longer lists, but only where no newer detail observation exists. Partial and failed indexes never delete — they only mark the index non-authoritative for absence.
+- The tombstone is absolute: no observation sequence, however recent, outranks it.
+- The visibility-block gate stays **outside** this module. It orders dataset confirmation states over access identity, capability and optional namespace, not cache entries; do not fold the confirmation-state machine in here.
+
 ### `@NacosValue` Navigation & PSI Subsystem
 
 The `psi/` package (registered in `plugin.xml` for `language="JAVA"`) is the plugin's code-intelligence layer. It reads only from `CacheService`, so gutter markers and navigation are only as accurate as the locally cached configs. Components:

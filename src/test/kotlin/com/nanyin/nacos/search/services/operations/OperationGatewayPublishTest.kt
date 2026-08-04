@@ -67,6 +67,47 @@ class OperationGatewayPublishTest {
         assertEquals(2, adapter.detailCalls)
     }
 
+    /**
+     * ADR-0020: the reconciliation read-back obeys the ordering rule like every
+     * other remote read rather than being suppressed until the publish state
+     * becomes verified. It always goes to the server, and what it observes
+     * updates the cache under that observation's own sequence — so an older
+     * read cannot undo it.
+     */
+    @Test
+    fun `publish read-back writes what it observed under its own observation`() = runBlocking {
+        val cache = InMemoryOperationCache()
+        val adapter = RecordingPublishAdapter()
+        val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to adapter), cache)
+        val publishGateway = OperationGatewayPublishGateway(gateway)
+        val session = session()
+
+        publishGateway.readBack(session).getOrThrow()
+
+        assertEquals(
+            "old",
+            cache.getDetail(session.target.context.identity, "public", "app.yaml", "G")?.content
+        )
+        // It never reads through the cache: a read-back that could be served
+        // from cache would verify a publish against the plugin's own memory.
+        publishGateway.readBack(session).getOrThrow()
+        assertEquals(2, adapter.detailCalls)
+    }
+
+    private fun session() = EditSession(
+        target = v1Target(),
+        dataId = "app.yaml",
+        group = "G",
+        namespaceId = "public",
+        baselineContent = "old",
+        baselineMd5 = "m1",
+        baselineType = "yaml",
+        baselineAppName = null,
+        baselineDesc = null,
+        baselineConfigTags = null,
+        draftContent = "new"
+    )
+
     private fun v1Target(): OperationTarget {
         val endpoint = com.nanyin.nacos.search.models.CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
         val context = com.nanyin.nacos.search.settings.NacosOperationContext(

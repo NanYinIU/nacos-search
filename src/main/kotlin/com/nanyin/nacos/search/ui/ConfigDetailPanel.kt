@@ -34,9 +34,11 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.services.CacheMutation
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
+import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.services.operations.EditSession
 import com.nanyin.nacos.search.services.operations.OperationTarget
 import com.nanyin.nacos.search.services.operations.PublishState
@@ -52,8 +54,14 @@ import javax.swing.*
 import kotlin.concurrent.withLock
 
 
+/**
+ * Loads one configuration's detail and reports the observation sequence the
+ * read took, so an authoritative not-found can delete the cached entry under
+ * that same number rather than under a fresh one that would outrank a newer
+ * read (ADR-0047).
+ */
 internal fun interface ConfigurationDetailLoader {
-    suspend fun load(configuration: NacosConfiguration, forceRefresh: Boolean): Result<NacosConfiguration?>
+    suspend fun load(configuration: NacosConfiguration, forceRefresh: Boolean): Result<Observed<NacosConfiguration?>>
 }
 
 /**
@@ -892,8 +900,8 @@ private fun setupEventHandlers() {
                     return@launch
                 }
                 
-                result.onSuccess { configWithContent ->
-                    configWithContent?.let { config ->
+                result.onSuccess { observed ->
+                    observed.value?.let { config ->
                         if (generation != displayGeneration || currentConfiguration?.getKey() != configuration.getKey()) {
                             setLoadingState(false)
                             return@let
@@ -904,7 +912,7 @@ private fun setupEventHandlers() {
                         showCard("content")
                         hideFreshnessStatus()
                         refreshNavigationState()
-                        
+
                         // Update size information and status bar
                         ApplicationManager.getApplication().invokeLater({
                             val contentSize = config.content.length
@@ -914,11 +922,18 @@ private fun setupEventHandlers() {
                     } ?: run {
                         setLoadingState(false)
                         if (keepCachedVisible) {
-                            cacheService.removeConfigDetail(
-                                project.captureSelectedAccessIdentity(settings),
-                                configuration.tenantId,
-                                configuration.dataId,
-                                configuration.group
+                            // An authoritative not-found deletes the cached entry
+                            // under the sequence of the read that proved it gone,
+                            // so a later-started read can still restore a
+                            // recreated configuration (ADR-0020).
+                            cacheService.applyMutation(
+                                CacheMutation.DeleteDetailNotFound(
+                                    project.captureSelectedAccessIdentity(settings),
+                                    configuration.tenantId,
+                                    configuration.dataId,
+                                    configuration.group
+                                ),
+                                observed.observation
                             )
                             showFreshnessStatus("config.detail.cache.deleted")
                             refreshNavigationState()

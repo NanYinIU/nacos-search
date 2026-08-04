@@ -5,6 +5,12 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
+/**
+ * The single observation high-water implementation (ADR-0044). The gateway's
+ * per-key gate and the unused identity-scoped stamp registry were merged into
+ * this one type: it keys on whatever scope the caller derives from the complete
+ * access identity, and it raises its mark only when a mutation is accepted.
+ */
 class ObservationHighWaterTest {
 
     @Test
@@ -18,43 +24,54 @@ class ObservationHighWaterTest {
     }
 
     @Test
-    fun `gate accepts newer sequence and rejects older or equal`() {
-        val gate = ObservationGate()
+    fun `accepts a newer sequence and rejects an older or equal one`() {
+        val highWater = ObservationHighWater()
 
-        assertTrue(gate.acceptIfNewer(1))
-        assertTrue(gate.acceptIfNewer(5))
-        assertFalse(gate.acceptIfNewer(5))
-        assertFalse(gate.acceptIfNewer(3))
-        assertTrue(gate.acceptIfNewer(6))
+        assertTrue(highWater.accepts(listOf("k"), 1))
+        highWater.raise("k", 1)
+        assertTrue(highWater.accepts(listOf("k"), 5))
+        highWater.raise("k", 5)
+
+        assertFalse(highWater.accepts(listOf("k"), 5))
+        assertFalse(highWater.accepts(listOf("k"), 3))
+        assertTrue(highWater.accepts(listOf("k"), 6))
     }
 
     @Test
-    fun `late failure does not overwrite newer success`() {
-        val gate = ObservationGate()
-        val successSeq = 10L
-        val lateFailureSeq = 5L
+    fun `the mark only moves forward`() {
+        val highWater = ObservationHighWater()
 
-        assertTrue(gate.acceptIfNewer(successSeq))
-        assertFalse(gate.acceptIfNewer(lateFailureSeq))
+        highWater.raise("k", 3)
+        highWater.raise("k", 7)
+        highWater.raise("k", 2)
+
+        assertEquals(7, highWater.markOf("k"))
     }
 
     @Test
-    fun `late success does not clear newer permission block`() {
-        val gate = ObservationGate()
-        val blockSeq = 10L
-        val lateSuccessSeq = 5L
+    fun `distinct scopes do not gate each other`() {
+        val highWater = ObservationHighWater()
 
-        assertTrue(gate.acceptIfNewer(blockSeq))
-        assertFalse(gate.acceptIfNewer(lateSuccessSeq))
+        highWater.raise("dev", 10)
+
+        assertTrue(highWater.accepts(listOf("prod"), 1))
+        assertFalse(highWater.accepts(listOf("dev"), 1))
     }
 
     @Test
-    fun `current high water tracks the last accepted sequence`() {
-        val gate = ObservationGate()
-        gate.acceptIfNewer(3)
-        gate.acceptIfNewer(7)
-        gate.acceptIfNewer(2) // rejected
+    fun `a scope chain is outranked by its broadest member`() {
+        val highWater = ObservationHighWater()
 
-        assertEquals(7, gate.currentHighWater())
+        // A user's clear at sequence 5 raises the global scope; a write that
+        // started at 3 must lose even though its own coordinate is untouched.
+        highWater.raise("*", 5)
+
+        assertFalse(highWater.accepts(listOf("*", "ns", "coordinate"), 3))
+        assertTrue(highWater.accepts(listOf("*", "ns", "coordinate"), 6))
+    }
+
+    @Test
+    fun `an unseen scope has a zero mark`() {
+        assertEquals(0, ObservationHighWater().markOf("never-written"))
     }
 }

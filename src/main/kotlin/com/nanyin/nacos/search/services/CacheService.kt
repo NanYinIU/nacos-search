@@ -7,6 +7,7 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CacheAgeCalculator
 import com.nanyin.nacos.search.models.ConfigListResponse
+import com.nanyin.nacos.search.services.operations.ObservationHighWater
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +28,14 @@ import java.util.concurrent.atomic.AtomicLong
  * Persistence lives entirely behind [CacheStore], which owns the entry payloads
  * and the key list that names them together, so the cache cannot leave a payload
  * behind that no reclamation path can see (issue #61).
+ *
+ * **Writes go through [apply] and nowhere else** (ADR-0045). It takes a
+ * [CacheMutation] together with the observation sequence of the operation that
+ * produced it, and both the cache-entry gate and the profile-deletion tombstone
+ * check live inside it, so the gate's scope equals the mutation's coordinate by
+ * construction. Reads stay named operations returning their own types: the
+ * argument for collapsing writes is that the gate must be unbypassable, and
+ * reads have no such property.
  */
 @Service(Service.Level.APP)
 class CacheService internal constructor(
@@ -56,25 +65,256 @@ class CacheService internal constructor(
     private val modificationCount = AtomicLong(0)
 
     /**
-     * A deleted profile's tombstone rejects late in-flight cache mutations so
-     * stale responses cannot resurrect the entombed profile's state (design
-     * §13.1, §19.2). Identity-keyed writes silently drop when the identity's
-     * profile has been entombed.
-     *
-     * Every identity-scoped writer **must** go through [identityScopedWrite];
-     * the guard is not optional per call site.
+     * The cache-entry gate. Scopes are derived from the **complete** access
+     * identity plus the mutation's coordinate — truncating to profile id and
+     * access revision would let two identities that resolved to different API
+     * generations reject each other's writes to distinct coordinates.
      */
-    private fun isRejectedByTombstone(identity: AccessIdentity): Boolean =
-        tombstones.isEntombed(identity)
+    private val highWater = ObservationHighWater()
 
     /**
-     * Single gated entry for identity-scoped cache mutations. Returns null and
-     * skips [write] when the profile is entombed, so a future writer cannot
-     * omit the tombstone check (issue #40).
+     * Advances whenever a mutation discards entries. A single-key load that
+     * read an entry out of the store before the discard must not publish it
+     * afterwards, which is how a lazy load used to resurrect an entry the user
+     * had just cleared.
      */
-    private suspend fun <T> identityScopedWrite(identity: AccessIdentity, write: suspend () -> T): T? {
-        if (isRejectedByTombstone(identity)) return null
-        return write()
+    private val discardGeneration = AtomicLong(0)
+
+    /**
+     * The cache module's only write entry point (ADR-0045).
+     *
+     * [observation] is the sequence the operation that produced [mutation] took
+     * **when it started**, so a later-started mutation wins even if an earlier
+     * one completes after it (ADR-0020). Returns false when the mutation was
+     * gated away or rejected by a tombstone, in which case nothing was written.
+     */
+    suspend fun applyMutation(mutation: CacheMutation, observation: Long): Boolean {
+        // The tombstone is absolute and independent of ordering: no observation
+        // sequence, however recent, outranks it (ADR-0025).
+        entombedBy(mutation)?.let { if (tombstones.isEntombed(it)) return false }
+        return cacheMutex.withLock {
+            val scopeChain = scopeChain(mutation)
+            if (!highWater.accepts(scopeChain, observation)) return@withLock false
+            // Raise only once the mutation has actually landed: a store write
+            // that throws must not leave a mark that locks out the retry.
+            applyLocked(mutation, observation)
+            highWater.raise(scopeChain.last(), observation)
+            true
+        }
+    }
+
+    /**
+     * The identity whose profile tombstone blocks this mutation, enumerated
+     * exhaustively so a newly added mutation kind cannot silently skip the
+     * check — adding one without a branch here is a compile error.
+     */
+    private fun entombedBy(mutation: CacheMutation): AccessIdentity? = when (mutation) {
+        is CacheMutation.WriteDetail -> mutation.identity
+        is CacheMutation.WriteListPage -> mutation.identity
+        is CacheMutation.ReplaceNamespaceIndex -> mutation.identity
+        is CacheMutation.MarkNamespaceIndexNonAuthoritative -> mutation.identity
+        is CacheMutation.DeleteDetailNotFound -> mutation.identity
+        is CacheMutation.InvalidateNamespace -> mutation.identity
+        // The user's clear is not profile-scoped: it discards data rather than
+        // resurrecting it, so a tombstone has nothing to protect against.
+        CacheMutation.Clear -> null
+    }
+
+    /**
+     * The scope chain a mutation must outrank, broadest first. Its own scope is
+     * last, and that is the only mark an accepted mutation raises — a clear
+     * raises the global mark, a namespace invalidation the namespace mark, and
+     * either outranks a coordinate write that started earlier.
+     */
+    private fun scopeChain(mutation: CacheMutation): List<String> = when (mutation) {
+        is CacheMutation.WriteDetail -> listOf(
+            GLOBAL_SCOPE,
+            namespaceScope(mutation.identity, mutation.namespaceId),
+            detailScope(detailKey(mutation.identity, mutation.namespaceId, mutation.configuration.dataId, mutation.configuration.group))
+        )
+        is CacheMutation.WriteListPage -> listOf(
+            GLOBAL_SCOPE,
+            namespaceScope(mutation.identity, mutation.namespaceId),
+            listPageScope(listPageKey(mutation.identity, mutation.namespaceId, mutation.requestKey))
+        )
+        is CacheMutation.ReplaceNamespaceIndex -> listOf(
+            GLOBAL_SCOPE,
+            namespaceScope(mutation.identity, mutation.namespaceId),
+            indexScope(mutation.identity, mutation.namespaceId)
+        )
+        is CacheMutation.MarkNamespaceIndexNonAuthoritative -> listOf(
+            GLOBAL_SCOPE,
+            namespaceScope(mutation.identity, mutation.namespaceId),
+            indexScope(mutation.identity, mutation.namespaceId)
+        )
+        is CacheMutation.DeleteDetailNotFound -> listOf(
+            GLOBAL_SCOPE,
+            namespaceScope(mutation.identity, mutation.namespaceId),
+            detailScope(detailKey(mutation.identity, mutation.namespaceId, mutation.dataId, mutation.group))
+        )
+        is CacheMutation.InvalidateNamespace -> listOf(
+            GLOBAL_SCOPE,
+            namespaceScope(mutation.identity, mutation.namespaceId)
+        )
+        CacheMutation.Clear -> listOf(GLOBAL_SCOPE)
+    }
+
+    private suspend fun applyLocked(mutation: CacheMutation, observation: Long) {
+        when (mutation) {
+            is CacheMutation.WriteDetail -> {
+                val key = detailKey(
+                    mutation.identity,
+                    mutation.namespaceId,
+                    mutation.configuration.dataId,
+                    mutation.configuration.group
+                )
+                val entry = CacheEntry(
+                    CacheEntryType.CONFIG_DETAIL,
+                    mutation.configuration,
+                    currentTimeMillis(),
+                    mutation.ttlMillis,
+                    mutation.source
+                )
+                detailCache[key] = entry
+                store.putDetail(key, entry)
+                cleanupOversizedCaches()
+                publishDetailSnapshot()
+                markModified()
+            }
+            is CacheMutation.WriteListPage -> {
+                val key = listPageKey(mutation.identity, mutation.namespaceId, mutation.requestKey)
+                val entry = CacheEntry(
+                    CacheEntryType.LIST_PAGE,
+                    mutation.response,
+                    currentTimeMillis(),
+                    mutation.ttlMillis,
+                    mutation.source
+                )
+                listPageCache[key] = entry
+                store.putListPage(key, entry)
+                cleanupOversizedCaches()
+            }
+            is CacheMutation.ReplaceNamespaceIndex -> replaceNamespaceIndexLocked(mutation, observation)
+            is CacheMutation.MarkNamespaceIndexNonAuthoritative -> {
+                val indexKey = namespaceKey(mutation.identity, mutation.namespaceId)
+                if (namespaceIndexCache.containsKey(indexKey)) {
+                    namespaceIndexAuthority[indexKey] = false
+                }
+            }
+            is CacheMutation.DeleteDetailNotFound -> {
+                val key = detailKey(mutation.identity, mutation.namespaceId, mutation.dataId, mutation.group)
+                // Raise the discard mark before removing anything, so a lazy
+                // load already reading this key from the store cannot publish it.
+                discardGeneration.incrementAndGet()
+                val wasInMemory = detailCache.remove(key) != null
+                // Unconditional: the entry may be in the store without having
+                // been loaded into memory yet, and it must not survive there.
+                store.removeDetail(key)
+                if (wasInMemory) {
+                    publishDetailSnapshot()
+                    markModified()
+                }
+            }
+            is CacheMutation.InvalidateNamespace -> invalidateNamespaceLocked(mutation)
+            CacheMutation.Clear -> {
+                discardGeneration.incrementAndGet()
+                // Every other scope chain runs through the global scope, so once
+                // the clear's mark sits there the per-coordinate marks can only
+                // repeat what it already says. Dropping them keeps this map from
+                // growing for the life of the IDE.
+                highWater.collapseTo(GLOBAL_SCOPE, observation)
+                detailCache.clear()
+                listPageCache.clear()
+                namespaceIndexCache.clear()
+                namespaceIndexAuthority.clear()
+                store.clear()
+                publishDetailSnapshot()
+                markModified()
+                logger.info("Cache cleared")
+            }
+        }
+    }
+
+    private suspend fun replaceNamespaceIndexLocked(
+        mutation: CacheMutation.ReplaceNamespaceIndex,
+        observation: Long
+    ) {
+        val indexKey = namespaceKey(mutation.identity, mutation.namespaceId)
+        // Persist summaries with empty/lightweight content only. Callers may
+        // pass rows that still carry content; strip it so the index never
+        // pretends to own bodies.
+        val summaries = mutation.summaries.map { config ->
+            if (config.content.isEmpty()) config else config.copy(content = "")
+        }
+        namespaceIndexCache[indexKey] = CacheEntry(
+            CacheEntryType.NAMESPACE_INDEX,
+            summaries,
+            currentTimeMillis(),
+            mutation.ttlMillis,
+            mutation.source
+        )
+        namespaceIndexAuthority[indexKey] = true
+        reclaimDetailsAbsentFromIndexLocked(mutation, summaries, observation)
+        cleanupOversizedCaches()
+        // The namespace index answers data-id existence and global search;
+        // key-index rebuilds read the detail snapshot, so a pure index write
+        // publishes no detail snapshot change.
+        markModified()
+    }
+
+    /**
+     * A complete index proves that anything it does not list is gone, so those
+     * details are reclaimed — but only where no newer detail observation
+     * exists, because a detail read that started after this index did may have
+     * confirmed a configuration the index never saw (ADR-0020).
+     *
+     * The sweep is over what is in memory. A detail still sitting unread in the
+     * store outlives one index replacement and is reclaimed by the next one
+     * after the background load publishes it, which is the same bound every
+     * other in-memory sweep in this class works under.
+     */
+    private suspend fun reclaimDetailsAbsentFromIndexLocked(
+        mutation: CacheMutation.ReplaceNamespaceIndex,
+        summaries: List<NacosConfiguration>,
+        observation: Long
+    ) {
+        val listed = summaries
+            .map { detailKey(mutation.identity, mutation.namespaceId, it.dataId, it.group) }
+            .toSet()
+        val namespacePrefix = detailNamespacePrefix(mutation.identity, mutation.namespaceId)
+        val reclaimable = detailCache.keys.filter { key ->
+            key.startsWith(namespacePrefix) &&
+                key !in listed &&
+                highWater.accepts(listOf(detailScope(key)), observation)
+        }
+        if (reclaimable.isEmpty()) return
+        // Raise the discard mark before removing anything, so a lazy load
+        // already reading one of these keys cannot publish it afterwards.
+        discardGeneration.incrementAndGet()
+        reclaimable.forEach { key ->
+            highWater.acceptAndRaise(listOf(detailScope(key)), observation)
+            detailCache.remove(key)
+            store.removeDetail(key)
+        }
+        publishDetailSnapshot()
+    }
+
+    private suspend fun invalidateNamespaceLocked(mutation: CacheMutation.InvalidateNamespace) {
+        val namespacePrefix = detailNamespacePrefix(mutation.identity, mutation.namespaceId)
+        val indexKey = namespaceKey(mutation.identity, mutation.namespaceId)
+        discardGeneration.incrementAndGet()
+        detailCache.keys.filter { it.startsWith(namespacePrefix) }.forEach { key ->
+            detailCache.remove(key)
+            store.removeDetail(key)
+        }
+        listPageCache.keys.filter { it.startsWith(namespacePrefix) }.forEach { key ->
+            listPageCache.remove(key)
+            store.removeListPage(key)
+        }
+        namespaceIndexCache.remove(indexKey)
+        namespaceIndexAuthority.remove(indexKey)
+        publishDetailSnapshot()
+        markModified()
     }
 
     /** Runs memory-only derived-state work in this application service's lifecycle scope. */
@@ -140,7 +380,8 @@ class CacheService internal constructor(
     }
 
     companion object {
-        private const val DEFAULT_TTL = 300_000L
+        /** The scope every mutation must outrank; only a user's clear raises it. */
+        private const val GLOBAL_SCOPE = "*"
         // Single definition lives on CacheAgeCalculator (issue #42).
         private const val DEEP_STALE_AGE_MILLIS = CacheAgeCalculator.DEEP_STALE_THRESHOLD_MILLIS
         private const val MAX_CACHE_SIZE = 1000
@@ -203,24 +444,6 @@ class CacheService internal constructor(
         val createdAtMillis: Long
     )
 
-    suspend fun putListPage(
-        identity: AccessIdentity,
-        namespaceId: String?,
-        requestKey: String,
-        response: ConfigListResponse,
-        ttl: Long = DEFAULT_TTL,
-        source: CacheSource = CacheSource.REMOTE
-    ) {
-        identityScopedWrite(identity) {
-            cacheMutex.withLock {
-                val key = listPageKey(identity, namespaceId, requestKey)
-                listPageCache[key] = CacheEntry(CacheEntryType.LIST_PAGE, response, currentTimeMillis(), ttl, source)
-                store.putListPage(key, listPageCache[key]!!)
-                cleanupOversizedCaches()
-            }
-        }
-    }
-
     suspend fun getConfigDetail(
         identity: AccessIdentity,
         namespaceId: String?,
@@ -244,14 +467,9 @@ class CacheService internal constructor(
         // for the background full load. Try reading just this entry from the store; if the
         // background load is still in flight and the entry is genuinely absent, await it
         // and re-check so the result reflects any entry loaded concurrently.
-        val fromStore = store.loadDetail(key)
-        if (fromStore != null) {
-            if (fromStore.isExpired(currentTimeMillis()) && !allowStale) {
-                return null
-            }
-            detailCache[key] = fromStore
-            if (loadCompleted.isCompleted) publishDetailSnapshot()
-            return fromStore.data
+        reconstituteDetail(key)?.let { reconstituted ->
+            if (reconstituted.isExpired(currentTimeMillis()) && !allowStale) return null
+            return reconstituted.data
         }
         loadCompleted.await()
         val loadedLate = detailCache[key]
@@ -261,82 +479,36 @@ class CacheService internal constructor(
         return null
     }
 
-    suspend fun putConfigDetail(
-        identity: AccessIdentity,
-        namespaceId: String?,
-        configuration: NacosConfiguration,
-        ttl: Long = DEFAULT_TTL,
-        source: CacheSource = CacheSource.REMOTE
-    ) {
-        identityScopedWrite(identity) {
-            putConfigDetailByKey(
-                detailKey(identity, namespaceId, configuration.dataId, configuration.group),
-                configuration,
-                ttl,
-                source
-            )
+    /**
+     * Reads one entry back out of the cache's own persistent store and publishes
+     * it into memory. This is **not** a cache mutation: it observes the cache's
+     * own store rather than the server, so it carries no observation sequence
+     * and cannot raise any gate's mark. It is private behind the read path for
+     * the same reason.
+     *
+     * It does have to respect a discard that happened while it was reading: a
+     * lazy load already in flight must not republish an entry the user just
+     * cleared. Returns null when the entry was discarded mid-flight, so the
+     * caller reports a miss instead of data that no longer exists.
+     *
+     * It deliberately takes no lock. The background full load holds the write
+     * lock for its whole duration, and a go-to-declaration lookup must not wait
+     * behind it. Ordering against a concurrent discard comes from
+     * [discardGeneration] instead: a discard raises it *before* emptying the
+     * maps, so publishing and then re-checking is enough to catch every
+     * interleaving.
+     */
+    private suspend fun reconstituteDetail(key: String): CacheEntry<NacosConfiguration>? {
+        val discardsBeforeRead = discardGeneration.get()
+        val fromStore = store.loadDetail(key) ?: return null
+        if (discardGeneration.get() != discardsBeforeRead) return null
+        val published = detailCache.putIfAbsent(key, fromStore) ?: fromStore
+        if (discardGeneration.get() != discardsBeforeRead) {
+            detailCache.remove(key, published)
+            return null
         }
-    }
-
-    private suspend fun putConfigDetailByKey(
-        key: String,
-        configuration: NacosConfiguration,
-        ttl: Long,
-        source: CacheSource
-    ) {
-        cacheMutex.withLock {
-            detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, configuration, currentTimeMillis(), ttl, source)
-            store.putDetail(key, detailCache[key]!!)
-            cleanupOversizedCaches()
-            publishDetailSnapshot()
-            markModified()
-        }
-    }
-
-    suspend fun removeConfigDetail(
-        identity: AccessIdentity,
-        namespaceId: String?,
-        dataId: String,
-        group: String
-    ) {
-        removeConfigDetailByKey(detailKey(identity, namespaceId, dataId, group))
-    }
-
-    private suspend fun removeConfigDetailByKey(key: String) {
-        cacheMutex.withLock {
-            if (detailCache.remove(key) == null) return@withLock
-            store.removeDetail(key)
-            publishDetailSnapshot()
-            markModified()
-        }
-    }
-
-    /** Upserts a partial batch without claiming that the Namespace snapshot is complete. */
-    suspend fun putNamespaceDetails(
-        identity: AccessIdentity,
-        namespaceId: String?,
-        configurations: List<NacosConfiguration>,
-        ttl: Long = DEFAULT_TTL,
-        source: CacheSource = CacheSource.REMOTE
-    ) {
-        // Partial namespace loads go through this path; without the tombstone
-        // gate a mid-flight load after profile deletion would resurrect details
-        // (issue #40 / ADR-0025).
-        identityScopedWrite(identity) {
-            if (configurations.isEmpty()) return@identityScopedWrite
-            cacheMutex.withLock {
-                val now = currentTimeMillis()
-                configurations.forEach { config ->
-                    val key = detailKey(identity, namespaceId, config.dataId, config.group)
-                    val entry = CacheEntry(CacheEntryType.CONFIG_DETAIL, config, now, ttl, source)
-                    detailCache[key] = entry
-                    store.putDetail(key, entry)
-                }
-                cleanupOversizedCaches()
-                publishDetailSnapshot()
-                markModified()
-            }
-        }
+        if (loadCompleted.isCompleted) publishDetailSnapshot()
+        return published
     }
 
     suspend fun getNamespaceIndex(
@@ -375,66 +547,6 @@ class CacheService internal constructor(
         return null
     }
 
-    suspend fun putNamespaceIndex(
-        identity: AccessIdentity,
-        namespaceId: String?,
-        configurations: List<NacosConfiguration>,
-        ttl: Long = DEFAULT_TTL,
-        source: CacheSource = CacheSource.REMOTE
-    ) {
-        identityScopedWrite(identity) {
-            cacheMutex.withLock {
-                val now = currentTimeMillis()
-                val indexKey = namespaceKey(identity, namespaceId)
-                // Persist summaries with empty/lightweight content only. Callers
-                // may pass rows that still carry content; strip it so the index
-                // never pretends to own bodies.
-                val summaries = configurations.map { config ->
-                    if (config.content.isEmpty()) config
-                    else config.copy(content = "")
-                }
-                namespaceIndexCache[indexKey] =
-                    CacheEntry(CacheEntryType.NAMESPACE_INDEX, summaries, now, ttl, source)
-                namespaceIndexAuthority[indexKey] = true
-                cleanupOversizedCaches()
-                // Namespace index is used for data-id existence and global search
-                // identity; key-index rebuilds read the detail snapshot, so do not
-                // publish a detail snapshot change here.
-                markModified()
-            }
-        }
-    }
-
-    suspend fun markNamespaceIndexNonAuthoritative(identity: AccessIdentity, namespaceId: String?) {
-        val indexKey = namespaceKey(identity, namespaceId)
-        cacheMutex.withLock {
-            if (namespaceIndexCache.containsKey(indexKey)) {
-                namespaceIndexAuthority[indexKey] = false
-            }
-        }
-    }
-
-    suspend fun invalidateNamespace(identity: AccessIdentity, namespaceId: String?) {
-        val namespacePrefix = "${identityPrefix(identity)}|${normalizeNamespace(namespaceId)}|"
-        val indexKey = namespaceKey(identity, namespaceId)
-        cacheMutex.withLock {
-            detailCache.keys.filter { it.startsWith(namespacePrefix) }.forEach { key ->
-                detailCache.remove(key)
-                store.removeDetail(key)
-            }
-            listPageCache.keys.filter { it.startsWith(namespacePrefix) }.forEach { key ->
-                listPageCache.remove(key)
-                store.removeListPage(key)
-            }
-            namespaceIndexCache.remove(indexKey)
-            namespaceIndexAuthority.remove(indexKey)
-            publishDetailSnapshot()
-            markModified()
-        }
-    }
-
-    suspend fun clearAll() = clearCache()
-
     suspend fun getAllCachedConfigurations(identity: AccessIdentity): List<NacosConfiguration> {
         loadCompleted.await()
         return configurationSnapshot(identity)
@@ -443,19 +555,6 @@ class CacheService internal constructor(
     fun getModificationCount(): Long = modificationCount.get()
 
     internal fun cacheTimeMillis(): Long = currentTimeMillis()
-
-    suspend fun clearCache() {
-        cacheMutex.withLock {
-            detailCache.clear()
-            listPageCache.clear()
-            namespaceIndexCache.clear()
-            namespaceIndexAuthority.clear()
-            store.clear()
-            publishDetailSnapshot()
-            markModified()
-            logger.info("Cache cleared")
-        }
-    }
 
     private suspend fun loadCacheFromPersistence() {
         // Hold the write lock for the whole load so the background load is mutually
@@ -558,6 +657,21 @@ class CacheService internal constructor(
         CacheCoordinate.NamespaceIndex(identity, identity.serverId, namespaceId.orEmpty()).storageKey()
 
     private fun identityPrefix(identity: AccessIdentity): String = CacheCoordinate.identityPrefix(identity)
+
+    private fun detailNamespacePrefix(identity: AccessIdentity, namespaceId: String?): String =
+        "${identityPrefix(identity)}|${normalizeNamespace(namespaceId)}|"
+
+    // Gate scopes are prefixed by entry kind because a detail key and a list-page
+    // key for the same identity and namespace can otherwise coincide.
+    private fun detailScope(detailKey: String): String = "detail|$detailKey"
+
+    private fun listPageScope(listPageKey: String): String = "list|$listPageKey"
+
+    private fun indexScope(identity: AccessIdentity, namespaceId: String?): String =
+        "index|" + namespaceKey(identity, namespaceId)
+
+    private fun namespaceScope(identity: AccessIdentity, namespaceId: String?): String =
+        "ns|" + namespaceKey(identity, namespaceId)
 
     private fun isIdentityScopedKey(key: String): Boolean = key.startsWith("v2|")
 

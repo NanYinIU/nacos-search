@@ -19,7 +19,7 @@ class OperationGatewayHistoryTest {
         val page = gateway.listHistory(
             target,
             HistoryQuery(ConfigurationCoordinate("app.yaml", "G"))
-        ).getOrThrow()
+        ).getOrThrow().value
 
         assertEquals(1, page.totalCount)
         assertEquals(1, adapter.listCalls)
@@ -31,7 +31,7 @@ class OperationGatewayHistoryTest {
         val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to adapter))
         val target = v1Target()
 
-        val detail = gateway.readHistoryDetail(target, "123").getOrThrow()
+        val detail = gateway.readHistoryDetail(target, "123").getOrThrow().value
 
         assertEquals("123", detail.id)
         assertEquals(1, adapter.detailCalls)
@@ -77,9 +77,9 @@ class OperationGatewayHistoryTest {
         val target = v1Target()
         val query = HistoryQuery(ConfigurationCoordinate("app.yaml", "G"))
 
-        gateway.listHistory(target, query).getOrThrow()
+        gateway.listHistory(target, query).getOrThrow().value
         // Second call should hit the cache, not the adapter
-        gateway.listHistory(target, query).getOrThrow()
+        gateway.listHistory(target, query).getOrThrow().value
 
         assertEquals(1, adapter.listCalls)
     }
@@ -94,8 +94,8 @@ class OperationGatewayHistoryTest {
         )
         val target = v1Target()
 
-        gateway.readHistoryDetail(target, "123").getOrThrow()
-        gateway.readHistoryDetail(target, "123").getOrThrow()
+        gateway.readHistoryDetail(target, "123").getOrThrow().value
+        gateway.readHistoryDetail(target, "123").getOrThrow().value
 
         assertEquals(1, adapter.detailCalls)
     }
@@ -110,9 +110,9 @@ class OperationGatewayHistoryTest {
         )
         val query = HistoryQuery(ConfigurationCoordinate("app.yaml", "G"))
 
-        gateway.listHistory(v1Target("profile-a"), query).getOrThrow()
+        gateway.listHistory(v1Target("profile-a"), query).getOrThrow().value
         // Different identity — must not hit cache
-        gateway.listHistory(v1Target("profile-b"), query).getOrThrow()
+        gateway.listHistory(v1Target("profile-b"), query).getOrThrow().value
 
         assertEquals(2, adapter.listCalls)
     }
@@ -128,8 +128,8 @@ class OperationGatewayHistoryTest {
         val target = v1Target()
         val query = HistoryQuery(ConfigurationCoordinate("app.yaml", "G"))
 
-        gateway.listHistory(target, query).getOrThrow()
-        gateway.listHistory(target, query, forceRefresh = true).getOrThrow()
+        gateway.listHistory(target, query).getOrThrow().value
+        gateway.listHistory(target, query, forceRefresh = true).getOrThrow().value
 
         assertEquals(2, adapter.listCalls)
     }

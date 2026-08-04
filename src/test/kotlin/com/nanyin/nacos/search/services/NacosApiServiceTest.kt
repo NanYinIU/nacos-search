@@ -190,7 +190,7 @@ class NacosApiServiceTest {
         val result = apiService.getConfiguration("test.properties", "DEFAULT_GROUP", "test-ns")
         assertTrue(result.isSuccess)
 
-        val config = result.getOrNull()
+        val config = result.getOrNull()?.value
         assertNotNull(config)
         assertEquals("test.properties", config!!.dataId)
         assertEquals("key=value", config.content)
@@ -206,7 +206,7 @@ class NacosApiServiceTest {
     fun `invalid endpoint or incomplete credentials fails closed before cache or transport`() = runBlocking {
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
         cache.clearAll()
-        cache.putConfigDetail(
+        cache.writeDetail(
             settings.captureAccessIdentity(),
             "test-ns",
             NacosConfiguration("test.properties", "DEFAULT_GROUP", "test-ns", "cached=value")

@@ -7,6 +7,12 @@ import java.util.LinkedHashMap
  * Bounded in-memory cache for read-only configuration history. Entries are
  * scoped by complete access identity, namespace, and configuration coordinate.
  *
+ * History writes go to this separate in-memory store rather than to the
+ * persistent cache, but they take the same gate: a stale history page cannot
+ * overwrite a newer one (ADR-0020). The gate is the one
+ * [ObservationHighWater] implementation, keyed on the same complete access
+ * identity the entries themselves are keyed on.
+ *
  * History data is **never persisted** and never offered offline. P1 promises
  * no offline history. Eviction is LRU by access order.
  */
@@ -14,6 +20,7 @@ class HistoryMemoryCache(
     private val maxPages: Int = DEFAULT_MAX_PAGES,
     private val maxDetails: Int = DEFAULT_MAX_DETAILS
 ) {
+    private val highWater = ObservationHighWater()
     private val pageStore = object : LinkedHashMap<String, HistoryPage>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, HistoryPage>?): Boolean =
             size > maxPages
@@ -28,9 +35,19 @@ class HistoryMemoryCache(
     fun getHistoryPage(identity: AccessIdentity, namespaceId: String, cacheKey: String): HistoryPage? =
         pageStore[pageKey(identity, namespaceId, cacheKey)]
 
+    /** Returns false when a later-started history read already owns this key. */
     @Synchronized
-    fun putHistoryPage(identity: AccessIdentity, namespaceId: String, cacheKey: String, page: HistoryPage) {
-        pageStore[pageKey(identity, namespaceId, cacheKey)] = page
+    fun putHistoryPage(
+        identity: AccessIdentity,
+        namespaceId: String,
+        cacheKey: String,
+        page: HistoryPage,
+        observation: Long
+    ): Boolean {
+        val key = pageKey(identity, namespaceId, cacheKey)
+        if (!highWater.acceptAndRaise(listOf("page|$key"), observation)) return false
+        pageStore[key] = page
+        return true
     }
 
     @Synchronized
@@ -40,14 +57,19 @@ class HistoryMemoryCache(
         historyId: String
     ): HistoryDetail? = detailStore[detailKey(identity, namespaceId, historyId)]
 
+    /** Returns false when a later-started history read already owns this key. */
     @Synchronized
     fun putHistoryDetail(
         identity: AccessIdentity,
         namespaceId: String,
         historyId: String,
-        detail: HistoryDetail
-    ) {
-        detailStore[detailKey(identity, namespaceId, historyId)] = detail
+        detail: HistoryDetail,
+        observation: Long
+    ): Boolean {
+        val key = detailKey(identity, namespaceId, historyId)
+        if (!highWater.acceptAndRaise(listOf("detail|$key"), observation)) return false
+        detailStore[key] = detail
+        return true
     }
 
     @Synchronized

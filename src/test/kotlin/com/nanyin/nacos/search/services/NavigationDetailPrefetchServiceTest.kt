@@ -30,6 +30,8 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import com.nanyin.nacos.search.services.operations.Observed
+import com.nanyin.nacos.search.services.operations.ObservationSequence
 
 class NavigationDetailPrefetchServiceTest {
 
@@ -102,7 +104,7 @@ class NavigationDetailPrefetchServiceTest {
         val api = mock<NacosApiService>()
         val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
-        cache.putNamespaceIndex(
+        cache.replaceNamespaceIndex(
             identity,
             "dev",
             listOf(
@@ -122,7 +124,10 @@ class NavigationDetailPrefetchServiceTest {
             )
         ).thenReturn(
             Result.success(
-                NacosConfiguration("common.properties", "DEFAULT_GROUP", "dev", "a=1", "properties")
+                Observed(
+                    NacosConfiguration("common.properties", "DEFAULT_GROUP", "dev", "a=1", "properties"),
+                    observation = ObservationSequence.process.next()
+                )
             )
         )
 
@@ -189,7 +194,7 @@ class NavigationDetailPrefetchServiceTest {
         val summaries = (1..50).map { i ->
             NacosConfiguration("cfg-$i.properties", "DEFAULT_GROUP", "dev", "", "properties")
         }
-        cache.putNamespaceIndex(identity, "dev", summaries)
+        cache.replaceNamespaceIndex(identity, "dev", summaries)
 
         // Stub each of the first FALLBACK_BUDGET configs individually. Avoid
         // thenAnswer + Result (mockito double-wraps the value type for suspend).
@@ -206,7 +211,10 @@ class NavigationDetailPrefetchServiceTest {
                 )
             ).thenReturn(
                 Result.success(
-                    NacosConfiguration(dataId, "DEFAULT_GROUP", "dev", "$dataId=true", "properties")
+                    Observed(
+                        NacosConfiguration(dataId, "DEFAULT_GROUP", "dev", "$dataId=true", "properties"),
+                        observation = ObservationSequence.process.next()
+                    )
                 )
             )
         }
@@ -240,7 +248,7 @@ class NavigationDetailPrefetchServiceTest {
         val api = mock<NacosApiService>()
         val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
-        cache.putNamespaceIndex(
+        cache.replaceNamespaceIndex(
             identity,
             "dev",
             listOf(NacosConfiguration("shared.properties", "DEFAULT_GROUP", "dev", "", "properties"))
@@ -256,7 +264,10 @@ class NavigationDetailPrefetchServiceTest {
             )
         ).thenReturn(
             Result.success(
-                NacosConfiguration("shared.properties", "DEFAULT_GROUP", "dev", "shared=1", "properties")
+                Observed(
+                    NacosConfiguration("shared.properties", "DEFAULT_GROUP", "dev", "shared=1", "properties"),
+                    observation = ObservationSequence.process.next()
+                )
             )
         )
 
@@ -291,7 +302,7 @@ class NavigationDetailPrefetchServiceTest {
     fun `different access identity cannot see prefetched details`() = runBlocking {
         val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
-        cache.putConfigDetail(
+        cache.writeDetail(
             identity,
             "dev",
             NacosConfiguration("secret.properties", "DEFAULT_GROUP", "dev", "secret=1", "properties"),

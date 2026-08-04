@@ -12,6 +12,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import com.nanyin.nacos.search.services.writeDetail
+import com.nanyin.nacos.search.services.replaceNamespaceIndex
+import com.nanyin.nacos.search.services.markNamespaceIndexNonAuthoritative
+import com.nanyin.nacos.search.services.clearAll
 
 class NacosKeyResolverTest {
     @get:Rule
@@ -21,9 +25,11 @@ class NacosKeyResolverTest {
     private val identity = testIdentity("http://localhost:8848")
 
     @Before
-    fun setUp() = runBlocking {
-        cache = CacheService(InMemoryCacheStore())
-        cache.clearAll()
+    fun setUp() {
+        runBlocking {
+            cache = CacheService(InMemoryCacheStore())
+            cache.clearAll()
+        }
     }
 
     private fun cfg(dataId: String, group: String, tenant: String?, content: String, type: String) =
@@ -34,7 +40,7 @@ class NacosKeyResolverTest {
         forIdentity: com.nanyin.nacos.search.models.AccessIdentity = identity
     ) {
         configurations.forEach { config ->
-            cache.putConfigDetail(
+            cache.writeDetail(
                 identity = forIdentity,
                 namespaceId = config.tenantId,
                 configuration = config,
@@ -67,7 +73,7 @@ class NacosKeyResolverTest {
         var now = 3_000_000L
         val timedCache = CacheService({ now }, InMemoryCacheStore())
         timedCache.clearAll()
-        timedCache.putConfigDetail(
+        timedCache.writeDetail(
             identity = identity,
             namespaceId = "dev",
             configuration = cfg(
@@ -109,7 +115,7 @@ class NacosKeyResolverTest {
         var now = 4_000_000L
         val timedCache = CacheService({ now }, InMemoryCacheStore())
         timedCache.clearAll()
-        timedCache.putConfigDetail(
+        timedCache.writeDetail(
             identity,
             "dev",
             cfg("app.properties", "DEFAULT_GROUP", "dev", "timeout=30\n", "properties"),
@@ -142,7 +148,7 @@ class NacosKeyResolverTest {
         var now = 5_000_000L
         val timedCache = CacheService({ now }, InMemoryCacheStore())
         timedCache.clearAll()
-        timedCache.putConfigDetail(
+        timedCache.writeDetail(
             identity,
             "dev",
             cfg("other.properties", "DEFAULT_GROUP", "dev", "other=true\n", "properties"),
@@ -159,7 +165,7 @@ class NacosKeyResolverTest {
             )
         )
 
-        timedCache.putNamespaceIndex(
+        timedCache.replaceNamespaceIndex(
             identity,
             "dev",
             listOf(cfg("other.properties", "DEFAULT_GROUP", "dev", "other=true\n", "properties")),
@@ -222,13 +228,13 @@ class NacosKeyResolverTest {
     fun `active access identity scopes resolution`() = runBlocking {
         val dev = testIdentity("http://dev-nacos:8848")
         val prod = testIdentity("http://prod-nacos:8848")
-        cache.putConfigDetail(
+        cache.writeDetail(
             identity = dev,
             namespaceId = null,
             configuration = cfg("app.properties", "DEFAULT_GROUP", null, "app.name=dev\n", "properties"),
             ttl = 60_000L
         )
-        cache.putConfigDetail(
+        cache.writeDetail(
             identity = prod,
             namespaceId = null,
             configuration = cfg("app.properties", "DEFAULT_GROUP", null, "app.name=prod\n", "properties"),
@@ -484,7 +490,7 @@ class NacosKeyResolverTest {
     fun `lazy load flow caches config then rebuild makes key resolvable`() = runBlocking {
         assertFalse(NacosKeyResolver.hasKey("db.url", cache, activeIdentity = identity))
 
-        cache.putConfigDetail(
+        cache.writeDetail(
             identity = identity,
             namespaceId = null,
             configuration = cfg("datasource.properties", "DEFAULT_GROUP", null, "db.url=jdbc:test\n", "properties"),

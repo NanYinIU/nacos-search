@@ -119,9 +119,12 @@ class SessionGenerationIntegrationTest {
      * once a SEARCH trigger hits its 15-second cutoff and drops its in-flight
      * entry while the job keeps running.
      *
-     * A competing load is simulated at the transport seam — it starts, and wins
-     * the high-water mark, while this load is still fetching pages. This load's
-     * write must then be discarded rather than delete the newer index.
+     * A competing load is simulated at the transport seam — it starts later and
+     * lands its own mutation on this identity+namespace while this load is
+     * still fetching pages. This load's write must then be discarded rather
+     * than delete the newer index. The competitor mutates rather than merely
+     * claiming a mark, because the gate now lives inside the cache and only an
+     * accepted mutation raises it.
      *
      * Regression guard: taking the sequence at write time instead would hand
      * this load the higher number, and the older view would win.
@@ -133,11 +136,16 @@ class SessionGenerationIntegrationTest {
             onRequest = { url ->
                 if (url.contains("/cs/config")) {
                     val gateway = competing.apiService.operationGateway()
-                    val newer = gateway.beginNamespaceIndexObservation()
-                    gateway.commitNamespaceIndexWrite(
-                        competing.indexTarget(competing.lockedContext(NacosApiGeneration.V1)),
-                        newer
-                    )
+                    val newer = gateway.beginObservation()
+                    // A newer load that failed: it publishes no index but does
+                    // record that this namespace's absence became undecidable.
+                    runBlocking {
+                        competing.cacheService.markNamespaceIndexNonAuthoritative(
+                            competing.lockedContext(NacosApiGeneration.V1).identity,
+                            "public",
+                            observation = newer
+                        )
+                    }
                 }
             }
         )
@@ -457,7 +465,7 @@ class SessionGenerationIntegrationTest {
         val offlineIdentity = harness.apiService.offlineCacheIdentity(context)
             ?: context.identity.copy(resolvedGeneration = NacosApiGeneration.V3)
         assertEquals(NacosApiGeneration.V3, offlineIdentity.resolvedGeneration)
-        harness.cacheService.putConfigDetail(
+        harness.cacheService.writeDetail(
             offlineIdentity,
             "public",
             NacosConfiguration("app.yaml", "DEFAULT_GROUP", "public", "k=v"),
