@@ -62,9 +62,23 @@ class NacosAuthService : V1Authenticator {
     /**
      * 获取有效的accessToken
      * @return 有效的accessToken，如果获取失败返回null
+     *
+     * Reads live settings coordinates (not a captured operation context). Prefer
+     * [getValidAccessToken] with a prepared [NacosOperationContext] for in-flight
+     * operations so credentials stay off the EDT and environment switches cannot
+     * retarget mid-request (issue #53).
      */
     suspend fun getValidAccessToken(): String? {
-        return getValidAccessToken(currentSettingsSnapshot())
+        return try {
+            val serverUrl = com.nanyin.nacos.search.models.CanonicalNacosEndpoint
+                .parse(settings.serverUrl).getOrNull()?.value.orEmpty()
+            val username = settings.username
+            val password = settings.password
+            getValidAccessToken(serverUrl, username, password)
+        } catch (e: Exception) {
+            logger.warn("Failed to get valid access token", e)
+            null
+        }
     }
 
     /**
@@ -79,7 +93,7 @@ class NacosAuthService : V1Authenticator {
             profileRevision = context.profileRevision,
             strategy = context.authenticationStrategy
         )
-        return v1Sessions.getOrLogin(key) { login(loginSnapshot(context))?.toAuthenticationToken() }?.value
+        return v1Sessions.getOrLogin(key) { login(context)?.toAuthenticationToken() }?.value
     }
 
     /**
@@ -94,17 +108,8 @@ class NacosAuthService : V1Authenticator {
      */
     internal suspend fun loginWithoutRecording(context: NacosOperationContext): AuthenticationToken? {
         if (context.authenticationStrategy != V1AuthenticationStrategy.NACOS_PASSWORD) return null
-        return login(loginSnapshot(context))?.toAuthenticationToken()
+        return login(context)?.toAuthenticationToken()
     }
-
-    private fun loginSnapshot(context: NacosOperationContext): NacosServerSnapshot = NacosServerSnapshot(
-        serverUrl = context.endpoint.value,
-        username = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty(),
-        password = context.credential.secret,
-        authMode = context.authMode,
-        enableTokenAuth = true,
-        identity = context.identity
-    )
 
     /**
      * Every identity holding V1 session state. Read-only: what an operation
@@ -115,21 +120,23 @@ class NacosAuthService : V1Authenticator {
 
     override suspend fun accessToken(context: NacosOperationContext): String? = getValidAccessToken(context)
 
-    internal suspend fun getValidAccessToken(server: NacosServerSnapshot): String? {
+    private suspend fun getValidAccessToken(
+        serverUrl: String,
+        username: String,
+        password: String
+    ): String? {
         return try {
-            val cacheKey = "${server.serverUrl}_${server.username}"
+            val cacheKey = "${serverUrl}_$username"
             val cachedToken = tokenCache[cacheKey]
-            
-            // 检查缓存的token是否有效
+
             if (cachedToken != null && cachedToken.isValid()) {
                 logger.debug("Using cached access token")
                 cachedToken.accessToken
             } else {
-                // 缓存无效，重新登录获取token
                 logger.info("Cached token expired or invalid, requesting new token")
-                val newToken = login(server)
-               if (newToken != null) {
-                   tokenCache[cacheKey] = newToken
+                val newToken = login(serverUrl, username, password)
+                if (newToken != null) {
+                    tokenCache[cacheKey] = newToken
                     // Evict tokens for stale server/user combinations so switching
                     // credentials does not leak access tokens for the app lifetime.
                     tokenCache.keys.retainAll { it == cacheKey }
@@ -144,62 +151,62 @@ class NacosAuthService : V1Authenticator {
             null
         }
     }
-    
+
     /**
      * 执行登录获取accessToken
      * @return TokenInfo对象，如果登录失败返回null
      */
-    private suspend fun login(): TokenInfo? = login(currentSettingsSnapshot())
+    private suspend fun login(): TokenInfo? {
+        val serverUrl = com.nanyin.nacos.search.models.CanonicalNacosEndpoint
+            .parse(settings.serverUrl).getOrNull()?.value.orEmpty()
+        return login(serverUrl, settings.username, settings.password)
+    }
 
-    private fun currentSettingsSnapshot(): NacosServerSnapshot = NacosServerSnapshot(
-        serverUrl = com.nanyin.nacos.search.models.CanonicalNacosEndpoint
-            .parse(settings.serverUrl).getOrNull()?.value.orEmpty(),
-        username = settings.username,
-        password = settings.password,
-        authMode = settings.authMode,
-        enableTokenAuth = settings.enableTokenAuth
-    )
+    private suspend fun login(context: NacosOperationContext): TokenInfo? =
+        login(
+            serverUrl = context.endpoint.value,
+            username = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty(),
+            password = context.credential.secret
+        )
 
-    private suspend fun login(server: NacosServerSnapshot): TokenInfo? {
+    /**
+     * Performs the V1 login wire call. Credentials are method parameters only —
+     * they never enter a data class, equality, logging, or a cache key (issue #53 /
+     * ADR-0009).
+     */
+    private suspend fun login(serverUrl: String, username: String, password: String): TokenInfo? {
         return withContext(Dispatchers.IO) {
             try {
-                if (server.username.isBlank() || server.password.isBlank()) {
+                if (username.isBlank() || password.isBlank()) {
                     logger.warn("Username or password is empty, cannot perform token authentication")
                     return@withContext null
                 }
-                
-               val loginUrl = "${server.serverUrl.trimEnd('/')}/nacos/v1/auth/login"
-               logger.debug("Attempting to login to: $loginUrl")
-               
-                val postData = "username=${URLEncoder.encode(server.username, StandardCharsets.UTF_8.name())}&password=${URLEncoder.encode(server.password, StandardCharsets.UTF_8.name())}"
+
+                val loginUrl = "${serverUrl.trimEnd('/')}/nacos/v1/auth/login"
+                logger.debug("Attempting to login to: $loginUrl")
+
+                val postData = "username=${URLEncoder.encode(username, StandardCharsets.UTF_8.name())}&password=${URLEncoder.encode(password, StandardCharsets.UTF_8.name())}"
 
                 val response = HttpRequests.post(loginUrl, "application/x-www-form-urlencoded")
                     .connectTimeout(CONNECTION_TIMEOUT)
                     .readTimeout(READ_TIMEOUT)
                     .tuner { connection ->
                         (connection as? java.net.HttpURLConnection)?.instanceFollowRedirects = false
-                        // 设置请求头
                         connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
                         connection.setRequestProperty("Content-Length", postData.length.toString())
                     }
                     .connect { request ->
-                        // 2. 在 connect 的 lambda 中执行 I/O 操作
-
-                        // 步骤 A: 写入（发送）POST 数据
                         request.write(postData)
-
-                        // 步骤 B: 读取服务器的响应
-                        // lambda 的最后一个表达式的值将作为 connect 方法的返回值
                         request.readString(null)
                     }
-                
+
                 logger.debug("Login response: $response")
-                
+
                 val jsonResponse = gson.fromJson(response, JsonObject::class.java)
                 val accessToken = jsonResponse.get("accessToken")?.asString
                 val tokenTtl = jsonResponse.get("tokenTtl")?.asLong ?: 18000L // 默认5小时
                 val globalAdmin = jsonResponse.get("globalAdmin")?.asBoolean ?: false
-                
+
                 if (accessToken.isNullOrBlank()) {
                     logger.warn("Login failed: accessToken is null or empty")
                     return@withContext null

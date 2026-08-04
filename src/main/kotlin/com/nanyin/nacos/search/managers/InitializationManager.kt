@@ -4,7 +4,6 @@ import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.NacosSearchService
-import com.nanyin.nacos.search.services.captureServerSnapshot
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.intellij.openapi.application.ApplicationManager
 import com.nanyin.nacos.search.ui.NamespacePanel
@@ -142,13 +141,15 @@ class InitializationManager(
         logger.debug("Loading initial configurations for namespace: ${namespace.namespaceName}")
         
         try {
-            // Create search request for loading all configurations
+            // Create search request for loading all configurations. Capture the
+            // operation context here (already on a background coroutine) so the
+            // search keeps this environment if the user switches mid-load (#53).
             val searchRequest = NacosSearchService.SearchRequest(
                 namespace = namespace,
                 pageNo = 1,
                 pageSize = 10,
                 serverId = settings.activeServerId,
-                serverSnapshot = settings.captureServerSnapshot()
+                operationContext = settings.captureOperationContext().getOrNull()
             )
             
             // Perform search to load configurations

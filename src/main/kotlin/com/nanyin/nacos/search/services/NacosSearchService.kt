@@ -19,6 +19,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.coroutines.coroutineContext
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -68,8 +69,11 @@ class NacosSearchService(
         val pageNo: Int = 1,
         val pageSize: Int = 10,
         val serverId: String = "",
-        val serverSnapshot: NacosServerSnapshot? = null,
-        /** Captured by the project UI before any cache or transport operation. */
+        /**
+         * Captured by the project UI (off the EDT) before any cache or transport
+         * operation. Search keeps using this environment even if the user switches
+         * profiles mid-flight (issue #53).
+         */
         val operationContext: NacosOperationContext? = null
     ) {
         /**
@@ -216,9 +220,13 @@ class NacosSearchService(
        request: SearchRequest,
        nacosApiService: NacosApiService
    ) {
-       // Cancel pending debounce and capture a generation so this request's
-       // result is only published if it is still the latest request.
-       searchJob?.cancel()
+       // Cancel a *pending* debounced search that has not entered this method
+       // yet. Do not cancel the current coroutine — searchWithDebounce calls
+       // performSearch from inside searchJob after the delay, and cancelling
+       // that job would abort at the next suspension (e.g. off-EDT context
+       // capture on Dispatchers.IO).
+       val currentJob = coroutineContext[Job]
+       searchJob?.takeIf { it != currentJob }?.cancel()
        val generation = requestGeneration.incrementAndGet()
        val sessionTicket = captureSessionTicket(request)
        try {
@@ -231,6 +239,8 @@ class NacosSearchService(
                searchWithRemoteList(request, nacosApiService)
            }
            publishIfCurrent(generation, result, request, sessionTicket)
+       } catch (e: CancellationException) {
+           throw e
        } catch (e: Exception) {
            if (generation == requestGeneration.get() && sessionTicket?.isCurrent() != false) {
                _searchState.value = SearchState.Error("搜索过程中发生错误: ${e.message}", e)
@@ -241,21 +251,32 @@ class NacosSearchService(
 
     private fun captureSessionTicket(request: SearchRequest): OperationTicket? {
         val epochs = project?.getService(ProjectSessionEpochs::class.java) ?: return null
+        // Prefer the prepared context; fall back to credential-free identity
+        // derivation so a missing snapshot never touches PasswordSafe on the
+        // EDT (issue #53 / ADR-0039).
         val identity = request.operationContext?.identity
-            ?: request.serverSnapshot?.identity
-            ?: settings.captureOperationContext(request.serverId.takeIf { it.isNotBlank() })
-                .getOrNull()?.identity
-            ?: return null
+            ?: settings.captureAccessIdentity(request.serverId.takeIf { it.isNotBlank() })
         return epochs.capture(identity)
+    }
+
+    /**
+     * Resolves the operation context for a search. Prefers the prepared
+     * [SearchRequest.operationContext] so mid-flight environment switches
+     * cannot retarget the request. Fallback capture always runs on
+     * [Dispatchers.IO] so PasswordSafe is never read on the EDT (#53).
+     */
+    private suspend fun resolveOperationContext(request: SearchRequest): Result<NacosOperationContext> {
+        request.operationContext?.let { return Result.success(it) }
+        return withContext(Dispatchers.IO) {
+            settings.captureOperationContext(request.serverId.takeIf { it.isNotBlank() })
+        }
     }
 
     private suspend fun searchWithRemoteList(
         request: SearchRequest,
         nacosApiService: NacosApiService
     ): Result<SearchExecutionResult> {
-        val context = request.operationContext ?: settings.captureOperationContext(
-            request.serverId.takeIf { it.isNotBlank() }
-        ).getOrElse { return Result.failure(it) }
+        val context = resolveOperationContext(request).getOrElse { return Result.failure(it) }
         val requestKey = request.toCacheKey()
         val preferCache = !request.forceRefresh && settings.cacheEnabled
         if (preferCache) {
@@ -362,9 +383,7 @@ class NacosSearchService(
         request: SearchRequest,
         nacosApiService: NacosApiService
     ): Result<SearchExecutionResult> {
-        val context = request.operationContext ?: settings.captureOperationContext(
-            request.serverId.takeIf { it.isNotBlank() }
-        ).getOrElse { return Result.failure(it) }
+        val context = resolveOperationContext(request).getOrElse { return Result.failure(it) }
         val namespaceId = request.namespace?.namespaceId
         val indexRequest = settings.captureNamespaceIndexRequest(namespaceId, context)
         val indexKey = indexRequest.key

@@ -16,7 +16,6 @@ import com.nanyin.nacos.search.services.IndexOutcome
 import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
 import com.nanyin.nacos.search.services.NamespaceIndexRequest
 import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
-import com.nanyin.nacos.search.services.captureServerSnapshot
 import com.nanyin.nacos.search.services.requestSwitchedNamespaceIndex
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.settings.NacosConfigurable
@@ -436,14 +435,12 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             refreshOperationContextSnapshot()
             val profileId = selectedProfileId()
             val operationContext = selectedOperationContext()
-            val serverSnapshot = settings.captureServerSnapshot(profileId, operationContext)
             val request = NacosSearchService.SearchRequest(
                 namespace = newNamespace,
                 pageNo = 1,
                 pageSize = paginationPanel.getCurrentPageSize(),
                 forceRefresh = false,
                 serverId = profileId,
-                serverSnapshot = serverSnapshot,
                 operationContext = operationContext
             )
             currentSearchRequest = request
@@ -491,7 +488,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
              return
          }
          
-         // Create enhanced SearchRequest for prefix asterisk fuzzy search
+         // Create enhanced SearchRequest for prefix asterisk fuzzy search.
+         // Uses the prepared operation context (refreshed off-EDT) — never
+         // capture credentials on the event dispatch thread (issue #53).
          val searchRequest = NacosSearchService.SearchRequest(
              dataId = (criteria.dataId.ifBlank { criteria.query }),
              group = criteria.group,
@@ -503,7 +502,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
              pageNo = 1,
              pageSize = paginationPanel.getCurrentPageSize(),
              serverId = selectedProfileId(),
-             serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
              operationContext = selectedOperationContext()
          )
          currentNamespace = searchNameSpace;
@@ -556,7 +554,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             pageNo = 1,
             pageSize = paginationPanel.getCurrentPageSize(),
             serverId = selectedProfileId(),
-            serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
             operationContext = selectedOperationContext()
         )
        currentSearchRequest = searchRequest
@@ -572,7 +569,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             val currentRequest = NacosSearchService.SearchRequest(
                  namespace = namespacePanel.getSelectedNamespace(),
                  serverId = selectedProfileId(),
-                 serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
                  operationContext = selectedOperationContext()
              )
             nacosSearchService.previousPage(currentSearchRequest ?: currentRequest, nacosApiService)
@@ -584,7 +580,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             val currentRequest = NacosSearchService.SearchRequest(
                  namespace = namespacePanel.getSelectedNamespace(),
                  serverId = selectedProfileId(),
-                 serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
                  operationContext = selectedOperationContext()
              )
             nacosSearchService.nextPage(currentSearchRequest ?: currentRequest, nacosApiService)
@@ -597,7 +592,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                  namespace = namespacePanel.getSelectedNamespace(),
                  pageSize = pageSize,
                  serverId = selectedProfileId(),
-                 serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
                  operationContext = selectedOperationContext()
              )
             currentSearchRequest = (currentSearchRequest ?: currentRequest).copy(pageNo = 1, pageSize = pageSize)
@@ -719,7 +713,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             namespace = namespacePanel.getSelectedNamespace(),
             pageSize = paginationPanel.getCurrentPageSize(),
             serverId = selectedProfileId(),
-            serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
             operationContext = selectedOperationContext()
         )).copy(forceRefresh = true)
         loadConfigurations()
@@ -753,7 +746,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     pageNo = 1,
                     pageSize = paginationPanel.getCurrentPageSize(),
                     serverId = selectedProfileId(),
-                    serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
                     operationContext = selectedOperationContext()
                 )).copy(namespace = namespace)
                 currentSearchRequest = request
