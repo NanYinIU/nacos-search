@@ -55,6 +55,17 @@ class AuthenticationSessionRegistry(
     fun completedToken(identity: AccessIdentity): AuthenticationToken? =
         completedTokens[identity]?.takeIf { it.isValid(clock()) }
 
+    /**
+     * Every identity this registry holds any state for — a completed token, a
+     * flight lock, or an invalidation epoch.
+     *
+     * A failed login still leaves a lock and an epoch behind, so emptiness here
+     * is the only honest way to ask whether an operation touched the registry
+     * at all. ADR-0022 requires connection diagnostics not to.
+     */
+    fun trackedIdentities(): Set<AccessIdentity> =
+        completedTokens.keys + flightLocks.keys.map { it.identity } + invalidationEpochs.keys
+
     private fun epochFor(identity: AccessIdentity): AtomicLong =
         invalidationEpochs.computeIfAbsent(identity) { AtomicLong(0) }
 }

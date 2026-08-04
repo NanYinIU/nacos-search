@@ -1,5 +1,6 @@
 package com.nanyin.nacos.search.services
 
+import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
@@ -78,19 +79,39 @@ class NacosAuthService : V1Authenticator {
             profileRevision = context.profileRevision,
             strategy = context.authenticationStrategy
         )
-        return v1Sessions.getOrLogin(key) {
-            login(
-                NacosServerSnapshot(
-                    serverUrl = context.endpoint.value,
-                    username = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty(),
-                    password = context.credential.secret,
-                    authMode = context.authMode,
-                    enableTokenAuth = true,
-                    identity = context.identity
-                )
-            )?.toAuthenticationToken()
-        }?.value
+        return v1Sessions.getOrLogin(key) { login(loginSnapshot(context))?.toAuthenticationToken() }?.value
     }
+
+    /**
+     * Logs in for [context] and returns the token WITHOUT recording it in the
+     * session registry or the legacy token cache.
+     *
+     * ADR-0022 requires connection diagnostics to run from unapplied settings on
+     * temporary authentication state and to leave the registry untouched. They
+     * still need a real token to exercise the V1 read path, so the login itself
+     * stays here — this service owns the `/nacos/v1/auth/login` wire format —
+     * while the caller owns the token's lifetime (see `EphemeralV1Authenticator`).
+     */
+    internal suspend fun loginWithoutRecording(context: NacosOperationContext): AuthenticationToken? {
+        if (context.authenticationStrategy != V1AuthenticationStrategy.NACOS_PASSWORD) return null
+        return login(loginSnapshot(context))?.toAuthenticationToken()
+    }
+
+    private fun loginSnapshot(context: NacosOperationContext): NacosServerSnapshot = NacosServerSnapshot(
+        serverUrl = context.endpoint.value,
+        username = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty(),
+        password = context.credential.secret,
+        authMode = context.authMode,
+        enableTokenAuth = true,
+        identity = context.identity
+    )
+
+    /**
+     * Every identity holding V1 session state. Read-only: what an operation
+     * leaves behind in the registry is otherwise invisible, and ADR-0022 makes
+     * "leaves nothing behind" a requirement diagnostics have to meet.
+     */
+    internal fun v1SessionIdentities(): Set<AccessIdentity> = v1Sessions.trackedIdentities()
 
     override suspend fun accessToken(context: NacosOperationContext): String? = getValidAccessToken(context)
 

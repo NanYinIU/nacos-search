@@ -7,14 +7,15 @@ import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.DatasetConfirmation
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
-import com.nanyin.nacos.search.services.operations.ConnectionDiagnostic
 import com.nanyin.nacos.search.services.operations.DiagnosticSnapshot
-import com.nanyin.nacos.search.services.operations.GenerationResolver
+import com.nanyin.nacos.search.services.network.NacosRequestError
+import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.settings.AuthMode
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -288,8 +289,13 @@ class SessionGenerationIntegrationTest {
         assertNull(harnessEntombed.session.peekResolvedGeneration())
     }
 
+    /**
+     * Entered through production `diagnoseConnection` rather than a hand-built
+     * adapter stack: ADR-0022 constrains the wiring, so a test that assembles
+     * its own isolated gateway proves nothing about the one that ships.
+     */
     @Test
-    fun `isolated connection diagnostics neither join the shared flight nor write session generation`() = runBlocking {
+    fun `production connection diagnostics neither join the shared flight nor write session generation`() = runBlocking {
         // Warm the formal session first.
         harness.coordinator.requestIndex(
             harness.indexRequest(harness.autoContext()),
@@ -298,20 +304,7 @@ class SessionGenerationIntegrationTest {
         val formalProbes = harness.v3StateProbeCount()
         val sessionGen = harness.session.peekResolvedGeneration()
 
-        // Diagnostic uses the same adapters/executor path construction as production
-        // diagnoseConnection, but must not touch the formal session or flight.
-        val diagnosticTransport = SessionGenerationHarness.RecordingTransport()
-        val diagExecutor = com.nanyin.nacos.search.services.network.NacosRequestExecutor(diagnosticTransport)
-        val v1 = com.nanyin.nacos.search.services.operations.V1ProtocolAdapter(
-            com.nanyin.nacos.search.services.operations.NacosRequestExecutorProtocolTransport(diagExecutor)
-        )
-        val v3 = com.nanyin.nacos.search.services.operations.V3ProtocolAdapter(
-            com.nanyin.nacos.search.services.operations.NacosRequestExecutorProtocolTransport(diagExecutor)
-        )
-        val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(
-            mapOf(NacosApiGeneration.V1 to v1, NacosApiGeneration.V3 to v3)
-        )
-        val report = ConnectionDiagnostic(GenerationResolver(v3, v1), gateway).diagnose(
+        val report = harness.apiService.diagnoseConnection(
             DiagnosticSnapshot(
                 endpoint = "https://nacos.example",
                 apiPolicy = "AUTO",
@@ -321,12 +314,116 @@ class SessionGenerationIntegrationTest {
                 namespaceId = "public"
             )
         )
-        assertTrue(report.connected || report.stages.any { it.stage == "generation" })
-        // Formal session unchanged.
+
+        assertTrue(report.connected, "stages=${report.stages} urls=${harness.recordedUrls}")
+        // Formal session unchanged — the diagnostic resolved a generation for itself alone.
         assertEquals(sessionGen, harness.session.peekResolvedGeneration())
-        assertEquals(formalProbes, harness.v3StateProbeCount())
-        // Diagnostic issued its own probe on its own transport.
-        assertTrue(diagnosticTransport.urls.any { it.contains("/v3/admin/core/state") })
+        // It did not join the shared probe flight: joining would have reused the
+        // formal result and issued no probe of its own.
+        assertTrue(
+            harness.v3StateProbeCount() > formalProbes,
+            "diagnostic must probe independently: urls=${harness.recordedUrls}"
+        )
+    }
+
+    /**
+     * ADR-0022: a diagnostic runs on temporary authentication state and modifies
+     * no authentication registry.
+     *
+     * A NACOS_PASSWORD diagnostic used to authenticate through
+     * `NacosAuthService.getValidAccessToken` and therefore through
+     * `AuthenticationSessionRegistry`, which records a flight lock and an
+     * invalidation epoch under the synthetic "diagnostic" identity — and does so
+     * even when the login itself fails, since the lock is taken before the
+     * attempt. Tracked identities are the assertion because that is exactly the
+     * residue the registry keeps.
+     *
+     * The credential must be non-blank: `V1ProtocolAdapter.validate` rejects a
+     * NACOS_PASSWORD target with an empty secret before authentication is ever
+     * reached, which would make this pass no matter which authenticator is
+     * wired. The endpoint is a closed local port so the login attempt is
+     * refused immediately instead of reaching any network.
+     */
+    @Test
+    fun `NACOS_PASSWORD diagnostics leave no state in the shared authentication registry`() = runBlocking {
+        val authService = com.intellij.openapi.application.ApplicationManager.getApplication()
+            .getService(NacosAuthService::class.java)
+        val before = authService.v1SessionIdentities()
+
+        val report = harness.apiService.diagnoseConnection(
+            DiagnosticSnapshot(
+                endpoint = "http://127.0.0.1:1",
+                apiPolicy = "V1",
+                authStrategy = "NACOS_PASSWORD",
+                principal = "admin",
+                secret = "unapplied-draft-secret",
+                namespaceId = "public"
+            )
+        )
+
+        assertEquals(
+            before,
+            authService.v1SessionIdentities(),
+            "a diagnostic must leave no authentication state behind"
+        )
+        // It did reach V1 authentication rather than stopping earlier: the read
+        // stage is the one that failed, and it failed for want of a token.
+        assertFalse(report.connected, "stages=${report.stages}")
+        assertEquals("namespace_read", report.stages.last().stage)
+    }
+
+    /**
+     * `diagnoseConnection` runs on `RequestPolicy.DIAGNOSTIC`, not the ordinary
+     * interactive budget. The discriminator is wall-clock budget alone: the
+     * first probe burns 20s of the injected clock before failing retriably, so
+     * only a budget wider than INTERACTIVE's 15s leaves room for the retry that
+     * the attempt count (identical across both profiles) already permits.
+     */
+    @Test
+    fun `connection diagnostics run on the longer diagnostic budget`() = runBlocking {
+        var now = 0L
+        var stateProbes = 0
+        val transport = SessionGenerationHarness.RecordingTransport(
+            onRequest = { url ->
+                if (url.contains("/v3/admin/core/state")) {
+                    stateProbes++
+                    if (stateProbes == 1) {
+                        now += 20_000
+                        throw NacosRequestError.Server(503, "")
+                    }
+                }
+            }
+        )
+        val apiService = NacosApiService(
+            executorOverride = NacosRequestExecutor(transport, clock = { now }, jitterProvider = { 0L })
+        )
+
+        val report = apiService.diagnoseConnection(
+            DiagnosticSnapshot(
+                endpoint = "https://nacos.example",
+                apiPolicy = "AUTO",
+                authStrategy = "ANONYMOUS",
+                principal = "",
+                secret = "",
+                namespaceId = "public"
+            )
+        )
+
+        // The failed probe was retried immediately on the same seam, not surfaced
+        // and re-issued by a later stage: the first two requests are both probes.
+        assertEquals(
+            listOf(STATE_PROBE_URL, STATE_PROBE_URL),
+            transport.urls.take(2),
+            "diagnostic must still have budget to retry: urls=${transport.urls}"
+        )
+        // Under the 15s interactive budget the retry is out of time, the
+        // generation stage fails, and the diagnostic reports a dead connection.
+        assertTrue(report.connected, "stages=${report.stages}")
+        assertEquals(NacosApiGeneration.V3, report.stages[1].resolvedGeneration)
+    }
+
+    private companion object {
+        const val STATE_PROBE_URL = "https://nacos.example/nacos/v3/admin/core/state"
     }
 
     @Test
@@ -396,4 +493,58 @@ class SessionGenerationIntegrationTest {
         assertEquals(0, harness.v3StateProbeCount(), "urls=${harness.recordedUrls}")
         assertEquals(0, harness.probeRequestCount(), "urls=${harness.recordedUrls}")
     }
+
+    /**
+     * ADR-0021: retry budget is classified by operation kind at the transport
+     * seam, never by which trigger asked. A background preheat therefore retries
+     * a retriable list failure exactly like a foreground search does — the index
+     * coordinator has no preheat-vs-interactive knob to withhold it.
+     *
+     * This matters beyond symmetry: a namespace index load that fails marks the
+     * index non-authoritative and puts PSI into a five-minute cooldown, so
+     * surrendering a transient 503 on the preheat path degrades gutter markers
+     * far longer than the retry it saved.
+     */
+    @Test
+    fun `preheat retries a retriable list failure exactly like an interactive trigger`() = runBlocking {
+        val attemptsByTrigger = mutableMapOf<IndexTrigger, Int>()
+
+        for (trigger in listOf(IndexTrigger.NAMESPACE_SWITCH, IndexTrigger.PSI, IndexTrigger.MANUAL_REFRESH)) {
+            var listAttempts = 0
+            val flaky = SessionGenerationHarness(
+                transport = SessionGenerationHarness.RecordingTransport(
+                    onRequest = { url ->
+                        if (url.contains("/v1/cs/configs")) {
+                            listAttempts++
+                            // Fail the first attempt only; a retry must reach the server.
+                            if (listAttempts == 1) throw NacosRequestError.Server(503, "")
+                        }
+                    }
+                )
+            )
+            flaky.cacheService.clearAll()
+
+            val outcome = flaky.coordinator.requestIndex(
+                flaky.indexRequest(flaky.lockedContext(NacosApiGeneration.V1), namespaceId = "retry-ns"),
+                trigger
+            )
+
+            assertTrue(
+                outcome is IndexOutcome.Complete,
+                "$trigger should recover from a transient 503: outcome=$outcome urls=${flaky.recordedUrls}"
+            )
+            attemptsByTrigger[trigger] = listAttempts
+        }
+
+        assertEquals(
+            mapOf(
+                IndexTrigger.NAMESPACE_SWITCH to 2,
+                IndexTrigger.PSI to 2,
+                IndexTrigger.MANUAL_REFRESH to 2
+            ),
+            attemptsByTrigger,
+            "every trigger gets the same transport retry budget"
+        )
+    }
+
 }
