@@ -227,16 +227,17 @@ class NamespaceIndexCoordinator internal constructor(
     private suspend fun executeIndex(request: NamespaceIndexRequest, policy: RequestPolicy): IndexOutcome {
         val key = request.key
         return try {
-            val v1Context = request.operationContext?.takeIf {
-                it.resolvedGeneration == NacosApiGeneration.V1
-            }
-            val result = if (v1Context != null) {
+            // Prefer the captured operation context for every generation so AUTO
+            // resolves once per project session and V1/V3 locked profiles use the
+            // gateway. The legacy server-snapshot path remains only for callers
+            // that have not yet captured a context (and for characterisation tests).
+            val result = if (request.operationContext != null) {
                 apiService.loadNamespace(
                     key.namespaceId,
                     useCache = false,
                     server = null,
                     policy = policy,
-                    operationContext = v1Context
+                    operationContext = request.operationContext
                 )
             } else {
                 apiService.loadNamespace(key.namespaceId, useCache = false, server = request.server, policy = policy)
