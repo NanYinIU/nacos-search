@@ -132,7 +132,11 @@ class NacosRequestExecutor(
 }
 
 /**
- * Production transport backed by IntelliJ [com.intellij.util.io.HttpRequests].
+ * Production transport backed by [java.net.HttpURLConnection] for both GET and
+ * POST. IntelliJ `HttpRequests` is deliberately not used: it discards the
+ * response body of a non-2xx, and protocol adapters need that body to tell a
+ * refused-or-expired token from a permission denial (issue #39).
+ *
  * Preserves the second-attempt compatibility headers (Connection: close,
  * Accept-Encoding: identity) that work around broken chunked-encoding on
  * some Nacos servers / reverse proxies.
@@ -196,8 +200,6 @@ object DefaultHttpTransport : NacosRequestExecutor.HttpTransport {
             throw NacosRequestError.ReadTimeout(e)
         } catch (e: java.net.ConnectException) {
             throw NacosRequestError.Connection(e)
-        } catch (e: NacosRequestError) {
-            throw e
         } catch (e: java.io.IOException) {
             val status = extractStatus(e)
             if (status != null) {
@@ -225,11 +227,18 @@ object DefaultHttpTransport : NacosRequestExecutor.HttpTransport {
         }
     }
 
-    /** Strip anything that looks like a credential from upstream error body. */
+    /**
+     * Strip anything that looks like a credential from an upstream error body.
+     *
+     * The masked run stops at `"` and `}` as well as whitespace and `,`: this
+     * body is now parsed, not just logged, so swallowing the delimiters of a
+     * JSON error envelope would turn a classifiable authentication failure into
+     * an unparseable one (issue #39).
+     */
     private fun sanitizeBody(body: String): String {
         return body
-            .replace(Regex("(?i)(Authorization)[:\\s]*[^\\s,]+"), "$1: ***")
-            .replace(Regex("(?i)(accessToken)[=]&?[^&\\s]+"), "$1=***")
+            .replace(Regex("(?i)(authorization)[\"\\s:=]*[^\"\\s,}]*"), "$1: ***")
+            .replace(Regex("(?i)(accesstoken)[\"\\s:=&]*[^\"\\s,&}]*"), "$1=***")
             .take(500)
     }
 }

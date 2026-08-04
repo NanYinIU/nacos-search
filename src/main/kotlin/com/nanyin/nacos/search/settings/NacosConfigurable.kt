@@ -924,6 +924,11 @@ class NacosConfigurable @JvmOverloads constructor(
         // put the credential value into any comparison key.
         val oldActiveId = settings.activeServerId
         val oldAccessRevision = settings.getActiveProfile()?.accessRevision
+        // Namespace is not part of the access revision (it is not an
+        // EnvironmentProfile field), but it still selects which dataset the tool
+        // window shows, so it must keep forcing a reload the way the old
+        // signature did. Connection timeout deliberately does not.
+        val oldNamespace = settings.getActiveServer().namespace
 
         // Apply draft to settings
         settings.applyServers(draftServers, draftActiveId)
@@ -944,7 +949,8 @@ class NacosConfigurable @JvmOverloads constructor(
         languageService.setLanguage(selectedLanguage.code)
 
         val connectionChanged = oldActiveId != settings.activeServerId ||
-            settings.getActiveProfile()?.accessRevision != oldAccessRevision
+            settings.getActiveProfile()?.accessRevision != oldAccessRevision ||
+            settings.getActiveServer().namespace != oldNamespace
 
         val publisher = ApplicationManager.getApplication().messageBus
             .syncPublisher(NacosSettingsListener.TOPIC)

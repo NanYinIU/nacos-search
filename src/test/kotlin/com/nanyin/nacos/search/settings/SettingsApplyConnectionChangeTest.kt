@@ -97,6 +97,23 @@ class SettingsApplyConnectionChangeTest {
     }
 
     @Test
+    fun `namespace-only change publishes connection-changed`() {
+        // Namespace is not part of the access revision, but it selects which
+        // dataset the tool window shows: preferences-only would leave the list
+        // on the previous namespace's configurations.
+        val before = settings.getActiveProfile()!!.accessRevision
+        val events = recordNotifications {
+            val configurable = openConfigurable()
+            privateField<JTextField>(configurable, "namespaceField").text = "dev-ns"
+            configurable.apply()
+        }
+        assertEquals(listOf("settingsChanged"), events)
+        assertEquals("dev-ns", settings.getActiveServer().namespace)
+        // The credential/endpoint identity did not change, so the revision holds.
+        assertEquals(before, settings.getActiveProfile()!!.accessRevision)
+    }
+
+    @Test
     fun `switching the active environment publishes connection-changed`() {
         val events = recordNotifications {
             val configurable = openConfigurable()

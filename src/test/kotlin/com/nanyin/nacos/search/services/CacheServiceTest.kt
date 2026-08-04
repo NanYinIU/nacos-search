@@ -652,6 +652,35 @@ class CacheServiceTest {
     }
 
     @Test
+    fun `namespace index entry exposes creation timestamp for cache age`() = runBlocking {
+        // The local-index search path reports age from this timestamp; without it
+        // a stale index rendered as WITHIN_TTL (issue #42).
+        var now = 9_000_000L
+        val cache = CacheService { now }
+        val identity = AccessIdentity.of("http://index-age-test", AuthMode.BASIC, "alice")
+        cache.putNamespaceIndex(
+            identity,
+            "public",
+            listOf(NacosConfiguration("app.yaml", "DEFAULT_GROUP", "public", "feature=true", "yaml")),
+            ttl = 60_000L
+        )
+
+        val fresh = cache.getNamespaceIndexEntry(identity, "public")
+        assertEquals(9_000_000L, fresh?.createdAtMillis)
+        assertEquals(listOf("app.yaml"), fresh?.data?.map { it.dataId })
+
+        // Past the entry TTL the read still reports the original creation time
+        // when stale is allowed, so age is derived from the entry, not from now.
+        now = 9_000_000L + 90_000L
+        assertNull(cache.getNamespaceIndexEntry(identity, "public"))
+        assertEquals(
+            9_000_000L,
+            cache.getNamespaceIndexEntry(identity, "public", allowStale = true)?.createdAtMillis
+        )
+        cache.dispose()
+    }
+
+    @Test
     fun `entombed profile rejects late cache writes while other identities persist`() = runBlocking {
         val tombstones = ProfileTombstoneRegistry()
         val cache = CacheService({ 0L }, tombstones)

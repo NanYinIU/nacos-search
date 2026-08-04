@@ -325,7 +325,7 @@ class NacosSearchService(
                     response,
                     configurations,
                     SearchSource.REMOTE,
-                    confidenceFor(SearchSource.REMOTE, configurations.size),
+                    confidenceFor(SearchSource.REMOTE, configurations.size, fetchedAtMillis = null),
                     coverageFor(request, context, response.totalCount)
                 )
             )
@@ -375,14 +375,19 @@ class NacosSearchService(
         val indexRequest = settings.captureNamespaceIndexRequest(namespaceId, snapshot, context)
         val indexKey = indexRequest.key
         val cachedIndex = if (!request.forceRefresh && settings.cacheEnabled) {
-            cacheService.getNamespaceIndex(indexKey.identity, namespaceId)
+            cacheService.getNamespaceIndexEntry(indexKey.identity, namespaceId)
         } else {
             null
         }
         val source: SearchSource
+        // Carried alongside [source] so the index-backed path reports age from the
+        // cached entry's own timestamp, exactly like the list-page path does
+        // (issue #42 / ADR-0036). Without it a stale index rendered as WITHIN_TTL.
+        val indexFetchedAtMillis: Long?
         val allConfigurations = if (cachedIndex != null) {
             source = SearchSource.CACHE
-            cachedIndex
+            indexFetchedAtMillis = cachedIndex.createdAtMillis
+            cachedIndex.data
         } else {
             val coordinator = indexRequester
                 ?: ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java)
@@ -392,15 +397,21 @@ class NacosSearchService(
                     .getService(NavigationIndexRefreshService::class.java)
                     .refresh(indexKey.identity, null)
             }
-            val loadedIndex = cacheService.getNamespaceIndex(indexKey.identity, namespaceId)
+            val loadedIndex = cacheService.getNamespaceIndexEntry(indexKey.identity, namespaceId)
             if (outcome is IndexOutcome.Complete && loadedIndex != null) {
                 source = SearchSource.REMOTE
-                loadedIndex
+                indexFetchedAtMillis = loadedIndex.createdAtMillis
+                loadedIndex.data
             } else {
-                val staleIndex = cacheService.getNamespaceIndex(indexKey.identity, namespaceId, allowStale = true)
+                val staleIndex = cacheService.getNamespaceIndexEntry(
+                    indexKey.identity,
+                    namespaceId,
+                    allowStale = true
+                )
                 if (staleIndex != null) {
                     source = SearchSource.STALE_CACHE
-                    staleIndex
+                    indexFetchedAtMillis = staleIndex.createdAtMillis
+                    staleIndex.data
                 } else {
                     val error = (outcome as? IndexOutcome.Failed)?.error
                         ?: IllegalStateException("Namespace index load did not produce a complete dataset")
@@ -432,7 +443,12 @@ class NacosSearchService(
                 response,
                 fromIndex,
                 source,
-                confidenceFor(source, fromIndex.size, filtered.size),
+                confidenceFor(
+                    source,
+                    fromIndex.size,
+                    filtered.size,
+                    fetchedAtMillis = indexFetchedAtMillis
+                ),
                 coverageForLocalIndex(request, context, filtered.size, allConfigurations.size)
             )
         )
@@ -475,11 +491,16 @@ class NacosSearchService(
         }
     }
 
+    /**
+     * [fetchedAtMillis] deliberately has no default: a cache-backed source that
+     * forgets it would silently report WITHIN_TTL, which is the defect issue #42
+     * exists to remove. Omitting it is a compile error; REMOTE passes null.
+     */
     private fun confidenceFor(
         source: SearchSource,
         pageCount: Int,
         totalCount: Int = pageCount,
-        fetchedAtMillis: Long? = null,
+        fetchedAtMillis: Long?,
         nowMillis: Long = System.currentTimeMillis()
     ): CacheConfidence {
         val completeness = if (totalCount > 0 && pageCount < totalCount) {

@@ -236,7 +236,7 @@ class CacheService internal constructor(
         val entry = listPageCache[key] ?: run { cacheMisses.incrementAndGet(); return null }
         if (!entry.isExpired(currentTimeMillis()) || allowStale) {
             cacheHits.incrementAndGet()
-            return CachedListPage(entry.data, entry.createdAt, entry.ttlMs)
+            return CachedListPage(entry.data, entry.createdAt)
         }
         cacheMisses.incrementAndGet()
         return null
@@ -245,8 +245,7 @@ class CacheService internal constructor(
     /** Payload plus the entry metadata needed for age / confidence reporting. */
     data class CachedListPage(
         val data: NacosApiService.ConfigListResponse,
-        val createdAtMillis: Long,
-        val ttlMs: Long
+        val createdAtMillis: Long
     )
 
     suspend fun putListPage(
@@ -476,23 +475,42 @@ class CacheService internal constructor(
     ): List<NacosConfiguration>? {
         loadCompleted.await()
         val key = namespaceKey(serverUrl, namespaceId)
-        return getNamespaceIndexByKey(key, allowStale)
+        return getNamespaceIndexByKey(key, allowStale)?.data
     }
 
     suspend fun getNamespaceIndex(
         identity: AccessIdentity,
         namespaceId: String?,
         allowStale: Boolean = false
-    ): List<NacosConfiguration>? {
+    ): List<NacosConfiguration>? =
+        getNamespaceIndexEntry(identity, namespaceId, allowStale)?.data
+
+    /**
+     * Namespace-index read that also returns the entry's creation timestamp so
+     * callers can derive [com.nanyin.nacos.search.models.CacheAge] from the
+     * cached entry itself (issue #42) rather than from "now". The local-index
+     * search path reports age from this, exactly as the list-page path does.
+     */
+    suspend fun getNamespaceIndexEntry(
+        identity: AccessIdentity,
+        namespaceId: String?,
+        allowStale: Boolean = false
+    ): CachedNamespaceIndex? {
         loadCompleted.await()
         return getNamespaceIndexByKey(namespaceKey(identity, namespaceId), allowStale)
     }
 
-    private fun getNamespaceIndexByKey(key: String, allowStale: Boolean): List<NacosConfiguration>? {
+    /** Payload plus the entry metadata needed for age / confidence reporting. */
+    data class CachedNamespaceIndex(
+        val data: List<NacosConfiguration>,
+        val createdAtMillis: Long
+    )
+
+    private fun getNamespaceIndexByKey(key: String, allowStale: Boolean): CachedNamespaceIndex? {
         val entry = namespaceIndexCache[key] ?: run { cacheMisses.incrementAndGet(); return null }
         if (!entry.isExpired(currentTimeMillis()) || allowStale) {
             cacheHits.incrementAndGet()
-            return entry.data
+            return CachedNamespaceIndex(entry.data, entry.createdAt)
         }
         cacheMisses.incrementAndGet()
         return null
