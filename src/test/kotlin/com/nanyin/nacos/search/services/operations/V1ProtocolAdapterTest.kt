@@ -3,6 +3,8 @@ package com.nanyin.nacos.search.services.operations
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
 import com.nanyin.nacos.search.models.NacosApiGeneration
+import com.nanyin.nacos.search.services.network.NacosRequestError
+import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.CredentialSnapshot
 import com.nanyin.nacos.search.settings.NacosOperationContext
@@ -117,13 +119,14 @@ class V1ProtocolAdapterTest {
 
     @Test
     fun `invalid Nacos password token relogins once and replays the idempotent V1 read`() = runBlocking {
-        val transport = QueuedTransport(
-            ProtocolResponse(403, """{"code":403,"message":"token is invalid"}"""),
-            ProtocolResponse(
-                200,
-                """{"totalCount":0,"pageNumber":1,"pagesAvailable":0,"pageItems":[]}"""
-            )
+        // Drive the same evidence the production transport carries: a typed
+        // Authentication error with a sanitized body (not a hand-built
+        // ProtocolResponse the gateway used to empty out — issue #39).
+        val http = SequencingHttpTransport(
+            { throw NacosRequestError.Authentication(403, """{"code":403,"message":"token is invalid"}""") },
+            { """{"totalCount":0,"pageNumber":1,"pagesAvailable":0,"pageItems":[]}""" }
         )
+        val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
         val authenticator = RecordingV1Authenticator(listOf("stale", "fresh"))
 
         val page = V1ProtocolAdapter(transport, authenticator)
@@ -131,18 +134,17 @@ class V1ProtocolAdapterTest {
             .getOrThrow()
 
         assertEquals(0, page.totalCount)
-        assertEquals(2, transport.requests.size)
-        assertEquals("stale", transport.requests[0].query.single { it.first == "accessToken" }.second)
-        assertEquals("fresh", transport.requests[1].query.single { it.first == "accessToken" }.second)
+        assertEquals(2, http.calls)
         assertEquals(1, authenticator.invalidations)
         assertEquals(2, authenticator.requests)
     }
 
     @Test
     fun `permission denial does not invalidate or replay a Nacos password read`() = runBlocking {
-        val transport = QueuedTransport(
-            ProtocolResponse(403, """{"code":403,"message":"permission denied"}""")
+        val http = SequencingHttpTransport(
+            { throw NacosRequestError.Authentication(403, """{"code":403,"message":"permission denied"}""") }
         )
+        val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
         val authenticator = RecordingV1Authenticator(listOf("current"))
 
         val error = V1ProtocolAdapter(transport, authenticator)
@@ -150,7 +152,7 @@ class V1ProtocolAdapterTest {
             .exceptionOrNull()
 
         assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
-        assertEquals(1, transport.requests.size)
+        assertEquals(1, http.calls)
         assertEquals(0, authenticator.invalidations)
         assertEquals(1, authenticator.requests)
     }
@@ -299,6 +301,28 @@ class V1ProtocolAdapterTest {
 
         override fun invalidate(context: NacosOperationContext) {
             invalidations += 1
+        }
+    }
+
+    /**
+     * Production-shaped HTTP seam: throws [NacosRequestError] the way
+     * [DefaultHttpTransport] does, so recovery is exercised through the real
+     * [NacosRequestExecutorProtocolTransport] rematerialisation.
+     */
+    private class SequencingHttpTransport(
+        private vararg val steps: () -> String
+    ) : NacosRequestExecutor.HttpTransport {
+        private val remaining = ArrayDeque(steps.toList())
+        var calls = 0
+
+        override fun get(request: NacosRequestExecutor.TransportRequest): String {
+            calls += 1
+            return remaining.removeFirst().invoke()
+        }
+
+        override fun post(request: NacosRequestExecutor.TransportRequest): String {
+            calls += 1
+            return remaining.removeFirst().invoke()
         }
     }
 }

@@ -917,12 +917,13 @@ class NacosConfigurable @JvmOverloads constructor(
             throw java.lang.IllegalStateException("Invalid server URL")
         }
 
-        // Capture connection-affecting fields of the active server BEFORE apply,
-        // so we can distinguish a full connection change from a preference-only
-        // change (e.g. toggling allowCrossNamespaceNavigation).
-        val oldActive = settings.getActiveServer()
-        val oldConnectionSig = connectionSignature(oldActive)
+        // Decide connection-vs-preferences from the profile's access revision
+        // (endpoint, API policy, auth strategy, principal, secret). The old
+        // hand-built signature omitted password and API policy, so those
+        // changes incorrectly published preferences-only (issue #41). Never
+        // put the credential value into any comparison key.
         val oldActiveId = settings.activeServerId
+        val oldAccessRevision = settings.getActiveProfile()?.accessRevision
 
         // Apply draft to settings
         settings.applyServers(draftServers, draftActiveId)
@@ -942,9 +943,8 @@ class NacosConfigurable @JvmOverloads constructor(
         val selectedLanguage = languageComboBox.selectedItem as LanguageService.SupportedLanguage
         languageService.setLanguage(selectedLanguage.code)
 
-        val newActive = settings.getActiveServer()
         val connectionChanged = oldActiveId != settings.activeServerId ||
-            connectionSignature(newActive) != oldConnectionSig
+            settings.getActiveProfile()?.accessRevision != oldAccessRevision
 
         val publisher = ApplicationManager.getApplication().messageBus
             .syncPublisher(NacosSettingsListener.TOPIC)
@@ -1083,9 +1083,6 @@ class NacosConfigurable @JvmOverloads constructor(
         override fun removeUpdate(e: DocumentEvent?) = callback()
         override fun changedUpdate(e: DocumentEvent?) = callback()
     }
-
-    private fun connectionSignature(server: NacosServerConfig): String =
-        "${server.serverUrl}|${server.username}|${server.authMode}|${server.namespace}|${server.connectionTimeoutMs}"
 
     private fun apiPolicyLabelKey(policy: NacosApiPolicy): String = when (policy) {
         NacosApiPolicy.AUTO -> "settings.api.generation.auto.label"

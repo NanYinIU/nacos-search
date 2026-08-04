@@ -74,4 +74,50 @@ class CacheConfidenceTest {
     fun `null fetchedAt is treated as within TTL`() {
         assertEquals(CacheAge.WITHIN_TTL, CacheAgeCalculator.compute(null, 1000L, 500L))
     }
+
+    @Test
+    fun `controllable clock walks all three age bands for a restored cache entry`() {
+        // Simulates a list-page entry created once, then observed at three later
+        // wall-clock moments — age comes from the entry timestamp, not "now==fetchedAt".
+        val createdAt = 1_000_000L
+        val ttl = 5 * 60 * 1000L
+        val deepStale = CacheAgeCalculator.DEEP_STALE_THRESHOLD_MILLIS
+
+        val withinTtl = CacheConfidence.restoredUnconfirmed(
+            DatasetCompleteness.COMPLETE,
+            CacheAgeCalculator.compute(createdAt, createdAt + ttl, ttl),
+            createdAt
+        )
+        val stale = CacheConfidence.restoredUnconfirmed(
+            DatasetCompleteness.COMPLETE,
+            CacheAgeCalculator.compute(createdAt, createdAt + ttl + 1, ttl),
+            createdAt
+        )
+        val deep = CacheConfidence.restoredUnconfirmed(
+            DatasetCompleteness.COMPLETE,
+            CacheAgeCalculator.compute(createdAt, createdAt + deepStale + 1, ttl),
+            createdAt
+        )
+
+        assertEquals(CacheAge.WITHIN_TTL, withinTtl.age)
+        assertEquals(DatasetConfirmation.UNCONFIRMED, withinTtl.confirmation)
+        assertEquals(CacheAge.STALE, stale.age)
+        assertEquals(DatasetConfirmation.UNCONFIRMED, stale.confirmation)
+        assertEquals(CacheAge.DEEP_STALE, deep.age)
+        assertEquals(DatasetConfirmation.UNCONFIRMED, deep.confirmation)
+
+        // Failed refresh changes confirmation without rewriting age (ADR-0036).
+        val failedWhileDeep = CacheConfidence.refreshFailed(
+            DatasetCompleteness.COMPLETE,
+            deep.age,
+            createdAt
+        )
+        assertEquals(DatasetConfirmation.REFRESH_FAILED, failedWhileDeep.confirmation)
+        assertEquals(CacheAge.DEEP_STALE, failedWhileDeep.age)
+    }
+
+    @Test
+    fun `deep-stale threshold has a single public definition`() {
+        assertEquals(7L * 24 * 60 * 60 * 1000, CacheAgeCalculator.DEEP_STALE_THRESHOLD_MILLIS)
+    }
 }

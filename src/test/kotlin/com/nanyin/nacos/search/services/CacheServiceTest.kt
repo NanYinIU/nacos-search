@@ -631,6 +631,27 @@ class CacheServiceTest {
         cacheService.clearAll()
     }
     @Test
+    fun `list page entry exposes creation timestamp for cache age`() = runBlocking {
+        var now = 5_000_000L
+        val cache = CacheService { now }
+        val identity = AccessIdentity.of("http://age-test", AuthMode.BASIC, "alice")
+        val response = NacosApiService.ConfigListResponse(
+            totalCount = 0,
+            pageNumber = 1,
+            pagesAvailable = 0,
+            pageItems = emptyList()
+        )
+        cache.putListPage(identity, "public", "key-1", response, ttl = 60_000L)
+        val entry = cache.getListPageEntry(identity, "public", "key-1")
+        assertEquals(5_000_000L, entry?.createdAtMillis)
+
+        now = 5_000_000L + 30_000L // still within TTL
+        val stillFresh = cache.getListPageEntry(identity, "public", "key-1")
+        assertEquals(5_000_000L, stillFresh?.createdAtMillis)
+        cache.dispose()
+    }
+
+    @Test
     fun `entombed profile rejects late cache writes while other identities persist`() = runBlocking {
         val tombstones = ProfileTombstoneRegistry()
         val cache = CacheService({ 0L }, tombstones)
@@ -640,10 +661,22 @@ class CacheServiceTest {
         tombstones.entomb(entombed.profileId, 1)
 
         cache.putConfigDetail(entombed, "ns", NacosConfiguration("d", "g", "ns", "late", "text"))
+        cache.putNamespaceDetails(
+            entombed,
+            "ns",
+            listOf(NacosConfiguration("partial", "g", "ns", "resurrected", "text"))
+        )
         cache.putConfigDetail(survivor, "ns", NacosConfiguration("d", "g", "ns", "kept", "text"))
+        cache.putNamespaceDetails(
+            survivor,
+            "ns",
+            listOf(NacosConfiguration("partial", "g", "ns", "survivor-partial", "text"))
+        )
 
         assertNull(cache.getConfigDetail(entombed, "ns", "d", "g"))
+        assertNull(cache.getConfigDetail(entombed, "ns", "partial", "g"))
         assertEquals("kept", cache.getConfigDetail(survivor, "ns", "d", "g")?.content)
+        assertEquals("survivor-partial", cache.getConfigDetail(survivor, "ns", "partial", "g")?.content)
         cache.dispose()
     }
 

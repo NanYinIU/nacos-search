@@ -8,6 +8,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.models.CacheAgeCalculator
 import com.nanyin.nacos.search.settings.AuthMode
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -55,9 +56,22 @@ class CacheService internal constructor(
      * stale responses cannot resurrect the entombed profile's state (design
      * §13.1, §19.2). Identity-keyed writes silently drop when the identity's
      * profile has been entombed.
+     *
+     * Every identity-scoped writer **must** go through [identityScopedWrite];
+     * the guard is not optional per call site.
      */
     private fun isRejectedByTombstone(identity: AccessIdentity): Boolean =
         tombstones.isEntombed(identity)
+
+    /**
+     * Single gated entry for identity-scoped cache mutations. Returns null and
+     * skips [write] when the profile is entombed, so a future writer cannot
+     * omit the tombstone check (issue #40).
+     */
+    private suspend fun <T> identityScopedWrite(identity: AccessIdentity, write: suspend () -> T): T? {
+        if (isRejectedByTombstone(identity)) return null
+        return write()
+    }
 
 
     private val cacheHits = AtomicLong(0)
@@ -151,9 +165,8 @@ class CacheService internal constructor(
         private const val LIST_PAGE_KEY_PREFIX = "nacos.cache.list."
         private const val LIST_PAGE_KEYS_LIST = "nacos.cache.list.keys"
        private const val DEFAULT_TTL = 300_000L
-       // Age at which a stale detail requires a forced single-detail refresh.
-       // It remains navigable and is still bounded by capacity/manual cleanup.
-       private const val DEEP_STALE_AGE_MILLIS = 7L * 24 * 60 * 60 * 1000
+       // Single definition lives on CacheAgeCalculator (issue #42).
+       private const val DEEP_STALE_AGE_MILLIS = CacheAgeCalculator.DEEP_STALE_THRESHOLD_MILLIS
        private const val MAX_CACHE_SIZE = 1000
         // Trigger the oversized-caches sweep only once the cache grows past the hard
         // cap by this margin, so per-insert writes stay O(1) instead of O(n).
@@ -204,17 +217,37 @@ class CacheService internal constructor(
         namespaceId: String?,
         requestKey: String,
         allowStale: Boolean = false
-    ): NacosApiService.ConfigListResponse? {
+    ): NacosApiService.ConfigListResponse? =
+        getListPageEntry(identity, namespaceId, requestKey, allowStale)?.data
+
+    /**
+     * List-page read that also returns the entry's creation timestamp so
+     * callers can derive [com.nanyin.nacos.search.models.CacheAge] from the
+     * cached entry itself (issue #42) rather than from "now".
+     */
+    suspend fun getListPageEntry(
+        identity: AccessIdentity,
+        namespaceId: String?,
+        requestKey: String,
+        allowStale: Boolean = false
+    ): CachedListPage? {
         loadCompleted.await()
         val key = listPageKey(identity, namespaceId, requestKey)
         val entry = listPageCache[key] ?: run { cacheMisses.incrementAndGet(); return null }
         if (!entry.isExpired(currentTimeMillis()) || allowStale) {
             cacheHits.incrementAndGet()
-            return entry.data
+            return CachedListPage(entry.data, entry.createdAt, entry.ttlMs)
         }
         cacheMisses.incrementAndGet()
         return null
     }
+
+    /** Payload plus the entry metadata needed for age / confidence reporting. */
+    data class CachedListPage(
+        val data: NacosApiService.ConfigListResponse,
+        val createdAtMillis: Long,
+        val ttlMs: Long
+    )
 
     suspend fun putListPage(
         serverUrl: String,
@@ -241,13 +274,14 @@ class CacheService internal constructor(
         ttl: Long = DEFAULT_TTL,
         source: CacheSource = CacheSource.REMOTE
     ) {
-        if (isRejectedByTombstone(identity)) return
-        cacheMutex.withLock {
-            val key = listPageKey(identity, namespaceId, requestKey)
-            listPageCache[key] = CacheEntry(CacheEntryType.LIST_PAGE, response, currentTimeMillis(), ttl, source)
-            persistListPage(key, listPageCache[key]!!)
-            updateListPageKeysList()
-            cleanupOversizedCaches()
+        identityScopedWrite(identity) {
+            cacheMutex.withLock {
+                val key = listPageKey(identity, namespaceId, requestKey)
+                listPageCache[key] = CacheEntry(CacheEntryType.LIST_PAGE, response, currentTimeMillis(), ttl, source)
+                persistListPage(key, listPageCache[key]!!)
+                updateListPageKeysList()
+                cleanupOversizedCaches()
+            }
         }
     }
 
@@ -330,13 +364,14 @@ class CacheService internal constructor(
         ttl: Long = DEFAULT_TTL,
         source: CacheSource = CacheSource.REMOTE
     ) {
-        if (isRejectedByTombstone(identity)) return
-        putConfigDetailByKey(
-            detailKey(identity, namespaceId, configuration.dataId, configuration.group),
-            configuration,
-            ttl,
-            source
-        )
+        identityScopedWrite(identity) {
+            putConfigDetailByKey(
+                detailKey(identity, namespaceId, configuration.dataId, configuration.group),
+                configuration,
+                ttl,
+                source
+            )
+        }
     }
 
     private suspend fun putConfigDetailByKey(
@@ -401,7 +436,12 @@ class CacheService internal constructor(
         ttl: Long = DEFAULT_TTL,
         source: CacheSource = CacheSource.REMOTE
     ) {
-        putNamespaceDetailsByIdentity(identity, identity.serverId, namespaceId, configurations, ttl, source)
+        // Partial namespace loads go through this path; without the tombstone
+        // gate a mid-flight load after profile deletion would resurrect details
+        // (issue #40 / ADR-0025).
+        identityScopedWrite(identity) {
+            putNamespaceDetailsByIdentity(identity, identity.serverId, namespaceId, configurations, ttl, source)
+        }
     }
 
     private suspend fun putNamespaceDetailsByIdentity(
@@ -475,8 +515,9 @@ class CacheService internal constructor(
         ttl: Long = DEFAULT_TTL,
         source: CacheSource = CacheSource.REMOTE
     ) {
-        if (isRejectedByTombstone(identity)) return
-        putNamespaceIndexByIdentity(identity, identity.serverId, namespaceId, configurations, ttl, source)
+        identityScopedWrite(identity) {
+            putNamespaceIndexByIdentity(identity, identity.serverId, namespaceId, configurations, ttl, source)
+        }
     }
 
     private suspend fun putNamespaceIndexByIdentity(

@@ -2,7 +2,6 @@ package com.nanyin.nacos.search.services
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
-import com.nanyin.nacos.search.models.CacheAge
 import com.nanyin.nacos.search.models.CacheAgeCalculator
 import com.nanyin.nacos.search.models.CacheConfidence
 import com.nanyin.nacos.search.models.DatasetCompleteness
@@ -260,22 +259,26 @@ class NacosSearchService(
         val requestKey = request.toCacheKey()
         val preferCache = !request.forceRefresh && settings.cacheEnabled
         if (preferCache) {
-            val cached = cacheService.getListPage(
+            val cached = cacheService.getListPageEntry(
                 context.identity,
                 request.namespace?.namespaceId,
                 request.toApiListPageCacheKey()
             )
             if (cached != null) {
-                val configurations = cached.pageItems.map {
+                val configurations = cached.data.pageItems.map {
                     it.toMetadataConfiguration(request.namespace?.namespaceId)
                 }
                 lastCompletedRequestKey = requestKey
                 return Result.success(
                     SearchExecutionResult(
-                        cached,
+                        cached.data,
                         configurations,
                         SearchSource.CACHE,
-                        confidenceFor(SearchSource.CACHE, configurations.size)
+                        confidenceFor(
+                            SearchSource.CACHE,
+                            configurations.size,
+                            fetchedAtMillis = cached.createdAtMillis
+                        )
                     )
                 )
             }
@@ -328,22 +331,26 @@ class NacosSearchService(
             )
         }
 
-        val stale = cacheService.getListPage(
+        val stale = cacheService.getListPageEntry(
             context.identity,
             request.namespace?.namespaceId,
             request.toApiListPageCacheKey(),
             allowStale = true
         )
         if (stale != null) {
-            val configurations = stale.pageItems.map {
+            val configurations = stale.data.pageItems.map {
                 it.toMetadataConfiguration(request.namespace?.namespaceId)
             }
             return Result.success(
                 SearchExecutionResult(
-                    stale,
+                    stale.data,
                     configurations,
                     SearchSource.STALE_CACHE,
-                    confidenceFor(SearchSource.STALE_CACHE, configurations.size)
+                    confidenceFor(
+                        SearchSource.STALE_CACHE,
+                        configurations.size,
+                        fetchedAtMillis = stale.createdAtMillis
+                    )
                 )
             )
         }
@@ -471,22 +478,33 @@ class NacosSearchService(
     private fun confidenceFor(
         source: SearchSource,
         pageCount: Int,
-        totalCount: Int = pageCount
+        totalCount: Int = pageCount,
+        fetchedAtMillis: Long? = null,
+        nowMillis: Long = System.currentTimeMillis()
     ): CacheConfidence {
         val completeness = if (totalCount > 0 && pageCount < totalCount) {
             DatasetCompleteness.PARTIAL
         } else {
             DatasetCompleteness.COMPLETE
         }
-        val now = System.currentTimeMillis()
-        val age = CacheAgeCalculator.compute(now, now, settings.getCacheTtlMillis())
+        // Age is derived from the cached entry's own creation time, not from
+        // the moment this result is assembled (issue #42 / ADR-0036).
+        val age = CacheAgeCalculator.compute(
+            fetchedAtMillis,
+            nowMillis,
+            settings.getCacheTtlMillis()
+        )
         return when (source) {
-            SearchSource.REMOTE -> CacheConfidence.remoteConfirmed(now, completeness)
-            SearchSource.CACHE -> CacheConfidence.restoredUnconfirmed(completeness, age, now)
+            SearchSource.REMOTE -> CacheConfidence.remoteConfirmed(nowMillis, completeness)
+            SearchSource.CACHE -> CacheConfidence.restoredUnconfirmed(
+                completeness,
+                age,
+                fetchedAtMillis
+            )
             SearchSource.STALE_CACHE -> CacheConfidence.refreshFailed(
                 completeness,
-                CacheAge.STALE,
-                now - settings.getCacheTtlMillis()
+                age,
+                fetchedAtMillis
             )
         }
     }

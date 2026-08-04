@@ -91,8 +91,11 @@ class ProtocolTransportTest {
     }
 
     @Test
-    fun `GET preserves 403 status from a thrown authentication error`() = runBlocking {
-        val executor = NacosRequestExecutor(ThrowingTransport { throw NacosRequestError.Authentication(403) })
+    fun `GET preserves 403 status and sanitized body from a thrown authentication error`() = runBlocking {
+        val body = """{"code":403,"message":"token is invalid"}"""
+        val executor = NacosRequestExecutor(
+            ThrowingTransport { throw NacosRequestError.Authentication(403, body) }
+        )
         val transport = NacosRequestExecutorProtocolTransport(executor)
 
         val response = transport.execute(ProtocolRequest(
@@ -101,6 +104,25 @@ class ProtocolTransportTest {
         ))
 
         assertEquals(403, response.status)
+        assertEquals(body, response.body)
+    }
+
+    @Test
+    fun `POST preserves authentication body so V1 recovery can classify refused tokens`() = runBlocking {
+        val body = """{"code":403,"message":"token is invalid"}"""
+        val executor = NacosRequestExecutor(
+            ThrowingTransport { throw NacosRequestError.Authentication(403, body) }
+        )
+        val transport = NacosRequestExecutorProtocolTransport(executor)
+
+        val response = transport.execute(ProtocolRequest(
+            method = "POST", endpoint = "https://nacos.example",
+            path = "/nacos/v1/cs/configs", query = emptyList(), headers = emptyMap(),
+            body = "dataId=app"
+        ))
+
+        assertEquals(403, response.status)
+        assertEquals(body, response.body)
     }
 
     @Test

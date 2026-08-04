@@ -140,45 +140,29 @@ class NacosRequestExecutor(
 object DefaultHttpTransport : NacosRequestExecutor.HttpTransport {
 
     override fun get(request: NacosRequestExecutor.TransportRequest): String {
-        try {
-            return com.intellij.util.io.HttpRequests
-                .request(request.url)
-                .connectTimeout(request.connectTimeoutMs)
-                .readTimeout(request.readTimeoutMs)
-                .tuner { connection ->
-                    // A redirect can silently cross an origin boundary. Endpoint
-                    // validation establishes the origin up front, so transport must
-                    // never follow a later redirect.
-                    (connection as? java.net.HttpURLConnection)?.instanceFollowRedirects = false
-                    connection.setRequestProperty("Accept", "application/json")
-                    if (request.attempt > 1) {
-                        connection.setRequestProperty("Connection", "close")
-                        connection.setRequestProperty("Accept-Encoding", "identity")
-                    }
-                    request.authHeaders.forEach { (key, value) ->
-                        connection.setRequestProperty(key, value)
-                    }
-                }
-                .readString()
-        } catch (e: java.net.SocketTimeoutException) {
-            if (e.message?.contains("connect") == true) {
-                throw NacosRequestError.ConnectTimeout(e)
+        // HttpURLConnection (not IntelliJ HttpRequests) so non-2xx responses expose
+        // their real body. Adapters need that body to classify refused tokens vs
+        // permission denials; discarding it made V1 recovery unreachable in production.
+        val conn = (java.net.URL(request.url).openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "GET"
+            // A redirect can silently cross an origin boundary. Endpoint validation
+            // establishes the origin up front, so transport must never follow later.
+            instanceFollowRedirects = false
+            connectTimeout = request.connectTimeoutMs
+            readTimeout = request.readTimeoutMs
+            setRequestProperty("Accept", "application/json")
+            // Second-attempt compatibility headers work around broken chunked
+            // encoding on some Nacos servers / reverse proxies.
+            if (request.attempt > 1) {
+                setRequestProperty("Connection", "close")
+                setRequestProperty("Accept-Encoding", "identity")
             }
-            throw NacosRequestError.ReadTimeout(e)
-        } catch (e: java.net.ConnectException) {
-            throw NacosRequestError.Connection(e)
-        } catch (e: java.io.IOException) {
-            val status = extractStatus(e)
-            if (status != null) {
-                throw classifyStatus(status, e.message ?: "")
-            }
-            throw NacosRequestError.Connection(e)
+            request.authHeaders.forEach { (key, value) -> setRequestProperty(key, value) }
         }
+        return execute(conn, writeBody = null)
     }
 
     override fun post(request: NacosRequestExecutor.TransportRequest): String {
-        // POST uses HttpURLConnection directly because the IntelliJ HttpRequests
-        // write/read split makes a single write-then-read round-trip awkward.
         val conn = (java.net.URL(request.url).openConnection() as java.net.HttpURLConnection).apply {
             requestMethod = "POST"
             instanceFollowRedirects = false
@@ -190,8 +174,14 @@ object DefaultHttpTransport : NacosRequestExecutor.HttpTransport {
             setRequestProperty("Connection", "close")
             request.authHeaders.forEach { (key, value) -> setRequestProperty(key, value) }
         }
+        return execute(conn, writeBody = request.postBody ?: "")
+    }
+
+    private fun execute(conn: java.net.HttpURLConnection, writeBody: String?): String {
         try {
-            conn.outputStream.use { it.write((request.postBody ?: "").toByteArray(Charsets.UTF_8)) }
+            if (writeBody != null) {
+                conn.outputStream.use { it.write(writeBody.toByteArray(Charsets.UTF_8)) }
+            }
             val status = conn.responseCode
             val body = (if (status in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
@@ -206,6 +196,8 @@ object DefaultHttpTransport : NacosRequestExecutor.HttpTransport {
             throw NacosRequestError.ReadTimeout(e)
         } catch (e: java.net.ConnectException) {
             throw NacosRequestError.Connection(e)
+        } catch (e: NacosRequestError) {
+            throw e
         } catch (e: java.io.IOException) {
             val status = extractStatus(e)
             if (status != null) {
@@ -216,14 +208,16 @@ object DefaultHttpTransport : NacosRequestExecutor.HttpTransport {
     }
 
     private fun extractStatus(e: java.io.IOException): Int? {
-        // IntelliJ HttpRequests wraps status codes in its own exception message
         val match = Regex("(?:HTTP |status )?(\\d{3})").find(e.message ?: "")
         return match?.groupValues?.get(1)?.toIntOrNull()
     }
 
     private fun classifyStatus(status: Int, body: String): NacosRequestError {
         return when (status) {
-            401, 403 -> NacosRequestError.Authentication(status)
+            // Carry a sanitized body so adapters can classify refused tokens vs
+            // permission denials (ADR-0011). Empty body stays empty — never invent
+            // evidence the wire did not provide.
+            401, 403 -> NacosRequestError.Authentication(status, sanitizeBody(body))
             429 -> NacosRequestError.RateLimited(null)
             in 400..499 -> NacosRequestError.Client(status, sanitizeBody(body))
             in 500..599 -> NacosRequestError.Server(status, sanitizeBody(body))
