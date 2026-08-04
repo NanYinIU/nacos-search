@@ -7,7 +7,6 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
 import com.nanyin.nacos.search.models.NamespaceLoadResult
-import com.nanyin.nacos.search.services.network.RequestPolicy
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.CredentialSnapshot
 import com.nanyin.nacos.search.settings.NacosOperationContext
@@ -146,7 +145,6 @@ class NamespaceIndexCoordinatorTest {
             apiService.loadNamespace(
                 namespaceId = "ns-a",
                 useCache = false,
-                policy = RequestPolicy.PREHEAT,
                 operationContext = context
             )
         ).thenReturn(
@@ -186,7 +184,6 @@ class NamespaceIndexCoordinatorTest {
             apiService.loadNamespace(
                 namespaceId = "ns-a",
                 useCache = false,
-                policy = RequestPolicy.PREHEAT,
                 operationContext = context
             )
         ).thenReturn(
@@ -240,7 +237,6 @@ class NamespaceIndexCoordinatorTest {
             apiService.loadNamespace(
                 namespaceId = "ns-a",
                 useCache = false,
-                policy = RequestPolicy.PREHEAT,
                 operationContext = context
             )
         ).thenReturn(

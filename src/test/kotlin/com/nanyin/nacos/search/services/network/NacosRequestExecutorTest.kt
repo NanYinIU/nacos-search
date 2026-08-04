@@ -88,21 +88,30 @@ class NacosRequestExecutorTest {
         assertEquals(2, calls.get())
     }
 
+    /**
+     * ADR-0021 classifies retry by operation kind at this seam, so no profile
+     * may withhold an idempotent read's retry. This replaces the former
+     * `preheat policy does not retry` test: PREHEAT was a caller-supplied
+     * no-retry knob, and its removal is only meaningful if nothing can
+     * reintroduce one by adding an enum constant.
+     */
     @Test
-    fun `preheat policy does not retry on failure`() = runBlocking {
-        val calls = AtomicInteger(0)
-        val transport = NacosRequestExecutor.HttpTransport { _ ->
-            calls.incrementAndGet()
-            throw NacosRequestError.Connection(RuntimeException("refused"))
+    fun `no policy withholds an idempotent read's retry`() = runBlocking {
+        for (policy in RequestPolicy.entries) {
+            val calls = AtomicInteger(0)
+            val transport = NacosRequestExecutor.HttpTransport { _ ->
+                calls.incrementAndGet()
+                throw NacosRequestError.Connection(RuntimeException("refused"))
+            }
+            var thrown: NacosRequestError.Connection? = null
+            try {
+                executor(transport).get("http://nacos", policy)
+            } catch (e: NacosRequestError.Connection) {
+                thrown = e
+            }
+            assertEquals("$policy must retry a retriable read", 2, calls.get())
+            assertTrue("$policy must surface the failure after retrying", thrown != null)
         }
-        var thrown: NacosRequestError.Connection? = null
-        try {
-            executor(transport).get("http://nacos", RequestPolicy.PREHEAT)
-        } catch (e: NacosRequestError.Connection) {
-            thrown = e
-        }
-        assertEquals(1, calls.get())
-        assertTrue(thrown != null)
     }
 
     @Test

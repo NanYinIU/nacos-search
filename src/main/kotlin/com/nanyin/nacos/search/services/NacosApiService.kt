@@ -20,6 +20,7 @@ import com.nanyin.nacos.search.services.operations.ConnectionDiagnostic
 import com.nanyin.nacos.search.services.operations.DiagnosticReport
 import com.nanyin.nacos.search.services.operations.DiagnosticSnapshot
 import com.nanyin.nacos.search.services.operations.EditSession
+import com.nanyin.nacos.search.services.operations.EphemeralV1Authenticator
 import com.nanyin.nacos.search.services.operations.HistoryDetail
 import com.nanyin.nacos.search.services.operations.HistoryPage
 import com.nanyin.nacos.search.services.operations.HistoryQuery
@@ -100,6 +101,47 @@ class NacosApiService(
    }
    /** Resolves AUTO to a concrete generation by probing V3 first, then V1. */
    private val generationResolver by lazy { GenerationResolver(v3Adapter, v1Adapter) }
+
+   /**
+    * Builds a throwaway adapter stack for one diagnostic run.
+    *
+    * Budget: [RequestPolicy.DIAGNOSTIC] raises only the per-request total budget
+    * (30s vs 15s) — attempt count and connect/read timeouts are identical to
+    * [RequestPolicy.INTERACTIVE], so this selects no retry behaviour that
+    * ADR-0021 reserves for the transport seam. A diagnostic is worth the longer
+    * budget because ADR-0022 makes it up to four sequential stages whose job is
+    * to characterise the connection and report per-stage timing; reporting a
+    * slow-but-working server as a connection failure sends the user to debug the
+    * wrong thing. The settings UI runs it in a cancellable background task, so
+    * nothing blocks on the wider ceiling.
+    *
+    * Isolation: ADR-0022 forbids diagnostics from touching the cache, the shared
+    * probe flight, the session, or the authentication registry. Building the
+    * stack here rather than sharing the formal one gets all four structurally —
+    * a fresh [OperationGateway] defaults to a no-op cache and its own
+    * observation sequence, a fresh [GenerationResolver] cannot join the formal
+    * probe flight, and [EphemeralV1Authenticator] holds any Nacos-password token
+    * in a field that dies with this object.
+    *
+    * Per call, not cached: a token acquired for one unapplied draft must never
+    * serve the next one, because the user may have edited the credentials
+    * between two clicks of Test Connection.
+    */
+   private fun newDiagnosticStack(): Pair<GenerationResolver, OperationGateway> {
+       val transport = NacosRequestExecutorProtocolTransport(executor, RequestPolicy.DIAGNOSTIC)
+       val v1 = V1ProtocolAdapter(
+           transport,
+           EphemeralV1Authenticator(login = { context -> authService.loginWithoutRecording(context) })
+       )
+       val v3 = V3ProtocolAdapter(transport)
+       return GenerationResolver(v3, v1) to OperationGateway(
+           mapOf(
+               NacosApiGeneration.V1 to v1,
+               NacosApiGeneration.V3 to v3
+           )
+       )
+   }
+
    /** Formal AUTO probes share this flight; diagnostics do not. */
    private val probeFlight = probeFlightOverride ?: sharedProbeFlight
    private val fallbackEpoch = java.util.concurrent.atomic.AtomicLong(0)
@@ -367,18 +409,15 @@ class NacosApiService(
     * Requires an already-captured [operationContext]; never reads settings or the
     * credential store (issue #50). Every generation is resolved and dispatched
     * through the operation gateway — there is no legacy server-snapshot path.
+    *
+    * Retry budget is not a parameter: per ADR-0021 every request crosses one
+    * transport seam that classifies retries by operation kind (idempotent read /
+    * write / login), not by who asked. A background preheat and a foreground
+    * search of the same namespace therefore get the same bounded budget.
     */
    suspend fun loadNamespace(
        namespaceId: String? = null,
        useCache: Boolean = true,
-       operationContext: NacosOperationContext
-   ): Result<NamespaceLoadResult> =
-       loadNamespace(namespaceId, useCache, RequestPolicy.INTERACTIVE, operationContext)
-
-   internal suspend fun loadNamespace(
-       namespaceId: String? = null,
-       useCache: Boolean = true,
-       policy: RequestPolicy,
        operationContext: NacosOperationContext
    ): Result<NamespaceLoadResult> {
        return try {
@@ -617,10 +656,8 @@ class NacosApiService(
      * Never mutates persisted profiles, sessions, cache, or the auth registry.
      */
     suspend fun diagnoseConnection(snapshot: DiagnosticSnapshot): DiagnosticReport = withContext(Dispatchers.IO) {
-        ConnectionDiagnostic(
-            resolver = generationResolver,
-            gateway = v1Gateway
-        ).diagnose(snapshot)
+        val (resolver, gateway) = newDiagnosticStack()
+        ConnectionDiagnostic(resolver = resolver, gateway = gateway).diagnose(snapshot)
     }
 
    /**

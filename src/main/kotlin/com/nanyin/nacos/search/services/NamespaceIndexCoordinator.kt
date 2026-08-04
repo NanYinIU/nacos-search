@@ -15,7 +15,6 @@ import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.OperationContextResolver
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.services.network.NacosRequestError
-import com.nanyin.nacos.search.services.network.RequestPolicy
 import com.nanyin.nacos.search.services.operations.OperationTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -158,14 +157,16 @@ sealed interface IndexOutcome {
  * (single-flight), that PSI triggers respect a five-minute cooldown after
  * failure, and that the latest foreground request wins.
  *
- * Search requests are bounded by a 15-second front-end cutoff.
- *
  * Every generation is dispatched through [NacosApiService.loadNamespace] with
  * the captured operation context — there is no generation branch and no
- * legacy server-snapshot path here (issue #50). Note that retry behaviour now
- * comes from the centralized transport seam (ADR-0021), which classifies by
- * operation kind; the [RequestPolicy] carried by a trigger no longer reaches
- * the gateway dispatch.
+ * legacy server-snapshot path here (issue #50).
+ *
+ * The trigger shapes how long a caller is willing to wait, not how the wire
+ * behaves: SEARCH and MANUAL_REFRESH are bounded by a 15-second front-end
+ * cutoff, while NAMESPACE_SWITCH and PSI await the load. Retry belongs to the
+ * centralized transport seam and is classified by operation kind (ADR-0021), so
+ * a background preheat and a foreground search retry identically and there is
+ * no per-trigger request policy to carry.
  */
 @Service(Service.Level.APP)
 class NamespaceIndexCoordinator internal constructor(
@@ -192,7 +193,7 @@ class NamespaceIndexCoordinator internal constructor(
     /**
      * Requests a full namespace index load for [request]. If an identical request
      * is already in flight, the caller joins it. The [trigger] determines the
-     * request policy and whether PSI cooldown applies.
+     * front-end cutoff and whether PSI cooldown applies.
      */
     override suspend fun requestIndex(request: NamespaceIndexRequest, trigger: IndexTrigger): IndexOutcome {
         val key = request.key
@@ -208,12 +209,10 @@ class NamespaceIndexCoordinator internal constructor(
             }
         }
 
-        val policy = policyFor(trigger)
-
         // Single-flight: join or start
         val deferred = flightMutex.withLock {
             inFlight[key] ?: run {
-                val job = scope.async { executeIndex(request, policy) }
+                val job = scope.async { executeIndex(request) }
                 inFlight[key] = job
                 job
             }
@@ -232,7 +231,7 @@ class NamespaceIndexCoordinator internal constructor(
         }
     }
 
-    private suspend fun executeIndex(request: NamespaceIndexRequest, policy: RequestPolicy): IndexOutcome {
+    private suspend fun executeIndex(request: NamespaceIndexRequest): IndexOutcome {
         val key = request.key
         val context = request.operationContext
         val target = OperationTarget(context, key.namespaceId.ifBlank { "public" })
@@ -248,7 +247,6 @@ class NamespaceIndexCoordinator internal constructor(
             val result = apiService.loadNamespace(
                 namespaceId = key.namespaceId,
                 useCache = false,
-                policy = policy,
                 operationContext = context
             )
             if (result.isFailure) {
@@ -320,11 +318,6 @@ class NamespaceIndexCoordinator internal constructor(
             val error = if (e is NacosRequestError) e else NacosRequestError.Connection(e)
             IndexOutcome.Failed(error)
         }
-    }
-
-    private fun policyFor(trigger: IndexTrigger): RequestPolicy = when (trigger) {
-        IndexTrigger.SEARCH, IndexTrigger.MANUAL_REFRESH -> RequestPolicy.INTERACTIVE
-        IndexTrigger.NAMESPACE_SWITCH, IndexTrigger.PSI -> RequestPolicy.PREHEAT
     }
 
     private fun recordPsiFailure(key: NamespaceIndexKey) {
