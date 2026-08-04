@@ -100,7 +100,7 @@ class NavigationDetailPrefetchServiceTest {
     @Test
     fun `prefetch with declared sources requests only those data ids`() = runBlocking {
         val api = mock<NacosApiService>()
-        val cache = CacheService()
+        val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
         cache.putNamespaceIndex(
             identity,
@@ -164,7 +164,7 @@ class NavigationDetailPrefetchServiceTest {
     fun `toggle off produces no detail requests`() = runBlocking {
         settings.getActiveServer().navigationDetailPrefetchEnabled = false
         val api = mock<NacosApiService>()
-        val cache = CacheService()
+        val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
         val svc = service(api, cache, setOf("common.properties"))
 
@@ -184,7 +184,7 @@ class NavigationDetailPrefetchServiceTest {
     @Test
     fun `no declared sources falls back to bounded budget and reports partial coverage`() = runBlocking {
         val api = mock<NacosApiService>()
-        val cache = CacheService()
+        val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
         val summaries = (1..50).map { i ->
             NacosConfiguration("cfg-$i.properties", "DEFAULT_GROUP", "dev", "", "properties")
@@ -238,7 +238,7 @@ class NavigationDetailPrefetchServiceTest {
     @Test
     fun `second project on same identity reuses cached details without re-fetch`() = runBlocking {
         val api = mock<NacosApiService>()
-        val cache = CacheService()
+        val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
         cache.putNamespaceIndex(
             identity,
@@ -289,7 +289,7 @@ class NavigationDetailPrefetchServiceTest {
 
     @Test
     fun `different access identity cannot see prefetched details`() = runBlocking {
-        val cache = CacheService()
+        val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
         cache.putConfigDetail(
             identity,

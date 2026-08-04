@@ -40,7 +40,7 @@ class SessionGenerationHarness(
         sessionGenerationOverride = session,
         probeFlightOverride = probeFlight
     )
-    val cacheService = CacheService({ System.currentTimeMillis() }, ProfileTombstoneRegistry())
+    val cacheService = CacheService({ System.currentTimeMillis() }, ProfileTombstoneRegistry(), InMemoryCacheStore())
     val coordinator = NamespaceIndexCoordinator(apiService, cacheService)
 
     val recordedUrls: List<String> get() = transport.urls

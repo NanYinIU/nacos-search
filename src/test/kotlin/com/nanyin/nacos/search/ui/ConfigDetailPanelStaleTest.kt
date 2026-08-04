@@ -6,6 +6,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.ApplicationRule
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.services.InMemoryCacheStore
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.services.captureAccessIdentity
 import kotlinx.coroutines.CompletableDeferred
@@ -23,7 +24,7 @@ class ConfigDetailPanelStaleTest {
     @Test
     fun `deep-stale navigation shows cached target and forces single-detail refresh`() = runBlocking {
         var now = 6_000_000L
-        val cacheService = CacheService { now }
+        val cacheService = CacheService({ now }, InMemoryCacheStore())
         cacheService.clearAll()
         val configuration = NacosConfiguration(
             "app.properties",
@@ -59,7 +60,7 @@ class ConfigDetailPanelStaleTest {
     @Test
     fun `explicit not-found removes stale navigation target`() = runBlocking {
         var now = 7_000_000L
-        val cacheService = CacheService { now }
+        val cacheService = CacheService({ now }, InMemoryCacheStore())
         cacheService.clearAll()
         val configuration = NacosConfiguration(
             "deleted.properties",

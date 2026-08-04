@@ -174,7 +174,7 @@ class NamespaceIndexCoordinatorTest {
         val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
         whenever(apiService.operationGateway()).thenReturn(gateway)
         val tombstones = ProfileTombstoneRegistry()
-        val cacheService = CacheService({ 2_000_000L }, tombstones)
+        val cacheService = CacheService({ 2_000_000L }, tombstones, InMemoryCacheStore())
         cacheService.clearAll()
         tombstones.entomb(identity.profileId, identity.accessRevision)
 
@@ -221,7 +221,7 @@ class NamespaceIndexCoordinatorTest {
         val apiService = mock<NacosApiService>()
         val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
         whenever(apiService.operationGateway()).thenReturn(gateway)
-        val cacheService = CacheService { 2_000_000L }
+        val cacheService = CacheService({ 2_000_000L }, InMemoryCacheStore())
         cacheService.clearAll()
         cacheService.putConfigDetail(
             identity,

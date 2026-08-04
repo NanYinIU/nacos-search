@@ -32,7 +32,7 @@ class NamespaceIndexRefreshServiceTest {
                 return IndexOutcome.Failed(NacosRequestError.Connection(RuntimeException("offline")))
             }
         }
-        val cacheService = CacheService()
+        val cacheService = CacheService(InMemoryCacheStore())
         cacheService.clearAll()
         val settings = com.intellij.openapi.application.ApplicationManager.getApplication()
             .getService(com.nanyin.nacos.search.settings.NacosSettings::class.java)

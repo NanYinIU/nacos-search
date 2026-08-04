@@ -98,7 +98,7 @@ class NamespaceSummaryIndexTest {
 
     @Test
     fun `putNamespaceIndex stores summaries without seeding detail cache`() = runBlocking {
-        val cache = CacheService()
+        val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
         cache.putNamespaceIndex(
             identity,
@@ -122,7 +122,7 @@ class NamespaceSummaryIndexTest {
 
     @Test
     fun `complete namespace index with present data id and no detail is undecidable`() = runBlocking {
-        val cache = CacheService()
+        val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
         cache.putNamespaceIndex(
             identity,
@@ -147,7 +147,7 @@ class NamespaceSummaryIndexTest {
 
     @Test
     fun `complete namespace index with absent data id is unresolved`() = runBlocking {
-        val cache = CacheService()
+        val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
         cache.putNamespaceIndex(
             identity,
@@ -171,7 +171,7 @@ class NamespaceSummaryIndexTest {
     @Test
     fun `complete index write is usable for data-id existence without details`() = runBlocking {
         val api = mock<NacosApiService>()
-        val cache = CacheService()
+        val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
         val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
         whenever(api.operationGateway()).thenReturn(gateway)
@@ -216,7 +216,7 @@ class NamespaceSummaryIndexTest {
     @Test
     fun `partial summary load does not write details`() = runBlocking {
         val api = mock<NacosApiService>()
-        val cache = CacheService()
+        val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
         val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
         whenever(api.operationGateway()).thenReturn(gateway)
