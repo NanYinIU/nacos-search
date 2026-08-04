@@ -10,7 +10,12 @@ sealed class NacosRequestError(message: String, cause: Throwable? = null) : Exce
     class ConnectTimeout(cause: Throwable) : NacosRequestError("Connection timed out", cause)
     class ReadTimeout(cause: Throwable) : NacosRequestError("Read timed out", cause)
     class Connection(cause: Throwable) : NacosRequestError("Connection failed", cause)
-    data class Authentication(val status: Int) : NacosRequestError("Authentication failed")
+    /**
+     * Authn/authz HTTP failure. [body] is a **sanitized** upstream response body
+     * (credentials stripped, length-capped) so protocol adapters can classify
+     * refused tokens vs permission denials. It must never carry secrets.
+     */
+    data class Authentication(val status: Int, val body: String = "") : NacosRequestError("Authentication failed")
     data class RateLimited(val retryAfterMs: Long?) : NacosRequestError("Rate limited")
     data class Client(val status: Int, val body: String) : NacosRequestError("Client error $status")
     data class Server(val status: Int, val body: String) : NacosRequestError("Server error $status")

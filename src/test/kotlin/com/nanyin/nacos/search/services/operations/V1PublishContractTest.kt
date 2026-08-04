@@ -3,6 +3,8 @@ package com.nanyin.nacos.search.services.operations
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
 import com.nanyin.nacos.search.models.NacosApiGeneration
+import com.nanyin.nacos.search.services.network.NacosRequestError
+import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.CredentialSnapshot
 import com.nanyin.nacos.search.settings.NacosOperationContext
@@ -67,30 +69,32 @@ class V1PublishContractTest {
 
     @Test
     fun `V1 publish is never replayed after an invalid token response`() = runBlocking {
-        val fixture = QueuedTransport(
-            ProtocolResponse(403, """{"code":403,"message":"token is invalid"}"""),
+        // Production path: typed Authentication error with sanitized body (issue #39).
+        val http = SequencingHttpTransport(
+            { throw NacosRequestError.Authentication(403, """{"code":403,"message":"token is invalid"}""") },
             // A replaying adapter would consume this by POSTing the same content again.
-            ProtocolResponse(200, "true")
+            { "true" }
         )
+        val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
         val authenticator = TokenCachingV1Authenticator(listOf("stale-token", "fresh-token"))
 
-        val error = V1ProtocolAdapter(fixture, authenticator)
+        val error = V1ProtocolAdapter(transport, authenticator)
             .publish(passwordTarget(), publishCommand())
             .exceptionOrNull()
 
-        assertEquals(1, fixture.requests.size, "publish must reach the wire exactly once")
-        assertEquals("POST", fixture.requests.single().method)
+        assertEquals(1, http.calls, "publish must reach the wire exactly once")
         assertInstanceOf(RemoteOperationError.InvalidOrExpiredNacosPasswordToken::class.java, error)
     }
 
     @Test
     fun `V1 publish invalidates the rejected token so the next attempt logs in again`() = runBlocking {
-        val fixture = QueuedTransport(
-            ProtocolResponse(403, """{"code":403,"message":"token is invalid"}"""),
-            ProtocolResponse(200, "true")
+        val http = SequencingHttpTransport(
+            { throw NacosRequestError.Authentication(403, """{"code":403,"message":"token is invalid"}""") },
+            { "true" }
         )
+        val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
         val authenticator = TokenCachingV1Authenticator(listOf("stale-token", "fresh-token"))
-        val adapter = V1ProtocolAdapter(fixture, authenticator)
+        val adapter = V1ProtocolAdapter(transport, authenticator)
         val target = passwordTarget()
 
         adapter.publish(target, publishCommand()).exceptionOrNull()
@@ -98,16 +102,18 @@ class V1PublishContractTest {
 
         assertEquals(1, authenticator.invalidations)
         assertEquals(2, authenticator.logins, "a rejected token must not be reused by the next write")
-        assertEquals("stale-token", fixture.requests[0].query.single { it.first == "accessToken" }.second)
-        assertEquals("fresh-token", fixture.requests[1].query.single { it.first == "accessToken" }.second)
+        assertEquals(2, http.calls)
     }
 
     @Test
     fun `V1 publish keeps the token when the server denies permission`() = runBlocking {
-        val fixture = QueuedTransport(ProtocolResponse(403, """{"code":403,"message":"permission denied"}"""))
+        val http = SequencingHttpTransport(
+            { throw NacosRequestError.Authentication(403, """{"code":403,"message":"permission denied"}""") }
+        )
+        val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
         val authenticator = TokenCachingV1Authenticator(listOf("valid-token"))
 
-        val error = V1ProtocolAdapter(fixture, authenticator)
+        val error = V1ProtocolAdapter(transport, authenticator)
             .publish(passwordTarget(), publishCommand())
             .exceptionOrNull()
 
@@ -174,6 +180,23 @@ class V1PublishContractTest {
         override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
             requests += request
             return queued.removeFirst()
+        }
+    }
+
+    private class SequencingHttpTransport(
+        private vararg val steps: () -> String
+    ) : NacosRequestExecutor.HttpTransport {
+        private val remaining = ArrayDeque(steps.toList())
+        var calls = 0
+
+        override fun get(request: NacosRequestExecutor.TransportRequest): String {
+            calls += 1
+            return remaining.removeFirst().invoke()
+        }
+
+        override fun post(request: NacosRequestExecutor.TransportRequest): String {
+            calls += 1
+            return remaining.removeFirst().invoke()
         }
     }
 

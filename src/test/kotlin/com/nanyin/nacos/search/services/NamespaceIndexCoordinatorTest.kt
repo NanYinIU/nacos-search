@@ -190,6 +190,52 @@ class NamespaceIndexCoordinatorTest {
     }
 
     @Test
+    fun `partial namespace load for an entombed profile writes nothing to the detail cache`() = runBlocking {
+        val apiService = mock<NacosApiService>()
+        val tombstones = ProfileTombstoneRegistry()
+        val cacheService = CacheService({ 2_000_000L }, tombstones)
+        cacheService.clearAll()
+        tombstones.entomb(identity.profileId, identity.accessRevision)
+
+        val late = NacosConfiguration("late.yaml", "DEFAULT_GROUP", "ns-a", "should-not-land=true")
+        val request = NamespaceIndexRequest(
+            NamespaceIndexKey(identity, "ns-a"),
+            server,
+            17L * 60 * 1000
+        )
+        whenever(
+            apiService.loadNamespace("ns-a", useCache = false, server = server, policy = RequestPolicy.PREHEAT)
+        ).thenReturn(
+            Result.success(
+                NamespaceLoadResult(
+                    completeness = DatasetCompleteness.PARTIAL,
+                    expectedCount = 2,
+                    configurations = listOf(late),
+                    failures = emptyList()
+                )
+            )
+        )
+
+        val outcome = NamespaceIndexCoordinator(apiService, cacheService)
+            .requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
+
+        assertTrue(outcome is IndexOutcome.Partial)
+        assertNull(
+            cacheService.getConfigDetail(
+                identity,
+                "ns-a",
+                "late.yaml",
+                "DEFAULT_GROUP",
+                allowStale = true
+            )
+        )
+        assertTrue(
+            "entombed partial load must not resurrect configuration details",
+            cacheService.configurationNavigationSnapshot(identity).isEmpty()
+        )
+    }
+
+    @Test
     fun `partial namespace load updates captured scope and preserves stale details`() = runBlocking {
         val apiService = mock<NacosApiService>()
         var now = 2_000_000L

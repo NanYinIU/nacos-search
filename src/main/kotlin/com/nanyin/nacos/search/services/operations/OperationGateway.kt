@@ -285,7 +285,10 @@ class NacosRequestExecutorProtocolTransport(
     private fun toResponseOrThrow(error: Throwable): ProtocolResponse = when (error) {
         is NacosRequestError.Client -> ProtocolResponse(error.status, error.body)
         is NacosRequestError.Server -> ProtocolResponse(error.status, error.body)
-        is NacosRequestError.Authentication -> ProtocolResponse(error.status, "")
+        // Pass the sanitized body through so V1/V3 recovery predicates can classify
+        // refused-or-expired tokens. Previously the body was discarded and V1
+        // recovery was unreachable in production (issue #39).
+        is NacosRequestError.Authentication -> ProtocolResponse(error.status, error.body)
         is NacosRequestError.RateLimited -> ProtocolResponse(429, "")
         is NacosRequestError.ConnectTimeout,
         is NacosRequestError.ReadTimeout,

@@ -59,9 +59,14 @@ data class CacheConfidence(
 /**
  * Computes [CacheAge] from timestamps relative to TTL and the deep-stale
  * threshold (seven days).
+ *
+ * [DEEP_STALE_THRESHOLD_MILLIS] is the single definition of the deep-stale
+ * boundary for the whole plugin (issue #42); detail-cache freshness and the
+ * search-status wording both read this constant.
  */
 object CacheAgeCalculator {
-    private const val DEEP_STALE_THRESHOLD_MILLIS = 7L * 24 * 60 * 60 * 1000
+    /** Age beyond which a cache-backed dataset is deeply stale (seven days). */
+    const val DEEP_STALE_THRESHOLD_MILLIS = 7L * 24 * 60 * 60 * 1000
 
     fun compute(
         fetchedAtMillis: Long?,

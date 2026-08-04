@@ -13,6 +13,7 @@ import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.never
 import org.mockito.kotlin.whenever
+import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
@@ -182,6 +183,42 @@ class NacosSearchServiceTest {
         )
 
         assertTrue(request.toCacheKey() != request.copy(namespace = testNamespace).toCacheKey())
+    }
+
+    @Test
+    fun `local index search reports cache age from the index entry timestamp`() = runBlocking {
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+        val context = settings.captureOperationContext().getOrThrow()
+        val snapshot = settings.captureServerSnapshot(operationContext = context)
+
+        cache.putNamespaceIndex(
+            context.identity,
+            "",
+            listOf(NacosConfiguration("app.yaml", "DEFAULT_GROUP", "", "feature=true", "yaml")),
+            ttl = 600_000L
+        )
+        val entry = cache.getNamespaceIndexEntry(context.identity, "")
+
+        val service = NacosSearchService()
+        service.performSearch(
+            NacosSearchService.SearchRequest(
+                dataId = "*",
+                namespace = NamespaceInfo.createPublicNamespace(),
+                serverSnapshot = snapshot,
+                operationContext = context
+            ),
+            mock<NacosApiService>()
+        )
+
+        val state = service.searchState.value
+        assertTrue(state is NacosSearchService.SearchState.Success, "search did not succeed: $state")
+        val success = state as NacosSearchService.SearchState.Success
+        assertEquals(NacosSearchService.SearchSource.CACHE, success.source)
+        // Regression guard: this path used to pass no timestamp at all, so every
+        // index-backed result claimed WITHIN_TTL regardless of its real age (#42).
+        assertEquals(entry?.createdAtMillis, success.confidence.fetchedAtMillis)
+        Unit
     }
 
     private fun stubApi(): NacosApiService {
