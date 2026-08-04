@@ -7,6 +7,7 @@ src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
   s_a158718be6e67c::t_4b83dfef38bacc 234
   s_a158718be6e67c::t_b3fe63b28ee5d8 196
   s_a158718be6e67c::t_f42ebe653c1e0a 215
+  s_a158718be6e67c::t_7f9229a7bf97bf 162-163,166-169
 src/test/kotlin/com/nanyin/nacos/search/services/network/RequestPolicyTest.kt
   s_a158718be6e67c::t_404642f8ce74d6 17-21,23-28,31-35,37-40
   s_a158718be6e67c::t_d8c2414c61c037 4
@@ -31,6 +32,7 @@ src/test/kotlin/com/nanyin/nacos/search/services/SessionGenerationIntegrationTes
   s_a158718be6e67c::t_c3ce81283a6db0 376
   s_a158718be6e67c::t_b39983cc33498e 12
   s_a158718be6e67c::t_a241da718eb9a9 11
+  s_a158718be6e67c::t_61c0b952ed143a 316,362
 src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
   s_a158718be6e67c::t_faf5229aa4a8e5 106,119-124,126-128,130-133,135-137,139-140
   s_a158718be6e67c::t_b50501c4b11d45 408,413-416
@@ -38,6 +40,8 @@ src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
   s_a158718be6e67c::t_49876658a73537 104-105,107-118,125,129,138,141-143
   s_a158718be6e67c::t_bc2fabd2f02210 23
   s_a158718be6e67c::t_6e5efd55bbb702 659-660
+  s_a158718be6e67c::t_ab35eedd02b00c 144
+  s_a158718be6e67c::t_a967ed1ab2bf0a 412
 ---
 {
   "schema_version": "authorship/3.0.0",
