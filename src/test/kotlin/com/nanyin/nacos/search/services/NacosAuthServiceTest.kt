@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicReference
 
 @TestApplication
+@Suppress("DEPRECATION") // exercises the legacy no-arg overload intentionally
 class NacosAuthServiceTest {
 
     companion object {

@@ -253,9 +253,20 @@ class NacosSearchService(
         val epochs = project?.getService(ProjectSessionEpochs::class.java) ?: return null
         // Prefer the prepared context; fall back to credential-free identity
         // derivation so a missing snapshot never touches PasswordSafe on the
-        // EDT (issue #53 / ADR-0039).
+        // EDT (issue #53 / ADR-0039). When serverId is blank, use the project
+        // session's selected profile rather than the app-wide activeServerId so
+        // multi-project sessions stay isolated.
+        val profileId = request.serverId.takeIf { it.isNotBlank() }
+            ?: project?.let { proj ->
+                try {
+                    proj.getService(com.nanyin.nacos.search.settings.NacosProjectSession::class.java)
+                        ?.sessionState?.selectedProfileId?.takeIf { it.isNotBlank() }
+                } catch (_: Exception) {
+                    null
+                }
+            }
         val identity = request.operationContext?.identity
-            ?: settings.captureAccessIdentity(request.serverId.takeIf { it.isNotBlank() })
+            ?: settings.captureAccessIdentity(profileId)
         return epochs.capture(identity)
     }
 

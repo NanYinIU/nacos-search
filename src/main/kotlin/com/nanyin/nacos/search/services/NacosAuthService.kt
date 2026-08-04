@@ -68,6 +68,10 @@ class NacosAuthService : V1Authenticator {
      * operations so credentials stay off the EDT and environment switches cannot
      * retarget mid-request (issue #53).
      */
+    @Deprecated(
+        message = "Use getValidAccessToken(context) so credentials stay off the EDT and mid-flight switches cannot retarget the request (issue #53)",
+        replaceWith = ReplaceWith("getValidAccessToken(context)")
+    )
     suspend fun getValidAccessToken(): String? {
         return try {
             val serverUrl = com.nanyin.nacos.search.models.CanonicalNacosEndpoint
