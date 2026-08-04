@@ -262,13 +262,27 @@ class NacosSearchService(
     /**
      * Resolves the operation context for a search. Prefers the prepared
      * [SearchRequest.operationContext] so mid-flight environment switches
-     * cannot retarget the request. Fallback capture always runs on
-     * [Dispatchers.IO] so PasswordSafe is never read on the EDT (#53).
+     * cannot retarget the request — but only when that context's profile id
+     * matches [SearchRequest.serverId]. A stale UI snapshot that still names
+     * environment A while [serverId] is B is discarded and re-captured on
+     * [Dispatchers.IO] for B (issue #53 race fix).
      */
     private suspend fun resolveOperationContext(request: SearchRequest): Result<NacosOperationContext> {
-        request.operationContext?.let { return Result.success(it) }
+        val prepared = request.operationContext
+        val expectedProfileId = request.serverId.takeIf { it.isNotBlank() }
+        if (prepared != null &&
+            (expectedProfileId == null || prepared.identity.profileId == expectedProfileId)
+        ) {
+            return Result.success(prepared)
+        }
+        if (prepared != null && expectedProfileId != null) {
+            logger.warn(
+                "Discarding prepared operation context for profile " +
+                    "${prepared.identity.profileId}; search targets $expectedProfileId"
+            )
+        }
         return withContext(Dispatchers.IO) {
-            settings.captureOperationContext(request.serverId.takeIf { it.isNotBlank() })
+            settings.captureOperationContext(expectedProfileId)
         }
     }
 

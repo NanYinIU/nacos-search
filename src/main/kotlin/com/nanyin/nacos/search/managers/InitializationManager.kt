@@ -10,7 +10,9 @@ import com.nanyin.nacos.search.ui.NamespacePanel
 import com.nanyin.nacos.search.ui.PaginationPanel
 import com.intellij.openapi.diagnostic.thisLogger
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Manages initialization of UI components and data loading
@@ -38,11 +40,16 @@ class InitializationManager(
     private var currentState: InitializationState = InitializationState.NotStarted
     
     /**
-     * Initialize all components and load initial data
+     * Initialize all components and load initial data.
+     *
+     * @param profileId project-selected environment profile. When null, falls
+     *   back to the app-wide active server (legacy). Capture always runs on
+     *   [Dispatchers.IO] so PasswordSafe is never read on the EDT (#53).
      */
     fun initialize(
         namespacePanel: NamespacePanel,
         paginationPanel: PaginationPanel,
+        profileId: String? = null,
         onInitializationComplete: (InitializationState) -> Unit
     ) {
         if (currentState is InitializationState.InProgress) {
@@ -64,7 +71,7 @@ class InitializationManager(
                 
                 // Step 3: Load initial configurations if namespace is available
                 if (currentNamespace != null) {
-                    loadInitialConfigurations(currentNamespace)
+                    loadInitialConfigurations(currentNamespace, profileId)
                 }
                 
                 currentState = InitializationState.Success(currentNamespace)
@@ -135,21 +142,29 @@ class InitializationManager(
     }
     
     /**
-     * Load initial configurations for the given namespace
+     * Load initial configurations for the given namespace.
+     *
+     * PasswordSafe is always read on [Dispatchers.IO], even when the caller's
+     * [coroutineScope] is bound to the EDT (Main). The project-selected
+     * [profileId] is preferred over the app-wide active server.
      */
-    private suspend fun loadInitialConfigurations(namespace: NamespaceInfo) {
+    private suspend fun loadInitialConfigurations(
+        namespace: NamespaceInfo,
+        profileId: String? = null
+    ) {
         logger.debug("Loading initial configurations for namespace: ${namespace.namespaceName}")
         
         try {
-            // Create search request for loading all configurations. Capture the
-            // operation context here (already on a background coroutine) so the
-            // search keeps this environment if the user switches mid-load (#53).
+            val resolvedProfileId = profileId?.takeIf { it.isNotBlank() } ?: settings.activeServerId
+            val operationContext = withContext(Dispatchers.IO) {
+                settings.captureOperationContext(resolvedProfileId).getOrNull()
+            }
             val searchRequest = NacosSearchService.SearchRequest(
                 namespace = namespace,
                 pageNo = 1,
                 pageSize = 10,
-                serverId = settings.activeServerId,
-                operationContext = settings.captureOperationContext().getOrNull()
+                serverId = resolvedProfileId,
+                operationContext = operationContext
             )
             
             // Perform search to load configurations
@@ -167,6 +182,7 @@ class InitializationManager(
     fun reinitializeWithNamespace(
         namespace: NamespaceInfo,
         paginationPanel: PaginationPanel,
+        profileId: String? = null,
         onReinitializationComplete: (InitializationState) -> Unit
     ) {
         coroutineScope.launch {
@@ -177,7 +193,7 @@ class InitializationManager(
                 initializePaginationPanel(paginationPanel)
                 
                 // Load configurations for new namespace
-                loadInitialConfigurations(namespace)
+                loadInitialConfigurations(namespace, profileId)
                 
                 currentState = InitializationState.Success(namespace)
                 onReinitializationComplete(currentState)

@@ -24,6 +24,7 @@ import com.nanyin.nacos.search.settings.NacosSettingsListener
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.NacosUpgradeSummary
+import com.nanyin.nacos.search.settings.OperationContextSnapshotCache
 import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.intellij.openapi.components.service
 import com.intellij.openapi.application.ApplicationManager
@@ -97,22 +98,37 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      * handlers consume this prepared immutable snapshot instead of capturing
      * fresh on the EDT (design §11/§19.7). It is refreshed off-EDT whenever the
      * selected profile, namespace, or settings change.
+     *
+     * Publishes are epoch-ordered: a late capture for profile A cannot overwrite
+     * a newer capture for profile B after a rapid environment switch.
      */
-    @Volatile
-    private var operationContextSnapshot: NacosOperationContext? = null
+    private val operationContextCache = OperationContextSnapshotCache()
 
     private fun selectedProfileId(): String {
         projectSession.healSelection(settings)
         return projectSession.sessionState.selectedProfileId.ifBlank { settings.resolveDefaultProfileId() }
     }
 
-    private fun selectedOperationContext(): NacosOperationContext? = operationContextSnapshot
+    private fun selectedOperationContext(): NacosOperationContext? {
+        val profileId = selectedProfileId()
+        return operationContextCache.resolve(profileId, settings.getProfile(profileId))
+    }
 
     private suspend fun refreshOperationContextSnapshot() {
+        val epoch = operationContextCache.beginRefresh()
         val profileId = selectedProfileId()
-        operationContextSnapshot = withContext(Dispatchers.IO) {
+        val captured = withContext(Dispatchers.IO) {
             settings.captureOperationContext(profileId).getOrNull()
         }
+        // Re-read selection after IO so a switch during capture discards the result.
+        val stillSelected = selectedProfileId()
+        operationContextCache.publishIfCurrent(
+            epochAtStart = epoch,
+            capturedProfileId = profileId,
+            selectedProfileId = stillSelected,
+            selectedProfile = settings.getProfile(stillSelected),
+            context = captured
+        )
     }
     
     init {
@@ -325,6 +341,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun handleSettingsChanged() {
         // Switcher label reflects the new active environment immediately.
         SwingUtilities.invokeLater { environmentSwitcher.refresh() }
+        // Invalidate immediately so in-flight handlers cannot reuse a stale
+        // prepared context while the off-EDT refresh is still running.
+        operationContextCache.invalidate()
         coroutineScope.launch {
             refreshOperationContextSnapshot()
             nacosApiService.clearCache()
@@ -348,6 +367,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
 
     private fun handleProjectEnvironmentSelectionChanged() {
+        // Drop the previous environment's prepared context before the async
+        // refresh so a search scheduled mid-switch cannot pin the old server.
+        operationContextCache.invalidate()
         coroutineScope.launch {
             refreshOperationContextSnapshot()
             nacosSearchService.resetSearch()
@@ -376,22 +398,22 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 initializationManager.initialize(
                      namespacePanel = namespacePanel,
                      paginationPanel = paginationPanel,
-                     onInitializationComplete = { state ->
-                         when (state) {
-                             is InitializationManager.InitializationState.Success -> {
-                                 SwingUtilities.invokeLater {
-                                     // Initialization completed successfully
-                                 }
+                     profileId = selectedProfileId()
+                 ) { state ->
+                     when (state) {
+                         is InitializationManager.InitializationState.Success -> {
+                             SwingUtilities.invokeLater {
+                                 // Initialization completed successfully
                              }
-                             is InitializationManager.InitializationState.Error -> {
-                                 SwingUtilities.invokeLater {
-                                     showError(NacosSearchBundle.message("error.config.load.failed") + ": ${state.message}")
-                                 }
-                             }
-                             else -> {}
                          }
+                         is InitializationManager.InitializationState.Error -> {
+                             SwingUtilities.invokeLater {
+                                 showError(NacosSearchBundle.message("error.config.load.failed") + ": ${state.message}")
+                             }
+                         }
+                         else -> {}
                      }
-                 )
+                 }
             } catch (e: Exception) {
             SwingUtilities.invokeLater {
                 showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
