@@ -32,7 +32,11 @@ import com.nanyin.nacos.search.services.operations.PublishResult
 import com.nanyin.nacos.search.services.operations.SummaryPage
 import com.nanyin.nacos.search.services.operations.SummaryQuery
 import com.nanyin.nacos.search.services.operations.V1ProtocolAdapter
+import com.nanyin.nacos.search.services.operations.GenerationProbeFlight
+import com.nanyin.nacos.search.services.operations.GenerationProbeKey
 import com.nanyin.nacos.search.services.operations.GenerationResolver
+import com.nanyin.nacos.search.services.operations.GenerationSessionCapture
+import com.nanyin.nacos.search.services.operations.SessionGenerationState
 import com.nanyin.nacos.search.services.operations.V3ProtocolAdapter
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -50,13 +54,27 @@ import java.nio.charset.StandardCharsets
  */
 @Service(Service.Level.APP)
 class NacosApiService(
-    private val v1GatewayOverride: OperationGateway? = null
+    private val v1GatewayOverride: OperationGateway? = null,
+    /**
+     * Test seam: override the request executor so tests can observe every
+     * outgoing HTTP request (legacy wire path and gateway path both funnel
+     * through this executor). Production uses the default transport.
+     */
+    private val executorOverride: NacosRequestExecutor? = null,
+    /**
+     * Test seam: inject a project-session generation owner. Production looks
+     * up [ProjectSessionEpochs] for the active profile, or falls back to an
+     * in-memory default session for app-level callers without an open project.
+     */
+    private val sessionGenerationOverride: SessionGenerationState? = null,
+    /** Test seam: shared formal probe flight. Isolated diagnostics never use it. */
+    private val probeFlightOverride: GenerationProbeFlight? = null
 ) {
     private val logger = thisLogger()
     private val gson = Gson()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
   private val authService = ApplicationManager.getApplication().getService(NacosAuthService::class.java)
-    private val executor = NacosRequestExecutor()
+    private val executor = executorOverride ?: NacosRequestExecutor()
 
    private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
 
@@ -82,11 +100,25 @@ class NacosApiService(
    }
    /** Resolves AUTO to a concrete generation by probing V3 first, then V1. */
    private val generationResolver by lazy { GenerationResolver(v3Adapter, v1Adapter) }
+   /** Formal AUTO probes share this flight; diagnostics do not. */
+   private val probeFlight = probeFlightOverride ?: sharedProbeFlight
+   private val fallbackEpoch = java.util.concurrent.atomic.AtomicLong(0)
+   /**
+    * Fallback session used when no open project owns the profile. Still
+    * in-memory only and never persisted — satisfies sequential reuse for
+    * app-level callers (plugin init, unit tests without a Project).
+    */
+   private val fallbackSessionGeneration = SessionGenerationState(
+       currentEpoch = { fallbackEpoch.get() },
+       onGenerationChanged = { fallbackEpoch.incrementAndGet(); Unit }
+   )
   companion object {
        private const val CONFIG_ENDPOINT = "/nacos/v1/cs/configs"
        private const val CONFIG_LIST_ENDPOINT = "/nacos/v1/cs/configs"
        private const val NAMESPACE_ENDPOINT = "/nacos/v1/console/namespaces"
         private const val FETCH_CONCURRENCY = 8
+        /** Process-wide formal probe flight shared by all NacosApiService instances. */
+        private val sharedProbeFlight = GenerationProbeFlight()
 
         // Testable I/O body of requestPost. Guarantees the connection is
         // disconnected and streams closed on every path (success, error, exception).
@@ -797,24 +829,106 @@ class NacosApiService(
 
     /**
      * Returns a target whose generation is locked to a concrete V1 or V3.
-     * Locked profiles (V1/V3) keep their captured generation. AUTO is resolved
-     * once by probing V3 first and falling back to V1 only on a typed
-     * `GenerationUnsupported`; any other V3 failure propagates without
-     * fallback (design §2.1). The resolved target is then routed through the
-     * gateway, so AUTO never depends on the legacy V1 wire path.
+     * Locked profiles (V1/V3) keep their captured generation and never probe.
+     * AUTO is resolved **once per project session** (ADR-0006 / ADR-0034): the
+     * in-memory session result is reused; concurrent formal detections share a
+     * single flight keyed by the complete non-secret probe inputs; a consumer
+     * whose capture no longer matches does not commit the shared result.
+     * Isolated diagnostics never enter this path.
      */
     private suspend fun resolvedReadTarget(
         context: NacosOperationContext,
         namespaceId: String?
     ): Result<OperationTarget> {
         if (usesLockedGeneration(context)) return Result.success(v1Target(context, namespaceId))
-        val probeTarget = v1Target(context, namespaceId)
-        val generation = generationResolver.resolve(probeTarget).getOrElse { error ->
+
+        val session = sessionOwner(context)
+        session.resolvedIfCompatible(
+            profileId = context.identity.profileId,
+            profileRevision = context.profileRevision,
+            accessRevision = context.accessRevision
+        )?.let { cached ->
+            return Result.success(v1Target(lockedContext(context, cached), namespaceId))
+        }
+
+        val capture = GenerationSessionCapture(
+            profileId = context.identity.profileId,
+            profileRevision = context.profileRevision,
+            accessRevision = context.accessRevision,
+            sessionEpoch = session.snapshotEpoch(),
+            canonicalEndpoint = context.endpoint.value,
+            authMode = context.authMode,
+            principal = context.identity.principal
+        )
+        val probeKey = GenerationProbeKey.from(capture)
+        val generation = probeFlight.joinOrProbe(probeKey) {
+            generationResolver.resolve(v1Target(context, namespaceId))
+        }.getOrElse { error ->
             return Result.failure(error)
         }
-        persistLastKnownGeneration(context, generation)
+
+        // Commit only when the consumer's capture still matches live identity
+        // keys, epoch, and tombstone (ADR-0034). A rejected commit still lets
+        // this operation use the probed generation, but neither the session nor
+        // last-known generation is updated.
+        val live = liveIdentityKeys(context)
+        if (live != null && session.tryCommit(generation, capture, live)) {
+            persistLastKnownGeneration(context, generation)
+        }
         return Result.success(v1Target(lockedContext(context, generation), namespaceId))
     }
+
+    private fun sessionOwner(context: NacosOperationContext): SessionGenerationState {
+        sessionGenerationOverride?.let { return it }
+        ProjectSessionEpochs.findForProfile(context.identity.profileId)
+            ?.generationState()
+            ?.let { return it }
+        return fallbackSessionGeneration
+    }
+
+    /**
+     * Re-reads the live profile's non-secret identity keys for the ADR-0034
+     * commit recheck. Returns null when the profile is gone in production —
+     * commit is refused. Injected test sessions fall back to the capture keys.
+     */
+    private fun liveIdentityKeys(context: NacosOperationContext): SessionGenerationState.LiveIdentityKeys? {
+        val fromCapture = SessionGenerationState.LiveIdentityKeys(
+            profileId = context.identity.profileId,
+            profileRevision = context.profileRevision,
+            accessRevision = context.accessRevision
+        )
+        return try {
+            val profile = settings.getProfile(context.identity.profileId)
+            if (profile != null) {
+                SessionGenerationState.LiveIdentityKeys(
+                    profileId = profile.id,
+                    profileRevision = profile.profileRevision,
+                    accessRevision = profile.accessRevision
+                )
+            } else if (sessionGenerationOverride != null) {
+                // Harness profiles are not registered in NacosSettings.
+                fromCapture
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            if (sessionGenerationOverride != null) fromCapture else null
+        }
+    }
+
+    /**
+     * Offline bootstrap: rebuild the access identity using the persisted
+     * last-known generation so the same identity's cache can be located.
+     * Marks nothing as remote-authorised — callers must treat restored data as
+     * unconfirmed and must still run formal detection before any remote op
+     * (ADR-0034). Returns null when no last-known value exists.
+     */
+    fun offlineCacheIdentity(context: NacosOperationContext): com.nanyin.nacos.search.models.AccessIdentity? {
+        val lastKnown = lastKnownGeneration(context) ?: return null
+        if (lastKnown != NacosApiGeneration.V1 && lastKnown != NacosApiGeneration.V3) return null
+        return context.identity.copy(resolvedGeneration = lastKnown)
+    }
+
 
     private fun persistLastKnownGeneration(context: NacosOperationContext, generation: NacosApiGeneration) {
         if (generation != NacosApiGeneration.V1 && generation != NacosApiGeneration.V3) return
