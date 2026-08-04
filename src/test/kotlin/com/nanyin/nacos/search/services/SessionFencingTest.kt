@@ -127,40 +127,8 @@ class SessionFencingTest {
         assertFalse(restored.isEntombed(identity("prod", 1)))
     }
 
-    // ── Observation high-water ordering ──
-
-    @Test
-    fun `older cache visibility cannot override a newer outcome`() {
-        val highWater = ObservationHighWater()
-
-        val stamp1 = highWater.capture(identity("dev", 1), "ns-a")
-        val stamp2 = highWater.capture(identity("dev", 1), "ns-a")
-
-        assertTrue(highWater.isCurrent(stamp2))
-        assertFalse(highWater.isCurrent(stamp1))
-    }
-
-    @Test
-    fun `different namespace stamps are independent`() {
-        val highWater = ObservationHighWater()
-
-        val stampA = highWater.capture(identity("dev", 1), "ns-a")
-        val stampB = highWater.capture(identity("dev", 1), "ns-b")
-
-        assertTrue(highWater.isCurrent(stampA))
-        assertTrue(highWater.isCurrent(stampB))
-    }
-
-    @Test
-    fun `different identity stamps are independent`() {
-        val highWater = ObservationHighWater()
-
-        val stampDev = highWater.capture(identity("dev", 1), "ns-a")
-        val stampProd = highWater.capture(identity("prod", 1), "ns-a")
-
-        assertTrue(highWater.isCurrent(stampDev))
-        assertTrue(highWater.isCurrent(stampProd))
-    }
+    // Observation high-water ordering lives with the one implementation that
+    // survived the merge — see ObservationHighWaterTest and CacheWriteGateTest.
 
     // ── Policy-only change fence ──
 

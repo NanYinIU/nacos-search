@@ -16,6 +16,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import com.nanyin.nacos.search.services.writeDetail
+import com.nanyin.nacos.search.services.clearAll
+import com.nanyin.nacos.search.services.operations.Observed
+import com.nanyin.nacos.search.services.operations.ObservationSequence
 
 class ConfigDetailPanelStaleTest {
     @get:Rule
@@ -35,7 +39,7 @@ class ConfigDetailPanelStaleTest {
         )
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         settings.serverUrl = "http://localhost:8848"
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             settings.captureAccessIdentity(),
             "dev",
             configuration,
@@ -43,7 +47,7 @@ class ConfigDetailPanelStaleTest {
         )
         now += 8L * 24 * 60 * 60 * 1000
         val refreshRequested = CompletableDeferred<Boolean>()
-        val neverCompletes = CompletableDeferred<Result<NacosConfiguration?>>()
+        val neverCompletes = CompletableDeferred<Result<Observed<NacosConfiguration?>>>()
         val loader = ConfigurationDetailLoader { _, forceRefresh ->
             refreshRequested.complete(forceRefresh)
             neverCompletes.await()
@@ -71,7 +75,7 @@ class ConfigDetailPanelStaleTest {
         )
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         settings.serverUrl = "http://localhost:8848"
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             settings.captureAccessIdentity(),
             "dev",
             configuration,
@@ -81,7 +85,7 @@ class ConfigDetailPanelStaleTest {
         val notFoundReturned = CompletableDeferred<Unit>()
         val loader = ConfigurationDetailLoader { _, _ ->
             notFoundReturned.complete(Unit)
-            Result.success(null)
+            Result.success(Observed(null, ObservationSequence.process.next()))
         }
         val panel = ConfigDetailPanel(
             ProjectManager.getInstance().defaultProject,

@@ -11,6 +11,7 @@ import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.nanyin.nacos.search.services.NacosApiService
+import com.nanyin.nacos.search.services.CacheMutation
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.NamespaceService
@@ -164,7 +165,7 @@ class NacosValueLineMarkerProvider internal constructor(
                 NacosConfigNavigator.navigate(project, cached, lineIndex)
                 return@executeOnPooledThread
             }
-            val config = runBlocking {
+            val observed = runBlocking {
                 apiService.getConfiguration(
                     dataId = dataId,
                     group = group,
@@ -172,18 +173,24 @@ class NacosValueLineMarkerProvider internal constructor(
                     useCache = true,
                     operationContext = operationContext
                 ).getOrNull()
-            } ?: return@executeOnPooledThread
+            }
+            val config = observed?.value ?: return@executeOnPooledThread
 
             // Ensure the fetched config lives in the detail cache so the key
             // index can see it. getConfiguration() only persists when
             // cacheEnabled is on, but the gutter marker relies on the cache to
-            // decide resolved vs. unresolved, so we write it unconditionally.
+            // decide resolved vs. unresolved, so we write it unconditionally —
+            // under the same observation sequence the read took, so a slower
+            // earlier navigation cannot displace it.
             runBlocking {
-                cacheService.putConfigDetail(
-                    accessIdentity,
-                    namespaceId,
-                    config,
-                    settings.getCacheTtlMillis()
+                cacheService.apply(
+                    CacheMutation.WriteDetail(
+                        accessIdentity,
+                        namespaceId,
+                        config,
+                        settings.getCacheTtlMillis()
+                    ),
+                    observed.observation
                 )
             }
 

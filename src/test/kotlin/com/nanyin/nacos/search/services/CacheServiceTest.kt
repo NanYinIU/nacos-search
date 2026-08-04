@@ -49,7 +49,7 @@ class CacheServiceTest {
     @Test
     fun `configuration snapshot excludes expired details`() = runBlocking {
         val cacheService = CacheService(InMemoryCacheStore())
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             defaultIdentity, null,
             NacosConfiguration("expired.properties", "DEFAULT_GROUP", null, "k=v", "properties"),
             ttl = -1L
@@ -69,7 +69,7 @@ class CacheServiceTest {
             "feature=old",
             "properties"
         )
-        first.putConfigDetail(
+        first.writeDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
             configuration = cached,
@@ -104,7 +104,7 @@ class CacheServiceTest {
     fun `navigation snapshot keeps details across fresh stale and deep-stale ages`() = runBlocking {
         var now = 1_000_000L
         val cacheService = CacheService({ now }, InMemoryCacheStore())
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
             configuration = NacosConfiguration(
@@ -140,11 +140,11 @@ class CacheServiceTest {
         val cacheService = CacheService(InMemoryCacheStore())
         val one = testIdentity("http://one:8848/")
         val two = testIdentity("http://two:8848")
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             one, null,
             NacosConfiguration("one.properties", "DEFAULT_GROUP", null, "k=one", "properties")
         )
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             two, null,
             NacosConfiguration("two.properties", "DEFAULT_GROUP", null, "k=two", "properties")
         )
@@ -162,7 +162,7 @@ class CacheServiceTest {
 
         coroutineScope {
             val writer = launch {
-                cacheService.putNamespaceIndex(defaultIdentity, "dev", configurations)
+                cacheService.replaceNamespaceIndex(defaultIdentity, "dev", configurations)
             }
             while (!writer.isCompleted) {
                 observedSizes += cacheService.getNamespaceIndex(defaultIdentity, "dev")?.size ?: 0
@@ -179,35 +179,46 @@ class CacheServiceTest {
         assertEquals(0, cacheService.configurationSnapshot(defaultIdentity).size)
     }
 
+    /**
+     * A complete index proves what the namespace holds, so it reclaims details
+     * it no longer lists (ADR-0020) — but it still never *seeds* a detail from
+     * a summary, and it never reaches outside its own namespace (ADR-0041).
+     * The ordering side of the same rule is in CacheWriteGateTest.
+     */
     @Test
-    fun `complete namespace index replacement does not delete or seed details`() = runBlocking {
+    fun `complete namespace index replacement reclaims absent details but seeds none`() = runBlocking {
         val cacheService = CacheService(InMemoryCacheStore())
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             defaultIdentity,
             "dev",
             NacosConfiguration("keep.properties", "DEFAULT_GROUP", "dev", "v=old"),
             ttl = 60_000L
         )
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             defaultIdentity,
             "dev",
             NacosConfiguration("orphan.properties", "DEFAULT_GROUP", "dev", "gone=true"),
             ttl = 60_000L
         )
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             defaultIdentity,
             "prod",
             NacosConfiguration("prod.properties", "DEFAULT_GROUP", "prod", "safe=true"),
             ttl = 60_000L
         )
 
-        cacheService.putNamespaceIndex(
+        cacheService.replaceNamespaceIndex(
             defaultIdentity,
             "dev",
-            listOf(NacosConfiguration("keep.properties", "DEFAULT_GROUP", "dev", "v=new")),
+            listOf(
+                NacosConfiguration("keep.properties", "DEFAULT_GROUP", "dev", "v=new"),
+                NacosConfiguration("never.fetched", "DEFAULT_GROUP", "dev", "seeded=true")
+            ),
             ttl = 60_000L
         )
 
+        // The listed detail keeps the body its own read observed; the index
+        // carries summaries, not content.
         assertEquals(
             "v=old",
             cacheService.getConfigDetail(
@@ -217,15 +228,23 @@ class CacheServiceTest {
                 "DEFAULT_GROUP"
             )?.content
         )
-        assertEquals(
-            "gone=true",
+        assertNull(
+            cacheService.getConfigDetail(
+                defaultIdentity,
+                "dev",
+                "never.fetched",
+                "DEFAULT_GROUP",
+                allowStale = true
+            )
+        )
+        assertNull(
             cacheService.getConfigDetail(
                 defaultIdentity,
                 "dev",
                 "orphan.properties",
                 "DEFAULT_GROUP",
                 allowStale = true
-            )?.content
+            )
         )
         assertEquals(
             "safe=true",
@@ -237,7 +256,7 @@ class CacheServiceTest {
             )?.content
         )
         assertEquals(
-            setOf("keep.properties"),
+            setOf("keep.properties", "never.fetched"),
             cacheService.namespaceIndexState(defaultIdentity, "dev")?.dataIds
         )
     }
@@ -277,7 +296,7 @@ class CacheServiceTest {
             type = "yaml"
         )
 
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
             configuration = config,
@@ -308,13 +327,13 @@ class CacheServiceTest {
         val dev = testIdentity("http://dev-nacos:8848")
         val prod = testIdentity("http://prod-nacos:8848")
 
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             identity = dev,
             namespaceId = "public",
             configuration = NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=dev", "properties"),
             ttl = 60_000L
         )
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             identity = prod,
             namespaceId = "public",
             configuration = NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=prod", "properties"),
@@ -349,14 +368,14 @@ class CacheServiceTest {
         )
         val detail = NacosConfiguration("app.yaml", "DEFAULT_GROUP", "dev", "feature=true")
 
-        cacheService.putListPage(
+        cacheService.writeListPage(
             identity = defaultIdentity,
             namespaceId = "dev",
             requestKey = "page=1",
             response = page,
             ttl = 1L
         )
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
             configuration = detail,
@@ -378,7 +397,7 @@ class CacheServiceTest {
         cacheService.awaitLoadCompleted()
         val initial = cacheService.getModificationCount()
 
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
             configuration = NacosConfiguration("app.yaml", "DEFAULT_GROUP", "dev", "feature=true"),
@@ -402,10 +421,10 @@ class CacheServiceTest {
             NacosConfiguration("db.properties", "DEFAULT_GROUP", "dev", "db.url=jdbc:test", "properties")
         )
 
-        cacheService.putNamespaceIndex(
+        cacheService.replaceNamespaceIndex(
             identity = defaultIdentity,
             namespaceId = "dev",
-            configurations = configs,
+            summaries = configs,
             ttl = 60_000L
         )
 
@@ -420,10 +439,10 @@ class CacheServiceTest {
     fun `putNamespaceIndex does not seed individual config details`() = runBlocking {
         val cacheService = CacheService(InMemoryCacheStore())
 
-        cacheService.putNamespaceIndex(
+        cacheService.replaceNamespaceIndex(
             identity = defaultIdentity,
             namespaceId = null,
-            configurations = listOf(
+            summaries = listOf(
                 NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "timeout=30", "properties")
             ),
             ttl = 60_000L
@@ -440,7 +459,7 @@ class CacheServiceTest {
     fun `reads are not serialized behind a write lock`() = runBlocking {
         val cacheService = CacheService(InMemoryCacheStore())
         repeat(200) { i ->
-            cacheService.putConfigDetail(
+            cacheService.writeDetail(
                 identity = defaultIdentity,
                 namespaceId = "ns",
                 configuration = NacosConfiguration("app$i.properties", "DEFAULT_GROUP", "ns", "k=$i", "properties"),
@@ -450,7 +469,7 @@ class CacheServiceTest {
 
         val writer = launch {
             repeat(200) { i ->
-                cacheService.putConfigDetail(
+                cacheService.writeDetail(
                     identity = defaultIdentity,
                     namespaceId = "ns",
                     configuration = NacosConfiguration("other$i.properties", "DEFAULT_GROUP", "ns", "v=$i", "properties"),
@@ -473,10 +492,10 @@ class CacheServiceTest {
     @Test
     fun `putNamespaceIndex does not persist details for reload`() = runBlocking {
         val store = InMemoryCacheStore()
-        CacheService(store).putNamespaceIndex(
+        CacheService(store).replaceNamespaceIndex(
             identity = defaultIdentity,
             namespaceId = "dev",
-            configurations = listOf(
+            summaries = listOf(
                 NacosConfiguration("seed.properties", "DEFAULT_GROUP", "dev", "seeded=true", "properties")
             ),
             ttl = 60_000L
@@ -492,13 +511,13 @@ class CacheServiceTest {
     fun `clearing the cache leaves no payload in the store`() = runBlocking {
         val store = InMemoryCacheStore()
         val first = CacheService(store)
-        first.putConfigDetail(
+        first.writeDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
             configuration = NacosConfiguration("gone.properties", "DEFAULT_GROUP", "dev", "x=1", "properties"),
             ttl = 60_000L
         )
-        first.putListPage(
+        first.writeListPage(
             identity = defaultIdentity,
             namespaceId = "dev",
             requestKey = "page=1",
@@ -511,7 +530,7 @@ class CacheServiceTest {
             CacheService(store).getConfigDetail(defaultIdentity, "dev", "gone.properties", "DEFAULT_GROUP")?.content
         )
 
-        first.clearCache()
+        first.clearAll()
 
         // Nothing unreachable is left behind, and a fresh load cannot resurrect
         // an entry the user explicitly discarded.
@@ -524,14 +543,14 @@ class CacheServiceTest {
     fun `removing a detail reclaims its payload from the store`() = runBlocking {
         val store = InMemoryCacheStore()
         val cacheService = CacheService(store)
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
             configuration = NacosConfiguration("removed.properties", "DEFAULT_GROUP", "dev", "x=1", "properties"),
             ttl = 60_000L
         )
 
-        cacheService.removeConfigDetail(defaultIdentity, "dev", "removed.properties", "DEFAULT_GROUP")
+        cacheService.deleteDetailNotFound(defaultIdentity, "dev", "removed.properties", "DEFAULT_GROUP")
 
         assertTrue(store.loadDetails().isEmpty())
     }
@@ -563,7 +582,7 @@ class CacheServiceTest {
     @Test
     fun `single-key read resolves from the store without waiting for the full background load`() = runBlocking {
         val store = InMemoryCacheStore()
-        CacheService(store).putConfigDetail(
+        CacheService(store).writeDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
             configuration = NacosConfiguration("quick.properties", "DEFAULT_GROUP", "dev", "v=1", "properties"),
@@ -584,7 +603,7 @@ class CacheServiceTest {
     @Test
     fun `full read reflects the completed background load`() = runBlocking {
         val store = InMemoryCacheStore()
-        CacheService(store).putConfigDetail(
+        CacheService(store).writeDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
             configuration = NacosConfiguration("full.properties", "DEFAULT_GROUP", "dev", "k=v", "properties"),
@@ -602,12 +621,12 @@ class CacheServiceTest {
         val alice = testIdentity("http://nacos:8848", "alice", AuthMode.BASIC)
         val bob = testIdentity("http://nacos:8848", "bob", AuthMode.BASIC)
 
-        cacheService.putNamespaceIndex(
+        cacheService.replaceNamespaceIndex(
             alice,
             "dev",
             listOf(NacosConfiguration("alice.yaml", "DEFAULT_GROUP", "dev", "owner=alice", "yaml"))
         )
-        cacheService.putNamespaceIndex(
+        cacheService.replaceNamespaceIndex(
             bob,
             "dev",
             listOf(NacosConfiguration("bob.yaml", "DEFAULT_GROUP", "dev", "owner=bob", "yaml"))
@@ -630,7 +649,7 @@ class CacheServiceTest {
             pagesAvailable = 0,
             pageItems = emptyList()
         )
-        cache.putListPage(identity, "public", "key-1", response, ttl = 60_000L)
+        cache.writeListPage(identity, "public", "key-1", response, ttl = 60_000L)
         val entry = cache.getListPageEntry(identity, "public", "key-1")
         assertEquals(5_000_000L, entry?.createdAtMillis)
 
@@ -645,7 +664,7 @@ class CacheServiceTest {
         var now = 9_000_000L
         val cache = CacheService({ now }, InMemoryCacheStore())
         val identity = testIdentity("http://index-age-test", "alice", AuthMode.BASIC)
-        cache.putNamespaceIndex(
+        cache.replaceNamespaceIndex(
             identity,
             "public",
             listOf(NacosConfiguration("app.yaml", "DEFAULT_GROUP", "public", "feature=true", "yaml")),
@@ -674,23 +693,23 @@ class CacheServiceTest {
 
         tombstones.entomb(entombed.profileId, 1)
 
-        cache.putConfigDetail(entombed, "ns", NacosConfiguration("d", "g", "ns", "late", "text"))
-        cache.putNamespaceDetails(
+        cache.writeDetail(entombed, "ns", NacosConfiguration("d", "g", "ns", "late", "text"))
+        cache.replaceNamespaceIndex(
             entombed,
             "ns",
-            listOf(NacosConfiguration("partial", "g", "ns", "resurrected", "text"))
+            listOf(NacosConfiguration("d", "g", "ns", "", "text"))
         )
-        cache.putConfigDetail(survivor, "ns", NacosConfiguration("d", "g", "ns", "kept", "text"))
-        cache.putNamespaceDetails(
+        cache.writeDetail(survivor, "ns", NacosConfiguration("d", "g", "ns", "kept", "text"))
+        cache.replaceNamespaceIndex(
             survivor,
             "ns",
-            listOf(NacosConfiguration("partial", "g", "ns", "survivor-partial", "text"))
+            listOf(NacosConfiguration("d", "g", "ns", "", "text"))
         )
 
         assertNull(cache.getConfigDetail(entombed, "ns", "d", "g"))
-        assertNull(cache.getConfigDetail(entombed, "ns", "partial", "g"))
+        assertNull(cache.getNamespaceIndex(entombed, "ns"))
         assertEquals("kept", cache.getConfigDetail(survivor, "ns", "d", "g")?.content)
-        assertEquals("survivor-partial", cache.getConfigDetail(survivor, "ns", "partial", "g")?.content)
+        assertEquals(1, cache.getNamespaceIndex(survivor, "ns")?.size)
         cache.dispose()
     }
 

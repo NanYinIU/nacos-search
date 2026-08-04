@@ -224,11 +224,12 @@ class NavigationDetailPrefetchService internal constructor(
                                 namespaceId = target.namespaceId,
                                 useCache = true,
                                 operationContext = operationContext
-                            ).getOrNull()?.also { config ->
-                                // Prefer the write already performed by getConfiguration
-                                // (observation-gated). Only fill the gap when the
-                                // detail is still missing (cache disabled, or a
-                                // test double that returns without persisting).
+                            ).getOrNull()?.let { observed ->
+                                val config = observed.value ?: return@let null
+                                // Prefer the write already performed by getConfiguration.
+                                // Only fill the gap when the detail is still missing
+                                // (cache disabled, or a test double that returns without
+                                // persisting), under the read's own observation sequence.
                                 val cached = cacheService.getConfigDetail(
                                     identity,
                                     target.namespaceId,
@@ -237,14 +238,18 @@ class NavigationDetailPrefetchService internal constructor(
                                     allowStale = true
                                 )
                                 if (cached == null || cached.content.isBlank()) {
-                                    cacheService.putConfigDetail(
-                                        identity,
-                                        target.namespaceId,
-                                        config,
-                                        settings.getCacheTtlMillis()
+                                    cacheService.apply(
+                                        CacheMutation.WriteDetail(
+                                            identity,
+                                            target.namespaceId,
+                                            config,
+                                            settings.getCacheTtlMillis()
+                                        ),
+                                        observed.observation
                                     )
                                 }
                                 fetchedCount.incrementAndGet()
+                                config
                             }
                         }
                     }

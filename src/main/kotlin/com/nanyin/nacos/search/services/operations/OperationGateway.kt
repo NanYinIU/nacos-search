@@ -6,22 +6,28 @@ import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.services.CacheMutation
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.network.RequestPolicy
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Generation-neutral boundary for read operations. Callers pass an immutable
  * [OperationTarget] captured before UI state can change; neither cache lookup
  * nor protocol dispatch reads current settings or project selection.
+ *
+ * Every read takes its observation sequence when the operation starts and hands
+ * the same number to both the caller and the cache mutation derived from it, so
+ * painting a result and writing its cache entry are ordered by one number
+ * (ADR-0020 / ADR-0047). The gateway no longer keeps gates of its own: the
+ * cache-entry gate lives inside the cache module, where its scope equals the
+ * mutation's coordinate by construction (ADR-0044).
  */
 class OperationGateway(
     private val adapters: Map<NacosApiGeneration, ProtocolAdapter>,
     private val cache: OperationCache = NoOperationCache,
     private val historyCache: HistoryMemoryCache = HistoryMemoryCache(),
-    private val observationSequence: ObservationSequence = ObservationSequence(),
-    private val observationGates: ConcurrentHashMap<String, ObservationGate> = ConcurrentHashMap()
+    private val observationSequence: ObservationSequence = ObservationSequence.process
 ) {
     suspend fun probe(target: OperationTarget): Result<Unit> =
         adapterFor(target)?.probe(target) ?: unsupportedGeneration(target)
@@ -31,18 +37,19 @@ class OperationGateway(
         query: SummaryQuery,
         forceRefresh: Boolean = false,
         useCache: Boolean = true
-    ): Result<SummaryPage> {
+    ): Result<Observed<SummaryPage>> {
+        val observation = observationSequence.next()
         if (useCache && !forceRefresh) {
             cache.getSummaries(target.context.identity, target.namespaceId, query.cacheKey())?.let {
-                return Result.success(it)
+                return Result.success(Observed(it, observation))
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
-        val seq = observationSequence.next()
-        return adapter.listSummaries(target, query).onSuccess { page ->
-            if (useCache && acceptObservation(summaryGateKey(target, query), seq)) {
-                cache.putSummaries(target.context.identity, target.namespaceId, query.cacheKey(), page)
+        return adapter.listSummaries(target, query).map { page ->
+            if (useCache) {
+                cache.putSummaries(target.context.identity, target.namespaceId, query.cacheKey(), page, observation)
             }
+            Observed(page, observation)
         }
     }
 
@@ -51,18 +58,19 @@ class OperationGateway(
         coordinate: ConfigurationCoordinate,
         forceRefresh: Boolean = false,
         useCache: Boolean = true
-    ): Result<NacosConfiguration?> {
+    ): Result<Observed<NacosConfiguration?>> {
+        val observation = observationSequence.next()
         if (useCache && !forceRefresh) {
             cache.getDetail(target.context.identity, target.namespaceId, coordinate.dataId, coordinate.group)?.let {
-                return Result.success(it)
+                return Result.success(Observed(it, observation))
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
-        val seq = observationSequence.next()
-        return adapter.readDetail(target, coordinate).onSuccess { detail ->
-            if (useCache && detail != null && acceptObservation(detailGateKey(target, coordinate), seq)) {
-                cache.putDetail(target.context.identity, target.namespaceId, detail)
+        return adapter.readDetail(target, coordinate).map { detail ->
+            if (useCache && detail != null) {
+                cache.putDetail(target.context.identity, target.namespaceId, detail, observation)
             }
+            Observed(detail, observation)
         }
     }
 
@@ -72,10 +80,11 @@ class OperationGateway(
         query: HistoryQuery,
         forceRefresh: Boolean = false,
         useCache: Boolean = true
-    ): Result<HistoryPage> {
+    ): Result<Observed<HistoryPage>> {
+        val observation = observationSequence.next()
         if (useCache && !forceRefresh) {
             historyCache.getHistoryPage(target.context.identity, target.namespaceId, query.cacheKey())?.let {
-                return Result.success(it)
+                return Result.success(Observed(it, observation))
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
@@ -84,10 +93,13 @@ class OperationGateway(
                 RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support configuration history")
             )
         }
-        return adapter.listHistory(target, query).onSuccess { page ->
+        return adapter.listHistory(target, query).map { page ->
             if (useCache) {
-                historyCache.putHistoryPage(target.context.identity, target.namespaceId, query.cacheKey(), page)
+                historyCache.putHistoryPage(
+                    target.context.identity, target.namespaceId, query.cacheKey(), page, observation
+                )
             }
+            Observed(page, observation)
         }
     }
 
@@ -96,10 +108,11 @@ class OperationGateway(
         historyId: String,
         forceRefresh: Boolean = false,
         useCache: Boolean = true
-    ): Result<HistoryDetail> {
+    ): Result<Observed<HistoryDetail>> {
+        val observation = observationSequence.next()
         if (useCache && !forceRefresh) {
             historyCache.getHistoryDetail(target.context.identity, target.namespaceId, historyId)?.let {
-                return Result.success(it)
+                return Result.success(Observed(it, observation))
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
@@ -108,12 +121,13 @@ class OperationGateway(
                 RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support configuration history")
             )
         }
-        return adapter.readHistoryDetail(target, historyId).onSuccess { detail ->
+        return adapter.readHistoryDetail(target, historyId).map { detail ->
             if (useCache) {
                 historyCache.putHistoryDetail(
-                    target.context.identity, target.namespaceId, historyId, detail
+                    target.context.identity, target.namespaceId, historyId, detail, observation
                 )
             }
+            Observed(detail, observation)
         }
     }
 
@@ -141,48 +155,18 @@ class OperationGateway(
     }
 
     /**
-     * Takes the observation sequence for a namespace-index load. ADR-0020
-     * requires the sequence to be obtained **when the operation starts**, not
-     * when it writes, so that a later-started load wins even if an earlier one
-     * completes after it. Callers must pair this with
-     * [commitNamespaceIndexWrite] using the same sequence.
+     * Takes the observation sequence for an operation this gateway does not
+     * dispatch itself — today, a full namespace-index load. ADR-0020 requires
+     * the sequence to be obtained **when the operation starts**, not when it
+     * writes, so that a later-started load wins even if an earlier one
+     * completes after it. The caller passes the same number to
+     * [com.nanyin.nacos.search.services.CacheService.apply], which decides
+     * whether the mutation still lands.
      */
-    fun beginNamespaceIndexObservation(): Long = observationSequence.next()
-
-    /**
-     * Gates the namespace-index write (the one cache mutation that deletes
-     * data) on the sequence taken by [beginNamespaceIndexObservation]. Returns
-     * false when a later-started observation already owns the high-water mark
-     * for this identity+namespace, in which case the write must be discarded
-     * (ADR-0020 / issue #50).
-     *
-     * Whether the observation gate later moves inside the cache module is a
-     * separate decision (#43); this pair only ensures the index write carries
-     * a sequence through the gateway.
-     */
-    fun commitNamespaceIndexWrite(target: OperationTarget, sequence: Long): Boolean =
-        acceptObservation(namespaceIndexGateKey(target), sequence)
+    fun beginObservation(): Long = observationSequence.next()
 
     /** Test/inspection helper: last issued observation sequence. */
     fun currentObservationSequence(): Long = observationSequence.current()
-
-    private fun acceptObservation(key: String, seq: Long): Boolean =
-        observationGates.computeIfAbsent(key) { ObservationGate() }.acceptIfNewer(seq)
-
-    private fun summaryGateKey(target: OperationTarget, query: SummaryQuery): String =
-        "summary|" + target.context.identity.profileId + "|" +
-            target.context.identity.accessRevision + "|" +
-            target.namespaceId + "|" + query.cacheKey()
-
-    private fun detailGateKey(target: OperationTarget, coordinate: ConfigurationCoordinate): String =
-        "detail|" + target.context.identity.profileId + "|" +
-            target.context.identity.accessRevision + "|" +
-            target.namespaceId + "|" + coordinate.dataId + "|" + coordinate.group
-
-    private fun namespaceIndexGateKey(target: OperationTarget): String =
-        "ns-index|" + target.context.identity.profileId + "|" +
-            target.context.identity.accessRevision + "|" +
-            target.namespaceId
 
     private fun adapterFor(target: OperationTarget): ProtocolAdapter? = adapters[target.context.resolvedGeneration]
 
@@ -191,22 +175,48 @@ class OperationGateway(
     )
 }
 
-/** Cache seam for gateway tests and the identity-scoped production cache bridge. */
+/**
+ * Cache seam for gateway tests and the identity-scoped production cache bridge.
+ * Writes carry the observation sequence of the read that produced them; whether
+ * the write lands is the cache's decision, not the gateway's.
+ */
 interface OperationCache {
     suspend fun getSummaries(identity: AccessIdentity, namespaceId: String, requestKey: String): SummaryPage?
-    suspend fun putSummaries(identity: AccessIdentity, namespaceId: String, requestKey: String, page: SummaryPage)
+    suspend fun putSummaries(
+        identity: AccessIdentity,
+        namespaceId: String,
+        requestKey: String,
+        page: SummaryPage,
+        observation: Long
+    )
     suspend fun getDetail(identity: AccessIdentity, namespaceId: String, dataId: String, group: String): NacosConfiguration?
-    suspend fun putDetail(identity: AccessIdentity, namespaceId: String, detail: NacosConfiguration)
+    suspend fun putDetail(
+        identity: AccessIdentity,
+        namespaceId: String,
+        detail: NacosConfiguration,
+        observation: Long
+    )
 }
 
+/** Test double that keeps the ordering rule so gateway tests still see it. */
 class InMemoryOperationCache : OperationCache {
     private val summaries = mutableMapOf<Triple<AccessIdentity, String, String>, SummaryPage>()
     private val details = mutableMapOf<DetailCacheKey, NacosConfiguration>()
+    private val highWater = ObservationHighWater()
 
     override suspend fun getSummaries(identity: AccessIdentity, namespaceId: String, requestKey: String): SummaryPage? =
         summaries[Triple(identity, namespaceId, requestKey)]
 
-    override suspend fun putSummaries(identity: AccessIdentity, namespaceId: String, requestKey: String, page: SummaryPage) {
+    override suspend fun putSummaries(
+        identity: AccessIdentity,
+        namespaceId: String,
+        requestKey: String,
+        page: SummaryPage,
+        observation: Long
+    ) {
+        val scope = "summary|$identity|$namespaceId|$requestKey"
+        if (!highWater.accepts(listOf(scope), observation)) return
+        highWater.raise(scope, observation)
         summaries[Triple(identity, namespaceId, requestKey)] = page
     }
 
@@ -217,8 +227,17 @@ class InMemoryOperationCache : OperationCache {
         group: String
     ): NacosConfiguration? = details[DetailCacheKey(identity, namespaceId, dataId, group)]
 
-    override suspend fun putDetail(identity: AccessIdentity, namespaceId: String, detail: NacosConfiguration) {
-        details[DetailCacheKey(identity, namespaceId, detail.dataId, detail.group)] = detail
+    override suspend fun putDetail(
+        identity: AccessIdentity,
+        namespaceId: String,
+        detail: NacosConfiguration,
+        observation: Long
+    ) {
+        val key = DetailCacheKey(identity, namespaceId, detail.dataId, detail.group)
+        val scope = "detail|$key"
+        if (!highWater.accepts(listOf(scope), observation)) return
+        highWater.raise(scope, observation)
+        details[key] = detail
     }
 
     private data class DetailCacheKey(
@@ -229,7 +248,7 @@ class InMemoryOperationCache : OperationCache {
     )
 }
 
-/** Adapts the existing persistent cache without weakening its identity-scoped keys. */
+/** Adapts the persistent cache's one gated write entry point to this seam. */
 class CacheServiceOperationCache(
     private val cacheService: CacheService,
     private val ttlMillis: () -> Long
@@ -244,9 +263,15 @@ class CacheServiceOperationCache(
         identity: AccessIdentity,
         namespaceId: String,
         requestKey: String,
-        page: SummaryPage
+        page: SummaryPage,
+        observation: Long
     ) {
-        cacheService.putListPage(identity, namespaceId, requestKey, page.toConfigListResponse(), ttlMillis())
+        cacheService.apply(
+            CacheMutation.WriteListPage(
+                identity, namespaceId, requestKey, page.toConfigListResponse(), ttlMillis()
+            ),
+            observation
+        )
     }
 
     override suspend fun getDetail(
@@ -256,8 +281,16 @@ class CacheServiceOperationCache(
         group: String
     ): NacosConfiguration? = cacheService.getConfigDetail(identity, namespaceId, dataId, group)
 
-    override suspend fun putDetail(identity: AccessIdentity, namespaceId: String, detail: NacosConfiguration) {
-        cacheService.putConfigDetail(identity, namespaceId, detail, ttlMillis())
+    override suspend fun putDetail(
+        identity: AccessIdentity,
+        namespaceId: String,
+        detail: NacosConfiguration,
+        observation: Long
+    ) {
+        cacheService.apply(
+            CacheMutation.WriteDetail(identity, namespaceId, detail, ttlMillis()),
+            observation
+        )
     }
 
     private fun SummaryPage.toConfigListResponse(): ConfigListResponse = ConfigListResponse(
@@ -333,7 +366,18 @@ class NacosRequestExecutorProtocolTransport(
 
 private object NoOperationCache : OperationCache {
     override suspend fun getSummaries(identity: AccessIdentity, namespaceId: String, requestKey: String): SummaryPage? = null
-    override suspend fun putSummaries(identity: AccessIdentity, namespaceId: String, requestKey: String, page: SummaryPage) = Unit
+    override suspend fun putSummaries(
+        identity: AccessIdentity,
+        namespaceId: String,
+        requestKey: String,
+        page: SummaryPage,
+        observation: Long
+    ) = Unit
     override suspend fun getDetail(identity: AccessIdentity, namespaceId: String, dataId: String, group: String): NacosConfiguration? = null
-    override suspend fun putDetail(identity: AccessIdentity, namespaceId: String, detail: NacosConfiguration) = Unit
+    override suspend fun putDetail(
+        identity: AccessIdentity,
+        namespaceId: String,
+        detail: NacosConfiguration,
+        observation: Long
+    ) = Unit
 }

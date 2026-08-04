@@ -11,7 +11,9 @@ import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 // import com.nanyin.nacos.search.services.NacosConfigService // Not needed
 import com.nanyin.nacos.search.services.NacosSearchService
+import com.nanyin.nacos.search.services.CacheMutation
 import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.services.operations.ObservationSequence
 import com.nanyin.nacos.search.services.IndexOutcome
 import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
 import com.nanyin.nacos.search.services.NamespaceIndexRequest
@@ -234,7 +236,11 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
 
     private fun clearCache() {
         coroutineScope.launch {
-            ApplicationManager.getApplication().getService(CacheService::class.java).clearCache()
+            // The user's clear is a cache mutation: it takes an observation
+            // sequence, so a read that started before it loses and the reload
+            // started afterwards lands normally (ADR-0045).
+            ApplicationManager.getApplication().getService(CacheService::class.java)
+                .apply(CacheMutation.Clear, ObservationSequence.process.next())
             nacosApiService.clearCache()
             handleRefreshRequested()
         }
@@ -853,7 +859,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                         operationContext = selectedOperationContext()
                     )
                     
-                    val configDetail = configResult.getOrNull()
+                    val configDetail = configResult.getOrNull()?.value
                     if (configDetail == null) {
                         return@withContext false
                     }

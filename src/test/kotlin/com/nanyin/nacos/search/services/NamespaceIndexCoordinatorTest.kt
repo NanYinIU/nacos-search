@@ -20,6 +20,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.mockito.kotlin.any
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -158,14 +160,23 @@ class NamespaceIndexCoordinatorTest {
             )
         )
 
-        coordinator.requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
+        whenever(cacheService.apply(any(), any())).thenReturn(true)
 
-        verify(cacheService).putNamespaceIndex(
-            identity,
-            "ns-a",
-            listOf(configuration),
-            cacheTtlMillis
+        val outcome = coordinator.requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
+
+        assertTrue(outcome is IndexOutcome.Complete)
+        verify(cacheService).apply(
+            eq(
+                CacheMutation.ReplaceNamespaceIndex(
+                    identity,
+                    "ns-a",
+                    listOf(configuration),
+                    cacheTtlMillis
+                )
+            ),
+            any()
         )
+        Unit
     }
 
     @Test
@@ -223,7 +234,7 @@ class NamespaceIndexCoordinatorTest {
         whenever(apiService.operationGateway()).thenReturn(gateway)
         val cacheService = CacheService({ 2_000_000L }, InMemoryCacheStore())
         cacheService.clearAll()
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             identity,
             "ns-a",
             NacosConfiguration("stale.yaml", "DEFAULT_GROUP", "ns-a", "old=true"),

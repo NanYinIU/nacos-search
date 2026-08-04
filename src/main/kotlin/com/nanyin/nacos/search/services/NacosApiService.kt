@@ -23,6 +23,8 @@ import com.nanyin.nacos.search.services.operations.HistoryDetail
 import com.nanyin.nacos.search.services.operations.HistoryPage
 import com.nanyin.nacos.search.services.operations.HistoryQuery
 import com.nanyin.nacos.search.services.operations.NacosRequestExecutorProtocolTransport
+import com.nanyin.nacos.search.services.operations.Observed
+import com.nanyin.nacos.search.services.operations.ObservationSequence
 import com.nanyin.nacos.search.services.operations.OperationGateway
 import com.nanyin.nacos.search.services.operations.OperationGatewayPublishGateway
 import com.nanyin.nacos.search.services.operations.OperationTarget
@@ -174,7 +176,12 @@ class NacosApiService(
     }
 
     /**
-     * Retrieves a specific configuration from Nacos
+     * Retrieves a specific configuration from Nacos, together with the
+     * observation sequence the read took (ADR-0047). Callers that derive a
+     * cache mutation from the result — a not-found deletion, a navigation
+     * fill-in write — must pass that same number, so the read and the write it
+     * produced are ordered as one observation.
+     *
      * @param dataId Configuration data ID
      * @param group Configuration group
      * @param namespaceId Namespace ID (tenant), null for public namespace
@@ -187,7 +194,7 @@ class NacosApiService(
         useCache: Boolean = true,
         forceRefresh: Boolean = false,
         operationContext: NacosOperationContext? = null
-    ): Result<NacosConfiguration?> = withContext(Dispatchers.IO) {
+    ): Result<Observed<NacosConfiguration?>> = withContext(Dispatchers.IO) {
         try {
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
@@ -246,7 +253,7 @@ class NacosApiService(
                 SummaryQuery(pageNo, pageSize, dataId, group, appName, configTags, searchMode),
                 forceRefresh = forceRefresh,
                 useCache = useCache
-            ).map { it.toConfigListResponse() }
+            ).map { it.value.toConfigListResponse() }
         } catch (e: Exception) {
             logger.warn("Error listing configurations", e)
             Result.failure(e)
@@ -377,14 +384,22 @@ class NacosApiService(
     }
 
     /**
-     * Clears the cache for a specific namespace or all namespaces
+     * Clears the cache for a specific namespace or all namespaces.
+     *
+     * Both are cache mutations and take an observation sequence, so a read that
+     * started before the gesture loses to it while one started afterwards lands
+     * normally — clear-then-reload behaves as the obvious gesture (ADR-0045).
      */
     suspend fun clearCache(namespace: String? = null) {
+        val observation = ObservationSequence.process.next()
         if (namespace == null) {
-            cacheService.clearAll()
+            cacheService.apply(CacheMutation.Clear, observation)
             logger.debug("Cleared all configuration cache")
         } else {
-            cacheService.invalidateNamespace(settings.captureAccessIdentity(), namespace)
+            cacheService.apply(
+                CacheMutation.InvalidateNamespace(settings.captureAccessIdentity(), namespace),
+                observation
+            )
             logger.debug("Cleared cache for namespace: $namespace")
         }
     }
@@ -408,14 +423,14 @@ class NacosApiService(
         target: OperationTarget,
         query: HistoryQuery
     ): Result<HistoryPage> = withContext(Dispatchers.IO) {
-        v1Gateway.listHistory(target, query, forceRefresh = true, useCache = false)
+        v1Gateway.listHistory(target, query, forceRefresh = true, useCache = false).map { it.value }
     }
 
     suspend fun readConfigurationHistoryDetail(
         target: OperationTarget,
         historyId: String
     ): Result<HistoryDetail> = withContext(Dispatchers.IO) {
-        v1Gateway.readHistoryDetail(target, historyId, forceRefresh = true, useCache = false)
+        v1Gateway.readHistoryDetail(target, historyId, forceRefresh = true, useCache = false).map { it.value }
     }
 
     /**

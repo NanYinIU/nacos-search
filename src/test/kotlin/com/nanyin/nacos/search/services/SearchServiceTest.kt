@@ -23,7 +23,7 @@ class SearchServiceTest {
         cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
         settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         runBlocking {
-            cacheService.clearCache()
+            cacheService.clearAll()
         }
     }
 
@@ -43,7 +43,7 @@ class SearchServiceTest {
     }
 
     private suspend fun cache(configuration: NacosConfiguration) {
-        cacheService.putConfigDetail(
+        cacheService.writeDetail(
             settings.captureAccessIdentity(),
             configuration.tenantId,
             configuration

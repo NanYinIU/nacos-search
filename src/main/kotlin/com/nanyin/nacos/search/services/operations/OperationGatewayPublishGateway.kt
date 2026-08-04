@@ -18,7 +18,7 @@ class OperationGatewayPublishGateway(
             coordinate = coordinate,
             forceRefresh = true,
             useCache = false
-        )
+        ).map { it.value }
     }
 
     override suspend fun write(session: EditSession, command: PublishCommand): Result<PublishOutcome> {
@@ -33,13 +33,20 @@ class OperationGatewayPublishGateway(
         )
     }
 
+    /**
+     * The reconciliation read-back obeys the ordering rule like every other
+     * remote read rather than being suppressed until the publish state becomes
+     * verified (ADR-0020): it always goes to the server, and the detail it
+     * observes updates the cache under that observation's sequence, so
+     * verifying a publish cannot be undone by an older read.
+     */
     override suspend fun readBack(session: EditSession): Result<NacosConfiguration?> {
         val coordinate = ConfigurationCoordinate(session.dataId, session.group)
         return gateway.readDetail(
             target = session.target,
             coordinate = coordinate,
             forceRefresh = true,
-            useCache = false
-        )
+            useCache = true
+        ).map { it.value }
     }
 }

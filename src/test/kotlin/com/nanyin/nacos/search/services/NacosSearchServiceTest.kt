@@ -193,7 +193,7 @@ class NacosSearchServiceTest {
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
         val context = settings.captureOperationContext().getOrThrow()
 
-        cache.putNamespaceIndex(
+        cache.replaceNamespaceIndex(
             context.identity,
             "",
             listOf(NacosConfiguration("app.yaml", "DEFAULT_GROUP", "", "feature=true", "yaml")),

@@ -101,7 +101,7 @@ class NamespaceSummaryIndexTest {
     fun `putNamespaceIndex stores summaries without seeding detail cache`() = runBlocking {
         val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
-        cache.putNamespaceIndex(
+        cache.replaceNamespaceIndex(
             identity,
             "dev",
             listOf(
@@ -125,7 +125,7 @@ class NamespaceSummaryIndexTest {
     fun `complete namespace index with present data id and no detail is undecidable`() = runBlocking {
         val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
-        cache.putNamespaceIndex(
+        cache.replaceNamespaceIndex(
             identity,
             "dev",
             listOf(
@@ -150,7 +150,7 @@ class NamespaceSummaryIndexTest {
     fun `complete namespace index with absent data id is unresolved`() = runBlocking {
         val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
-        cache.putNamespaceIndex(
+        cache.replaceNamespaceIndex(
             identity,
             "dev",
             listOf(

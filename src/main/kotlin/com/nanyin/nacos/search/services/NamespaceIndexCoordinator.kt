@@ -15,7 +15,6 @@ import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.OperationContextResolver
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.services.network.NacosRequestError
-import com.nanyin.nacos.search.services.operations.OperationTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Deferred
@@ -193,12 +192,12 @@ class NamespaceIndexCoordinator internal constructor(
     private suspend fun executeIndex(request: NamespaceIndexRequest): IndexOutcome {
         val key = request.key
         val context = request.operationContext
-        val target = OperationTarget(context, key.namespaceId.ifBlank { "public" })
         // Namespace-index writes delete data, so they are ordered by observation
         // sequence (ADR-0020 / issue #50). The sequence is taken *before* the
         // load starts — a load that started earlier must lose to one that
-        // started later, even when it happens to finish afterwards.
-        val observation = apiService.operationGateway().beginNamespaceIndexObservation()
+        // started later, even when it happens to finish afterwards. Whether it
+        // still lands is the cache's decision, not this coordinator's.
+        val observation = apiService.operationGateway().beginObservation()
         return try {
             // Mandatory operation context — every generation (V1, V3, AUTO)
             // resolves through the gateway. No server snapshot, no generation
@@ -209,7 +208,7 @@ class NamespaceIndexCoordinator internal constructor(
                 operationContext = context
             )
             if (result.isFailure) {
-                cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
+                markNonAuthoritative(key, observation)
                 recordPsiFailure(key)
                 val error = result.exceptionOrNull()
                 return IndexOutcome.Failed(
@@ -223,10 +222,19 @@ class NamespaceIndexCoordinator internal constructor(
 
             when (loadResult.completeness) {
                 DatasetCompleteness.COMPLETE -> {
-                    // A rejected sequence means a later-started observation
-                    // already owns this identity+namespace — discard this one
-                    // rather than let an older view delete newer entries.
-                    if (!apiService.operationGateway().commitNamespaceIndexWrite(target, observation)) {
+                    // A rejected mutation means a later-started observation
+                    // already owns this identity+namespace — the older view is
+                    // discarded rather than allowed to delete newer entries.
+                    val landed = cacheService.apply(
+                        CacheMutation.ReplaceNamespaceIndex(
+                            key.identity,
+                            key.namespaceId,
+                            loadResult.configurations,
+                            request.cacheTtlMillis
+                        ),
+                        observation
+                    )
+                    if (!landed) {
                         logger.info(
                             "Discarded obsolete namespace index write for ${key.namespaceId} " +
                                 "(observation $observation lost to a later-started load)"
@@ -236,12 +244,6 @@ class NamespaceIndexCoordinator internal constructor(
                             DatasetState(DataSource.REMOTE, DataFreshness.UNKNOWN, DatasetCompleteness.COMPLETE, now)
                         )
                     }
-                    cacheService.putNamespaceIndex(
-                        key.identity,
-                        key.namespaceId,
-                        loadResult.configurations,
-                        request.cacheTtlMillis
-                    )
                     clearPsiCooldown(key)
                     IndexOutcome.Complete(
                         loadResult.configurations.size,
@@ -252,7 +254,7 @@ class NamespaceIndexCoordinator internal constructor(
                     // Partial summary pagination: do not publish an authoritative
                     // index and do not seed the detail cache (issue #52). Details
                     // arrive only via navigation prefetch or explicit reads.
-                    cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
+                    markNonAuthoritative(key, observation)
                     IndexOutcome.Partial(
                         loadResult.configurations.size,
                         loadResult.expectedCount,
@@ -260,17 +262,29 @@ class NamespaceIndexCoordinator internal constructor(
                     )
                 }
                 DatasetCompleteness.FAILED -> {
-                    cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
+                    markNonAuthoritative(key, observation)
                     recordPsiFailure(key)
                     IndexOutcome.Failed(NacosRequestError.Connection(RuntimeException("Namespace list failed")))
                 }
             }
         } catch (e: Exception) {
-            cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
+            markNonAuthoritative(key, observation)
             recordPsiFailure(key)
             val error = if (e is NacosRequestError) e else NacosRequestError.Connection(e)
             IndexOutcome.Failed(error)
         }
+    }
+
+    /**
+     * A partial or failed index never deletes; it only records that absence has
+     * become undecidable — and even that is ordered, so a late failure cannot
+     * demote an index a later-started load already completed.
+     */
+    private suspend fun markNonAuthoritative(key: NamespaceIndexKey, observation: Long) {
+        cacheService.apply(
+            CacheMutation.MarkNamespaceIndexNonAuthoritative(key.identity, key.namespaceId),
+            observation
+        )
     }
 
     private fun recordPsiFailure(key: NamespaceIndexKey) {

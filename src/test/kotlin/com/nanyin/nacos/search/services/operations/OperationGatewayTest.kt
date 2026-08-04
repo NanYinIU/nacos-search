@@ -22,12 +22,12 @@ class OperationGatewayTest {
         val startedTarget = anonymousTarget("dev", "https://dev.nacos.example", "team-manual")
         val laterUiSelection = anonymousTarget("prod", "https://prod.nacos.example", "other-team")
 
-        val page = gateway.listSummaries(startedTarget, SummaryQuery(pageSize = 20), useCache = true).getOrThrow()
+        val page = gateway.listSummaries(startedTarget, SummaryQuery(pageSize = 20), useCache = true).getOrThrow().value
         val detail = gateway.readDetail(
             startedTarget,
             ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP"),
             useCache = true
-        ).getOrThrow()
+        ).getOrThrow().value
 
         assertEquals(startedTarget, adapter.summaryTargets.single())
         assertEquals(startedTarget, adapter.detailTargets.single())
@@ -83,8 +83,8 @@ class OperationGatewayTest {
             ConfigurationSummary("older", "G", "public", "c", "yaml")
         )))
 
-        gateway.listSummaries(target, query, useCache = true).getOrThrow()
-        gateway.listSummaries(target, query, useCache = true).getOrThrow()
+        gateway.listSummaries(target, query, useCache = true).getOrThrow().value
+        gateway.listSummaries(target, query, useCache = true).getOrThrow().value
 
         val cached = cache.getSummaries(target.context.identity, target.namespaceId, query.cacheKey())
         assertEquals("newer", cached!!.items.first().dataId)
