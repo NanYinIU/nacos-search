@@ -1,0 +1,19 @@
+docs/adr/0050-report-every-observation-to-access-visibility.md
+  s_9388b6a8cc2e4d::t_f6f584232411cc 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "cee26e818f4a0974e95b205e55713527b010c3b7",
+  "prompts": {},
+  "sessions": {
+    "s_9388b6a8cc2e4d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fee94daa-a1fa-44d7-95b8-b379a5f6ec74",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
