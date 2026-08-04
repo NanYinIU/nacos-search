@@ -160,12 +160,12 @@ class NamespaceIndexCoordinatorTest {
             )
         )
 
-        whenever(cacheService.apply(any(), any())).thenReturn(true)
+        whenever(cacheService.applyMutation(any(), any())).thenReturn(true)
 
         val outcome = coordinator.requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
 
         assertTrue(outcome is IndexOutcome.Complete)
-        verify(cacheService).apply(
+        verify(cacheService).applyMutation(
             eq(
                 CacheMutation.ReplaceNamespaceIndex(
                     identity,

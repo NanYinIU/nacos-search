@@ -16,12 +16,15 @@ import com.nanyin.nacos.search.services.network.RequestPolicy
  * [OperationTarget] captured before UI state can change; neither cache lookup
  * nor protocol dispatch reads current settings or project selection.
  *
- * Every read takes its observation sequence when the operation starts and hands
- * the same number to both the caller and the cache mutation derived from it, so
- * painting a result and writing its cache entry are ordered by one number
- * (ADR-0020 / ADR-0047). The gateway no longer keeps gates of its own: the
- * cache-entry gate lives inside the cache module, where its scope equals the
- * mutation's coordinate by construction (ADR-0044).
+ * A read that goes to the server takes its observation sequence when that
+ * operation starts and hands the same number to both the caller and the cache
+ * mutation derived from it, so painting a result and writing its cache entry
+ * are ordered by one number (ADR-0020 / ADR-0047). A read served from cache
+ * observed nothing and returns [Observed.NO_OBSERVATION].
+ *
+ * The gateway keeps no gates of its own: the cache-entry gate lives inside the
+ * cache module, where its scope equals the mutation's coordinate by
+ * construction (ADR-0044).
  */
 class OperationGateway(
     private val adapters: Map<NacosApiGeneration, ProtocolAdapter>,
@@ -38,13 +41,13 @@ class OperationGateway(
         forceRefresh: Boolean = false,
         useCache: Boolean = true
     ): Result<Observed<SummaryPage>> {
-        val observation = observationSequence.next()
         if (useCache && !forceRefresh) {
             cache.getSummaries(target.context.identity, target.namespaceId, query.cacheKey())?.let {
-                return Result.success(Observed(it, observation))
+                return Result.success(Observed(it, Observed.NO_OBSERVATION))
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
+        val observation = observationSequence.next()
         return adapter.listSummaries(target, query).map { page ->
             if (useCache) {
                 cache.putSummaries(target.context.identity, target.namespaceId, query.cacheKey(), page, observation)
@@ -59,13 +62,13 @@ class OperationGateway(
         forceRefresh: Boolean = false,
         useCache: Boolean = true
     ): Result<Observed<NacosConfiguration?>> {
-        val observation = observationSequence.next()
         if (useCache && !forceRefresh) {
             cache.getDetail(target.context.identity, target.namespaceId, coordinate.dataId, coordinate.group)?.let {
-                return Result.success(Observed(it, observation))
+                return Result.success(Observed(it, Observed.NO_OBSERVATION))
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
+        val observation = observationSequence.next()
         return adapter.readDetail(target, coordinate).map { detail ->
             if (useCache && detail != null) {
                 cache.putDetail(target.context.identity, target.namespaceId, detail, observation)
@@ -81,10 +84,9 @@ class OperationGateway(
         forceRefresh: Boolean = false,
         useCache: Boolean = true
     ): Result<Observed<HistoryPage>> {
-        val observation = observationSequence.next()
         if (useCache && !forceRefresh) {
             historyCache.getHistoryPage(target.context.identity, target.namespaceId, query.cacheKey())?.let {
-                return Result.success(Observed(it, observation))
+                return Result.success(Observed(it, Observed.NO_OBSERVATION))
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
@@ -93,6 +95,7 @@ class OperationGateway(
                 RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support configuration history")
             )
         }
+        val observation = observationSequence.next()
         return adapter.listHistory(target, query).map { page ->
             if (useCache) {
                 historyCache.putHistoryPage(
@@ -109,10 +112,9 @@ class OperationGateway(
         forceRefresh: Boolean = false,
         useCache: Boolean = true
     ): Result<Observed<HistoryDetail>> {
-        val observation = observationSequence.next()
         if (useCache && !forceRefresh) {
             historyCache.getHistoryDetail(target.context.identity, target.namespaceId, historyId)?.let {
-                return Result.success(Observed(it, observation))
+                return Result.success(Observed(it, Observed.NO_OBSERVATION))
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
@@ -121,6 +123,7 @@ class OperationGateway(
                 RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support configuration history")
             )
         }
+        val observation = observationSequence.next()
         return adapter.readHistoryDetail(target, historyId).map { detail ->
             if (useCache) {
                 historyCache.putHistoryDetail(
@@ -214,9 +217,7 @@ class InMemoryOperationCache : OperationCache {
         page: SummaryPage,
         observation: Long
     ) {
-        val scope = "summary|$identity|$namespaceId|$requestKey"
-        if (!highWater.accepts(listOf(scope), observation)) return
-        highWater.raise(scope, observation)
+        if (!highWater.acceptAndRaise(listOf("summary|$identity|$namespaceId|$requestKey"), observation)) return
         summaries[Triple(identity, namespaceId, requestKey)] = page
     }
 
@@ -234,9 +235,7 @@ class InMemoryOperationCache : OperationCache {
         observation: Long
     ) {
         val key = DetailCacheKey(identity, namespaceId, detail.dataId, detail.group)
-        val scope = "detail|$key"
-        if (!highWater.accepts(listOf(scope), observation)) return
-        highWater.raise(scope, observation)
+        if (!highWater.acceptAndRaise(listOf("detail|$key"), observation)) return
         details[key] = detail
     }
 
@@ -266,7 +265,7 @@ class CacheServiceOperationCache(
         page: SummaryPage,
         observation: Long
     ) {
-        cacheService.apply(
+        cacheService.applyMutation(
             CacheMutation.WriteListPage(
                 identity, namespaceId, requestKey, page.toConfigListResponse(), ttlMillis()
             ),
@@ -287,7 +286,7 @@ class CacheServiceOperationCache(
         detail: NacosConfiguration,
         observation: Long
     ) {
-        cacheService.apply(
+        cacheService.applyMutation(
             CacheMutation.WriteDetail(identity, namespaceId, detail, ttlMillis()),
             observation
         )

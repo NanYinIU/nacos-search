@@ -225,7 +225,7 @@ class NamespaceIndexCoordinator internal constructor(
                     // A rejected mutation means a later-started observation
                     // already owns this identity+namespace — the older view is
                     // discarded rather than allowed to delete newer entries.
-                    val landed = cacheService.apply(
+                    val landed = cacheService.applyMutation(
                         CacheMutation.ReplaceNamespaceIndex(
                             key.identity,
                             key.namespaceId,
@@ -281,7 +281,7 @@ class NamespaceIndexCoordinator internal constructor(
      * demote an index a later-started load already completed.
      */
     private suspend fun markNonAuthoritative(key: NamespaceIndexKey, observation: Long) {
-        cacheService.apply(
+        cacheService.applyMutation(
             CacheMutation.MarkNamespaceIndexNonAuthoritative(key.identity, key.namespaceId),
             observation
         )

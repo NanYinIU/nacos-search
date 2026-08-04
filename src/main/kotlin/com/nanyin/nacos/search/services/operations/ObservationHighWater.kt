@@ -32,8 +32,18 @@ class ObservationSequence(private val clock: () -> Long = System::nanoTime) {
  * A read result together with the observation sequence the read took, so a
  * caller that paints the result and a cache mutation derived from the same
  * observation are ordered by the same number (ADR-0047).
+ *
+ * A read served from cache observed nothing and carries [NO_OBSERVATION]: only
+ * a *remote* operation takes a sequence (ADR-0020). That value can never
+ * outrank any mark, so a mutation derived from a cache hit is dropped rather
+ * than allowed to restamp the entry it just read and lock out a genuine remote
+ * read that started earlier.
  */
-data class Observed<T>(val value: T, val observation: Long)
+data class Observed<T>(val value: T, val observation: Long) {
+    companion object {
+        const val NO_OBSERVATION = 0L
+    }
+}
 
 /**
  * The single observation high-water implementation (ADR-0044).
@@ -56,9 +66,37 @@ class ObservationHighWater {
     fun accepts(scopeChain: List<String>, sequence: Long): Boolean =
         scopeChain.none { sequence <= (marks[it] ?: 0L) }
 
+    /**
+     * Accepts [sequence] against [scopeChain] and, if it wins, raises the
+     * chain's own scope in one step. Use this wherever nothing has to happen
+     * between the two; a caller that must apply the mutation in between (and
+     * leave the mark alone if applying throws) uses [accepts] and [raise].
+     */
+    @Synchronized
+    fun acceptAndRaise(scopeChain: List<String>, sequence: Long): Boolean {
+        if (!accepts(scopeChain, sequence)) return false
+        raise(scopeChain.last(), sequence)
+        return true
+    }
+
     /** Raises [scope]'s mark. Call only once a mutation has been accepted. */
     fun raise(scope: String, sequence: Long) {
         marks.merge(scope, sequence, ::maxOf)
+    }
+
+    /**
+     * Forgets every mark except [scope], which is set to [sequence].
+     *
+     * Safe only where [scope] is on every other scope's chain, as the global
+     * scope is: a forgotten mark reads as zero, and any sequence at or below
+     * [sequence] is then rejected by [scope] instead. A user's clear is that
+     * point, and it is what keeps this map from growing for the life of the
+     * IDE as the user browses ever more configuration coordinates.
+     */
+    @Synchronized
+    fun collapseTo(scope: String, sequence: Long) {
+        marks.clear()
+        marks[scope] = sequence
     }
 
     /** The last accepted sequence for [scope]; zero when nothing was accepted. */

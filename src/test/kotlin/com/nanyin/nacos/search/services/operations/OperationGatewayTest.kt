@@ -7,8 +7,13 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.CredentialSnapshot
 import com.nanyin.nacos.search.settings.NacosOperationContext
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
@@ -65,30 +70,65 @@ class OperationGatewayTest {
 
 
     @Test
-    fun `older observation does not overwrite newer cache entry`() = runBlocking {
+    fun `a read that started earlier does not overwrite one that started later`() = runBlocking {
         val cache = InMemoryOperationCache()
-        val adapter = SequencedAdapter()
-        val gateway = OperationGateway(
-            mapOf(NacosApiGeneration.V1 to adapter),
-            cache
-        )
+        val adapter = ParkingAdapter()
+        val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to adapter), cache)
         val target = anonymousTarget("dev", "https://dev.nacos.example", "public")
         val query = SummaryQuery(pageNo = 1, pageSize = 1)
 
-        // Two concurrent reads: newer completes first, older completes second.
-        adapter.enqueue(SummaryPage(1, 1, 1, listOf(
-            ConfigurationSummary("newer", "G", "public", "c", "yaml")
-        )))
-        adapter.enqueue(SummaryPage(1, 1, 1, listOf(
-            ConfigurationSummary("older", "G", "public", "c", "yaml")
-        )))
+        coroutineScope {
+            // The earlier read enters the adapter first, so it holds the lower
+            // sequence — and stays parked there until the later read has landed.
+            val earlier = async {
+                gateway.listSummaries(target, query, forceRefresh = true).getOrThrow().value
+            }
+            adapter.awaitEntry()
+            val later = async {
+                gateway.listSummaries(target, query, forceRefresh = true).getOrThrow().value
+            }
+            adapter.awaitEntry()
 
-        gateway.listSummaries(target, query, useCache = true).getOrThrow().value
-        gateway.listSummaries(target, query, useCache = true).getOrThrow().value
+            adapter.release(index = 1, page = page("later"))
+            later.await()
+            adapter.release(index = 0, page = page("earlier"))
+            earlier.await()
+        }
 
         val cached = cache.getSummaries(target.context.identity, target.namespaceId, query.cacheKey())
-        assertEquals("newer", cached!!.items.first().dataId)
+        assertEquals("later", cached!!.items.first().dataId)
     }
+
+    @Test
+    fun `a remote read returns the observation sequence its cache write used`() = runBlocking {
+        val cache = RecordingOperationCache()
+        val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to ScriptedAdapter()), cache)
+        val target = anonymousTarget("dev", "https://dev.nacos.example", "public")
+
+        val observed = gateway.listSummaries(target, SummaryQuery(pageSize = 1), forceRefresh = true).getOrThrow()
+
+        assertEquals(observed.observation, cache.lastSummaryObservation)
+    }
+
+    @Test
+    fun `a read served from cache reports that it observed nothing`() = runBlocking {
+        val cache = InMemoryOperationCache()
+        val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to ScriptedAdapter()), cache)
+        val target = anonymousTarget("dev", "https://dev.nacos.example", "public")
+        val query = SummaryQuery(pageSize = 1)
+
+        val remote = gateway.listSummaries(target, query).getOrThrow()
+        val fromCache = gateway.listSummaries(target, query).getOrThrow()
+
+        assertNotEquals(Observed.NO_OBSERVATION, remote.observation)
+        // A cache hit observed nothing, so a mutation derived from it can never
+        // outrank a real observation — including the one that wrote this entry.
+        assertEquals(Observed.NO_OBSERVATION, fromCache.observation)
+    }
+
+    private fun page(dataId: String) = SummaryPage(
+        1, 1, 1, listOf(ConfigurationSummary(dataId, "G", "public", "c", "yaml"))
+    )
 
     private class ScriptedAdapter : ProtocolAdapter {
         val summaryTargets = mutableListOf<OperationTarget>()
@@ -123,17 +163,36 @@ class OperationGatewayTest {
     }
 
 
-    private class SequencedAdapter : ProtocolAdapter {
-        private val queue = ArrayDeque<SummaryPage>()
+    /**
+     * Parks each call until the test releases it with a payload, so a read that
+     * entered first — and therefore holds the lower observation sequence — can
+     * be made to finish last.
+     */
+    private class ParkingAdapter : ProtocolAdapter {
+        private val entries = Channel<Unit>(Channel.UNLIMITED)
+        private val parked = mutableListOf<CompletableDeferred<SummaryPage>>()
 
-        fun enqueue(page: SummaryPage) { queue.addLast(page) }
+        /** Suspends until one more call has entered and parked. */
+        suspend fun awaitEntry() {
+            entries.receive()
+        }
+
+        /** Completes the [index]-th entered call, counting in entry order. */
+        fun release(index: Int, page: SummaryPage) {
+            synchronized(this) { parked[index] }.complete(page)
+        }
 
         override suspend fun probe(target: OperationTarget) = Result.success(Unit)
 
         override suspend fun listSummaries(
             target: OperationTarget,
             query: SummaryQuery
-        ): Result<SummaryPage> = Result.success(queue.removeFirst())
+        ): Result<SummaryPage> {
+            val slot = CompletableDeferred<SummaryPage>()
+            synchronized(this) { parked.add(slot) }
+            entries.send(Unit)
+            return Result.success(slot.await())
+        }
 
         override suspend fun readDetail(
             target: OperationTarget,
@@ -144,5 +203,36 @@ class OperationGatewayTest {
             target: OperationTarget,
             command: PublishCommand
         ): Result<PublishOutcome> = Result.success(PublishOutcome.Written("true"))
+    }
+
+    /** Records the observation each write carried, without gating anything. */
+    private class RecordingOperationCache : OperationCache {
+        var lastSummaryObservation: Long? = null
+
+        override suspend fun getSummaries(identity: AccessIdentity, namespaceId: String, requestKey: String) = null
+
+        override suspend fun putSummaries(
+            identity: AccessIdentity,
+            namespaceId: String,
+            requestKey: String,
+            page: SummaryPage,
+            observation: Long
+        ) {
+            lastSummaryObservation = observation
+        }
+
+        override suspend fun getDetail(
+            identity: AccessIdentity,
+            namespaceId: String,
+            dataId: String,
+            group: String
+        ): NacosConfiguration? = null
+
+        override suspend fun putDetail(
+            identity: AccessIdentity,
+            namespaceId: String,
+            detail: NacosConfiguration,
+            observation: Long
+        ) = Unit
     }
 }

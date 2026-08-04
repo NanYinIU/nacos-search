@@ -7,7 +7,7 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 /**
  * One intended change to the cache's contents, carrying its scope coordinate.
  * The observation sequence that produced it travels beside it into
- * [CacheService.apply], which is the module's only write entry point.
+ * [CacheService.applyMutation], which is the module's only write entry point.
  *
  * The set is closed on purpose (ADR-0045): the cache-entry gate and the
  * profile-deletion tombstone check both live at that one entry point, so a new
@@ -20,16 +20,9 @@ import com.nanyin.nacos.search.models.NacosConfiguration
  * rather than of the server, and it stays private behind the read path.
  */
 sealed interface CacheMutation {
-    /**
-     * The access identity whose data this mutation touches, or null for the
-     * user's explicit [Clear], which is not profile-scoped. A non-null identity
-     * is checked against the profile-deletion tombstone before anything else.
-     */
-    val identity: AccessIdentity?
-
     /** Writes one configuration detail at its coordinate. */
     data class WriteDetail(
-        override val identity: AccessIdentity,
+        val identity: AccessIdentity,
         val namespaceId: String?,
         val configuration: NacosConfiguration,
         val ttlMillis: Long,
@@ -38,7 +31,7 @@ sealed interface CacheMutation {
 
     /** Writes one list page for a namespace and request key. */
     data class WriteListPage(
-        override val identity: AccessIdentity,
+        val identity: AccessIdentity,
         val namespaceId: String?,
         val requestKey: String,
         val response: ConfigListResponse,
@@ -52,7 +45,7 @@ sealed interface CacheMutation {
      * reclaimed, but only where no newer detail observation exists.
      */
     data class ReplaceNamespaceIndex(
-        override val identity: AccessIdentity,
+        val identity: AccessIdentity,
         val namespaceId: String?,
         val summaries: List<NacosConfiguration>,
         val ttlMillis: Long,
@@ -64,13 +57,13 @@ sealed interface CacheMutation {
      * absent. A partial or failed index never deletes anything.
      */
     data class MarkNamespaceIndexNonAuthoritative(
-        override val identity: AccessIdentity,
+        val identity: AccessIdentity,
         val namespaceId: String?
     ) : CacheMutation
 
     /** Deletes one configuration detail after an authoritative not-found. */
     data class DeleteDetailNotFound(
-        override val identity: AccessIdentity,
+        val identity: AccessIdentity,
         val namespaceId: String?,
         val dataId: String,
         val group: String
@@ -78,7 +71,7 @@ sealed interface CacheMutation {
 
     /** Drops every detail, list page, and index for one namespace. */
     data class InvalidateNamespace(
-        override val identity: AccessIdentity,
+        val identity: AccessIdentity,
         val namespaceId: String?
     ) : CacheMutation
 
@@ -88,7 +81,5 @@ sealed interface CacheMutation {
      * operation started afterwards lands normally — clear-then-reload behaves
      * as the obvious gesture.
      */
-    data object Clear : CacheMutation {
-        override val identity: AccessIdentity? get() = null
-    }
+    data object Clear : CacheMutation
 }

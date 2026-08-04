@@ -246,7 +246,7 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
             // A user's clear is a cache mutation and takes an observation
             // sequence, so a read already in flight cannot write its result
             // back afterwards (ADR-0045).
-            cacheService.apply(CacheMutation.Clear, ObservationSequence.process.next())
+            cacheService.applyMutation(CacheMutation.Clear, ObservationSequence.process.next())
             logger.info("Cache cleared")
         } catch (e: Exception) {
             logger.error("Error clearing cache", e)

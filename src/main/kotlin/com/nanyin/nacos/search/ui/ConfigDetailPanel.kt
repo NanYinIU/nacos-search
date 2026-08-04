@@ -926,7 +926,7 @@ private fun setupEventHandlers() {
                             // under the sequence of the read that proved it gone,
                             // so a later-started read can still restore a
                             // recreated configuration (ADR-0020).
-                            cacheService.apply(
+                            cacheService.applyMutation(
                                 CacheMutation.DeleteDetailNotFound(
                                     project.captureSelectedAccessIdentity(settings),
                                     configuration.tenantId,

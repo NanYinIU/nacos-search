@@ -45,9 +45,7 @@ class HistoryMemoryCache(
         observation: Long
     ): Boolean {
         val key = pageKey(identity, namespaceId, cacheKey)
-        val scope = "page|$key"
-        if (!highWater.accepts(listOf(scope), observation)) return false
-        highWater.raise(scope, observation)
+        if (!highWater.acceptAndRaise(listOf("page|$key"), observation)) return false
         pageStore[key] = page
         return true
     }
@@ -69,9 +67,7 @@ class HistoryMemoryCache(
         observation: Long
     ): Boolean {
         val key = detailKey(identity, namespaceId, historyId)
-        val scope = "detail|$key"
-        if (!highWater.accepts(listOf(scope), observation)) return false
-        highWater.raise(scope, observation)
+        if (!highWater.acceptAndRaise(listOf("detail|$key"), observation)) return false
         detailStore[key] = detail
         return true
     }

@@ -226,10 +226,11 @@ class NavigationDetailPrefetchService internal constructor(
                                 operationContext = operationContext
                             ).getOrNull()?.let { observed ->
                                 val config = observed.value ?: return@let null
-                                // Prefer the write already performed by getConfiguration.
-                                // Only fill the gap when the detail is still missing
-                                // (cache disabled, or a test double that returns without
-                                // persisting), under the read's own observation sequence.
+                                // The gateway read normally writes the detail itself.
+                                // Only fill the gap when it did not, under that read's
+                                // own observation sequence — a body served from cache
+                                // carries NO_OBSERVATION and is therefore dropped here
+                                // rather than restamped as freshly observed.
                                 val cached = cacheService.getConfigDetail(
                                     identity,
                                     target.namespaceId,
@@ -238,7 +239,7 @@ class NavigationDetailPrefetchService internal constructor(
                                     allowStale = true
                                 )
                                 if (cached == null || cached.content.isBlank()) {
-                                    cacheService.apply(
+                                    cacheService.applyMutation(
                                         CacheMutation.WriteDetail(
                                             identity,
                                             target.namespaceId,

@@ -116,10 +116,10 @@ class NacosApiService(
      * Isolation: ADR-0022 forbids diagnostics from touching the cache, the shared
      * probe flight, the session, or the authentication registry. Building the
      * stack here rather than sharing the formal one gets all four structurally —
-     * a fresh [OperationGateway] defaults to a no-op cache and its own
-     * observation sequence, a fresh [GenerationResolver] cannot join the formal
-     * probe flight, and [EphemeralV1Authenticator] holds any Nacos-password token
-     * in a field that dies with this object.
+     * this [OperationGateway] takes a no-op cache and an observation sequence of
+     * its own rather than the process-wide one, a fresh [GenerationResolver]
+     * cannot join the formal probe flight, and [EphemeralV1Authenticator] holds
+     * any Nacos-password token in a field that dies with this object.
      *
      * Per call, not cached: a token acquired for one unapplied draft must never
      * serve the next one, because the user may have edited the credentials
@@ -136,7 +136,8 @@ class NacosApiService(
             mapOf(
                 NacosApiGeneration.V1 to v1,
                 NacosApiGeneration.V3 to v3
-            )
+            ),
+            observationSequence = ObservationSequence()
         )
     }
 
@@ -393,10 +394,10 @@ class NacosApiService(
     suspend fun clearCache(namespace: String? = null) {
         val observation = ObservationSequence.process.next()
         if (namespace == null) {
-            cacheService.apply(CacheMutation.Clear, observation)
+            cacheService.applyMutation(CacheMutation.Clear, observation)
             logger.debug("Cleared all configuration cache")
         } else {
-            cacheService.apply(
+            cacheService.applyMutation(
                 CacheMutation.InvalidateNamespace(settings.captureAccessIdentity(), namespace),
                 observation
             )

@@ -6,6 +6,8 @@ import com.nanyin.nacos.search.models.ConfigItem
 import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.psi.ConfigReferenceStatus
+import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.nanyin.nacos.search.settings.AuthMode
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -13,6 +15,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -56,12 +59,12 @@ class CacheWriteGateTest {
         val cacheService = cache()
 
         assertTrue(
-            cacheService.apply(
+            cacheService.applyMutation(
                 CacheMutation.WriteDetail(identity, "dev", config("app.properties", "v=new"), TTL), 10
             )
         )
         assertFalse(
-            cacheService.apply(
+            cacheService.applyMutation(
                 CacheMutation.WriteDetail(identity, "dev", config("app.properties", "v=old"), TTL), 4
             )
         )
@@ -76,10 +79,10 @@ class CacheWriteGateTest {
     fun `ordering is per coordinate, so an unrelated key is unaffected`() = runBlocking {
         val cacheService = cache()
 
-        cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "a"), TTL), 10)
+        cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "a"), TTL), 10)
 
         assertTrue(
-            cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("b.properties", "b"), TTL), 4)
+            cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("b.properties", "b"), TTL), 4)
         )
         assertEquals("b", cacheService.getConfigDetail(identity, "dev", "b.properties", "DEFAULT_GROUP")?.content)
     }
@@ -88,9 +91,9 @@ class CacheWriteGateTest {
     fun `a late list page cannot resurrect an older page`() = runBlocking {
         val cacheService = cache()
 
-        cacheService.apply(CacheMutation.WriteListPage(identity, "dev", "page-1", listPage("new"), TTL), 10)
+        cacheService.applyMutation(CacheMutation.WriteListPage(identity, "dev", "page-1", listPage("new"), TTL), 10)
         assertFalse(
-            cacheService.apply(CacheMutation.WriteListPage(identity, "dev", "page-1", listPage("old"), TTL), 3)
+            cacheService.applyMutation(CacheMutation.WriteListPage(identity, "dev", "page-1", listPage("old"), TTL), 3)
         )
 
         assertEquals(
@@ -103,10 +106,10 @@ class CacheWriteGateTest {
     fun `a late failed index cannot mark a newer complete index non-authoritative`() = runBlocking {
         val cacheService = cache()
 
-        cacheService.apply(
+        cacheService.applyMutation(
             CacheMutation.ReplaceNamespaceIndex(identity, "dev", listOf(config("a.properties", "")), TTL), 10
         )
-        assertFalse(cacheService.apply(CacheMutation.MarkNamespaceIndexNonAuthoritative(identity, "dev"), 6))
+        assertFalse(cacheService.applyMutation(CacheMutation.MarkNamespaceIndexNonAuthoritative(identity, "dev"), 6))
 
         assertTrue(cacheService.namespaceIndexState(identity, "dev")!!.authoritativeForAbsence)
     }
@@ -115,16 +118,16 @@ class CacheWriteGateTest {
     fun `a later-started detail read restores a configuration an earlier not-found deleted`() = runBlocking {
         val cacheService = cache()
 
-        cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "one"), TTL), 5)
+        cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "one"), TTL), 5)
         // The not-found observation started after the write, so it wins.
         assertTrue(
-            cacheService.apply(CacheMutation.DeleteDetailNotFound(identity, "dev", "a.properties", "DEFAULT_GROUP"), 7)
+            cacheService.applyMutation(CacheMutation.DeleteDetailNotFound(identity, "dev", "a.properties", "DEFAULT_GROUP"), 7)
         )
         assertNull(cacheService.getConfigDetail(identity, "dev", "a.properties", "DEFAULT_GROUP"))
 
         // A read that started later still restores the recreated configuration.
         assertTrue(
-            cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "two"), TTL), 9)
+            cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "two"), TTL), 9)
         )
         assertEquals(
             "two",
@@ -136,9 +139,9 @@ class CacheWriteGateTest {
     fun `an earlier not-found cannot delete what a later read confirmed`() = runBlocking {
         val cacheService = cache()
 
-        cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "one"), TTL), 9)
+        cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "one"), TTL), 9)
         assertFalse(
-            cacheService.apply(CacheMutation.DeleteDetailNotFound(identity, "dev", "a.properties", "DEFAULT_GROUP"), 4)
+            cacheService.applyMutation(CacheMutation.DeleteDetailNotFound(identity, "dev", "a.properties", "DEFAULT_GROUP"), 4)
         )
 
         assertNotNull(cacheService.getConfigDetail(identity, "dev", "a.properties", "DEFAULT_GROUP"))
@@ -152,10 +155,10 @@ class CacheWriteGateTest {
         val v1 = testIdentity(generation = NacosApiGeneration.V1)
         val v3 = testIdentity(generation = NacosApiGeneration.V3)
 
-        assertTrue(cacheService.apply(CacheMutation.WriteDetail(v3, "dev", config("a.properties", "v3"), TTL), 10))
+        assertTrue(cacheService.applyMutation(CacheMutation.WriteDetail(v3, "dev", config("a.properties", "v3"), TTL), 10))
         // Older sequence, different identity: it writes to a distinct coordinate
         // and must not be rejected by the other identity's mark.
-        assertTrue(cacheService.apply(CacheMutation.WriteDetail(v1, "dev", config("a.properties", "v1"), TTL), 3))
+        assertTrue(cacheService.applyMutation(CacheMutation.WriteDetail(v1, "dev", config("a.properties", "v1"), TTL), 3))
 
         assertEquals("v3", cacheService.getConfigDetail(v3, "dev", "a.properties", "DEFAULT_GROUP")?.content)
         assertEquals("v1", cacheService.getConfigDetail(v1, "dev", "a.properties", "DEFAULT_GROUP")?.content)
@@ -174,11 +177,11 @@ class CacheWriteGateTest {
 
         variants.forEach { (label, variant) ->
             val cacheService = cache()
-            cacheService.apply(CacheMutation.WriteDetail(base, "dev", config("a.properties", "base"), TTL), 10)
+            cacheService.applyMutation(CacheMutation.WriteDetail(base, "dev", config("a.properties", "base"), TTL), 10)
 
             assertTrue(
                 "$label must write to its own coordinate",
-                cacheService.apply(CacheMutation.WriteDetail(variant, "dev", config("a.properties", label), TTL), 2)
+                cacheService.applyMutation(CacheMutation.WriteDetail(variant, "dev", config("a.properties", label), TTL), 2)
             )
             assertEquals(
                 "base", cacheService.getConfigDetail(base, "dev", "a.properties", "DEFAULT_GROUP")?.content
@@ -195,7 +198,7 @@ class CacheWriteGateTest {
         val before = testIdentity(accessRevision = 1L)
         val after = testIdentity(accessRevision = 2L)
 
-        cacheService.apply(CacheMutation.WriteDetail(before, "dev", config("a.properties", "old creds"), TTL), 1)
+        cacheService.applyMutation(CacheMutation.WriteDetail(before, "dev", config("a.properties", "old creds"), TTL), 1)
 
         assertNull(cacheService.getConfigDetail(after, "dev", "a.properties", "DEFAULT_GROUP"))
         assertTrue(cacheService.configurationSnapshot(after).isEmpty())
@@ -206,7 +209,7 @@ class CacheWriteGateTest {
         // One application-level cache, two readers: sharing is what identity
         // scoping means, and nothing about the ordering machinery narrows it.
         val cacheService = cache()
-        cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "shared"), TTL), 1)
+        cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "shared"), TTL), 1)
 
         val projectA = cacheService.getConfigDetail(identity, "dev", "a.properties", "DEFAULT_GROUP")
         val projectB = cacheService.getConfigDetail(identity, "dev", "a.properties", "DEFAULT_GROUP")
@@ -221,15 +224,15 @@ class CacheWriteGateTest {
     fun `a clear taking a middle sequence rejects an earlier write and accepts a later one`() = runBlocking {
         val cacheService = cache()
 
-        assertTrue(cacheService.apply(CacheMutation.Clear, 5))
+        assertTrue(cacheService.applyMutation(CacheMutation.Clear, 5))
 
         assertFalse(
-            cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "in flight"), TTL), 3)
+            cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "in flight"), TTL), 3)
         )
         assertNull(cacheService.getConfigDetail(identity, "dev", "a.properties", "DEFAULT_GROUP"))
 
         assertTrue(
-            cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "reloaded"), TTL), 8)
+            cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "reloaded"), TTL), 8)
         )
         assertEquals(
             "reloaded",
@@ -242,9 +245,9 @@ class CacheWriteGateTest {
         val store = InMemoryCacheStore()
         val cacheService = cache(store)
 
-        cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "x"), TTL), 1)
-        cacheService.apply(CacheMutation.WriteListPage(identity, "dev", "page-1", listPage("a"), TTL), 2)
-        cacheService.apply(CacheMutation.Clear, 3)
+        cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "x"), TTL), 1)
+        cacheService.applyMutation(CacheMutation.WriteListPage(identity, "dev", "page-1", listPage("a"), TTL), 2)
+        cacheService.applyMutation(CacheMutation.Clear, 3)
 
         assertTrue(store.loadDetails().isEmpty())
         assertTrue(store.loadListPages().isEmpty())
@@ -254,14 +257,14 @@ class CacheWriteGateTest {
     fun `a namespace invalidation drops a write for that namespace that started earlier`() = runBlocking {
         val cacheService = cache()
 
-        cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "x"), TTL), 1)
-        assertTrue(cacheService.apply(CacheMutation.InvalidateNamespace(identity, "dev"), 5))
+        cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "x"), TTL), 1)
+        assertTrue(cacheService.applyMutation(CacheMutation.InvalidateNamespace(identity, "dev"), 5))
 
         assertFalse(
-            cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "late"), TTL), 3)
+            cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "late"), TTL), 3)
         )
         assertTrue(
-            cacheService.apply(CacheMutation.WriteDetail(identity, "prod", config("a.properties", "other ns"), TTL), 3)
+            cacheService.applyMutation(CacheMutation.WriteDetail(identity, "prod", config("a.properties", "other ns"), TTL), 3)
         )
 
         assertNull(cacheService.getConfigDetail(identity, "dev", "a.properties", "DEFAULT_GROUP"))
@@ -277,7 +280,7 @@ class CacheWriteGateTest {
     fun `a lazy single-entry load cannot republish an entry across a concurrent clear`() = runBlocking {
         val store = BlockingDetailStore()
         val seeded = cache(store)
-        seeded.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "discarded"), TTL), 1)
+        seeded.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "discarded"), TTL), 1)
 
         // A fresh cache over the same store: nothing is in memory, so a single-key
         // read has to reconstitute the entry from the store.
@@ -290,7 +293,7 @@ class CacheWriteGateTest {
                 cacheService.getConfigDetail(identity, "dev", "a.properties", "DEFAULT_GROUP", allowStale = true)
             }
             store.awaitLoadStarted()
-            cacheService.apply(CacheMutation.Clear, 9)
+            cacheService.applyMutation(CacheMutation.Clear, 9)
             store.releaseLoad()
 
             assertNull("a reconstituted entry must not survive the clear", read.await())
@@ -305,7 +308,7 @@ class CacheWriteGateTest {
         // Reconstitution is an observation of the cache's own store, not of the
         // server, so it is not a mutation and cannot gate a real one.
         val store = InMemoryCacheStore()
-        cache(store).apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "stored"), TTL), 100)
+        cache(store).applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "stored"), TTL), 100)
 
         val cacheService = cache(store)
         cacheService.awaitLoadCompleted()
@@ -315,7 +318,7 @@ class CacheWriteGateTest {
         )
 
         assertTrue(
-            cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "fresh"), TTL), 1)
+            cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "fresh"), TTL), 1)
         )
         assertEquals(
             "fresh",
@@ -330,10 +333,10 @@ class CacheWriteGateTest {
         val store = InMemoryCacheStore()
         val cacheService = cache(store)
 
-        cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("gone.properties", "x"), TTL), 1)
-        cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("kept.properties", "y"), TTL), 2)
+        cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("gone.properties", "x"), TTL), 1)
+        cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("kept.properties", "y"), TTL), 2)
 
-        cacheService.apply(
+        cacheService.applyMutation(
             CacheMutation.ReplaceNamespaceIndex(identity, "dev", listOf(config("kept.properties", "")), TTL), 5
         )
 
@@ -348,8 +351,8 @@ class CacheWriteGateTest {
 
         // The index started at 5; the detail read that confirmed this key started
         // at 7, so the older index view must not delete it.
-        cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("recreated.properties", "x"), TTL), 7)
-        cacheService.apply(
+        cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("recreated.properties", "x"), TTL), 7)
+        cacheService.applyMutation(
             CacheMutation.ReplaceNamespaceIndex(identity, "dev", listOf(config("kept.properties", "")), TTL), 5
         )
 
@@ -360,11 +363,11 @@ class CacheWriteGateTest {
     fun `a non-authoritative mark never deletes`() = runBlocking {
         val cacheService = cache()
 
-        cacheService.apply(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "x"), TTL), 1)
-        cacheService.apply(
+        cacheService.applyMutation(CacheMutation.WriteDetail(identity, "dev", config("a.properties", "x"), TTL), 1)
+        cacheService.applyMutation(
             CacheMutation.ReplaceNamespaceIndex(identity, "dev", listOf(config("a.properties", "")), TTL), 2
         )
-        assertTrue(cacheService.apply(CacheMutation.MarkNamespaceIndexNonAuthoritative(identity, "dev"), 3))
+        assertTrue(cacheService.applyMutation(CacheMutation.MarkNamespaceIndexNonAuthoritative(identity, "dev"), 3))
 
         assertNotNull(cacheService.getConfigDetail(identity, "dev", "a.properties", "DEFAULT_GROUP"))
         assertFalse(cacheService.namespaceIndexState(identity, "dev")!!.authoritativeForAbsence)
@@ -374,7 +377,7 @@ class CacheWriteGateTest {
     fun `a restored namespace index cannot prove a configuration absent`() = runBlocking {
         val store = InMemoryCacheStore()
         val first = cache(store)
-        first.apply(
+        first.applyMutation(
             CacheMutation.ReplaceNamespaceIndex(identity, "dev", listOf(config("a.properties", "")), TTL), 1
         )
         assertTrue(first.namespaceIndexState(identity, "dev")!!.authoritativeForAbsence)
@@ -385,6 +388,29 @@ class CacheWriteGateTest {
         restarted.awaitLoadCompleted()
 
         assertNull(restarted.namespaceIndexState(identity, "dev"))
+        // A code reference to a data id the pre-restart index did not list is
+        // reported as undecidable, never as an unresolved (confidently absent)
+        // one — no amount of ordering machinery turns restored data into a
+        // successful check this run.
+        assertNotEquals(
+            ConfigReferenceStatus.UNRESOLVED,
+            NacosKeyResolver.dataIdPresenceResolution(
+                dataId = "never.listed",
+                cacheService = restarted,
+                activeNamespaceId = "dev",
+                activeIdentity = identity
+            ).status
+        )
+        // The same check against the live index does prove absence.
+        assertEquals(
+            ConfigReferenceStatus.UNRESOLVED,
+            NacosKeyResolver.dataIdPresenceResolution(
+                dataId = "never.listed",
+                cacheService = first,
+                activeNamespaceId = "dev",
+                activeIdentity = identity
+            ).status
+        )
     }
 
     // ── The tombstone is absolute ──
@@ -402,7 +428,7 @@ class CacheWriteGateTest {
             assertFalse(
                 "${mutation::class.simpleName} must not land for an entombed profile",
                 // A very recent observation must not outrank the tombstone.
-                cacheService.apply(mutation, Long.MAX_VALUE)
+                cacheService.applyMutation(mutation, Long.MAX_VALUE)
             )
         }
 
@@ -430,7 +456,7 @@ class CacheWriteGateTest {
         val cacheService = cache(tombstones = tombstones)
         tombstones.entomb(identity.profileId, identity.accessRevision)
 
-        assertTrue(cacheService.apply(CacheMutation.Clear, 1))
+        assertTrue(cacheService.applyMutation(CacheMutation.Clear, 1))
     }
 
     private fun identityScopedMutations(): List<CacheMutation> = listOf(

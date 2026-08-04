@@ -236,11 +236,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
 
     private fun clearCache() {
         coroutineScope.launch {
-            // The user's clear is a cache mutation: it takes an observation
-            // sequence, so a read that started before it loses and the reload
-            // started afterwards lands normally (ADR-0045).
-            ApplicationManager.getApplication().getService(CacheService::class.java)
-                .apply(CacheMutation.Clear, ObservationSequence.process.next())
+            // One gesture, one clear mutation: it takes an observation sequence,
+            // so a read that started before it loses and the reload started
+            // afterwards lands normally (ADR-0045).
             nacosApiService.clearCache()
             handleRefreshRequested()
         }

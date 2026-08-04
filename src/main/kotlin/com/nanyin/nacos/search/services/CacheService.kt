@@ -88,17 +88,36 @@ class CacheService internal constructor(
      * one completes after it (ADR-0020). Returns false when the mutation was
      * gated away or rejected by a tombstone, in which case nothing was written.
      */
-    suspend fun apply(mutation: CacheMutation, observation: Long): Boolean {
+    suspend fun applyMutation(mutation: CacheMutation, observation: Long): Boolean {
         // The tombstone is absolute and independent of ordering: no observation
         // sequence, however recent, outranks it (ADR-0025).
-        mutation.identity?.let { if (tombstones.isEntombed(it)) return false }
+        entombedBy(mutation)?.let { if (tombstones.isEntombed(it)) return false }
         return cacheMutex.withLock {
             val scopeChain = scopeChain(mutation)
             if (!highWater.accepts(scopeChain, observation)) return@withLock false
-            highWater.raise(scopeChain.last(), observation)
+            // Raise only once the mutation has actually landed: a store write
+            // that throws must not leave a mark that locks out the retry.
             applyLocked(mutation, observation)
+            highWater.raise(scopeChain.last(), observation)
             true
         }
+    }
+
+    /**
+     * The identity whose profile tombstone blocks this mutation, enumerated
+     * exhaustively so a newly added mutation kind cannot silently skip the
+     * check — adding one without a branch here is a compile error.
+     */
+    private fun entombedBy(mutation: CacheMutation): AccessIdentity? = when (mutation) {
+        is CacheMutation.WriteDetail -> mutation.identity
+        is CacheMutation.WriteListPage -> mutation.identity
+        is CacheMutation.ReplaceNamespaceIndex -> mutation.identity
+        is CacheMutation.MarkNamespaceIndexNonAuthoritative -> mutation.identity
+        is CacheMutation.DeleteDetailNotFound -> mutation.identity
+        is CacheMutation.InvalidateNamespace -> mutation.identity
+        // The user's clear is not profile-scoped: it discards data rather than
+        // resurrecting it, so a tombstone has nothing to protect against.
+        CacheMutation.Clear -> null
     }
 
     /**
@@ -116,7 +135,7 @@ class CacheService internal constructor(
         is CacheMutation.WriteListPage -> listOf(
             GLOBAL_SCOPE,
             namespaceScope(mutation.identity, mutation.namespaceId),
-            "list|" + listPageKey(mutation.identity, mutation.namespaceId, mutation.requestKey)
+            listPageScope(listPageKey(mutation.identity, mutation.namespaceId, mutation.requestKey))
         )
         is CacheMutation.ReplaceNamespaceIndex -> listOf(
             GLOBAL_SCOPE,
@@ -199,6 +218,11 @@ class CacheService internal constructor(
             is CacheMutation.InvalidateNamespace -> invalidateNamespaceLocked(mutation)
             CacheMutation.Clear -> {
                 discardGeneration.incrementAndGet()
+                // Every other scope chain runs through the global scope, so once
+                // the clear's mark sits there the per-coordinate marks can only
+                // repeat what it already says. Dropping them keeps this map from
+                // growing for the life of the IDE.
+                highWater.collapseTo(GLOBAL_SCOPE, observation)
                 detailCache.clear()
                 listPageCache.clear()
                 namespaceIndexCache.clear()
@@ -268,7 +292,7 @@ class CacheService internal constructor(
         // already reading one of these keys cannot publish it afterwards.
         discardGeneration.incrementAndGet()
         reclaimable.forEach { key ->
-            highWater.raise(detailScope(key), observation)
+            highWater.acceptAndRaise(listOf(detailScope(key)), observation)
             detailCache.remove(key)
             store.removeDetail(key)
         }
@@ -640,6 +664,8 @@ class CacheService internal constructor(
     // Gate scopes are prefixed by entry kind because a detail key and a list-page
     // key for the same identity and namespace can otherwise coincide.
     private fun detailScope(detailKey: String): String = "detail|$detailKey"
+
+    private fun listPageScope(listPageKey: String): String = "list|$listPageKey"
 
     private fun indexScope(identity: AccessIdentity, namespaceId: String?): String =
         "index|" + namespaceKey(identity, namespaceId)

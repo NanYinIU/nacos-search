@@ -176,14 +176,13 @@ class NacosValueLineMarkerProvider internal constructor(
             }
             val config = observed?.value ?: return@executeOnPooledThread
 
-            // Ensure the fetched config lives in the detail cache so the key
-            // index can see it. getConfiguration() only persists when
-            // cacheEnabled is on, but the gutter marker relies on the cache to
-            // decide resolved vs. unresolved, so we write it unconditionally —
-            // under the same observation sequence the read took, so a slower
-            // earlier navigation cannot displace it.
+            // The gutter marker decides resolved vs. unresolved from the cache,
+            // so the fetched config has to be there. The gateway read normally
+            // writes it already; this covers the case where it did not, and it
+            // carries that read's own observation sequence, so it can neither
+            // outrank a newer read nor restamp what the gateway just wrote.
             runBlocking {
-                cacheService.apply(
+                cacheService.applyMutation(
                     CacheMutation.WriteDetail(
                         accessIdentity,
                         namespaceId,
