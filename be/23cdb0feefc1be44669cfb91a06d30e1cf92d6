@@ -1,0 +1,45 @@
+src/main/kotlin/com/nanyin/nacos/search/models/ConfigListResponse.kt
+  s_571e179001bbaa::t_25dbbe1c3d4a0d 1-25
+src/main/kotlin/com/nanyin/nacos/search/services/CacheFileStorage.kt
+  s_23bf24561bd884::t_21b01df79278de 6,56-57,59
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_23bf24561bd884::t_fa25fc776df570 12,50,202,221,248,256,273,798
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_23bf24561bd884::t_b8fbe609a3b3a7 7-8,465,470,739,746
+src/main/kotlin/com/nanyin/nacos/search/services/operations/OperationGateway.kt
+  s_23bf24561bd884::t_ed95ef7f28b23f 4-5,249,263,268,279
+src/test/kotlin/com/nanyin/nacos/search/services/CacheFileStorageTest.kt
+  s_23bf24561bd884::t_cd3e9a74855eb7 3,29
+src/test/kotlin/com/nanyin/nacos/search/services/CacheServiceTest.kt
+  s_23bf24561bd884::t_c2fc616e5d7e98 8-9,343,348,652
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceCancelTest.kt
+  s_23bf24561bd884::t_259fc8b9634371 6-7,46,51,136,141
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceTest.kt
+  s_23bf24561bd884::t_5cd16fa0f4a696 16-17,255,260
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceSummaryIndexTest.kt
+  s_23bf24561bd884::t_bcb06ed61a54ec 6,79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "be23cdb0feefc1be44669cfb91a06d30e1cf92d6",
+  "prompts": {},
+  "sessions": {
+    "s_23bf24561bd884": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bf4ec3d1-aa0d-4f9d-94b2-b86a75d2ea7a",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_571e179001bbaa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4ee10160-e070-4d9d-a5bd-ea1506c43b5d",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
