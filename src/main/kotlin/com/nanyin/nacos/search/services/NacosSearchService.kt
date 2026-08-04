@@ -366,13 +366,7 @@ class NacosSearchService(
             request.serverId.takeIf { it.isNotBlank() }
         ).getOrElse { return Result.failure(it) }
         val namespaceId = request.namespace?.namespaceId
-        val snapshot = requireNotNull(request.serverSnapshot) {
-            "Full namespace search requires a server snapshot captured with the request"
-        }
-        if (snapshot.identity != context.identity) {
-            return Result.failure(ConfigurationRequired(listOf("Search request identity does not match its operation context")))
-        }
-        val indexRequest = settings.captureNamespaceIndexRequest(namespaceId, snapshot, context)
+        val indexRequest = settings.captureNamespaceIndexRequest(namespaceId, context)
         val indexKey = indexRequest.key
         val cachedIndex = if (!request.forceRefresh && settings.cacheEnabled) {
             cacheService.getNamespaceIndexEntry(indexKey.identity, namespaceId)

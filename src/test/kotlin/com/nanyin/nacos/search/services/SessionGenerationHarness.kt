@@ -6,6 +6,7 @@ import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.operations.GenerationProbeFlight
+import com.nanyin.nacos.search.services.operations.OperationTarget
 import com.nanyin.nacos.search.services.operations.SessionGenerationState
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.CredentialSnapshot
@@ -14,12 +15,12 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Shared test harness for issue #49 / parent PRD #35.
+ * Shared test harness for issues #49 / #50 / parent PRD #35.
  *
  * Enters at [NamespaceIndexCoordinator.requestIndex] — the real entry for all
  * four index triggers — and records every outgoing request at the
- * [NacosRequestExecutor.HttpTransport] seam, which both the legacy wire path
- * and the gateway path funnel through.
+ * [NacosRequestExecutor.HttpTransport] seam. After issue #50 every index load
+ * routes through the gateway; generation is observed by URL path segments.
  */
 class SessionGenerationHarness(
     private val transport: RecordingTransport = RecordingTransport(),
@@ -50,11 +51,15 @@ class SessionGenerationHarness(
     fun v3StateProbeCount(): Int =
         transport.urls.count { it.contains("/v3/admin/core/state") }
 
-    fun legacyListCount(): Int =
+    fun v1ListCount(): Int =
         transport.urls.count { it.contains("/v1/cs/configs") && !it.contains("/v3/") }
 
     fun gatewayV3ListCount(): Int =
         transport.urls.count { it.contains("/v3/admin/cs/config/list") }
+
+    /** Any URL path segment that is generation-one (hardcoded V1 Open API). */
+    fun generationOneRequestCount(): Int =
+        transport.urls.count { it.contains("/v1/") }
 
     fun clearRecorded() = transport.urls.clear()
 
@@ -113,45 +118,21 @@ class SessionGenerationHarness(
         context: NacosOperationContext,
         namespaceId: String = "public"
     ): NamespaceIndexRequest {
-        val snapshot = NacosServerSnapshot(
-            serverUrl = context.endpoint.value,
-            username = "",
-            password = "",
-            authMode = context.authMode,
-            enableTokenAuth = false,
-            identity = context.identity
-        )
         return NamespaceIndexRequest(
             key = NamespaceIndexKey(context.identity, namespaceId),
-            server = snapshot,
             cacheTtlMillis = 60_000L,
             operationContext = context
         )
     }
 
-    /** Legacy path: no operation context, only the server snapshot. */
-    fun legacyIndexRequest(
-        serverUrl: String = "https://nacos.example",
+    /** The gateway target the coordinator gates namespace-index writes on. */
+    fun indexTarget(
+        context: NacosOperationContext,
         namespaceId: String = "public"
-    ): NamespaceIndexRequest {
-        val identity = AccessIdentity.ofProfile(
-            profileId = "legacy",
-            accessRevision = 1,
-            canonicalEndpoint = serverUrl,
-            resolvedGeneration = NacosApiGeneration.UNKNOWN,
-            authMode = AuthMode.ANONYMOUS,
-            principal = "<anonymous>"
-        )
-        return NamespaceIndexRequest(
-            key = NamespaceIndexKey(identity, namespaceId),
-            server = NacosServerSnapshot(serverUrl, "", "", AuthMode.ANONYMOUS, false, identity),
-            cacheTtlMillis = 60_000L,
-            operationContext = null
-        )
-    }
+    ): OperationTarget = OperationTarget(context, namespaceId.ifBlank { "public" })
 
     /**
-     * Recording transport that answers V3 state, V3 list, and legacy V1 list
+     * Recording transport that answers V3 state, V3 list, and V1 list
      * with deterministic empty payloads so index loads complete without detail
      * fan-out.
      */

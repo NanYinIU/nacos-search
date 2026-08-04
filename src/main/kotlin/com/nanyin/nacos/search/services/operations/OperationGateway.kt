@@ -139,6 +139,32 @@ class OperationGateway(
         return adapter.discoverNamespaces(target)
     }
 
+    /**
+     * Takes the observation sequence for a namespace-index load. ADR-0020
+     * requires the sequence to be obtained **when the operation starts**, not
+     * when it writes, so that a later-started load wins even if an earlier one
+     * completes after it. Callers must pair this with
+     * [commitNamespaceIndexWrite] using the same sequence.
+     */
+    fun beginNamespaceIndexObservation(): Long = observationSequence.next()
+
+    /**
+     * Gates the namespace-index write (the one cache mutation that deletes
+     * data) on the sequence taken by [beginNamespaceIndexObservation]. Returns
+     * false when a later-started observation already owns the high-water mark
+     * for this identity+namespace, in which case the write must be discarded
+     * (ADR-0020 / issue #50).
+     *
+     * Whether the observation gate later moves inside the cache module is a
+     * separate decision (#43); this pair only ensures the index write carries
+     * a sequence through the gateway.
+     */
+    fun commitNamespaceIndexWrite(target: OperationTarget, sequence: Long): Boolean =
+        acceptObservation(namespaceIndexGateKey(target), sequence)
+
+    /** Test/inspection helper: last issued observation sequence. */
+    fun currentObservationSequence(): Long = observationSequence.current()
+
     private fun acceptObservation(key: String, seq: Long): Boolean =
         observationGates.computeIfAbsent(key) { ObservationGate() }.acceptIfNewer(seq)
 
@@ -151,6 +177,11 @@ class OperationGateway(
         "detail|" + target.context.identity.profileId + "|" +
             target.context.identity.accessRevision + "|" +
             target.namespaceId + "|" + coordinate.dataId + "|" + coordinate.group
+
+    private fun namespaceIndexGateKey(target: OperationTarget): String =
+        "ns-index|" + target.context.identity.profileId + "|" +
+            target.context.identity.accessRevision + "|" +
+            target.namespaceId
 
     private fun adapterFor(target: OperationTarget): ProtocolAdapter? = adapters[target.context.resolvedGeneration]
 

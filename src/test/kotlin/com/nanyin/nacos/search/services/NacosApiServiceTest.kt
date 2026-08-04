@@ -187,9 +187,11 @@ class NacosApiServiceTest {
         assertNotNull(apiService)
     }
 
+    private fun capturedContext() = settings.captureOperationContext().getOrThrow()
+
     @Test
     fun `test connection to nacos server`() = runBlocking {
-        val result = apiService.testConnection()
+        val result = apiService.testConnection(capturedContext())
         assertTrue(result.isSuccess)
         assertTrue(result.getOrDefault(false))
     }
@@ -270,7 +272,7 @@ class NacosApiServiceTest {
 
     @Test
     fun `loadNamespace returns COMPLETE when all items fetched`() = runBlocking {
-        val result = apiService.loadNamespace("test-ns", useCache = false)
+        val result = apiService.loadNamespace("test-ns", useCache = false, operationContext = capturedContext())
         assertTrue(result.isSuccess)
         val loadResult = result.getOrNull()!!
         assertEquals(DatasetCompleteness.COMPLETE, loadResult.completeness)
@@ -281,15 +283,17 @@ class NacosApiServiceTest {
     @Test
     fun `loadNamespace returns FAILED when list endpoint unreachable`() = runBlocking {
         settings.serverUrl = "http://localhost:1"
+        // Capture context against the unreachable endpoint before constructing the service.
+        val failingContext = settings.captureOperationContext().getOrThrow()
         val failingService = NacosApiService()
-        val result = failingService.loadNamespace(null, useCache = false)
+        val result = failingService.loadNamespace(null, useCache = false, operationContext = failingContext)
         assertTrue(result.isSuccess)
         assertEquals(DatasetCompleteness.FAILED, result.getOrNull()!!.completeness)
     }
 
     @Test
     fun `test get namespaces`() = runBlocking {
-        val result = apiService.getNamespaces()
+        val result = apiService.getNamespaces(capturedContext())
         assertTrue(result.isSuccess)
 
         val namespaces = result.getOrNull()
@@ -308,9 +312,10 @@ class NacosApiServiceTest {
     fun `test get namespaces returns public namespace when api fails`() = runBlocking {
         // Point to a non-existent port to trigger error handling
         settings.serverUrl = "http://localhost:1"
+        val failingContext = settings.captureOperationContext().getOrThrow()
         val failingService = NacosApiService()
 
-        val result = failingService.getNamespaces()
+        val result = failingService.getNamespaces(failingContext)
         assertTrue(result.isSuccess)
 
         val namespaces = result.getOrNull()
@@ -330,7 +335,7 @@ class NacosApiServiceTest {
             tenant = "test-ns"
         )
 
-        val config = apiService.getConfigurationFromItem(item)
+        val config = apiService.getConfigurationFromItem(item, operationContext = capturedContext())
         assertEquals("test.properties", config.dataId)
         // Item already has content, so it's returned directly
         assertEquals("initial", config.content)

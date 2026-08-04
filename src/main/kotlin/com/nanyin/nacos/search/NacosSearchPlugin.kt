@@ -75,12 +75,17 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
             }
         }
         
-        // Test connection in background
+        // Test connection in background — capture context first so the read
+        // module never re-reads settings mid-flight (issue #50).
         coroutineScope.launch {
             try {
-                val connectionResult = apiService.testConnection()
+                val context = settings.captureOperationContext().getOrElse { error ->
+                    logger.warn("Connection test skipped: ${error.message}")
+                    return@launch
+                }
+                val connectionResult = apiService.testConnection(context)
                 if (connectionResult.isSuccess) {
-                    logger.info("Successfully connected to Nacos server: ${settings.serverUrl}")
+                    logger.info("Successfully connected to Nacos server: ${context.endpoint.value}")
                     
                     // Load initial data if cache is empty or disabled
                     if (!settings.cacheEnabled) {
@@ -142,9 +147,9 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
      */
     private fun preheatNamespaceIndex(namespaceId: String?) {
         if (!settings.cacheEnabled) return
-        val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
         coroutineScope.launch {
             try {
+                val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
                 val existing = cacheService.getNamespaceIndex(indexRequest.key.identity, namespaceId)
                 if (existing != null) {
                     NacosKeyResolver.ensureIndexBuilt(cacheService, indexRequest.key.identity)
@@ -174,6 +179,8 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
     suspend fun refreshCache(namespaceId: String): Result<Int> {
         return try {
             logger.info("Refreshing full namespace cache for '${namespaceId.ifBlank { "public" }}'")
+            // captureNamespaceIndexRequest fails closed with ConfigurationRequired;
+            // the surrounding catch turns it into Result.failure (issue #50).
             val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
             when (val outcome = indexCoordinator.requestManualNamespaceRefresh(indexRequest)) {
                 is IndexOutcome.Complete -> {

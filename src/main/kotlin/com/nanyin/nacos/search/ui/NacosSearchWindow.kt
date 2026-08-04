@@ -451,13 +451,14 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
 
             // Preheat the full namespace index in the background so the first
             // content/regex/wildcard search over this namespace is instant.
-            preheatNamespaceIndex(
-                settings.captureNamespaceIndexRequest(
-                    newNamespace.namespaceId,
-                    serverSnapshot,
-                    operationContext
+            if (operationContext != null) {
+                preheatNamespaceIndex(
+                    settings.captureNamespaceIndexRequest(
+                        newNamespace.namespaceId,
+                        operationContext
+                    )
                 )
-            )
+            }
         } else {
             clearSearchUi()
         }
@@ -763,26 +764,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
                 configListPanel.setConfigurations(emptyList())
             }
-        }
-    }
-    
-    private suspend fun searchConfigurations(
-        namespace: NamespaceInfo,
-        _criteria: SearchCriteria
-    ): List<NacosConfiguration> {
-        return withContext(Dispatchers.IO) {
-            val context = selectedOperationContext()
-            val listConfigurations = nacosApiService.listConfigurations(
-                namespace.namespaceId,
-                operationContext = context
-            )
-            val configurations = listConfigurations.getOrNull()?.pageItems?.map { item ->
-                nacosApiService.getConfigurationFromItem(item, useCache = true, operationContext = context)
-            }
-            if(configurations == null) {
-                emptyList<NacosConfiguration>()
-            }
-            configurations!!
         }
     }
     

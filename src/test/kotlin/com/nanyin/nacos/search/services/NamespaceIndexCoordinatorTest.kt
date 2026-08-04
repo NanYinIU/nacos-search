@@ -30,8 +30,23 @@ class NamespaceIndexCoordinatorTest {
     @get:Rule
     val applicationRule = ApplicationRule()
 
-    private val identity = AccessIdentity.of("http://test:8848", AuthMode.BASIC, "admin")
-    private val server = NacosServerSnapshot("http://test:8848", "admin", "admin", AuthMode.BASIC, false)
+    private val identity = AccessIdentity.ofProfile(
+        profileId = "test-profile",
+        accessRevision = 1,
+        canonicalEndpoint = "http://test:8848",
+        resolvedGeneration = NacosApiGeneration.V1,
+        authMode = AuthMode.BASIC,
+        principal = "admin"
+    )
+    private val context = NacosOperationContext(
+        identity = identity,
+        endpoint = CanonicalNacosEndpoint.parse("http://test:8848").getOrThrow(),
+        credential = CredentialSnapshot("admin"),
+        authMode = AuthMode.BASIC,
+        profileRevision = 1,
+        accessRevision = 1,
+        resolvedGeneration = NacosApiGeneration.V1
+    )
 
     @Before
     fun setUp() {
@@ -44,8 +59,18 @@ class NamespaceIndexCoordinatorTest {
         }
     }
 
+    private fun indexRequest(
+        namespaceId: String = "ns-a",
+        ctx: NacosOperationContext = context,
+        cacheTtlMillis: Long = 300_000L
+    ) = NamespaceIndexRequest(
+        key = NamespaceIndexKey(ctx.identity, namespaceId),
+        cacheTtlMillis = cacheTtlMillis,
+        operationContext = ctx
+    )
+
     @Test
-    fun `captured index request keeps original server after settings switch`() {
+    fun `captured index request keeps original identity after settings switch`() {
         val settings = com.intellij.openapi.application.ApplicationManager.getApplication()
             .getService(com.nanyin.nacos.search.settings.NacosSettings::class.java)
         val originalServers = settings.servers.map { it.copy() }
@@ -68,11 +93,11 @@ class NamespaceIndexCoordinatorTest {
             settings.servers[0].serverUrl = "http://b:8848"
             settings.servers[0].username = "bob"
 
-            assertEquals("http://a:8848", captured.server.serverUrl)
-            assertEquals("alice", captured.server.username)
+            assertEquals("http://a:8848", captured.operationContext.endpoint.value)
+            assertEquals("alice", captured.operationContext.identity.principal)
             assertEquals("server-a", captured.key.identity.profileId)
-            assertEquals(captured.server.serverUrl, captured.key.identity.canonicalEndpoint)
-            assertNotEquals(settings.getActiveServer().serverUrl, captured.server.serverUrl)
+            assertEquals(captured.operationContext.endpoint.value, captured.key.identity.canonicalEndpoint)
+            assertNotEquals(settings.getActiveServer().serverUrl, captured.operationContext.endpoint.value)
         } finally {
             settings.applyServers(originalServers, originalActive)
             // applyServers entombs removed ids and never lifts them on restore
@@ -105,6 +130,8 @@ class NamespaceIndexCoordinatorTest {
     fun `complete namespace load writes index with captured cache TTL`() = runBlocking {
         val apiService = mock<NacosApiService>()
         val cacheService = mock<CacheService>()
+        val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
+        whenever(apiService.operationGateway()).thenReturn(gateway)
         val coordinator = NamespaceIndexCoordinator(apiService, cacheService)
         val configuration = NacosConfiguration(
             dataId = "app.yaml",
@@ -114,13 +141,14 @@ class NamespaceIndexCoordinatorTest {
             type = "yaml"
         )
         val cacheTtlMillis = 17L * 60 * 1000
-        val request = NamespaceIndexRequest(
-            NamespaceIndexKey(identity, "ns-a"),
-            server,
-            cacheTtlMillis
-        )
+        val request = indexRequest(cacheTtlMillis = cacheTtlMillis)
         whenever(
-            apiService.loadNamespace("ns-a", useCache = false, server = server, policy = RequestPolicy.PREHEAT)
+            apiService.loadNamespace(
+                namespaceId = "ns-a",
+                useCache = false,
+                policy = RequestPolicy.PREHEAT,
+                operationContext = context
+            )
         ).thenReturn(
             Result.success(
                 NamespaceLoadResult(
@@ -143,68 +171,24 @@ class NamespaceIndexCoordinatorTest {
     }
 
     @Test
-    fun `V1 index load uses the captured operation context rather than the legacy server path`() = runBlocking {
-        val apiService = mock<NacosApiService>()
-        val cacheService = mock<CacheService>()
-        val v1Identity = AccessIdentity.ofProfile(
-            profileId = "anonymous-v1",
-            accessRevision = 4,
-            canonicalEndpoint = "https://nacos.example",
-            resolvedGeneration = NacosApiGeneration.V1,
-            authMode = AuthMode.ANONYMOUS,
-            principal = "<anonymous>"
-        )
-        val context = NacosOperationContext(
-            identity = v1Identity,
-            endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow(),
-            credential = CredentialSnapshot(""),
-            authMode = AuthMode.ANONYMOUS,
-            profileRevision = 4,
-            accessRevision = 4,
-            resolvedGeneration = NacosApiGeneration.V1
-        )
-        val snapshot = NacosServerSnapshot(
-            "https://nacos.example", "", "", AuthMode.ANONYMOUS, false, v1Identity
-        )
-        val request = NamespaceIndexRequest(NamespaceIndexKey(v1Identity, "manual-ns"), snapshot, 60_000, context)
-        whenever(
-            apiService.loadNamespace(
-                "manual-ns",
-                useCache = false,
-                server = null,
-                policy = RequestPolicy.PREHEAT,
-                operationContext = context
-            )
-        ).thenReturn(Result.success(NamespaceLoadResult(DatasetCompleteness.COMPLETE, 0, emptyList(), emptyList())))
-
-        NamespaceIndexCoordinator(apiService, cacheService).requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
-
-        verify(apiService).loadNamespace(
-            "manual-ns",
-            useCache = false,
-            server = null,
-            policy = RequestPolicy.PREHEAT,
-            operationContext = context
-        )
-        Unit
-    }
-
-    @Test
     fun `partial namespace load for an entombed profile writes nothing to the detail cache`() = runBlocking {
         val apiService = mock<NacosApiService>()
+        val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
+        whenever(apiService.operationGateway()).thenReturn(gateway)
         val tombstones = ProfileTombstoneRegistry()
         val cacheService = CacheService({ 2_000_000L }, tombstones)
         cacheService.clearAll()
         tombstones.entomb(identity.profileId, identity.accessRevision)
 
         val late = NacosConfiguration("late.yaml", "DEFAULT_GROUP", "ns-a", "should-not-land=true")
-        val request = NamespaceIndexRequest(
-            NamespaceIndexKey(identity, "ns-a"),
-            server,
-            17L * 60 * 1000
-        )
+        val request = indexRequest()
         whenever(
-            apiService.loadNamespace("ns-a", useCache = false, server = server, policy = RequestPolicy.PREHEAT)
+            apiService.loadNamespace(
+                namespaceId = "ns-a",
+                useCache = false,
+                policy = RequestPolicy.PREHEAT,
+                operationContext = context
+            )
         ).thenReturn(
             Result.success(
                 NamespaceLoadResult(
@@ -238,6 +222,8 @@ class NamespaceIndexCoordinatorTest {
     @Test
     fun `partial namespace load updates captured scope and preserves stale details`() = runBlocking {
         val apiService = mock<NacosApiService>()
+        val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
+        whenever(apiService.operationGateway()).thenReturn(gateway)
         var now = 2_000_000L
         val cacheService = CacheService { now }
         cacheService.clearAll()
@@ -249,13 +235,14 @@ class NamespaceIndexCoordinatorTest {
         )
         val fresh = NacosConfiguration("fresh.yaml", "DEFAULT_GROUP", "ns-a", "new=true")
         val cacheTtlMillis = 17L * 60 * 1000
-        val request = NamespaceIndexRequest(
-            NamespaceIndexKey(identity, "ns-a"),
-            server,
-            cacheTtlMillis
-        )
+        val request = indexRequest(cacheTtlMillis = cacheTtlMillis)
         whenever(
-            apiService.loadNamespace("ns-a", useCache = false, server = server, policy = RequestPolicy.PREHEAT)
+            apiService.loadNamespace(
+                namespaceId = "ns-a",
+                useCache = false,
+                policy = RequestPolicy.PREHEAT,
+                operationContext = context
+            )
         ).thenReturn(
             Result.success(
                 NamespaceLoadResult(
@@ -309,8 +296,8 @@ class NamespaceIndexCoordinatorTest {
         val keyB = NamespaceIndexKey(identity, "ns-b")
 
         val (outcomeA, outcomeB) = awaitAll(
-            async { coordinator.requestIndex(NamespaceIndexRequest(keyA, server, 300_000L), IndexTrigger.PSI) },
-            async { coordinator.requestIndex(NamespaceIndexRequest(keyB, server, 300_000L), IndexTrigger.PSI) }
+            async { coordinator.requestIndex(NamespaceIndexRequest(keyA, 300_000L, context), IndexTrigger.PSI) },
+            async { coordinator.requestIndex(NamespaceIndexRequest(keyB, 300_000L, context), IndexTrigger.PSI) }
         )
 
         // Both complete (or fail, since no real server), but neither is blocked by the other
@@ -324,7 +311,7 @@ class NamespaceIndexCoordinatorTest {
         val key = NamespaceIndexKey(identity, "cooldown-ns")
 
         // First request fails (no real server)
-        val request = NamespaceIndexRequest(key, server, 300_000L)
+        val request = NamespaceIndexRequest(key, 300_000L, context)
         val first = coordinator.requestIndex(request, IndexTrigger.PSI)
         assertTrue("Expected failure: $first", first is IndexOutcome.Failed)
 

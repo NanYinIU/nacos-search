@@ -150,20 +150,19 @@ class NacosApiService(
     }
 
     /**
-     * Tests connection to Nacos server
-    */
-   suspend fun testConnection(): Result<Boolean> = withContext(Dispatchers.IO) {
+     * Tests connection using an already-captured [operationContext].
+     * Never reads current settings, the credential store, or the project session
+     * (issue #50 / ADR-0010) — the caller must supply a valid context.
+     */
+   suspend fun testConnection(operationContext: NacosOperationContext): Result<Boolean> = withContext(Dispatchers.IO) {
        try {
-           val context = operationContextOrFailure() ?: return@withContext Result.failure(
-               ConfigurationRequired(listOf("Connection configuration is incomplete"))
-           )
-           if (usesLockedGeneration(context)) {
-               return@withContext v1Gateway.probe(v1Target(context)).map { true }
+           if (usesLockedGeneration(operationContext)) {
+               return@withContext v1Gateway.probe(v1Target(operationContext)).map { true }
            }
            // AUTO: resolve the generation by probing V3 first, then V1. A
            // successful resolution (which already probed the server) proves
            // reachability; the formal gateway probe confirms the adapter path.
-           val target = resolvedReadTarget(context, null).getOrElse { error ->
+           val target = resolvedReadTarget(operationContext, null).getOrElse { error ->
                return@withContext Result.failure(error)
            }
            return@withContext v1Gateway.probe(target).map { true }
@@ -353,7 +352,9 @@ class NacosApiService(
        useCache: Boolean = true,
        operationContext: NacosOperationContext? = null
    ): Result<List<NacosConfiguration>> {
-       val result = loadNamespace(namespaceId, useCache, operationContext)
+       val context = operationContext ?: operationContextOrFailure()
+           ?: return Result.failure(ConfigurationRequired(listOf("Connection configuration is incomplete")))
+       val result = loadNamespace(namespaceId, useCache, operationContext = context)
        return result.map { it.configurations }
    }
 
@@ -362,29 +363,25 @@ class NacosApiService(
     * Individual detail-fetch failures are collected instead of silently swallowed;
     * the result distinguishes COMPLETE (no failures), PARTIAL (some failures),
     * and FAILED (list-level failure).
+    *
+    * Requires an already-captured [operationContext]; never reads settings or the
+    * credential store (issue #50). Every generation is resolved and dispatched
+    * through the operation gateway — there is no legacy server-snapshot path.
     */
    suspend fun loadNamespace(
        namespaceId: String? = null,
        useCache: Boolean = true,
-       operationContext: NacosOperationContext? = null
+       operationContext: NacosOperationContext
    ): Result<NamespaceLoadResult> =
-       loadNamespace(namespaceId, useCache, null, RequestPolicy.INTERACTIVE, operationContext)
+       loadNamespace(namespaceId, useCache, RequestPolicy.INTERACTIVE, operationContext)
 
    internal suspend fun loadNamespace(
        namespaceId: String? = null,
        useCache: Boolean = true,
-       server: NacosServerSnapshot?,
        policy: RequestPolicy,
-       operationContext: NacosOperationContext? = null
+       operationContext: NacosOperationContext
    ): Result<NamespaceLoadResult> {
        return try {
-           val capturedContext = operationContext ?: if (server == null) operationContextOrFailure() else null
-           if (server == null && capturedContext == null) {
-               return Result.failure(ConfigurationRequired(listOf("Connection configuration is incomplete")))
-           }
-           if (server != null && isIncomplete(server)) {
-               return Result.failure(ConfigurationRequired(listOf("Captured connection configuration is incomplete")))
-           }
            val allConfigs = mutableListOf<NacosConfiguration>()
            val failures = mutableListOf<ConfigLoadFailure>()
            var expectedCount = 0
@@ -392,11 +389,11 @@ class NacosApiService(
            val pageSize = 100
 
            do {
-               val result = if (server == null) {
-                   listConfigurations(namespaceId, pageNo, pageSize, useCache = useCache, operationContext = capturedContext)
-               } else {
-                   listConfigurations(server, namespaceId, pageNo, pageSize, policy)
-               }
+               val result = listConfigurations(
+                   namespaceId, pageNo, pageSize,
+                   useCache = useCache,
+                   operationContext = operationContext
+               )
                if (result.isFailure) {
                    return Result.success(
                        NamespaceLoadResult(DatasetCompleteness.FAILED, expectedCount, allConfigs, failures)
@@ -415,8 +412,7 @@ class NacosApiService(
                            semaphore.withPermit {
                                try {
                                    FetchResult.Success(
-                                       if (server == null) getConfigurationFromItem(item, useCache, capturedContext)
-                                       else getConfigurationFromItem(server, item, policy)
+                                       getConfigurationFromItem(item, useCache, operationContext)
                                    )
                                } catch (ce: kotlinx.coroutines.CancellationException) {
                                    throw ce
@@ -446,55 +442,6 @@ class NacosApiService(
        }
    }
 
-   private suspend fun listConfigurations(
-       server: NacosServerSnapshot,
-       namespaceId: String?,
-       pageNo: Int,
-       pageSize: Int,
-       policy: RequestPolicy
-   ): Result<ConfigListResponse> = try {
-       val params = buildMap {
-           put("pageNo", pageNo.toString())
-           put("pageSize", pageSize.toString())
-           put("dataId", "")
-           put("group", "")
-           put("appName", "")
-           put("config_tags", "")
-           put("search", "accurate")
-           namespaceId?.let { put("tenant", it) }
-       }
-       val url = buildUrl(server, CONFIG_LIST_ENDPOINT, params)
-       val response = requestJsonWithReplay(server, url, policy)
-       Result.success(gson.fromJson(response, object : TypeToken<ConfigListResponse>() {}.type) as ConfigListResponse)
-   } catch (e: Exception) {
-       logger.warn("Error listing configurations for captured server", e)
-       Result.failure(e)
-   }
-
-   private suspend fun getConfigurationFromItem(
-       server: NacosServerSnapshot,
-       item: ConfigItem,
-       policy: RequestPolicy
-   ): NacosConfiguration {
-       if (!item.content.isNullOrEmpty()) {
-           return NacosConfiguration(
-               dataId = item.dataId,
-               group = item.group,
-               tenantId = item.tenant,
-               content = item.content,
-               type = item.type
-           )
-       }
-       val params = buildMap {
-           put("dataId", item.dataId)
-           put("group", item.group)
-           put("show", "all")
-           item.tenant?.let { put("tenant", it) }
-       }
-       val response = requestJsonWithReplay(server, buildUrl(server, CONFIG_LIST_ENDPOINT, params), policy)
-       return gson.fromJson(response, object : TypeToken<NacosConfiguration>() {}.type) as NacosConfiguration
-   }
-
    private sealed class FetchResult {
        data class Success(val config: NacosConfiguration) : FetchResult()
        data class Failure(val dataId: String, val group: String, val error: Throwable) : FetchResult()
@@ -506,14 +453,13 @@ class NacosApiService(
    }
     
     /**
-     * Retrieves all namespaces from Nacos
+     * Retrieves all namespaces from Nacos using an already-captured
+     * [operationContext]. Never reads current settings, the credential store,
+     * or the project session (issue #50 / ADR-0010).
      */
-    suspend fun getNamespaces(operationContext: NacosOperationContext? = null): Result<List<NamespaceInfo>> = withContext(Dispatchers.IO) {
+    suspend fun getNamespaces(operationContext: NacosOperationContext): Result<List<NamespaceInfo>> = withContext(Dispatchers.IO) {
         try {
-           val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
-               ConfigurationRequired(listOf("Connection configuration is incomplete"))
-           )
-           val resolvedTarget = resolvedReadTarget(context, null).getOrElse { error ->
+           val resolvedTarget = resolvedReadTarget(operationContext, null).getOrElse { error ->
                logger.warn("Failed to resolve generation for namespace discovery", error)
                // Discovery failure must not hide a manually readable public namespace.
                return@withContext Result.success(listOf(NamespaceInfo.createPublicNamespace()))
@@ -595,55 +541,6 @@ class NacosApiService(
         return CapturedRequest(url, headers)
     }
 
-    private suspend fun buildUrl(
-        server: NacosServerSnapshot,
-        endpoint: String,
-        params: Map<String, String>
-    ): String {
-        val mutableParams = params.toMutableMap()
-        val shouldUseToken = when (server.authMode) {
-            AuthMode.TOKEN, AuthMode.NACOS_PASSWORD -> true
-            AuthMode.BASIC -> false
-            AuthMode.HTTP_BASIC, AuthMode.BEARER_TOKEN -> throw ConfigurationRequired(
-                listOf("Explicit V1 authentication strategies require a V1-locked profile")
-            )
-            AuthMode.HYBRID -> server.enableTokenAuth
-            AuthMode.ANONYMOUS -> false
-        }
-        if (shouldUseToken) {
-            authService.getValidAccessToken(server)?.let { mutableParams["accessToken"] = it }
-        }
-        val queryParams = mutableParams.entries.joinToString("&") { (key, value) ->
-            "$key=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
-        }
-        return if (queryParams.isEmpty()) "${server.serverUrl}$endpoint" else "${server.serverUrl}$endpoint?$queryParams"
-    }
-
-    private suspend fun buildAuthHeaders(server: NacosServerSnapshot): Map<String, String> {
-        val headers = mutableMapOf<String, String>()
-        when (server.authMode) {
-            AuthMode.TOKEN, AuthMode.NACOS_PASSWORD -> if (server.enableTokenAuth) authService.getValidAccessToken(server)
-            AuthMode.HYBRID -> {
-                val token = if (server.enableTokenAuth) authService.getValidAccessToken(server) else null
-                if (token == null) addBasicAuthHeader(headers, server)
-            }
-            AuthMode.BASIC -> addBasicAuthHeader(headers, server)
-            AuthMode.HTTP_BASIC, AuthMode.BEARER_TOKEN -> throw ConfigurationRequired(
-                listOf("Explicit V1 authentication strategies require a V1-locked profile")
-            )
-            AuthMode.ANONYMOUS -> Unit
-        }
-        return headers
-    }
-
-    private fun addBasicAuthHeader(headers: MutableMap<String, String>, server: NacosServerSnapshot) {
-        if (server.username.isNotEmpty() && server.password.isNotEmpty()) {
-            val credentials = "${server.username}:${server.password}"
-            headers["Authorization"] = "Basic " + java.util.Base64.getEncoder()
-                .encodeToString(credentials.toByteArray())
-        }
-    }
-
     private fun addBasicAuthHeader(headers: MutableMap<String, String>, context: NacosOperationContext) {
         if (context.identity.principal != "<anonymous>" && context.credential.secret.isNotEmpty()) {
             val credentials = "${context.identity.principal}:${context.credential.secret}"
@@ -675,19 +572,6 @@ class NacosApiService(
            authService.invalidateToken(context)
            val replay = buildCapturedRequest(context, endpoint, params)
            return executor.get(replay.url, policy, replay.headers)
-       }
-   }
-
-   private suspend fun requestJsonWithReplay(
-       server: NacosServerSnapshot,
-       url: String,
-       policy: RequestPolicy
-   ): String {
-       try {
-           return executor.get(url, policy, buildAuthHeaders(server))
-       } catch (e: NacosRequestError.Authentication) {
-           authService.invalidateToken()
-           return executor.get(url, policy, buildAuthHeaders(server))
        }
    }
 
@@ -991,12 +875,6 @@ class NacosApiService(
         return mapOf("Authorization" to "Basic " + java.util.Base64.getEncoder().encodeToString(credentials.toByteArray()))
     }
 
-    private fun isIncomplete(server: NacosServerSnapshot): Boolean {
-        val endpointValid = com.nanyin.nacos.search.models.CanonicalNacosEndpoint.parse(server.serverUrl).isSuccess
-        val credentialsComplete = server.username.isBlank() == server.password.isBlank()
-        return !endpointValid || !credentialsComplete
-    }
-
     
     /**
      * Data class for configuration list response
@@ -1018,15 +896,15 @@ class NacosApiService(
     )
     
     /**
-     * Converts ConfigItem to NacosConfiguration with full content
+     * Converts ConfigItem to NacosConfiguration with full content using an
+     * already-captured [operationContext]. Never reads current settings, the
+     * credential store, or the project session (issue #50 / ADR-0010).
      */
     suspend fun getConfigurationFromItem(
         item: ConfigItem,
         useCache: Boolean = true,
-        operationContext: NacosOperationContext? = null
+        operationContext: NacosOperationContext
     ): NacosConfiguration {
-        val context = operationContext ?: operationContextOrFailure()
-            ?: throw ConfigurationRequired(listOf("Connection configuration is incomplete"))
         if (!item.content.isNullOrEmpty()) {
             val configuration = NacosConfiguration(
                 dataId = item.dataId,
@@ -1037,7 +915,7 @@ class NacosApiService(
             )
             if (useCache && settings.cacheEnabled) {
                 cacheService.putConfigDetail(
-                    context.identity,
+                    operationContext.identity,
                     item.tenant,
                     configuration,
                     settings.getCacheTtlMillis()
@@ -1046,7 +924,7 @@ class NacosApiService(
             return configuration
         }
 
-        val fullConfig = getConfiguration(item.dataId, item.group, item.tenant, useCache, operationContext = context)
+        val fullConfig = getConfiguration(item.dataId, item.group, item.tenant, useCache, operationContext = operationContext)
         return fullConfig.getOrNull() ?: NacosConfiguration(
             dataId = item.dataId,
             group = item.group,

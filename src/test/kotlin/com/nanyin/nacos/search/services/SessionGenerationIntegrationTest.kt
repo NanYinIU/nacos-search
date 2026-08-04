@@ -41,22 +41,121 @@ class SessionGenerationIntegrationTest {
     }
 
     @Test
-    fun `characterisation observes both the legacy wire path and the gateway path`() = runBlocking {
-        // Gateway path: V1-locked context through the coordinator.
+    fun `V1 index load uses generation-one paths and V3 index load does not`() = runBlocking {
+        // V1-locked profile: generation-one requests only.
         val v1Request = harness.indexRequest(harness.lockedContext(NacosApiGeneration.V1))
         harness.coordinator.requestIndex(v1Request, IndexTrigger.NAMESPACE_SWITCH)
-        val gatewaySeen = harness.legacyListCount() > 0 ||
-            harness.recordedUrls.any { it.contains("/v1/") }
-        assertTrue(gatewaySeen, "expected gateway/V1 traffic: ${harness.recordedUrls}")
+        assertTrue(
+            harness.v1ListCount() > 0,
+            "expected V1 gateway list traffic: ${harness.recordedUrls}"
+        )
+        assertEquals(
+            0,
+            harness.gatewayV3ListCount(),
+            "V1 profile must not hit V3 list: ${harness.recordedUrls}"
+        )
 
         harness.clearRecorded()
 
-        // Legacy path: no operation context — only the server snapshot.
-        val legacy = harness.legacyIndexRequest()
-        harness.coordinator.requestIndex(legacy, IndexTrigger.NAMESPACE_SWITCH)
+        // V3-locked profile: no generation-one path segments on index load.
+        val v3Request = harness.indexRequest(
+            harness.lockedContext(NacosApiGeneration.V3, profileId = "v3-profile")
+        )
+        harness.coordinator.requestIndex(v3Request, IndexTrigger.NAMESPACE_SWITCH)
         assertTrue(
-            harness.legacyListCount() > 0,
-            "expected legacy /v1/cs/configs traffic: ${harness.recordedUrls}"
+            harness.gatewayV3ListCount() > 0,
+            "expected V3 gateway list traffic: ${harness.recordedUrls}"
+        )
+        assertEquals(
+            0,
+            harness.generationOneRequestCount(),
+            "V3 index load must not contain generation-one paths: ${harness.recordedUrls}"
+        )
+    }
+
+    @Test
+    fun `AUTO profile that resolves to V3 issues no generation-one index requests`() = runBlocking {
+        val request = harness.indexRequest(harness.autoContext())
+        harness.coordinator.requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
+
+        assertEquals(NacosApiGeneration.V3, harness.session.peekResolvedGeneration())
+        assertTrue(
+            harness.gatewayV3ListCount() > 0,
+            "AUTO→V3 must list via V3: ${harness.recordedUrls}"
+        )
+        // Probe uses /v3/admin/core/state (not generation-one). Index lists use V3.
+        // No /v1/ path segment may appear for the index load itself.
+        val nonProbeGenerationOne = harness.recordedUrls.filter {
+            (it.contains("/v1/") || it.contains("/nacos/v1/")) &&
+                !it.contains("/v3/")
+        }
+        assertTrue(
+            nonProbeGenerationOne.isEmpty(),
+            "AUTO→V3 index load must not contain generation-one paths: $nonProbeGenerationOne"
+        )
+    }
+
+    @Test
+    fun `complete namespace index write carries an observation sequence`() = runBlocking {
+        val before = harness.apiService.operationGateway().currentObservationSequence()
+        val request = harness.indexRequest(harness.lockedContext(NacosApiGeneration.V1))
+        val outcome = harness.coordinator.requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
+        assertTrue(
+            outcome is IndexOutcome.Complete,
+            "expected a complete index load, got $outcome (urls=${harness.recordedUrls})"
+        )
+        val after = harness.apiService.operationGateway().currentObservationSequence()
+        assertTrue(
+            after > before,
+            "namespace index write must carry an observation sequence (before=$before after=$after)"
+        )
+    }
+
+    /**
+     * ADR-0020: the sequence is taken when the load *starts*, so a load that
+     * started earlier must not overwrite one that started later, even when it
+     * finishes afterwards. Two loads for the same identity+namespace can overlap
+     * once a SEARCH trigger hits its 15-second cutoff and drops its in-flight
+     * entry while the job keeps running.
+     *
+     * A competing load is simulated at the transport seam — it starts, and wins
+     * the high-water mark, while this load is still fetching pages. This load's
+     * write must then be discarded rather than delete the newer index.
+     *
+     * Regression guard: taking the sequence at write time instead would hand
+     * this load the higher number, and the older view would win.
+     */
+    @Test
+    fun `an index load that started earlier does not overwrite a newer index`() = runBlocking {
+        lateinit var competing: SessionGenerationHarness
+        val transport = SessionGenerationHarness.RecordingTransport(
+            onRequest = { url ->
+                if (url.contains("/cs/config")) {
+                    val gateway = competing.apiService.operationGateway()
+                    val newer = gateway.beginNamespaceIndexObservation()
+                    gateway.commitNamespaceIndexWrite(
+                        competing.indexTarget(competing.lockedContext(NacosApiGeneration.V1)),
+                        newer
+                    )
+                }
+            }
+        )
+        competing = SessionGenerationHarness(transport)
+        competing.cacheService.clearAll()
+
+        val context = competing.lockedContext(NacosApiGeneration.V1)
+        val outcome = competing.coordinator.requestIndex(
+            competing.indexRequest(context),
+            IndexTrigger.NAMESPACE_SWITCH
+        )
+
+        assertTrue(
+            outcome is IndexOutcome.Stale,
+            "expected the obsolete write to be discarded, got $outcome"
+        )
+        assertNull(
+            competing.cacheService.getNamespaceIndex(context.identity, "public"),
+            "an older observation must not land in the namespace index"
         )
     }
 

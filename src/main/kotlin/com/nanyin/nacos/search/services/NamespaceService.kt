@@ -32,6 +32,8 @@ data class NamespaceServiceState(
 class NamespaceService(private val nacosApiService: NacosApiService? = null) : PersistentStateComponent<NamespaceServiceState> {
     private val logger = thisLogger()
     private val apiService = nacosApiService ?: ApplicationManager.getApplication()?.getService(NacosApiService::class.java)
+    private val settings: com.nanyin.nacos.search.settings.NacosSettings?
+        get() = ApplicationManager.getApplication()?.getService(com.nanyin.nacos.search.settings.NacosSettings::class.java)
     
     // Persistent state
     private var state = NamespaceServiceState()
@@ -96,7 +98,14 @@ class NamespaceService(private val nacosApiService: NacosApiService? = null) : P
         return serviceScope.async {
             try {
                 logger.debug("Loading namespaces from Nacos server")
-                val result = apiService?.getNamespaces(operationContext)
+                val context = operationContext
+                    ?: settings?.captureOperationContext()?.getOrElse { return@async Result.failure(it) }
+                    ?: return@async Result.failure(
+                        com.nanyin.nacos.search.settings.ConfigurationRequired(
+                            listOf("Connection configuration is incomplete")
+                        )
+                    )
+                val result = apiService?.getNamespaces(context)
                     ?: Result.failure(IllegalStateException("NacosApiService not available"))
                 
                 if (result.isSuccess) {
