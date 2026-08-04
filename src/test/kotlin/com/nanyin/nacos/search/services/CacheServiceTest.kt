@@ -1,14 +1,12 @@
 package com.nanyin.nacos.search.services
 
 import com.intellij.testFramework.ApplicationRule
-import com.intellij.ide.util.PropertiesComponent
-import com.google.gson.Gson
 import com.nanyin.nacos.search.models.NacosConfiguration
-import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.ConfigItem
 import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.testIdentity
 import com.nanyin.nacos.search.settings.AuthMode
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -23,6 +21,12 @@ import org.junit.Rule
 import org.junit.Test
 import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * Drives the real cache module through its public interface against an
+ * in-memory [CacheStore]. Every case owns its store, so no case shares an
+ * on-disk directory or an application-properties instance with another, and
+ * "restart" is simply a second [CacheService] over the same store.
+ */
 class CacheServiceTest {
     @get:Rule
     val applicationRule = ApplicationRule()
@@ -31,21 +35,20 @@ class CacheServiceTest {
 
     @Test
     fun `CacheService is Disposable and dispose cancels its scope`() {
-        val cacheService = CacheService()
+        val cacheService = CacheService(InMemoryCacheStore())
         assertTrue(cacheService is com.intellij.openapi.Disposable)
         cacheService.dispose()
     }
 
     @Test
     fun `configuration snapshot is immediately callable without a coroutine`() {
-        val cacheService = CacheService()
+        val cacheService = CacheService(InMemoryCacheStore())
         assertTrue(cacheService.configurationSnapshot(defaultIdentity).isEmpty())
     }
 
     @Test
     fun `configuration snapshot excludes expired details`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
+        val cacheService = CacheService(InMemoryCacheStore())
         cacheService.putConfigDetail(
             defaultIdentity, null,
             NacosConfiguration("expired.properties", "DEFAULT_GROUP", null, "k=v", "properties"),
@@ -57,8 +60,8 @@ class CacheServiceTest {
 
     @Test
     fun `expired detail survives reload for stale navigation`() = runBlocking {
-        val first = CacheService()
-        first.clearAll()
+        val store = InMemoryCacheStore()
+        val first = CacheService(store)
         val cached = NacosConfiguration(
             "stale.properties",
             "DEFAULT_GROUP",
@@ -84,7 +87,7 @@ class CacheServiceTest {
             )
         )
 
-        val reloaded = CacheService()
+        val reloaded = CacheService(store)
         assertEquals(
             cached,
             reloaded.getConfigDetail(
@@ -95,14 +98,12 @@ class CacheServiceTest {
                 allowStale = true
             )
         )
-        reloaded.clearAll()
     }
 
     @Test
     fun `navigation snapshot keeps details across fresh stale and deep-stale ages`() = runBlocking {
         var now = 1_000_000L
-        val cacheService = CacheService { now }
-        cacheService.clearAll()
+        val cacheService = CacheService({ now }, InMemoryCacheStore())
         cacheService.putConfigDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
@@ -136,8 +137,7 @@ class CacheServiceTest {
 
     @Test
     fun `configuration snapshot scopes by access identity`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
+        val cacheService = CacheService(InMemoryCacheStore())
         val one = testIdentity("http://one:8848/")
         val two = testIdentity("http://two:8848")
         cacheService.putConfigDetail(
@@ -154,8 +154,7 @@ class CacheServiceTest {
 
     @Test
     fun `configuration snapshot publishes namespace batches atomically`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
+        val cacheService = CacheService(InMemoryCacheStore())
         val configurations = (1..100).map {
             NacosConfiguration("app$it.properties", "DEFAULT_GROUP", "dev", "k$it=v", "properties")
         }
@@ -182,8 +181,7 @@ class CacheServiceTest {
 
     @Test
     fun `complete namespace index replacement does not delete or seed details`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
+        val cacheService = CacheService(InMemoryCacheStore())
         cacheService.putConfigDetail(
             defaultIdentity,
             "dev",
@@ -269,8 +267,7 @@ class CacheServiceTest {
 
     @Test
     fun `configuration detail cache uses identity namespace dataId and group`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
+        val cacheService = CacheService(InMemoryCacheStore())
 
         val config = NacosConfiguration(
             dataId = "app.yaml",
@@ -307,8 +304,7 @@ class CacheServiceTest {
 
     @Test
     fun `all cached configurations can be scoped to one access identity`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
+        val cacheService = CacheService(InMemoryCacheStore())
         val dev = testIdentity("http://dev-nacos:8848")
         val prod = testIdentity("http://prod-nacos:8848")
 
@@ -333,8 +329,8 @@ class CacheServiceTest {
 
     @Test
     fun `list page cache expires independently from detail cache`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
+        var now = 1_000L
+        val cacheService = CacheService({ now }, InMemoryCacheStore())
 
         val page = ConfigListResponse(
             totalCount = 1,
@@ -367,7 +363,7 @@ class CacheServiceTest {
             ttl = 60_000L
         )
 
-        Thread.sleep(5L)
+        now += 5L
 
         assertNull(cacheService.getListPage(defaultIdentity, "dev", "page=1"))
         assertEquals(
@@ -378,8 +374,7 @@ class CacheServiceTest {
 
     @Test
     fun `cache modification count changes when detail cache changes`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
+        val cacheService = CacheService(InMemoryCacheStore())
         cacheService.awaitLoadCompleted()
         val initial = cacheService.getModificationCount()
 
@@ -400,8 +395,7 @@ class CacheServiceTest {
 
     @Test
     fun `namespace index preheat round-trips and is scoped by identity and namespace`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
+        val cacheService = CacheService(InMemoryCacheStore())
 
         val configs = listOf(
             NacosConfiguration("app.yaml", "DEFAULT_GROUP", "dev", "feature=true", "yaml"),
@@ -424,8 +418,7 @@ class CacheServiceTest {
 
     @Test
     fun `putNamespaceIndex does not seed individual config details`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
+        val cacheService = CacheService(InMemoryCacheStore())
 
         cacheService.putNamespaceIndex(
             identity = defaultIdentity,
@@ -445,8 +438,7 @@ class CacheServiceTest {
 
     @Test
     fun `reads are not serialized behind a write lock`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
+        val cacheService = CacheService(InMemoryCacheStore())
         repeat(200) { i ->
             cacheService.putConfigDetail(
                 identity = defaultIdentity,
@@ -480,9 +472,8 @@ class CacheServiceTest {
 
     @Test
     fun `putNamespaceIndex does not persist details for reload`() = runBlocking {
-        val first = CacheService()
-        first.clearAll()
-        first.putNamespaceIndex(
+        val store = InMemoryCacheStore()
+        CacheService(store).putNamespaceIndex(
             identity = defaultIdentity,
             namespaceId = "dev",
             configurations = listOf(
@@ -491,101 +482,123 @@ class CacheServiceTest {
             ttl = 60_000L
         )
 
-        val reloaded = CacheService()
-        val detail = reloaded.getConfigDetail(defaultIdentity, "dev", "seed.properties", "DEFAULT_GROUP")
-        assertNull(detail)
-        reloaded.clearAll()
+        // Issue #52: summary index must not leave detail payloads behind.
+        val reloaded = CacheService(store)
+        assertNull(reloaded.getConfigDetail(defaultIdentity, "dev", "seed.properties", "DEFAULT_GROUP"))
+        assertTrue(store.loadDetails().isEmpty())
     }
 
     @Test
-    fun `clearCache removes persisted payloads so reload finds nothing`() = runBlocking {
-        val first = CacheService()
-        first.clearAll()
+    fun `clearing the cache leaves no payload in the store`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val first = CacheService(store)
         first.putConfigDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
             configuration = NacosConfiguration("gone.properties", "DEFAULT_GROUP", "dev", "x=1", "properties"),
             ttl = 60_000L
         )
+        first.putListPage(
+            identity = defaultIdentity,
+            namespaceId = "dev",
+            requestKey = "page=1",
+            response = ConfigListResponse(0, 1, 1, emptyList()),
+            ttl = 60_000L
+        )
+        // Confirms the payload was persisted and reloadable before clear.
         assertEquals(
             "x=1",
-            CacheService().getConfigDetail(defaultIdentity, "dev", "gone.properties", "DEFAULT_GROUP")?.content
+            CacheService(store).getConfigDetail(defaultIdentity, "dev", "gone.properties", "DEFAULT_GROUP")?.content
         )
 
         first.clearCache()
 
-        val afterClear = CacheService()
-        assertNull(afterClear.getConfigDetail(defaultIdentity, "dev", "gone.properties", "DEFAULT_GROUP"))
-        afterClear.clearAll()
+        // Nothing unreachable is left behind, and a fresh load cannot resurrect
+        // an entry the user explicitly discarded.
+        assertTrue(store.loadDetails().isEmpty())
+        assertTrue(store.loadListPages().isEmpty())
+        assertNull(CacheService(store).getConfigDetail(defaultIdentity, "dev", "gone.properties", "DEFAULT_GROUP"))
     }
 
     @Test
-    fun `ownership-unprovable legacy PropertiesComponent detail blob is discarded`() = runBlocking {
-        val cleaner = CacheService()
-        cleaner.clearAll()
-        cleaner.awaitLoadCompleted()
-
-        val key = "http://nacos:8848|dev|legacy.properties|DEFAULT_GROUP"
-        val entry = CacheService.CacheEntry(
-            type = CacheService.CacheEntryType.CONFIG_DETAIL,
-            data = NacosConfiguration("legacy.properties", "DEFAULT_GROUP", "dev", "legacy=true", "properties"),
-            createdAt = System.currentTimeMillis(),
-            ttlMs = 60_000L,
-            source = CacheService.CacheSource.REMOTE
+    fun `removing a detail reclaims its payload from the store`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val cacheService = CacheService(store)
+        cacheService.putConfigDetail(
+            identity = defaultIdentity,
+            namespaceId = "dev",
+            configuration = NacosConfiguration("removed.properties", "DEFAULT_GROUP", "dev", "x=1", "properties"),
+            ttl = 60_000L
         )
-        val gson = Gson()
-        val props = PropertiesComponent.getInstance()
-        props.setValue("nacos.cache.detail.$key", gson.toJson(entry))
-        props.setValue("nacos.cache.detail.keys", gson.toJson(listOf(key)))
 
-        val migrated = CacheService()
-        val detail = migrated.getConfigDetail(defaultIdentity, "dev", "legacy.properties", "DEFAULT_GROUP")
-        assertNull(detail)
+        cacheService.removeConfigDetail(defaultIdentity, "dev", "removed.properties", "DEFAULT_GROUP")
 
-        assertNull(props.getValue("nacos.cache.detail.$key"))
-        assertNull(CacheService().getConfigDetail(defaultIdentity, "dev", "legacy.properties", "DEFAULT_GROUP"))
-
-        migrated.clearAll()
+        assertTrue(store.loadDetails().isEmpty())
     }
 
     @Test
-    fun `single-key read resolves from file without waiting for the full background load`() = runBlocking {
-        val seeder = CacheService()
-        seeder.clearAll()
-        seeder.putConfigDetail(
+    fun `a persisted detail whose key cannot prove ownership is discarded`() = runBlocking {
+        // A pre-profile key names no profile id or access revision, so loading it
+        // would make data visible to whichever profile happens to be active (ADR-0018).
+        val store = InMemoryCacheStore()
+        store.putDetail(
+            "http://nacos:8848|dev|legacy.properties|DEFAULT_GROUP",
+            CacheService.CacheEntry(
+                type = CacheService.CacheEntryType.CONFIG_DETAIL,
+                data = NacosConfiguration("legacy.properties", "DEFAULT_GROUP", "dev", "legacy=true", "properties"),
+                createdAt = System.currentTimeMillis(),
+                ttlMs = 60_000L,
+                source = CacheService.CacheSource.REMOTE
+            )
+        )
+
+        val migrated = CacheService(store)
+        migrated.awaitLoadCompleted()
+
+        assertNull(migrated.getConfigDetail(defaultIdentity, "dev", "legacy.properties", "DEFAULT_GROUP"))
+        // Discarded rather than left in the store where no sweep would reach it.
+        assertTrue(store.loadDetails().isEmpty())
+    }
+
+    @Test
+    fun `single-key read resolves from the store without waiting for the full background load`() = runBlocking {
+        val store = InMemoryCacheStore()
+        CacheService(store).putConfigDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
             configuration = NacosConfiguration("quick.properties", "DEFAULT_GROUP", "dev", "v=1", "properties"),
             ttl = 60_000L
         )
 
-        val reloaded = CacheService()
-        val detail = reloaded.getConfigDetail(defaultIdentity, "dev", "quick.properties", "DEFAULT_GROUP")
+        // A fresh instance starts a background load; a single-key read (go-to-declaration
+        // path) must return the persisted entry before that load can finish.
+        val gated = GatedCacheStore(store)
+        val reloaded = CacheService(gated)
+        val detail = withTimeout(10_000L) {
+            reloaded.getConfigDetail(defaultIdentity, "dev", "quick.properties", "DEFAULT_GROUP")
+        }
         assertEquals("v=1", detail?.content)
-        reloaded.clearAll()
+        gated.releaseFullLoad()
     }
 
     @Test
     fun `full read reflects the completed background load`() = runBlocking {
-        val seeder = CacheService()
-        seeder.clearAll()
-        seeder.putConfigDetail(
+        val store = InMemoryCacheStore()
+        CacheService(store).putConfigDetail(
             identity = defaultIdentity,
             namespaceId = "dev",
             configuration = NacosConfiguration("full.properties", "DEFAULT_GROUP", "dev", "k=v", "properties"),
             ttl = 60_000L
         )
 
-        val reloaded = CacheService()
+        val reloaded = CacheService(store)
         val all = reloaded.getAllCachedConfigurations(defaultIdentity)
         assertTrue(all.any { it.dataId == "full.properties" && it.content == "k=v" })
-        reloaded.clearAll()
     }
 
     @Test
     fun `complete namespace replacement is isolated by access identity`() = runBlocking {
-        val cacheService = CacheService()
-        cacheService.clearAll()
+        val cacheService = CacheService(InMemoryCacheStore())
         val alice = testIdentity("http://nacos:8848", "alice", AuthMode.BASIC)
         val bob = testIdentity("http://nacos:8848", "bob", AuthMode.BASIC)
 
@@ -604,13 +617,12 @@ class CacheServiceTest {
         assertEquals(listOf("bob.yaml"), cacheService.getNamespaceIndex(bob, "dev")?.map { it.dataId })
         assertTrue(cacheService.configurationNavigationSnapshot(alice).isEmpty())
         assertTrue(cacheService.configurationNavigationSnapshot(bob).isEmpty())
-        cacheService.clearAll()
     }
 
     @Test
     fun `list page entry exposes creation timestamp for cache age`() = runBlocking {
         var now = 5_000_000L
-        val cache = CacheService { now }
+        val cache = CacheService({ now }, InMemoryCacheStore())
         val identity = testIdentity("http://age-test", "alice", AuthMode.BASIC)
         val response = ConfigListResponse(
             totalCount = 0,
@@ -631,7 +643,7 @@ class CacheServiceTest {
     @Test
     fun `namespace index entry exposes creation timestamp for cache age`() = runBlocking {
         var now = 9_000_000L
-        val cache = CacheService { now }
+        val cache = CacheService({ now }, InMemoryCacheStore())
         val identity = testIdentity("http://index-age-test", "alice", AuthMode.BASIC)
         cache.putNamespaceIndex(
             identity,
@@ -656,7 +668,7 @@ class CacheServiceTest {
     @Test
     fun `entombed profile rejects late cache writes while other identities persist`() = runBlocking {
         val tombstones = ProfileTombstoneRegistry()
-        val cache = CacheService({ 0L }, tombstones)
+        val cache = CacheService({ 0L }, tombstones, InMemoryCacheStore())
         val entombed = testIdentity("dev-srv", "alice", AuthMode.BASIC, profileId = "dev-srv")
         val survivor = testIdentity("prod-srv", "bob", AuthMode.BASIC, profileId = "prod-srv")
 
@@ -684,10 +696,24 @@ class CacheServiceTest {
 
     @Test
     fun `awaitLoadCompleted is explicit and does not rely on statistics side effects`() = runBlocking {
-        val cache = CacheService()
+        val cache = CacheService(InMemoryCacheStore())
         cache.awaitLoadCompleted()
         // Second await is a no-op once the deferred is complete.
         cache.awaitLoadCompleted()
         cache.dispose()
+    }
+
+    /** Holds the full load open so the single-key read path can be observed on its own. */
+    private class GatedCacheStore(private val delegate: CacheStore) : CacheStore by delegate {
+        private val opened = CompletableDeferred<Unit>()
+
+        override suspend fun loadDetails(): Map<String, CacheService.CacheEntry<NacosConfiguration>> {
+            opened.await()
+            return delegate.loadDetails()
+        }
+
+        fun releaseFullLoad() {
+            opened.complete(Unit)
+        }
     }
 }

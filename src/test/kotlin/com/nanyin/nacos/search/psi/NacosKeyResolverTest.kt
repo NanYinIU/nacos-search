@@ -4,6 +4,7 @@ import com.intellij.testFramework.ApplicationRule
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.testIdentity
 import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.services.InMemoryCacheStore
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -21,7 +22,7 @@ class NacosKeyResolverTest {
 
     @Before
     fun setUp() = runBlocking {
-        cache = CacheService()
+        cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
     }
 
@@ -64,7 +65,7 @@ class NacosKeyResolverTest {
     @Test
     fun `resolved key remains navigable as stale and deep-stale`() = runBlocking {
         var now = 3_000_000L
-        val timedCache = CacheService { now }
+        val timedCache = CacheService({ now }, InMemoryCacheStore())
         timedCache.clearAll()
         timedCache.putConfigDetail(
             identity = identity,
@@ -106,7 +107,7 @@ class NacosKeyResolverTest {
     @Test
     fun `current resolution changes when TTL elapses without a cache write`() = runBlocking {
         var now = 4_000_000L
-        val timedCache = CacheService { now }
+        val timedCache = CacheService({ now }, InMemoryCacheStore())
         timedCache.clearAll()
         timedCache.putConfigDetail(
             identity,
@@ -139,7 +140,7 @@ class NacosKeyResolverTest {
     @Test
     fun `only a fresh complete namespace can prove a dataId absent`() = runBlocking {
         var now = 5_000_000L
-        val timedCache = CacheService { now }
+        val timedCache = CacheService({ now }, InMemoryCacheStore())
         timedCache.clearAll()
         timedCache.putConfigDetail(
             identity,

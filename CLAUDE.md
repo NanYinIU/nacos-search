@@ -86,12 +86,12 @@ There are **two** caches — do not confuse them:
 1. `NacosApiService` keeps an in-memory response cache per namespace (5-minute TTL) to avoid repeated network round-trips within a session.
 2. `CacheService` persists configurations across IDE restarts. It holds three `ConcurrentHashMap`s in memory — config details, list pages, and namespace indexes — each entry wrapped with TTL metadata.
 
-For the persistent layer, `CacheService` splits storage:
+The persistent layer sits behind one interface, `CacheStore`, injected into `CacheService` by constructor alongside the clock and the profile-deletion tombstone registry. The store owns **both** halves of the persistence — the entry payloads and the key list that names them — so the two cannot drift apart and leave a payload that no reclamation sweep can see. Two adapters implement it:
 
-- **Lightweight key lists** (the set of cached entry keys) live in IntelliJ `PropertiesComponent` under the `nacos.cache.*` namespace.
-- **Heavy payloads** (full config content) live in per-entry JSON files owned by `CacheFileStorage`, under `…/nacos-search-cache/{details,listpages}/` beneath the IDE config path. This replaced a single multi-hundred-MB state XML and fixed slow startup / orphan blobs. On first run after upgrade, legacy `PropertiesComponent` payloads are migrated to files once (bounded by size/count).
+- `FileCacheStore` (production) writes one JSON file per entry under `…/nacos-search-cache/{details,listpages}/` beneath the IDE config path, named by the SHA-256 of the storage key. Each file **carries the key it belongs to**, so the key list is the set of payload files rather than a second record: a file that names no readable key is reclaimed on the next scan instead of being orphaned. This replaced a single multi-hundred-MB state XML and fixed slow startup. On first run after upgrade it adopts the previous release's records once, bounded by count (ADR-0018) — payload files whose key lived in `PropertiesComponent` under `nacos.cache.*` are rewritten to name their own key, and those properties are dropped.
+- `InMemoryCacheStore` (tests) keeps the same behaviour in memory, so cache tests never share an on-disk directory or an application-properties instance. Both adapters are held to `CacheStoreContractTest`.
 
-Cache loads run in the background; read methods await a `CompletableDeferred` load signal before serving results that depend on the full load, while single-key reads resolve from file immediately. Enforced limits: max 1,000 entries, 5-minute default TTL, lock-free reads with background expiry reclamation.
+Cache loads run in the background; read methods await a `CompletableDeferred` load signal before serving results that depend on the full load, while single-key reads resolve from the store immediately. Enforced limits: max 1,000 entries, 5-minute default TTL, lock-free reads with background expiry reclamation.
 
 ### `@NacosValue` Navigation & PSI Subsystem
 

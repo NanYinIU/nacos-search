@@ -1,8 +1,5 @@
 package com.nanyin.nacos.search.services
 
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
-import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
@@ -26,25 +23,29 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * Every read and write is keyed by [AccessIdentity] (issue #62). There is no
  * server-URL key space and no legacy identity factory with sentinel revisions.
+ *
+ * Persistence lives entirely behind [CacheStore], which owns the entry payloads
+ * and the key list that names them together, so the cache cannot leave a payload
+ * behind that no reclamation path can see (issue #61).
  */
 @Service(Service.Level.APP)
 class CacheService internal constructor(
     private val currentTimeMillis: () -> Long,
-    private val tombstones: ProfileTombstoneRegistry
+    private val tombstones: ProfileTombstoneRegistry,
+    private val store: CacheStore
 ) : Disposable {
-    constructor() : this(System::currentTimeMillis, defaultTombstones())
-    internal constructor(currentTimeMillis: () -> Long) : this(currentTimeMillis, ProfileTombstoneRegistry())
+    constructor() : this(System::currentTimeMillis, defaultTombstones(), FileCacheStore())
+    internal constructor(store: CacheStore) : this(System::currentTimeMillis, ProfileTombstoneRegistry(), store)
+    internal constructor(currentTimeMillis: () -> Long, store: CacheStore) :
+        this(currentTimeMillis, ProfileTombstoneRegistry(), store)
 
     private val logger = thisLogger()
-    private val gson = Gson()
     private val cacheMutex = Mutex()
     // Entry payloads are loaded in the background so IDE startup never blocks on
     // cache file I/O. Reads await this signal before serving results that depend
     // on the full load.
     private val loadCompleted = CompletableDeferred<Unit>()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val properties = PropertiesComponent.getInstance()
-    private val cacheStorage = CacheFileStorage()
 
     private val detailCache = ConcurrentHashMap<String, CacheEntry<NacosConfiguration>>()
     @Volatile
@@ -139,10 +140,6 @@ class CacheService internal constructor(
     }
 
     companion object {
-        private const val DETAIL_KEY_PREFIX = "nacos.cache.detail."
-        private const val DETAIL_KEYS_LIST = "nacos.cache.detail.keys"
-        private const val LIST_PAGE_KEY_PREFIX = "nacos.cache.list."
-        private const val LIST_PAGE_KEYS_LIST = "nacos.cache.list.keys"
         private const val DEFAULT_TTL = 300_000L
         // Single definition lives on CacheAgeCalculator (issue #42).
         private const val DEEP_STALE_AGE_MILLIS = CacheAgeCalculator.DEEP_STALE_THRESHOLD_MILLIS
@@ -218,8 +215,7 @@ class CacheService internal constructor(
             cacheMutex.withLock {
                 val key = listPageKey(identity, namespaceId, requestKey)
                 listPageCache[key] = CacheEntry(CacheEntryType.LIST_PAGE, response, currentTimeMillis(), ttl, source)
-                persistListPage(key, listPageCache[key]!!)
-                updateListPageKeysList()
+                store.putListPage(key, listPageCache[key]!!)
                 cleanupOversizedCaches()
             }
         }
@@ -245,17 +241,17 @@ class CacheService internal constructor(
             return null
         }
         // Not in memory yet: a single-key lookup (e.g. go-to-declaration) should not wait
-        // for the background full load. Try reading just this entry's backing file; if the
+        // for the background full load. Try reading just this entry from the store; if the
         // background load is still in flight and the entry is genuinely absent, await it
         // and re-check so the result reflects any entry loaded concurrently.
-        val fromFile = cacheStorage.loadDetail(key)
-        if (fromFile != null) {
-            if (fromFile.isExpired(currentTimeMillis()) && !allowStale) {
+        val fromStore = store.loadDetail(key)
+        if (fromStore != null) {
+            if (fromStore.isExpired(currentTimeMillis()) && !allowStale) {
                 return null
             }
-            detailCache[key] = fromFile
+            detailCache[key] = fromStore
             if (loadCompleted.isCompleted) publishDetailSnapshot()
-            return fromFile.data
+            return fromStore.data
         }
         loadCompleted.await()
         val loadedLate = detailCache[key]
@@ -290,8 +286,7 @@ class CacheService internal constructor(
     ) {
         cacheMutex.withLock {
             detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, configuration, currentTimeMillis(), ttl, source)
-            persistDetail(key, detailCache[key]!!)
-            updateDetailKeysList()
+            store.putDetail(key, detailCache[key]!!)
             cleanupOversizedCaches()
             publishDetailSnapshot()
             markModified()
@@ -310,8 +305,7 @@ class CacheService internal constructor(
     private suspend fun removeConfigDetailByKey(key: String) {
         cacheMutex.withLock {
             if (detailCache.remove(key) == null) return@withLock
-            cacheStorage.removeDetail(key)
-            updateDetailKeysList()
+            store.removeDetail(key)
             publishDetailSnapshot()
             markModified()
         }
@@ -336,9 +330,8 @@ class CacheService internal constructor(
                     val key = detailKey(identity, namespaceId, config.dataId, config.group)
                     val entry = CacheEntry(CacheEntryType.CONFIG_DETAIL, config, now, ttl, source)
                     detailCache[key] = entry
-                    persistDetail(key, entry)
+                    store.putDetail(key, entry)
                 }
-                updateDetailKeysList()
                 cleanupOversizedCaches()
                 publishDetailSnapshot()
                 markModified()
@@ -427,16 +420,14 @@ class CacheService internal constructor(
         cacheMutex.withLock {
             detailCache.keys.filter { it.startsWith(namespacePrefix) }.forEach { key ->
                 detailCache.remove(key)
-                cacheStorage.removeDetail(key)
+                store.removeDetail(key)
             }
             listPageCache.keys.filter { it.startsWith(namespacePrefix) }.forEach { key ->
                 listPageCache.remove(key)
-                cacheStorage.removeListPage(key)
+                store.removeListPage(key)
             }
             namespaceIndexCache.remove(indexKey)
             namespaceIndexAuthority.remove(indexKey)
-            updateDetailKeysList()
-            updateListPageKeysList()
             publishDetailSnapshot()
             markModified()
         }
@@ -459,9 +450,7 @@ class CacheService internal constructor(
             listPageCache.clear()
             namespaceIndexCache.clear()
             namespaceIndexAuthority.clear()
-            cacheStorage.clearAll()
-            properties.unsetValue(DETAIL_KEYS_LIST)
-            properties.unsetValue(LIST_PAGE_KEYS_LIST)
+            store.clear()
             publishDetailSnapshot()
             markModified()
             logger.info("Cache cleared")
@@ -475,97 +464,44 @@ class CacheService internal constructor(
         // or racing with a concurrent write. Reads are lock-free and merely await
         // loadCompleted, so there is no deadlock.
         cacheMutex.withLock {
-            loadIdentityScopedDetailsFromPersistence()
-            loadIdentityScopedListPagesFromPersistence()
-            discardLegacyBlobs()
+            loadIdentityScopedDetailsFromStore()
+            loadIdentityScopedListPagesFromStore()
             publishDetailSnapshot()
             markModified()
         }
     }
 
-    /** Deletes cache records whose schema cannot establish a profile owner. */
-    private suspend fun discardLegacyBlobs() {
-        for (key in getDetailKeys()) {
-            if (isIdentityScopedKey(key)) continue
-            properties.unsetValue("$DETAIL_KEY_PREFIX$key")
-            cacheStorage.removeDetail(key)
-        }
-        for (key in getListPageKeys()) {
-            if (isIdentityScopedKey(key)) continue
-            properties.unsetValue("$LIST_PAGE_KEY_PREFIX$key")
-            cacheStorage.removeListPage(key)
-        }
-        updateDetailKeysList()
-        updateListPageKeysList()
-    }
-
-    private suspend fun loadIdentityScopedDetailsFromPersistence() {
-        getDetailKeys().forEach { key ->
-            if (!isIdentityScopedKey(key)) return@forEach
-            val entry = cacheStorage.loadDetail(key)
-            if (entry == null) return@forEach
-            detailCache[key] = entry
+    /**
+     * Records whose key cannot establish a profile owner are discarded rather
+     * than guessed at (ADR-0018); the store reclaims their payload with them.
+     */
+    private suspend fun loadIdentityScopedDetailsFromStore() {
+        store.loadDetails().forEach { (key, entry) ->
+            if (isIdentityScopedKey(key)) detailCache[key] = entry else store.removeDetail(key)
         }
     }
 
-    private suspend fun loadIdentityScopedListPagesFromPersistence() {
-        getListPageKeys().forEach { key ->
-            if (!isIdentityScopedKey(key)) return@forEach
-            val entry = cacheStorage.loadListPage(key)
-            if (entry == null) return@forEach
-            if (!entry.isExpired()) {
+    private suspend fun loadIdentityScopedListPagesFromStore() {
+        val now = currentTimeMillis()
+        store.loadListPages().forEach { (key, entry) ->
+            if (isIdentityScopedKey(key) && !entry.isExpired(now)) {
                 listPageCache[key] = entry
             } else {
-                cacheStorage.removeListPage(key)
+                store.removeListPage(key)
             }
         }
-    }
-
-    private suspend fun persistDetail(key: String, entry: CacheEntry<NacosConfiguration>) {
-        cacheStorage.storeDetail(key, entry)
-    }
-
-    private suspend fun persistListPage(key: String, entry: CacheEntry<ConfigListResponse>) {
-        cacheStorage.storeListPage(key, entry)
-    }
-
-    private fun getDetailKeys(): List<String> {
-        return parseKeys(properties.getValue(DETAIL_KEYS_LIST, "[]"))
-    }
-
-    private fun getListPageKeys(): List<String> {
-        return parseKeys(properties.getValue(LIST_PAGE_KEYS_LIST, "[]"))
-    }
-
-    private fun parseKeys(keysJson: String): List<String> {
-        return try {
-            gson.fromJson(keysJson, object : TypeToken<List<String>>() {}.type) ?: emptyList()
-        } catch (e: Exception) {
-            logger.warn("Failed to parse cache keys", e)
-            emptyList()
-        }
-    }
-
-    private fun updateDetailKeysList() {
-        properties.setValue(DETAIL_KEYS_LIST, gson.toJson(detailCache.keys.toList()))
-    }
-
-    private fun updateListPageKeysList() {
-        properties.setValue(LIST_PAGE_KEYS_LIST, gson.toJson(listPageCache.keys.toList()))
     }
 
     private suspend fun cleanupExpiredEntriesLocked() {
         val now = currentTimeMillis()
         listPageCache.entries.filter { it.value.isExpired(now) }.forEach { (key, _) ->
             listPageCache.remove(key)
-            cacheStorage.removeListPage(key)
+            store.removeListPage(key)
         }
         namespaceIndexCache.entries.filter { it.value.isExpired(now) }.forEach { (key, _) ->
             namespaceIndexCache.remove(key)
             namespaceIndexAuthority.remove(key)
         }
-        updateDetailKeysList()
-        updateListPageKeysList()
     }
 
     private suspend fun cleanupOversizedCaches() {
@@ -577,11 +513,9 @@ class CacheService internal constructor(
             namespaceIndexCache.size > MAX_CACHE_SIZE + CLEANUP_BUFFER
         if (!oversized) return
         cleanupExpiredEntriesLocked()
-        trimOldest(detailCache) { key -> cacheStorage.removeDetail(key) }
-        trimOldest(listPageCache) { key -> cacheStorage.removeListPage(key) }
+        trimOldest(detailCache) { key -> store.removeDetail(key) }
+        trimOldest(listPageCache) { key -> store.removeListPage(key) }
         trimOldest(namespaceIndexCache) { /* in-memory only, never persisted */ }
-        updateDetailKeysList()
-        updateListPageKeysList()
     }
 
     private fun markModified() {
@@ -602,7 +536,7 @@ class CacheService internal constructor(
 
     private suspend fun <T> trimOldest(
         cache: ConcurrentHashMap<String, CacheEntry<T>>,
-        removeFile: suspend (String) -> Unit
+        removeFromStore: suspend (String) -> Unit
     ) {
         if (cache.size <= MAX_CACHE_SIZE) return
         cache.entries
@@ -610,7 +544,7 @@ class CacheService internal constructor(
             .take(cache.size - MAX_CACHE_SIZE)
             .forEach {
                 cache.remove(it.key)
-                removeFile(it.key) // reclaim the persisted payload, fixing orphan blobs
+                removeFromStore(it.key) // reclaims the payload together with its key entry
             }
     }
 
