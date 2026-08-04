@@ -133,14 +133,14 @@ class NamespaceSummaryIndexTest {
             )
         )
         // Key index has no hits (no details).
-        NacosKeyResolver.refreshIndex(cache, identity)
+        val index = NacosKeyResolver.buildIndex(cache.snapshot(identity))
 
         val resolution = NacosKeyResolver.resolveCurrentState(
             key = "feature.enabled",
-            cacheService = cache,
+            index = index,
+            snapshot = cache.snapshot(identity),
             preferredDataId = "common.properties",
-            activeNamespaceId = "dev",
-            activeIdentity = identity
+            activeNamespaceId = "dev"
         )
         assertEquals(ConfigReferenceStatus.UNDECIDABLE, resolution.status)
         assertTrue(resolution.hits.isEmpty())
@@ -157,14 +157,14 @@ class NamespaceSummaryIndexTest {
                 NacosConfiguration("common.properties", "DEFAULT_GROUP", "dev", "", "properties")
             )
         )
-        NacosKeyResolver.refreshIndex(cache, identity)
+        val index = NacosKeyResolver.buildIndex(cache.snapshot(identity))
 
         val resolution = NacosKeyResolver.resolveCurrentState(
             key = "feature.enabled",
-            cacheService = cache,
+            index = index,
+            snapshot = cache.snapshot(identity),
             preferredDataId = "missing.properties",
-            activeNamespaceId = "dev",
-            activeIdentity = identity
+            activeNamespaceId = "dev"
         )
         assertEquals(ConfigReferenceStatus.UNRESOLVED, resolution.status)
     }
@@ -208,7 +208,7 @@ class NamespaceSummaryIndexTest {
         )
         assertTrue(outcome is IndexOutcome.Complete)
 
-        val state = cache.namespaceIndexState(identity, "ns-a")
+        val state = cache.snapshot(identity).namespaceIndex("ns-a")
         assertTrue(state!!.authoritativeForAbsence)
         assertTrue("a.properties" in state.dataIds)
         assertNull(cache.getConfigDetail(identity, "ns-a", "a.properties", "DEFAULT_GROUP"))

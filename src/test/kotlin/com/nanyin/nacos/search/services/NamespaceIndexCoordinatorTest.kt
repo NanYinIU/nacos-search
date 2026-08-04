@@ -225,7 +225,7 @@ class NamespaceIndexCoordinatorTest {
         )
         assertTrue(
             "entombed partial load must not resurrect configuration details",
-            cacheService.configurationNavigationSnapshot(identity).isEmpty()
+            cacheService.snapshot(identity).configurations.isEmpty()
         )
     }
 

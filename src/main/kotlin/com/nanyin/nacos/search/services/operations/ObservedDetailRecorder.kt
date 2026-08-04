@@ -21,7 +21,7 @@ import com.nanyin.nacos.search.services.CacheWriteAccess
  * It exists so that the layers which *notice* these things — a Swing panel
  * refreshing a detail, a gutter renderer navigating to one — do not have to
  * hold a cache mutation to report them. The cache's write entry point is not
- * reachable from either (ADR-0051). Those layers still decide *when* to report;
+ * reachable from either (ADR-0052). Those layers still decide *when* to report;
  * moving that decision out of the panels is #44.
  */
 class ObservedDetailRecorder(private val cacheService: CacheService) {

@@ -59,7 +59,7 @@ class NamespaceIndexRefreshService internal constructor(
                 .requestIfNeeded(project, identity, namespaceId)
         }
 
-        val state = cacheService.namespaceIndexState(identity, namespaceId)
+        val state = cacheService.snapshot(identity).namespaceIndex(namespaceId)
         if (state?.freshness == CacheService.DetailFreshness.FRESH) return
 
         scope.launch {

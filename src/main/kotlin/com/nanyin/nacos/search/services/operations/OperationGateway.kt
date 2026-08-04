@@ -253,7 +253,7 @@ class InMemoryOperationCache : OperationCache {
  *
  * This is the gateway's cache-facing adapter and therefore one of the few
  * places entitled to [CacheWriteAccess]: every write it makes carries the
- * observation sequence of the read that produced it (ADR-0051).
+ * observation sequence of the read that produced it (ADR-0052).
  */
 @OptIn(CacheWriteAccess::class)
 class CacheServiceOperationCache(

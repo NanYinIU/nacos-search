@@ -12,6 +12,7 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.services.CacheSnapshot
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NamespaceIndexRefreshService
@@ -60,14 +61,19 @@ class NacosValueLineMarkerProvider internal constructor(
         if (!NacosValueReferenceContributor.isInSupportedAnnotation(literal)) return null
         val codeContext = NacosCodeContextExtractor.fromLiteral(literal)
         val project = anchor.project
-        val resolution = currentResolution(project, placeholder.key, codeContext)
+        // One snapshot for the whole decision: every hit it reports and the
+        // absence check that follows are judged against a single as-of instant,
+        // so a list of matches cannot straddle a freshness boundary (issue #64).
+        val snapshot = ApplicationManager.getApplication().getService(CacheService::class.java)
+            .snapshot(project.captureSelectedAccessIdentity())
+        val resolution = currentResolution(project, snapshot, placeholder.key, codeContext)
         if (resolution.status != ConfigReferenceStatus.RESOLVED) {
             refreshObserver(project, codeContext)
         }
 
         // Only show the marker if the key is in the cache or a dataId context
         // is available for remote lookup fallback.
-        if (!shouldShowMarker(project, resolution, codeContext)) return null
+        if (!shouldShowMarker(project, snapshot, resolution, codeContext)) return null
 
         val presentation = markerPresentation(resolution.status)
         return LineMarkerInfo(
@@ -85,30 +91,35 @@ class NacosValueLineMarkerProvider internal constructor(
 
     private fun shouldShowMarker(
         project: Project,
+        snapshot: CacheSnapshot,
         resolution: ConfigResolution,
         codeContext: NacosCodeContext
     ): Boolean {
         if (resolution.hits.isNotEmpty()) return true
         val dataId = codeContext.dataId ?: return false
-        return NacosKeyResolver.isDataIdKnown(
+        return keyIndexService().isDataIdKnown(
+            snapshot,
             dataId,
-            activeNamespaceId = effectiveNamespaceId(project, codeContext),
-            activeIdentity = project.captureSelectedAccessIdentity()
+            activeNamespaceId = effectiveNamespaceId(project, codeContext)
         )
     }
 
     private fun currentResolution(
         project: Project,
+        snapshot: CacheSnapshot,
         key: String,
         codeContext: NacosCodeContext
     ): ConfigResolution =
-        NacosKeyResolver.resolveCurrentState(
+        keyIndexService().resolveCurrentState(
+            snapshot,
             key,
             preferredDataId = codeContext.dataId,
             allowCrossNamespace = project.allowCrossNamespaceNavigation(),
-            activeNamespaceId = project.selectedNacosNamespaceId(),
-            activeIdentity = project.captureSelectedAccessIdentity()
+            activeNamespaceId = project.selectedNacosNamespaceId()
         )
+
+    private fun keyIndexService(): NacosKeyIndexService =
+        ApplicationManager.getApplication().getService(NacosKeyIndexService::class.java)
 
     private fun navigateFromCode(
         anchor: PsiElement,
