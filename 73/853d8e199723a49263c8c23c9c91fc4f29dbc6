@@ -1,0 +1,21 @@
+src/main/kotlin/com/nanyin/nacos/search/services/NacosAuthService.kt
+  s_c24d63ff7ab4ae::t_d7286e4c29ab14 65-69,72-81,96,111,123-127,129,131,137-139,154,159-177,180,184-188,202,204,209
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_c24d63ff7ab4ae::t_be410a7e0c7f3e 22,72-76,223-229,242-243,254-256,258,262-274,279,386
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "73853d8e199723a49263c8c23c9c91fc4f29dbc6",
+  "prompts": {},
+  "sessions": {
+    "s_c24d63ff7ab4ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0001a4dd-2739-49ff-8a0a-fae157b47010",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
