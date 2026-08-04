@@ -1,0 +1,65 @@
+src/test/kotlin/com/nanyin/nacos/search/services/FileCacheStoreTest.kt
+  s_dd730dd0c828c9::t_29433c8aea937c 4,33
+src/main/kotlin/com/nanyin/nacos/search/services/CacheStore.kt
+  s_dd730dd0c828c9::t_29433c8aea937c 3,28,30,41,57,60
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 3-4,46-51,58-59,73,76-154,164-169,175,195,198-203,205-206,211,241,244-254,256-300,303-328,330,332,336,344-371,378,422
+src/test/kotlin/com/nanyin/nacos/search/models/AccessIdentityTest.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 11-13,18-20,26-27,33-34,40,46-47,52-83
+src/test/kotlin/com/nanyin/nacos/search/models/TestAccessIdentities.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 1-20
+src/test/kotlin/com/nanyin/nacos/search/services/CacheCoordinateTest.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 3,11-12,30-33,52-58
+  s_dd730dd0c828c9::t_619ac37b5a4e10 59-60
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceSummaryIndexTest.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 6,64,79
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceTest.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 16-17,255,260
+src/main/kotlin/com/nanyin/nacos/search/models/AccessIdentity.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 15-18
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProviderTest.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 47,63,92,117,157,247,321,424,456,513
+src/main/kotlin/com/nanyin/nacos/search/services/FileCacheStore.kt
+  s_dd730dd0c828c9::t_29433c8aea937c 7,51,53-54,86,89
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinatorTest.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 57
+src/main/kotlin/com/nanyin/nacos/search/services/operations/OperationGateway.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 4-5,249,263,268,279
+src/main/kotlin/com/nanyin/nacos/search/models/ConfigListResponse.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 1-25
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_dd730dd0c828c9::t_2c5a0b634c0ca9 26,29
+  s_dd730dd0c828c9::t_81d302e55db2a6 9,24-25,53,85-91,94-95,99,107-108,111,143-146,177,193,202,210,288,290-293,326-332,334-337,371,386-403,409,418-419,429-432,436,455-456,572-591
+  s_dd730dd0c828c9::t_d8b0a3e4616dfe 289,333
+src/test/kotlin/com/nanyin/nacos/search/services/CacheServiceTest.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 5-7,34-35,46,53,58,73,82,94,108,122,128,134,139,141-142,144,148,152,165-169,173,178-179,186,192,198,205,214,223,233,241,245-269,281,288,297,306,308-309,312,318,324,335,340,353,360,368-373,378-379,382,397,406,412,415-416,424,432,434,444,446,454,456,465,477,496,567,588,595,602-603,626-627,637,647,672-673,704
+  s_dd730dd0c828c9::t_2bab22fa7aa803 62,366,377,487,502,505,509-512,520,528,534,556,558,564,578,697-702
+  s_dd730dd0c828c9::t_3accdf2cb93ad3 703
+  s_dd730dd0c828c9::t_37b2b823b284f7 705
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceCancelTest.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 6-7,46,51,136,141
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolverTest.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 5,21,32-44,48,52-57,71,85,93,101,113,118,125,134,146,151,157-158,163,168,173-174,178,183-184,193-194,204,217,222-224,226,232,237,242,249-258,268-273,294-295,317-318,338-339,356-361,382-383,403-404,420-425,435,440,450-452,460,463-468,473-474,479-480,485,488,494-495,498
+src/test/kotlin/com/nanyin/nacos/search/services/CacheStoreContractTest.kt
+  s_dd730dd0c828c9::t_29433c8aea937c 3,35
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 7-8,465,470,739,746
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolver.kt
+  s_dd730dd0c828c9::t_81d302e55db2a6 18-20,42-48,50-51,70,87,106,140-142,166-177,179-207,209,261-263,269,280,293-294,296-320,326,331-332,334,339,344
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "4c7a4882cbd00ef2ccd80af99ba21e95963a4623",
+  "prompts": {},
+  "sessions": {
+    "s_dd730dd0c828c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1387c579-5020-43cb-843e-5eec8c1659fb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
