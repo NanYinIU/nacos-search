@@ -1,0 +1,57 @@
+src/main/kotlin/com/nanyin/nacos/search/services/AuthenticationSessionRegistry.kt
+  s_a158718be6e67c::t_069b8f322430ff 58-68
+src/test/kotlin/com/nanyin/nacos/search/services/network/NacosRequestExecutorTest.kt
+  s_a158718be6e67c::t_2f3d608e4e3ed9 91-97,99-113
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
+  s_a158718be6e67c::t_849de213c946ba 164-165
+  s_a158718be6e67c::t_4b83dfef38bacc 234
+  s_a158718be6e67c::t_b3fe63b28ee5d8 196
+  s_a158718be6e67c::t_f42ebe653c1e0a 215
+src/test/kotlin/com/nanyin/nacos/search/services/network/RequestPolicyTest.kt
+  s_a158718be6e67c::t_404642f8ce74d6 17-21,23-28,31-35,37-40
+  s_a158718be6e67c::t_d8c2414c61c037 4
+src/main/kotlin/com/nanyin/nacos/search/services/NacosAuthService.kt
+  s_a158718be6e67c::t_8b1ccae8a3913a 82,85-114
+  s_a158718be6e67c::t_ff179c54b43be4 3
+  s_a158718be6e67c::t_77aa9763db0ca5 115
+src/main/kotlin/com/nanyin/nacos/search/services/network/RequestPolicy.kt
+  s_a158718be6e67c::t_ca63c4dc5b334b 7-16
+src/test/kotlin/com/nanyin/nacos/search/services/operations/EphemeralV1AuthenticatorTest.kt
+  s_a158718be6e67c::t_36f492ab048616 1-113
+src/main/kotlin/com/nanyin/nacos/search/services/operations/EphemeralV1Authenticator.kt
+  s_a158718be6e67c::t_e8e02b02e8cc34 1-43
+src/test/kotlin/com/nanyin/nacos/search/services/SessionGenerationIntegrationTest.kt
+  s_a158718be6e67c::t_05fc82a1c7fb42 292-296,298,307-315,317-325,327-329,377-384,386-388,391-401,411,421
+  s_a158718be6e67c::t_97eeba77f3601b 412-420,422-426
+  s_a158718be6e67c::t_41289d1ae7d0c0 330-340,346-354,356-358,360-361,363-375
+  s_a158718be6e67c::t_9c9c37aa51c9ae 341-345,355,359
+  s_a158718be6e67c::t_623d2ac54cbd7e 496-549
+  s_a158718be6e67c::t_84da7386636ff1 385,389-390
+  s_a158718be6e67c::t_4d7dd46155d488 18
+  s_a158718be6e67c::t_c3ce81283a6db0 376
+  s_a158718be6e67c::t_b39983cc33498e 12
+  s_a158718be6e67c::t_a241da718eb9a9 11
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_a158718be6e67c::t_faf5229aa4a8e5 106,119-124,126-128,130-133,135-137,139-140
+  s_a158718be6e67c::t_b50501c4b11d45 408,413-416
+  s_a158718be6e67c::t_f71e7c8f62cf91 134
+  s_a158718be6e67c::t_49876658a73537 104-105,107-118,125,129,138,141-143
+  s_a158718be6e67c::t_bc2fabd2f02210 23
+  s_a158718be6e67c::t_6e5efd55bbb702 659-660
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "792ae4fe3b7ba1358f815185d2700d849500f92d",
+  "prompts": {},
+  "sessions": {
+    "s_a158718be6e67c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f307aacc-059d-457f-9934-8c41a365859e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
