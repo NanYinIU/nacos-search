@@ -4,6 +4,8 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.nanyin.nacos.search.models.CacheAgeCalculator
 import com.nanyin.nacos.search.models.CacheConfidence
+import com.nanyin.nacos.search.models.ConfigItem
+import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
@@ -460,12 +462,12 @@ class NacosSearchService(
 
         val filtered = allConfigurations.filter { it.matchesRequest(request) }
         val fromIndex = paginate(filtered, request.pageNo, request.pageSize)
-        val response = NacosApiService.ConfigListResponse(
+        val response = ConfigListResponse(
             totalCount = filtered.size,
             pageNumber = request.pageNo,
             pagesAvailable = calculateTotalPages(filtered.size, request.pageSize),
             pageItems = fromIndex.mapIndexed { index, config ->
-                NacosApiService.ConfigItem(
+                ConfigItem(
                     id = "${request.pageNo}-$index",
                     dataId = config.dataId,
                     group = config.group,
@@ -734,14 +736,14 @@ class NacosSearchService(
     }
 
     private data class SearchExecutionResult(
-        val response: NacosApiService.ConfigListResponse,
+        val response: ConfigListResponse,
         val configurations: List<NacosConfiguration>,
         val source: SearchSource,
         val confidence: CacheConfidence,
         val coverage: SearchCoverage? = null
     )
 
-    private fun NacosApiService.ConfigItem.toMetadataConfiguration(
+    private fun ConfigItem.toMetadataConfiguration(
         requestNamespaceId: String? = null
     ): NacosConfiguration {
         val fromItem = tenant?.takeUnless { it.isBlank() }

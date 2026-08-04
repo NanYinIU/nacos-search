@@ -13,6 +13,8 @@ import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.never
 import org.mockito.kotlin.whenever
+import com.nanyin.nacos.search.models.ConfigItem
+import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.settings.AuthMode
@@ -250,12 +252,12 @@ class NacosSearchServiceTest {
     }
 
     private fun stubApi(): NacosApiService {
-        val response = NacosApiService.ConfigListResponse(
+        val response = ConfigListResponse(
             totalCount = 1,
             pageNumber = 1,
             pagesAvailable = 1,
             pageItems = listOf(
-                NacosApiService.ConfigItem(
+                ConfigItem(
                     id = "1",
                     dataId = "app.yaml",
                     group = "DEFAULT_GROUP",

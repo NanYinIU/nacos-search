@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.services
 import com.intellij.testFramework.ApplicationRule
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
+import com.nanyin.nacos.search.models.ConfigItem
 import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
@@ -75,7 +76,7 @@ class NamespaceSummaryIndexTest {
             val pageSize = 2
             val total = 5
             val items = (1..total).map { i ->
-                NacosApiService.ConfigItem(
+                ConfigItem(
                     id = "$i",
                     dataId = "cfg-$i.properties",
                     group = "DEFAULT_GROUP",

@@ -5,6 +5,8 @@ import com.intellij.ide.util.PropertiesComponent
 import com.google.gson.Gson
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.models.ConfigItem
+import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.settings.AuthMode
 import com.intellij.openapi.util.Disposer
 import kotlinx.coroutines.async
@@ -338,12 +340,12 @@ class CacheServiceTest {
         val cacheService = CacheService()
         cacheService.clearAll()
 
-        val page = NacosApiService.ConfigListResponse(
+        val page = ConfigListResponse(
             totalCount = 1,
             pageNumber = 1,
             pagesAvailable = 1,
             pageItems = listOf(
-                NacosApiService.ConfigItem(
+                ConfigItem(
                     id = "1",
                     dataId = "app.yaml",
                     group = "DEFAULT_GROUP",
@@ -647,7 +649,7 @@ class CacheServiceTest {
         var now = 5_000_000L
         val cache = CacheService { now }
         val identity = AccessIdentity.of("http://age-test", AuthMode.BASIC, "alice")
-        val response = NacosApiService.ConfigListResponse(
+        val response = ConfigListResponse(
             totalCount = 0,
             pageNumber = 1,
             pagesAvailable = 0,

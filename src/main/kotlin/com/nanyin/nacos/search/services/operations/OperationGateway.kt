@@ -1,10 +1,11 @@
 package com.nanyin.nacos.search.services.operations
 
 import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.models.ConfigItem
+import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
-import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.network.RequestPolicy
@@ -245,7 +246,7 @@ class CacheServiceOperationCache(
         requestKey: String,
         page: SummaryPage
     ) {
-        cacheService.putListPage(identity, namespaceId, requestKey, page.toLegacyResponse(), ttlMillis())
+        cacheService.putListPage(identity, namespaceId, requestKey, page.toConfigListResponse(), ttlMillis())
     }
 
     override suspend fun getDetail(
@@ -259,12 +260,12 @@ class CacheServiceOperationCache(
         cacheService.putConfigDetail(identity, namespaceId, detail, ttlMillis())
     }
 
-    private fun SummaryPage.toLegacyResponse(): NacosApiService.ConfigListResponse = NacosApiService.ConfigListResponse(
+    private fun SummaryPage.toConfigListResponse(): ConfigListResponse = ConfigListResponse(
         totalCount = totalCount,
         pageNumber = pageNumber,
         pagesAvailable = pagesAvailable,
         pageItems = items.mapIndexed { index, item ->
-            NacosApiService.ConfigItem(
+            ConfigItem(
                 id = index.toString(),
                 dataId = item.dataId,
                 group = item.group,
@@ -275,7 +276,7 @@ class CacheServiceOperationCache(
         }
     )
 
-    private fun NacosApiService.ConfigListResponse.toSummaryPage(): SummaryPage = SummaryPage(
+    private fun ConfigListResponse.toSummaryPage(): SummaryPage = SummaryPage(
         totalCount = totalCount,
         pageNumber = pageNumber,
         pagesAvailable = pagesAvailable,
