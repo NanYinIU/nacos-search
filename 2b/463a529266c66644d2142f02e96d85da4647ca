@@ -1,0 +1,20 @@
+src/main/kotlin/com/nanyin/nacos/search/services/NacosAuthService.kt
+  h_231225c3625e99 71-74
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  h_231225c3625e99 256-267,269
+src/test/kotlin/com/nanyin/nacos/search/services/NacosAuthServiceTest.kt
+  h_231225c3625e99 22
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceCancelTest.kt
+  h_231225c3625e99 3,9,13,17,26,92-187
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "2b463a529266c66644d2142f02e96d85da4647ca",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
