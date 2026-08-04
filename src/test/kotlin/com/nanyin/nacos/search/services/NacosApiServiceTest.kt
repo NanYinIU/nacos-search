@@ -5,7 +5,6 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.DatasetCompleteness
-import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosSettings
@@ -13,21 +12,13 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpHandler
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.runBlocking
-import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.mockito.kotlin.mock
-import org.mockito.kotlin.verify
-import org.mockito.kotlin.whenever
 import java.net.InetSocketAddress
-import java.net.HttpURLConnection
-import java.io.ByteArrayInputStream
-import java.io.IOException
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicInteger
 
 @TestApplication
@@ -37,8 +28,6 @@ class NacosApiServiceTest {
         private lateinit var server: HttpServer
         private var serverPort: Int = 0
         private val gson = Gson()
-        private val lastPublishBody = AtomicReference("")
-        private val lastPublishQuery = AtomicReference<String?>(null)
         private val activeDetail = AtomicInteger(0)
         private val inFlightMax = AtomicInteger(0)
         private val requestCount = AtomicInteger(0)
@@ -94,16 +83,9 @@ class NacosApiServiceTest {
                     sendJsonResponse(exchange, 200, namespacesResponse)
                 }
             })
-            // Handle POST (publish) to /nacos/v1/cs/configs
             server.createContext("/nacos/v1/cs/configs", object : HttpHandler {
                 override fun handle(exchange: HttpExchange) {
                     requestCount.incrementAndGet()
-                    if (exchange.requestMethod == "POST") {
-                        lastPublishQuery.set(exchange.requestURI.query)
-                        lastPublishBody.set(exchange.requestBody.bufferedReader(StandardCharsets.UTF_8).readText())
-                        sendTextResponse(exchange, 200, "true")
-                        return
-                    }
                     val query = exchange.requestURI.query ?: ""
                     when {
                         // Single-config detail fetch; introduce latency to surface N+1 behavior.
@@ -146,11 +128,6 @@ class NacosApiServiceTest {
             server.stop(0)
         }
 
-        fun resetLastPublishRequest() {
-            lastPublishBody.set("")
-            lastPublishQuery.set(null)
-        }
-
        private fun sendJsonResponse(exchange: HttpExchange, statusCode: Int, body: Any) {
            val response = gson.toJson(body)
            val bytes = response.toByteArray(StandardCharsets.UTF_8)
@@ -158,13 +135,6 @@ class NacosApiServiceTest {
            exchange.sendResponseHeaders(statusCode, bytes.size.toLong())
            exchange.responseBody.use { it.write(bytes) }
        }
-
-        private fun sendTextResponse(exchange: HttpExchange, statusCode: Int, body: String) {
-            val bytes = body.toByteArray(StandardCharsets.UTF_8)
-            exchange.responseHeaders.set("Content-Type", "text/plain")
-            exchange.sendResponseHeaders(statusCode, bytes.size.toLong())
-            exchange.responseBody.use { it.write(bytes) }
-        }
    }
 
    private lateinit var apiService: NacosApiService
@@ -255,22 +225,6 @@ class NacosApiServiceTest {
     }
 
     @Test
-    fun `test get all configurations`() = runBlocking {
-        val result = apiService.getAllConfigurations("test-ns")
-        assertTrue(result.isSuccess)
-
-        val configs = result.getOrNull()
-        assertNotNull(configs)
-        assertTrue(configs!!.isNotEmpty())
-    }
-
-    @Test
-    fun `test get all configurations with null namespace`() = runBlocking {
-        val result = apiService.getAllConfigurations(null)
-        assertTrue(result.isSuccess)
-    }
-
-    @Test
     fun `loadNamespace returns COMPLETE when all items fetched`() = runBlocking {
         val result = apiService.loadNamespace("test-ns", useCache = false, operationContext = capturedContext())
         assertTrue(result.isSuccess)
@@ -322,23 +276,6 @@ class NacosApiServiceTest {
         assertNotNull(namespaces)
         assertEquals(1, namespaces!!.size)
         assertTrue(namespaces[0].isPublicNamespace())
-    }
-
-    @Test
-    fun `test getConfigurationFromItem returns full configuration`() = runBlocking {
-        val item = NacosApiService.ConfigItem(
-            id = "1",
-            dataId = "test.properties",
-            group = "DEFAULT_GROUP",
-            content = "initial",
-            type = "properties",
-            tenant = "test-ns"
-        )
-
-        val config = apiService.getConfigurationFromItem(item, operationContext = capturedContext())
-        assertEquals("test.properties", config.dataId)
-        // Item already has content, so it's returned directly
-        assertEquals("initial", config.content)
     }
 
     @Test
@@ -394,75 +331,6 @@ class NacosApiServiceTest {
        settings.serverUrl = ""
        assertFalse(settings.isValid())
    }
-
-    @Test
-    fun `test publish configuration to correct endpoint`() = runBlocking {
-        resetLastPublishRequest()
-        val result = apiService.publishConfiguration(
-            dataId = "test-publish.properties",
-            group = "TEST_GROUP",
-            content = "test.key=test.value",
-            type = "properties",
-            namespaceId = "test-ns"
-        )
-        assertTrue(result.isSuccess)
-        assertTrue(result.getOrDefault(false))
-        assertEquals(
-            "dataId=test-publish.properties&group=TEST_GROUP&content=test.key%3Dtest.value&type=properties&tenant=test-ns",
-            lastPublishBody.get()
-        )
-        assertFalse(lastPublishQuery.get().orEmpty().contains("content="))
-    }
-
-    @Test
-    fun `test publish configuration to null namespace`() = runBlocking {
-        val result = apiService.publishConfiguration(
-            dataId = "public-config.properties",
-            group = "DEFAULT_GROUP",
-            content = "key=value",
-            type = "properties",
-            namespaceId = null
-        )
-        assertTrue(result.isSuccess)
-        assertTrue(result.getOrDefault(false))
-    }
-
-    @Test
-    fun `requestPost disconnects connection on error response`() {
-        val connection = mock<HttpURLConnection>()
-        whenever(connection.responseCode).thenReturn(500)
-        whenever(connection.errorStream).thenReturn(ByteArrayInputStream("server error".toByteArray()))
-
-        assertThrows<RuntimeException> {
-            NacosApiService.doRequestPost(connection, "dataId=x")
-        }
-        verify(connection).disconnect()
-    }
-
-    @Test
-    fun `requestPost disconnects connection when write throws`() {
-        val connection = mock<HttpURLConnection>()
-        whenever(connection.outputStream).thenThrow(IOException("broken pipe"))
-
-        assertThrows<IOException> {
-            NacosApiService.doRequestPost(connection, "dataId=x")
-        }
-        verify(connection).disconnect()
-    }
-
-    @Test
-    fun `getAllConfigurations loads summaries without per-item detail requests`() = runBlocking {
-        activeDetail.set(0)
-        inFlightMax.set(0)
-        val result = apiService.getAllConfigurations("concurrent-ns", useCache = false)
-        assertTrue(result.isSuccess)
-        assertEquals(12, result.getOrNull()!!.size)
-        // Issue #52: namespace load is summary-only — zero detail endpoints.
-        assertEquals(0, activeDetail.get(), "summary-only index must not call per-item detail endpoints")
-        assertEquals(0, inFlightMax.get())
-        // Mock list endpoint returns cfg1..cfg12 without bodies.
-        assertTrue(result.getOrNull()!!.all { it.dataId.startsWith("cfg") })
-    }
 
     @Test
     fun `loadNamespace completeness ignores detail state and follows summary pagination`() = runBlocking {

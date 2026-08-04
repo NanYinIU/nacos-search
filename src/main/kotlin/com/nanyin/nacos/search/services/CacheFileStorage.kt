@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.services
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.intellij.openapi.diagnostic.thisLogger
+import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -52,10 +53,10 @@ internal class CacheFileStorage(
 
     suspend fun removeDetail(key: String) = remove(detailsDir, key)
 
-    suspend fun loadListPage(key: String): CacheService.CacheEntry<NacosApiService.ConfigListResponse>? =
-        load(listPagesDir, key, object : TypeToken<CacheService.CacheEntry<NacosApiService.ConfigListResponse>>() {}.type)
+    suspend fun loadListPage(key: String): CacheService.CacheEntry<ConfigListResponse>? =
+        load(listPagesDir, key, object : TypeToken<CacheService.CacheEntry<ConfigListResponse>>() {}.type)
 
-    suspend fun storeListPage(key: String, entry: CacheService.CacheEntry<NacosApiService.ConfigListResponse>) =
+    suspend fun storeListPage(key: String, entry: CacheService.CacheEntry<ConfigListResponse>) =
         store(listPagesDir, key, entry)
 
     suspend fun removeListPage(key: String) = remove(listPagesDir, key)

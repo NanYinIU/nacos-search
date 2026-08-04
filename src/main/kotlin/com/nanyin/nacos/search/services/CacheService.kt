@@ -9,6 +9,7 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CacheAgeCalculator
+import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.settings.AuthMode
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -46,7 +47,7 @@ class CacheService internal constructor(
     private val detailCache = ConcurrentHashMap<String, CacheEntry<NacosConfiguration>>()
     @Volatile
     private var detailSnapshot: Map<String, CacheEntry<NacosConfiguration>> = emptyMap()
-    private val listPageCache = ConcurrentHashMap<String, CacheEntry<NacosApiService.ConfigListResponse>>()
+    private val listPageCache = ConcurrentHashMap<String, CacheEntry<ConfigListResponse>>()
     private val namespaceIndexCache = ConcurrentHashMap<String, CacheEntry<List<NacosConfiguration>>>()
     private val namespaceIndexAuthority = ConcurrentHashMap<String, Boolean>()
     private val modificationCount = AtomicLong(0)
@@ -198,7 +199,7 @@ class CacheService internal constructor(
         namespaceId: String?,
         requestKey: String,
         allowStale: Boolean = false
-    ): NacosApiService.ConfigListResponse? {
+    ): ConfigListResponse? {
         loadCompleted.await()
         val key = listPageKey(serverUrl, namespaceId, requestKey)
         val entry = listPageCache[key] ?: run { cacheMisses.incrementAndGet(); return null }
@@ -217,7 +218,7 @@ class CacheService internal constructor(
         namespaceId: String?,
         requestKey: String,
         allowStale: Boolean = false
-    ): NacosApiService.ConfigListResponse? =
+    ): ConfigListResponse? =
         getListPageEntry(identity, namespaceId, requestKey, allowStale)?.data
 
     /**
@@ -244,7 +245,7 @@ class CacheService internal constructor(
 
     /** Payload plus the entry metadata needed for age / confidence reporting. */
     data class CachedListPage(
-        val data: NacosApiService.ConfigListResponse,
+        val data: ConfigListResponse,
         val createdAtMillis: Long
     )
 
@@ -252,7 +253,7 @@ class CacheService internal constructor(
         serverUrl: String,
         namespaceId: String?,
         requestKey: String,
-        response: NacosApiService.ConfigListResponse,
+        response: ConfigListResponse,
         ttl: Long = DEFAULT_TTL,
         source: CacheSource = CacheSource.REMOTE
     ) {
@@ -269,7 +270,7 @@ class CacheService internal constructor(
         identity: AccessIdentity,
         namespaceId: String?,
         requestKey: String,
-        response: NacosApiService.ConfigListResponse,
+        response: ConfigListResponse,
         ttl: Long = DEFAULT_TTL,
         source: CacheSource = CacheSource.REMOTE
     ) {
@@ -794,7 +795,7 @@ class CacheService internal constructor(
         cacheStorage.storeDetail(key, entry)
     }
 
-    private suspend fun persistListPage(key: String, entry: CacheEntry<NacosApiService.ConfigListResponse>) {
+    private suspend fun persistListPage(key: String, entry: CacheEntry<ConfigListResponse>) {
         cacheStorage.storeListPage(key, entry)
     }
 
