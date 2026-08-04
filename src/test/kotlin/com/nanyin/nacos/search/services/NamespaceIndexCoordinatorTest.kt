@@ -54,7 +54,7 @@ class NamespaceIndexCoordinatorTest {
             .getApplication()
             .getService(CacheService::class.java)
         cache.clearAll()
-        cache.getCacheStats() // drain background load
+        cache.awaitLoadCompleted() // drain background load
         }
     }
 

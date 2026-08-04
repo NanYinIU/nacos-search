@@ -61,7 +61,7 @@ class NamespaceSummaryIndexTest {
                 .getApplication()
                 .getService(CacheService::class.java)
             cache.clearAll()
-            cache.getCacheStats()
+            cache.awaitLoadCompleted()
         }
     }
 
