@@ -1,0 +1,50 @@
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolver.kt
+  s_b9bbc0f5fb5f9d::t_a0f5b247e5012a 180
+src/main/kotlin/com/nanyin/nacos/search/services/CacheCoordinate.kt
+  s_b9bbc0f5fb5f9d::t_fba9d25474ea6f 56-69
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyIndexServiceTest.kt
+  s_b9bbc0f5fb5f9d::t_c88ec88b6cecea 29-32
+  s_b9bbc0f5fb5f9d::t_a5c8be78ccbbb7 215-230
+  s_b9bbc0f5fb5f9d::t_02e4cc76bdd0e3 40,101,206
+  s_b9bbc0f5fb5f9d::t_ca21bf2a881739 10,21
+  s_b9bbc0f5fb5f9d::t_739f3bc0e15f90 159-177
+  s_b9bbc0f5fb5f9d::t_6ade6771ec18e2 158
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_b9bbc0f5fb5f9d::t_5ec9ac59ca97f4 584-592
+  s_b9bbc0f5fb5f9d::t_7b6e7974ab95fd 467-468,473-478
+  s_b9bbc0f5fb5f9d::t_488cf213449c11 625,628,631
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolverTest.kt
+  s_b9bbc0f5fb5f9d::t_fde950183eb1be 429
+  s_b9bbc0f5fb5f9d::t_02e4cc76bdd0e3 34,436,446,452,458
+src/test/kotlin/com/nanyin/nacos/search/services/CacheSnapshotTest.kt
+  s_b9bbc0f5fb5f9d::t_2e093f62fa48ed 115-156
+  s_b9bbc0f5fb5f9d::t_c4b667bfd43b6e 258-295
+  s_b9bbc0f5fb5f9d::t_3c4831b7104187 8-10
+src/main/kotlin/com/nanyin/nacos/search/services/CacheSnapshot.kt
+  s_b9bbc0f5fb5f9d::t_2a612212ca2956 62
+  s_b9bbc0f5fb5f9d::t_3f4c851b8ff310 74
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyIndexService.kt
+  s_b9bbc0f5fb5f9d::t_35fa821b705290 6
+  s_b9bbc0f5fb5f9d::t_5165b2d1877a78 157-162,164,168-173
+  s_b9bbc0f5fb5f9d::t_ef574726d5a7cd 84-93,97
+  s_b9bbc0f5fb5f9d::t_b0a308a5b290da 29,31-41,48-54
+  s_b9bbc0f5fb5f9d::t_32964e4d31b628 55
+docs/adr/0051-own-the-derived-key-index-lifecycle-outside-the-cache.md
+  s_b9bbc0f5fb5f9d::t_0c9dc3ff5fc02c 7-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "803f8a791794d40cba5b03fb705f843757b09c8c",
+  "prompts": {},
+  "sessions": {
+    "s_b9bbc0f5fb5f9d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e771227e-7dc0-4e07-9b88-8523baef3c70",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
