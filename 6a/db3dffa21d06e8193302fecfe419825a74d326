@@ -1,0 +1,25 @@
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolver.kt
+  s_c24d63ff7ab4ae::t_7235ed5070d1a3 115-129,133-158
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProvider.kt
+  s_c24d63ff7ab4ae::t_9b39ea9804ebb9 225-228
+src/main/resources/messages/NacosSearchBundle.properties
+  s_c24d63ff7ab4ae::t_ac8afc182c9913 259-260,376
+src/main/resources/messages/NacosSearchBundle_zh_CN.properties
+  s_c24d63ff7ab4ae::t_5d3139cc73f85b 259-260,376
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "6adb3dffa21d06e8193302fecfe419825a74d326",
+  "prompts": {},
+  "sessions": {
+    "s_c24d63ff7ab4ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0001a4dd-2739-49ff-8a0a-fae157b47010",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
