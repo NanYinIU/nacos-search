@@ -1,5 +1,6 @@
 package com.nanyin.nacos.search.services
 
+import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -31,7 +32,7 @@ internal abstract class CacheStoreContractTest {
 
     private fun listPage(totalCount: Int) = CacheService.CacheEntry(
         type = CacheService.CacheEntryType.LIST_PAGE,
-        data = NacosApiService.ConfigListResponse(totalCount, 1, 1, emptyList()),
+        data = ConfigListResponse(totalCount, 1, 1, emptyList()),
         createdAt = 1_000L,
         ttlMs = 60_000L,
         source = CacheService.CacheSource.REMOTE

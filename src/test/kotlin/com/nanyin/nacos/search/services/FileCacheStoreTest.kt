@@ -1,6 +1,7 @@
 package com.nanyin.nacos.search.services
 
 import com.google.gson.Gson
+import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -29,7 +30,7 @@ internal class FileCacheStoreTest : CacheStoreContractTest() {
     )
     private val listEntry = CacheService.CacheEntry(
         type = CacheService.CacheEntryType.LIST_PAGE,
-        data = NacosApiService.ConfigListResponse(0, 1, 1, emptyList()),
+        data = ConfigListResponse(0, 1, 1, emptyList()),
         createdAt = 1000L,
         ttlMs = 60000L,
         source = CacheService.CacheSource.REMOTE

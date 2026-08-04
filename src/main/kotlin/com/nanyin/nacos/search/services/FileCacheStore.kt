@@ -4,6 +4,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.diagnostic.thisLogger
+import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -47,10 +48,10 @@ internal class FileCacheStore(
         legacyKeysProperty = "nacos.cache.detail.keys",
         legacyBlobPrefix = "nacos.cache.detail."
     )
-    private val listPages = StoredKind<NacosApiService.ConfigListResponse>(
+    private val listPages = StoredKind<ConfigListResponse>(
         dir = baseDir.resolve("listpages"),
-        recordType = object : TypeToken<StoredRecord<NacosApiService.ConfigListResponse>>() {}.type,
-        entryType = object : TypeToken<CacheService.CacheEntry<NacosApiService.ConfigListResponse>>() {}.type,
+        recordType = object : TypeToken<StoredRecord<ConfigListResponse>>() {}.type,
+        entryType = object : TypeToken<CacheService.CacheEntry<ConfigListResponse>>() {}.type,
         legacyKeysProperty = "nacos.cache.list.keys",
         legacyBlobPrefix = "nacos.cache.list."
     )
@@ -82,10 +83,10 @@ internal class FileCacheStore(
 
     override suspend fun removeDetail(key: String) = remove(details, key)
 
-    override suspend fun loadListPages(): Map<String, CacheService.CacheEntry<NacosApiService.ConfigListResponse>> =
+    override suspend fun loadListPages(): Map<String, CacheService.CacheEntry<ConfigListResponse>> =
         loadAll(listPages)
 
-    override suspend fun putListPage(key: String, entry: CacheService.CacheEntry<NacosApiService.ConfigListResponse>) =
+    override suspend fun putListPage(key: String, entry: CacheService.CacheEntry<ConfigListResponse>) =
         store(listPages, key, entry)
 
     override suspend fun removeListPage(key: String) = remove(listPages, key)

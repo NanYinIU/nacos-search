@@ -3,6 +3,8 @@ package com.nanyin.nacos.search.services
 import com.intellij.openapi.project.Project
 import com.intellij.testFramework.junit5.TestApplication
 import com.intellij.openapi.application.ApplicationManager
+import com.nanyin.nacos.search.models.ConfigItem
+import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosSettings
@@ -41,12 +43,12 @@ class NacosSearchServiceCancelTest {
     }
 
     private fun stubApi(): NacosApiService {
-        val response = NacosApiService.ConfigListResponse(
+        val response = ConfigListResponse(
             totalCount = 1,
             pageNumber = 1,
             pagesAvailable = 1,
             pageItems = listOf(
-                NacosApiService.ConfigItem(
+                ConfigItem(
                     id = "1", dataId = "app.yaml", group = "DEFAULT_GROUP",
                     content = "feature=true", type = "yaml", tenant = null
                 )
@@ -131,12 +133,12 @@ class NacosSearchServiceCancelTest {
         val epochs = ProjectSessionEpochs(project)
         whenever(project.getService(ProjectSessionEpochs::class.java)).thenReturn(epochs)
 
-        val response = NacosApiService.ConfigListResponse(
+        val response = ConfigListResponse(
             totalCount = 1,
             pageNumber = 1,
             pagesAvailable = 1,
             pageItems = listOf(
-                NacosApiService.ConfigItem(
+                ConfigItem(
                     id = "1", dataId = "stale.yaml", group = "DEFAULT_GROUP",
                     content = "stale=true", type = "yaml", tenant = null
                 )

@@ -1,16 +1,15 @@
 package com.nanyin.nacos.search.services
 
-import com.nanyin.nacos.search.models.NacosApiResponse
+import com.nanyin.nacos.search.models.ConfigItem
+import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NamespaceLoadResult
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.models.NacosApiGeneration
-import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.NacosSettings
-import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.network.RequestPolicy
 import com.nanyin.nacos.search.services.operations.CacheServiceOperationCache
@@ -38,27 +37,26 @@ import com.nanyin.nacos.search.services.operations.GenerationResolver
 import com.nanyin.nacos.search.services.operations.GenerationSessionCapture
 import com.nanyin.nacos.search.services.operations.SessionGenerationState
 import com.nanyin.nacos.search.services.operations.V3ProtocolAdapter
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import kotlinx.coroutines.*
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 
 /**
- * Service for interacting with Nacos Open API
+ * Application-level facade over the operation gateway for Nacos reads and writes.
+ *
+ * Every generation (locked V1/V3 and AUTO) resolves through [resolvedReadTarget]
+ * and dispatches through [OperationGateway]. There is no parallel wire path:
+ * authentication, retry, observation sequence, and cache writes all live at the
+ * gateway/adapter seam (issue #54).
  */
 @Service(Service.Level.APP)
 class NacosApiService(
     private val v1GatewayOverride: OperationGateway? = null,
     /**
      * Test seam: override the request executor so tests can observe every
-     * outgoing HTTP request (legacy wire path and gateway path both funnel
-     * through this executor). Production uses the default transport.
+     * outgoing HTTP request through the gateway path. Production uses the
+     * default transport.
      */
     private val executorOverride: NacosRequestExecutor? = null,
     /**
@@ -71,122 +69,91 @@ class NacosApiService(
     private val probeFlightOverride: GenerationProbeFlight? = null
 ) {
     private val logger = thisLogger()
-    private val gson = Gson()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-  private val authService = ApplicationManager.getApplication().getService(NacosAuthService::class.java)
+    private val authService = ApplicationManager.getApplication().getService(NacosAuthService::class.java)
     private val executor = executorOverride ?: NacosRequestExecutor()
 
-   private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
+    private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
 
-   /**
-    * The V1 and V3 adapters are shared by the [v1Gateway] and the
-    * [generationResolver] so AUTO resolution and formal operations use the
-    * same transport, auth boundary, and error mapping.
-    */
-   private val v1Adapter by lazy {
-       V1ProtocolAdapter(NacosRequestExecutorProtocolTransport(executor), authService)
-   }
-   private val v3Adapter by lazy {
-       V3ProtocolAdapter(NacosRequestExecutorProtocolTransport(executor))
-   }
-   private val v1Gateway by lazy {
-       v1GatewayOverride ?: OperationGateway(
-           mapOf(
-               NacosApiGeneration.V1 to v1Adapter,
-               NacosApiGeneration.V3 to v3Adapter
-           ),
-           CacheServiceOperationCache(cacheService) { settings.getCacheTtlMillis() }
-       )
-   }
-   /** Resolves AUTO to a concrete generation by probing V3 first, then V1. */
-   private val generationResolver by lazy { GenerationResolver(v3Adapter, v1Adapter) }
+    /**
+     * The V1 and V3 adapters are shared by the [v1Gateway] and the
+     * [generationResolver] so AUTO resolution and formal operations use the
+     * same transport, auth boundary, and error mapping.
+     */
+    private val v1Adapter by lazy {
+        V1ProtocolAdapter(NacosRequestExecutorProtocolTransport(executor), authService)
+    }
+    private val v3Adapter by lazy {
+        V3ProtocolAdapter(NacosRequestExecutorProtocolTransport(executor))
+    }
+    private val v1Gateway by lazy {
+        v1GatewayOverride ?: OperationGateway(
+            mapOf(
+                NacosApiGeneration.V1 to v1Adapter,
+                NacosApiGeneration.V3 to v3Adapter
+            ),
+            CacheServiceOperationCache(cacheService) { settings.getCacheTtlMillis() }
+        )
+    }
+    /** Resolves AUTO to a concrete generation by probing V3 first, then V1. */
+    private val generationResolver by lazy { GenerationResolver(v3Adapter, v1Adapter) }
 
-   /**
-    * Builds a throwaway adapter stack for one diagnostic run.
-    *
-    * Budget: [RequestPolicy.DIAGNOSTIC] raises only the per-request total budget
-    * (30s vs 15s) — attempt count and connect/read timeouts are identical to
-    * [RequestPolicy.INTERACTIVE], so this selects no retry behaviour that
-    * ADR-0021 reserves for the transport seam. A diagnostic is worth the longer
-    * budget because ADR-0022 makes it up to four sequential stages whose job is
-    * to characterise the connection and report per-stage timing; reporting a
-    * slow-but-working server as a connection failure sends the user to debug the
-    * wrong thing. The settings UI runs it in a cancellable background task, so
-    * nothing blocks on the wider ceiling.
-    *
-    * Isolation: ADR-0022 forbids diagnostics from touching the cache, the shared
-    * probe flight, the session, or the authentication registry. Building the
-    * stack here rather than sharing the formal one gets all four structurally —
-    * a fresh [OperationGateway] defaults to a no-op cache and its own
-    * observation sequence, a fresh [GenerationResolver] cannot join the formal
-    * probe flight, and [EphemeralV1Authenticator] holds any Nacos-password token
-    * in a field that dies with this object.
-    *
-    * Per call, not cached: a token acquired for one unapplied draft must never
-    * serve the next one, because the user may have edited the credentials
-    * between two clicks of Test Connection.
-    */
-   private fun newDiagnosticStack(): Pair<GenerationResolver, OperationGateway> {
-       val transport = NacosRequestExecutorProtocolTransport(executor, RequestPolicy.DIAGNOSTIC)
-       val v1 = V1ProtocolAdapter(
-           transport,
-           EphemeralV1Authenticator(login = { context -> authService.loginWithoutRecording(context) })
-       )
-       val v3 = V3ProtocolAdapter(transport)
-       return GenerationResolver(v3, v1) to OperationGateway(
-           mapOf(
-               NacosApiGeneration.V1 to v1,
-               NacosApiGeneration.V3 to v3
-           )
-       )
-   }
+    /**
+     * Builds a throwaway adapter stack for one diagnostic run.
+     *
+     * Budget: [RequestPolicy.DIAGNOSTIC] raises only the per-request total budget
+     * (30s vs 15s) — attempt count and connect/read timeouts are identical to
+     * [RequestPolicy.INTERACTIVE], so this selects no retry behaviour that
+     * ADR-0021 reserves for the transport seam. A diagnostic is worth the longer
+     * budget because ADR-0022 makes it up to four sequential stages whose job is
+     * to characterise the connection and report per-stage timing; reporting a
+     * slow-but-working server as a connection failure sends the user to debug the
+     * wrong thing. The settings UI runs it in a cancellable background task, so
+     * nothing blocks on the wider ceiling.
+     *
+     * Isolation: ADR-0022 forbids diagnostics from touching the cache, the shared
+     * probe flight, the session, or the authentication registry. Building the
+     * stack here rather than sharing the formal one gets all four structurally —
+     * a fresh [OperationGateway] defaults to a no-op cache and its own
+     * observation sequence, a fresh [GenerationResolver] cannot join the formal
+     * probe flight, and [EphemeralV1Authenticator] holds any Nacos-password token
+     * in a field that dies with this object.
+     *
+     * Per call, not cached: a token acquired for one unapplied draft must never
+     * serve the next one, because the user may have edited the credentials
+     * between two clicks of Test Connection.
+     */
+    private fun newDiagnosticStack(): Pair<GenerationResolver, OperationGateway> {
+        val transport = NacosRequestExecutorProtocolTransport(executor, RequestPolicy.DIAGNOSTIC)
+        val v1 = V1ProtocolAdapter(
+            transport,
+            EphemeralV1Authenticator(login = { context -> authService.loginWithoutRecording(context) })
+        )
+        val v3 = V3ProtocolAdapter(transport)
+        return GenerationResolver(v3, v1) to OperationGateway(
+            mapOf(
+                NacosApiGeneration.V1 to v1,
+                NacosApiGeneration.V3 to v3
+            )
+        )
+    }
 
-   /** Formal AUTO probes share this flight; diagnostics do not. */
-   private val probeFlight = probeFlightOverride ?: sharedProbeFlight
-   private val fallbackEpoch = java.util.concurrent.atomic.AtomicLong(0)
-   /**
-    * Fallback session used when no open project owns the profile. Still
-    * in-memory only and never persisted — satisfies sequential reuse for
-    * app-level callers (plugin init, unit tests without a Project).
-    */
-   private val fallbackSessionGeneration = SessionGenerationState(
-       currentEpoch = { fallbackEpoch.get() },
-       onGenerationChanged = { fallbackEpoch.incrementAndGet(); Unit }
-   )
-  companion object {
-       private const val CONFIG_ENDPOINT = "/nacos/v1/cs/configs"
-       private const val CONFIG_LIST_ENDPOINT = "/nacos/v1/cs/configs"
-       private const val NAMESPACE_ENDPOINT = "/nacos/v1/console/namespaces"
+    /** Formal AUTO probes share this flight; diagnostics do not. */
+    private val probeFlight = probeFlightOverride ?: sharedProbeFlight
+    private val fallbackEpoch = java.util.concurrent.atomic.AtomicLong(0)
+    /**
+     * Fallback session used when no open project owns the profile. Still
+     * in-memory only and never persisted — satisfies sequential reuse for
+     * app-level callers (plugin init, unit tests without a Project).
+     */
+    private val fallbackSessionGeneration = SessionGenerationState(
+        currentEpoch = { fallbackEpoch.get() },
+        onGenerationChanged = { fallbackEpoch.incrementAndGet(); Unit }
+    )
+
+    companion object {
         /** Process-wide formal probe flight shared by all NacosApiService instances. */
         private val sharedProbeFlight = GenerationProbeFlight()
-
-        // Testable I/O body of requestPost. Guarantees the connection is
-        // disconnected and streams closed on every path (success, error, exception).
-        internal fun doRequestPost(connection: java.net.HttpURLConnection, formData: String): String {
-            try {
-                connection.outputStream.use { os ->
-                    os.write(formData.toByteArray(StandardCharsets.UTF_8))
-                    os.flush()
-                }
-                val responseCode = connection.responseCode
-                if (responseCode !in 200..299) {
-                    val errText = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
-                    throw RuntimeException("HTTP $responseCode: $errText")
-                }
-                return java.io.BufferedReader(
-                    java.io.InputStreamReader(connection.inputStream, StandardCharsets.UTF_8)
-                ).use { reader ->
-                    val sb = StringBuilder()
-                    var line: String?
-                    while (reader.readLine().also { line = it } != null) {
-                        sb.append(line)
-                    }
-                    sb.toString()
-                }
-            } finally {
-                connection.disconnect()
-            }
-        }
     }
 
     /**
@@ -194,24 +161,18 @@ class NacosApiService(
      * Never reads current settings, the credential store, or the project session
      * (issue #50 / ADR-0010) — the caller must supply a valid context.
      */
-   suspend fun testConnection(operationContext: NacosOperationContext): Result<Boolean> = withContext(Dispatchers.IO) {
-       try {
-           if (usesLockedGeneration(operationContext)) {
-               return@withContext v1Gateway.probe(v1Target(operationContext)).map { true }
-           }
-           // AUTO: resolve the generation by probing V3 first, then V1. A
-           // successful resolution (which already probed the server) proves
-           // reachability; the formal gateway probe confirms the adapter path.
-           val target = resolvedReadTarget(operationContext, null).getOrElse { error ->
-               return@withContext Result.failure(error)
-           }
-           return@withContext v1Gateway.probe(target).map { true }
+    suspend fun testConnection(operationContext: NacosOperationContext): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val target = resolvedReadTarget(operationContext, null).getOrElse { error ->
+                return@withContext Result.failure(error)
+            }
+            return@withContext v1Gateway.probe(target).map { true }
         } catch (e: Exception) {
             logger.warn("Connection test failed", e)
             Result.failure(e)
         }
     }
-    
+
     /**
      * Retrieves a specific configuration from Nacos
      * @param dataId Configuration data ID
@@ -231,72 +192,23 @@ class NacosApiService(
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
             )
-            if (usesLockedGeneration(context)) {
-                return@withContext v1Gateway.readDetail(
-                    v1Target(context, namespaceId),
-                    ConfigurationCoordinate(dataId, group),
-                    forceRefresh = forceRefresh,
-                    useCache = useCache
-                )
-            }
-            // AUTO: resolve to a concrete generation and read through the gateway
-            // so a standard 3.2 server (no legacy V1 API) is read via V3.
-            val resolvedTarget = resolvedReadTarget(context, namespaceId).getOrElse { error ->
+            val target = resolvedReadTarget(context, namespaceId).getOrElse { error ->
                 return@withContext Result.failure(error)
             }
-            if (resolvedTarget.context.resolvedGeneration != NacosApiGeneration.UNKNOWN) {
-                return@withContext v1Gateway.readDetail(
-                    resolvedTarget,
-                    ConfigurationCoordinate(dataId, group),
-                    forceRefresh = forceRefresh,
-                    useCache = useCache
-                )
-            }
-            if (useCache && !forceRefresh && settings.cacheEnabled) {
-                cacheService.getConfigDetail(context.identity, namespaceId, dataId, group)?.let { cachedConfig ->
-                    logger.debug("Returning cached configuration for $dataId:$group")
-                    return@withContext Result.success(cachedConfig)
-                }
-            }
-            val params = buildMap {
-                put("dataId", dataId)
-                put("group", group)
-                put("show","all")
-                namespaceId?.let { put("tenant", it) }
-            }
-            
-           logger.debug("Fetching configuration from captured endpoint: ${context.endpoint.value}")
-           val response = requestJsonWithReplay(context, CONFIG_LIST_ENDPOINT, params, RequestPolicy.INTERACTIVE)
-
-           val apiResponse = gson.fromJson(response, object : TypeToken<NacosConfiguration>() {}.type) as? NacosConfiguration
-            
-            if (apiResponse != null) {
-                val config = apiResponse
-                // Cache the configuration if cache is enabled
-                if (useCache && settings.cacheEnabled) {
-                    cacheService.putConfigDetail(
-                        context.identity,
-                        namespaceId,
-                        config,
-                        settings.getCacheTtlMillis()
-                    )
-                }
-                
-                Result.success(config)
-            } else {
-                logger.warn("Configuration not found for dataId=$dataId group=$group namespaceId=$namespaceId (empty server response)")
-                Result.success(null)
-            }
+            return@withContext v1Gateway.readDetail(
+                target,
+                ConfigurationCoordinate(dataId, group),
+                forceRefresh = forceRefresh,
+                useCache = useCache
+            )
         } catch (e: Exception) {
-            if (e is NacosRequestError.Client && e.status == 404) {
-                logger.info("Configuration not found for dataId=$dataId group=$group namespaceId=$namespaceId")
-                return@withContext Result.success(null)
-            }
+            // Not-found is mapped to Result.success(null) inside the adapters;
+            // anything that escapes the gateway is a real failure.
             logger.warn("Error getting configuration", e)
             Result.failure(e)
         }
     }
-    
+
     /**
      * Lists all configurations from Nacos
      * @param namespaceId Namespace ID (tenant), null for public namespace
@@ -326,159 +238,102 @@ class NacosApiService(
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
             )
-            if (usesLockedGeneration(context)) {
-                return@withContext v1Gateway.listSummaries(
-                    v1Target(context, namespaceId),
-                    SummaryQuery(pageNo, pageSize, dataId, group, appName, configTags, searchMode),
-                    forceRefresh = forceRefresh,
-                    useCache = useCache
-                ).map { it.toConfigListResponse() }
-            }
-            // AUTO: resolve to a concrete generation and list through the gateway
-            // so a standard 3.2 server is browsed via V3.
-            val resolvedTarget = resolvedReadTarget(context, namespaceId).getOrElse { error ->
+            val target = resolvedReadTarget(context, namespaceId).getOrElse { error ->
                 return@withContext Result.failure(error)
             }
-            if (resolvedTarget.context.resolvedGeneration != NacosApiGeneration.UNKNOWN) {
-                return@withContext v1Gateway.listSummaries(
-                    resolvedTarget,
-                    SummaryQuery(pageNo, pageSize, dataId, group, appName, configTags, searchMode),
-                    forceRefresh = forceRefresh,
-                    useCache = useCache
-                ).map { it.toConfigListResponse() }
-            }
-            val params = buildMap {
-                put("pageNo", pageNo.toString())
-                put("pageSize", pageSize.toString())
-                put("dataId", dataId)
-                put("group", group)
-                put("appName", appName)
-                put("config_tags", configTags)
-                put("search", searchMode)
-                namespaceId?.let { put("tenant", it) }
-            }
-            val requestKey = normalizeRequestKey(params.filterKeys { it != "tenant" })
-
-            if (useCache && !forceRefresh && settings.cacheEnabled) {
-                cacheService.getListPage(context.identity, namespaceId, requestKey)?.let { cachedResponse ->
-                    logger.debug("Returning cached list page for $requestKey")
-                    return@withContext Result.success(cachedResponse)
-                }
-            }
-
-           logger.debug("Listing configurations from captured endpoint: ${context.endpoint.value}")
-           val response = requestJsonWithReplay(context, CONFIG_LIST_ENDPOINT, params, RequestPolicy.INTERACTIVE)
-
-           val apiResponse = gson.fromJson(response, object : TypeToken<ConfigListResponse>() {}.type) as ConfigListResponse
-            if (useCache && settings.cacheEnabled) {
-                cacheService.putListPage(context.identity, namespaceId, requestKey, apiResponse, settings.getCacheTtlMillis())
-            }
-            
-            // Return the full response with pagination info
-            Result.success(apiResponse)
+            return@withContext v1Gateway.listSummaries(
+                target,
+                SummaryQuery(pageNo, pageSize, dataId, group, appName, configTags, searchMode),
+                forceRefresh = forceRefresh,
+                useCache = useCache
+            ).map { it.toConfigListResponse() }
         } catch (e: Exception) {
             logger.warn("Error listing configurations", e)
             Result.failure(e)
         }
     }
-    
+
     /**
-    * Retrieves all configurations with their content
-    * @param namespaceId Namespace ID (tenant), null for public namespace
-    * @param useCache Whether to use cache for configurations (default: true)
-    */
-   suspend fun getAllConfigurations(
-       namespaceId: String? = null,
-       useCache: Boolean = true,
-       operationContext: NacosOperationContext? = null
-   ): Result<List<NacosConfiguration>> {
-       val context = operationContext ?: operationContextOrFailure()
-           ?: return Result.failure(ConfigurationRequired(listOf("Connection configuration is incomplete")))
-       val result = loadNamespace(namespaceId, useCache, operationContext = context)
-       return result.map { it.configurations }
-   }
+     * Loads configuration **summaries** for a namespace (ADR-0016 / ADR-0041).
+     * Issues one list request per summary page and never fetches configuration
+     * bodies — completeness depends only on summary pagination. Detail content
+     * for code navigation is supplied by the independent navigation detail
+     * prefetch (issue #51), not by this path.
+     *
+     * Requires an already-captured [operationContext]; never reads settings or the
+     * credential store (issue #50). Every generation is resolved and dispatched
+     * through the operation gateway.
+     *
+     * Retry budget is not a parameter: per ADR-0021 every request crosses one
+     * transport seam that classifies retries by operation kind (idempotent read /
+     * write / login), not by who asked. A background preheat and a foreground
+     * search of the same namespace therefore get the same bounded budget.
+     */
+    suspend fun loadNamespace(
+        namespaceId: String? = null,
+        useCache: Boolean = true,
+        operationContext: NacosOperationContext
+    ): Result<NamespaceLoadResult> {
+        return try {
+            val allSummaries = mutableListOf<NacosConfiguration>()
+            var expectedCount = 0
+            var pageNo = 1
+            val pageSize = 100
 
-   /**
-    * Loads configuration **summaries** for a namespace (ADR-0016 / ADR-0041).
-    * Issues one list request per summary page and never fetches configuration
-    * bodies — completeness depends only on summary pagination. Detail content
-    * for code navigation is supplied by the independent navigation detail
-    * prefetch (issue #51), not by this path.
-    *
-    * Requires an already-captured [operationContext]; never reads settings or the
-    * credential store (issue #50). Every generation is resolved and dispatched
-    * through the operation gateway — there is no legacy server-snapshot path.
-    *
-    * Retry budget is not a parameter: per ADR-0021 every request crosses one
-    * transport seam that classifies retries by operation kind (idempotent read /
-    * write / login), not by who asked. A background preheat and a foreground
-    * search of the same namespace therefore get the same bounded budget.
-    */
-   suspend fun loadNamespace(
-       namespaceId: String? = null,
-       useCache: Boolean = true,
-       operationContext: NacosOperationContext
-   ): Result<NamespaceLoadResult> {
-       return try {
-           val allSummaries = mutableListOf<NacosConfiguration>()
-           var expectedCount = 0
-           var pageNo = 1
-           val pageSize = 100
+            do {
+                val result = listConfigurations(
+                    namespaceId, pageNo, pageSize,
+                    useCache = useCache,
+                    operationContext = operationContext
+                )
+                if (result.isFailure) {
+                    // First page failure with nothing loaded → FAILED; a later
+                    // page failure with some rows → PARTIAL (summary pagination
+                    // incomplete). Detail failures cannot occur here.
+                    val completeness = if (allSummaries.isEmpty()) {
+                        DatasetCompleteness.FAILED
+                    } else {
+                        DatasetCompleteness.PARTIAL
+                    }
+                    return Result.success(
+                        NamespaceLoadResult(completeness, expectedCount, allSummaries, emptyList())
+                    )
+                }
 
-           do {
-               val result = listConfigurations(
-                   namespaceId, pageNo, pageSize,
-                   useCache = useCache,
-                   operationContext = operationContext
-               )
-               if (result.isFailure) {
-                   // First page failure with nothing loaded → FAILED; a later
-                   // page failure with some rows → PARTIAL (summary pagination
-                   // incomplete). Detail failures cannot occur here.
-                   val completeness = if (allSummaries.isEmpty()) {
-                       DatasetCompleteness.FAILED
-                   } else {
-                       DatasetCompleteness.PARTIAL
-                   }
-                   return Result.success(
-                       NamespaceLoadResult(completeness, expectedCount, allSummaries, emptyList())
-                   )
-               }
+                val response = result.getOrNull() ?: break
+                expectedCount = response.totalCount
 
-               val response = result.getOrNull() ?: break
-               expectedCount = response.totalCount
+                // Summaries only — empty content is intentional; the namespace
+                // index never promises bodies (ADR-0041 / issue #52).
+                response.pageItems.forEach { item ->
+                    allSummaries.add(
+                        NacosConfiguration(
+                            dataId = item.dataId,
+                            group = item.group,
+                            tenantId = item.tenant,
+                            content = item.content.orEmpty(),
+                            type = item.type
+                        )
+                    )
+                }
+                pageNo++
+                if (response.pageItems.size < pageSize) break
+            } while (true)
 
-               // Summaries only — empty content is intentional; the namespace
-               // index never promises bodies (ADR-0041 / issue #52).
-               response.pageItems.forEach { item ->
-                   allSummaries.add(
-                       NacosConfiguration(
-                           dataId = item.dataId,
-                           group = item.group,
-                           tenantId = item.tenant,
-                           content = item.content.orEmpty(),
-                           type = item.type
-                       )
-                   )
-               }
-               pageNo++
-               if (response.pageItems.size < pageSize) break
-           } while (true)
+            // Completeness from summary pagination alone: we got every expected
+            // summary row (or the server reported zero). A detail failure can no
+            // longer mark the index partial because we never request details.
+            val completeness = when {
+                expectedCount > 0 && allSummaries.size < expectedCount -> DatasetCompleteness.PARTIAL
+                else -> DatasetCompleteness.COMPLETE
+            }
+            Result.success(NamespaceLoadResult(completeness, expectedCount, allSummaries, emptyList()))
+        } catch (e: Exception) {
+            logger.warn("Error loading namespace", e)
+            Result.failure(e)
+        }
+    }
 
-           // Completeness from summary pagination alone: we got every expected
-           // summary row (or the server reported zero). A detail failure can no
-           // longer mark the index partial because we never request details.
-           val completeness = when {
-               expectedCount > 0 && allSummaries.size < expectedCount -> DatasetCompleteness.PARTIAL
-               else -> DatasetCompleteness.COMPLETE
-           }
-           Result.success(NamespaceLoadResult(completeness, expectedCount, allSummaries, emptyList()))
-       } catch (e: Exception) {
-           logger.warn("Error loading namespace", e)
-           Result.failure(e)
-       }
-   }
-    
     /**
      * Retrieves all namespaces from Nacos using an already-captured
      * [operationContext]. Never reads current settings, the credential store,
@@ -486,41 +341,41 @@ class NacosApiService(
      */
     suspend fun getNamespaces(operationContext: NacosOperationContext): Result<List<NamespaceInfo>> = withContext(Dispatchers.IO) {
         try {
-           val resolvedTarget = resolvedReadTarget(operationContext, null).getOrElse { error ->
-               logger.warn("Failed to resolve generation for namespace discovery", error)
-               // Discovery failure must not hide a manually readable public namespace.
-               return@withContext Result.success(listOf(NamespaceInfo.createPublicNamespace()))
-           }
-           logger.debug("Discovering namespaces via gateway for ${resolvedTarget.context.resolvedGeneration}")
-           val discovered = v1Gateway.discoverNamespaces(resolvedTarget)
-           discovered.fold(
-               onSuccess = { namespaces ->
-                   val mapped = namespaces.map { ns ->
-                       NamespaceInfo(
-                           namespaceId = if (ns.namespaceId == "public") "" else ns.namespaceId,
-                           namespaceName = ns.displayName,
-                           namespaceDesc = ns.description.orEmpty(),
-                           configCount = ns.configCount?.toInt() ?: 0
-                       )
-                   }
-                   val hasPublic = mapped.any { it.isPublicNamespace() }
-                   Result.success(
-                       if (hasPublic) mapped else listOf(NamespaceInfo.createPublicNamespace()) + mapped
-                   )
-               },
-               onFailure = { error ->
-                   logger.warn("Namespace discovery unavailable: ${error.message}")
-                   // Capability/auth denial → public + manual entry UX; not a hard failure.
-                   Result.success(listOf(NamespaceInfo.createPublicNamespace()))
-               }
-           )
+            val resolvedTarget = resolvedReadTarget(operationContext, null).getOrElse { error ->
+                logger.warn("Failed to resolve generation for namespace discovery", error)
+                // Discovery failure must not hide a manually readable public namespace.
+                return@withContext Result.success(listOf(NamespaceInfo.createPublicNamespace()))
+            }
+            logger.debug("Discovering namespaces via gateway for ${resolvedTarget.context.resolvedGeneration}")
+            val discovered = v1Gateway.discoverNamespaces(resolvedTarget)
+            discovered.fold(
+                onSuccess = { namespaces ->
+                    val mapped = namespaces.map { ns ->
+                        NamespaceInfo(
+                            namespaceId = if (ns.namespaceId == "public") "" else ns.namespaceId,
+                            namespaceName = ns.displayName,
+                            namespaceDesc = ns.description.orEmpty(),
+                            configCount = ns.configCount?.toInt() ?: 0
+                        )
+                    }
+                    val hasPublic = mapped.any { it.isPublicNamespace() }
+                    Result.success(
+                        if (hasPublic) mapped else listOf(NamespaceInfo.createPublicNamespace()) + mapped
+                    )
+                },
+                onFailure = { error ->
+                    logger.warn("Namespace discovery unavailable: ${error.message}")
+                    // Capability/auth denial → public + manual entry UX; not a hard failure.
+                    Result.success(listOf(NamespaceInfo.createPublicNamespace()))
+                }
+            )
         } catch (e: Exception) {
             logger.warn("Error getting namespaces", e)
             if (e is ConfigurationRequired) return@withContext Result.failure(e)
             Result.success(listOf(NamespaceInfo.createPublicNamespace()))
         }
     }
-    
+
     /**
      * Clears the cache for a specific namespace or all namespaces
      */
@@ -533,74 +388,6 @@ class NacosApiService(
             logger.debug("Cleared cache for namespace: $namespace")
         }
     }
-    
-    private data class CapturedRequest(val url: String, val headers: Map<String, String>)
-
-    /** Builds request material solely from an immutable operation context. */
-    private suspend fun buildCapturedRequest(
-        context: NacosOperationContext,
-        endpoint: String,
-        params: Map<String, String>
-    ): CapturedRequest {
-        val mutableParams = params.toMutableMap()
-        val headers = mutableMapOf<String, String>()
-        val token = when (context.authMode) {
-            AuthMode.TOKEN, AuthMode.NACOS_PASSWORD, AuthMode.HYBRID -> authService.getValidAccessToken(context)
-            AuthMode.BASIC -> null
-            AuthMode.HTTP_BASIC, AuthMode.BEARER_TOKEN -> throw ConfigurationRequired(
-                listOf("Explicit V1 authentication strategies require a V1-locked profile")
-            )
-            AuthMode.ANONYMOUS -> null
-        }
-        if (token != null) {
-            mutableParams["accessToken"] = token
-        } else if (context.authMode == AuthMode.BASIC || context.authMode == AuthMode.HYBRID) {
-            addBasicAuthHeader(headers, context)
-        }
-        val queryParams = mutableParams.entries.joinToString("&") { (key, value) ->
-            "$key=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
-        }
-        val url = if (queryParams.isEmpty()) {
-            "${context.endpoint.value}$endpoint"
-        } else {
-            "${context.endpoint.value}$endpoint?$queryParams"
-        }
-        return CapturedRequest(url, headers)
-    }
-
-    private fun addBasicAuthHeader(headers: MutableMap<String, String>, context: NacosOperationContext) {
-        if (context.identity.principal != "<anonymous>" && context.credential.secret.isNotEmpty()) {
-            val credentials = "${context.identity.principal}:${context.credential.secret}"
-            val encodedCredentials = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())
-            headers["Authorization"] = "Basic $encodedCredentials"
-        } else {
-            logger.warn("No basic auth credentials configured")
-        }
-    }
-
-   /**
-    * Executes a GET request through the executor with auth replay on 401.
-    * If the first attempt returns [NacosRequestError.Authentication], the
-    * auth service's token is invalidated and the request replays once within
-    * the same budget. Malformed JSON is classified as [NacosRequestError.Protocol].
-    */
-   private suspend fun requestJsonWithReplay(
-       context: NacosOperationContext,
-       endpoint: String,
-       params: Map<String, String>,
-       policy: RequestPolicy
-   ): String {
-       val request = buildCapturedRequest(context, endpoint, params)
-       try {
-           return executor.get(request.url, policy, request.headers)
-       } catch (e: NacosRequestError.Authentication) {
-           // Token may be stale; invalidate and replay once.
-           logger.info("Authentication failed (${e.status}), refreshing credentials")
-           authService.invalidateToken(context)
-           val replay = buildCapturedRequest(context, endpoint, params)
-           return executor.get(replay.url, policy, replay.headers)
-       }
-   }
 
     /**
      * Resolves a locked [OperationTarget] for the given context/namespace,
@@ -632,8 +419,7 @@ class NacosApiService(
     }
 
     /**
-     * Controlled publish through [PublishController]. Prefer this over
-     * [publishConfiguration] for locked V1/V3 paths.
+     * Controlled publish through [PublishController].
      */
     suspend fun controlledPublish(session: EditSession): PublishResult = withContext(Dispatchers.IO) {
         PublishController(OperationGatewayPublishGateway(v1Gateway)).publish(session)
@@ -646,84 +432,6 @@ class NacosApiService(
     suspend fun diagnoseConnection(snapshot: DiagnosticSnapshot): DiagnosticReport = withContext(Dispatchers.IO) {
         val (resolver, gateway) = newDiagnosticStack()
         ConnectionDiagnostic(resolver = resolver, gateway = gateway).diagnose(snapshot)
-    }
-
-   /**
-    * Publishes (creates or updates) a configuration to Nacos via POST.
-     * Uses the Nacos Open API /nacos/v1/cs/configs endpoint.
-     *
-     * Locked V1/V3 generations reject this path — use [controlledPublish] instead.
-     */
-    suspend fun publishConfiguration(
-        dataId: String,
-        group: String,
-        content: String,
-        type: String = "text",
-        namespaceId: String? = null,
-        operationContext: NacosOperationContext? = null
-    ): Result<Boolean> = withContext(Dispatchers.IO) {
-        try {
-            val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
-                ConfigurationRequired(listOf("Connection configuration is incomplete"))
-            )
-           if (usesLockedGeneration(context)) {
-               return@withContext Result.failure(
-                    ConfigurationRequired(listOf("The V1 path is read-only; use controlledPublish"))
-                )
-            }
-            val params = buildMap {
-                put("dataId", dataId)
-                put("group", group)
-                put("content", content)
-                put("type", type)
-                namespaceId?.let { put("tenant", it) }
-            }
-
-            val request = buildCapturedRequest(context, CONFIG_ENDPOINT, emptyMap())
-            logger.info("Publishing configuration: $dataId:$group")
-
-            val response = requestPost(request.url, params, request.headers)
-            // Nacos returns "true" on success
-            val success = response.trim().equals("true", ignoreCase = true)
-            if (success) {
-                // Invalidate cache for this config
-                cacheService.invalidateNamespace(context.identity, namespaceId)
-                Result.success(true)
-            } else {
-                Result.failure(RuntimeException("Server responded: $response"))
-            }
-        } catch (e: Exception) {
-            logger.warn("Error publishing configuration", e)
-            Result.failure(e)
-        }
-   }
-
-   private fun requestPost(url: String, params: Map<String, String>, authHeaders: Map<String, String>): String {
-       val formData = encodeFormData(params)
-       val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-       connection.requestMethod = "POST"
-       connection.instanceFollowRedirects = false
-       connection.connectTimeout = settings.getConnectionTimeoutMillis()
-       connection.readTimeout = settings.getReadTimeoutMillis()
-       connection.doOutput = true
-       connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-       connection.setRequestProperty("Accept", "application/json")
-       authHeaders.forEach { (key, value) ->
-           connection.setRequestProperty(key, value)
-       }
-        return doRequestPost(connection, formData)
-   }
-
-    private fun encodeFormData(params: Map<String, String>): String {
-        return params.entries.joinToString("&") { (key, value) ->
-            "${URLEncoder.encode(key, StandardCharsets.UTF_8.name())}=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
-        }
-    }
-
-    private fun normalizeRequestKey(params: Map<String, String>): String {
-        return params.entries
-            .sortedBy { it.key }
-            .joinToString("|") { (key, value) -> "$key=$value" }
     }
 
     /** Guards every operation before cache reads, token lookup, or remote transport. */
@@ -838,7 +546,6 @@ class NacosApiService(
         return context.identity.copy(resolvedGeneration = lastKnown)
     }
 
-
     private fun persistLastKnownGeneration(context: NacosOperationContext, generation: NacosApiGeneration) {
         if (generation != NacosApiGeneration.V1 && generation != NacosApiGeneration.V3) return
         try {
@@ -893,69 +600,4 @@ class NacosApiService(
             ConfigItem(index.toString(), item.dataId, item.group, item.content, item.type, item.tenantId)
         }
     )
-
-    private fun diagnosticHeaders(context: com.nanyin.nacos.search.settings.NacosOperationContext): Map<String, String> {
-        if (context.identity.principal == "<anonymous>" || context.credential.secret.isBlank()) return emptyMap()
-        val credentials = "${context.identity.principal}:${context.credential.secret}"
-        return mapOf("Authorization" to "Basic " + java.util.Base64.getEncoder().encodeToString(credentials.toByteArray()))
-    }
-
-    
-    /**
-     * Data class for configuration list response
-     */
-    data class ConfigListResponse(
-        val totalCount: Int,
-        val pageNumber: Int,
-        val pagesAvailable: Int,
-        val pageItems: List<ConfigItem>
-    )
-    
-    data class ConfigItem(
-        val id:String,
-        val dataId: String,
-        val group: String,
-        val content: String?,
-        val type: String?,
-        val tenant: String?
-    )
-    
-    /**
-     * Converts ConfigItem to NacosConfiguration with full content using an
-     * already-captured [operationContext]. Never reads current settings, the
-     * credential store, or the project session (issue #50 / ADR-0010).
-     */
-    suspend fun getConfigurationFromItem(
-        item: ConfigItem,
-        useCache: Boolean = true,
-        operationContext: NacosOperationContext
-    ): NacosConfiguration {
-        if (!item.content.isNullOrEmpty()) {
-            val configuration = NacosConfiguration(
-                dataId = item.dataId,
-                group = item.group,
-                tenantId = item.tenant,
-                content = item.content,
-                type = item.type
-            )
-            if (useCache && settings.cacheEnabled) {
-                cacheService.putConfigDetail(
-                    operationContext.identity,
-                    item.tenant,
-                    configuration,
-                    settings.getCacheTtlMillis()
-                )
-            }
-            return configuration
-        }
-
-        val fullConfig = getConfiguration(item.dataId, item.group, item.tenant, useCache, operationContext = operationContext)
-        return fullConfig.getOrNull() ?: NacosConfiguration(
-            dataId = item.dataId,
-            group = item.group,
-            tenantId = item.tenant,
-            content = "", // Content will be empty if fetch fails
-            type = item.type
-        )
-    }
 }

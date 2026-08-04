@@ -12,6 +12,10 @@ enum class NacosApiGeneration { UNKNOWN, V1, V3 }
  * Password and access tokens are deliberately excluded so that switching
  * credentials within the same identity (e.g. re-login) does not invalidate
  * the cache, while switching the username or auth mode does.
+ *
+ * Every value is produced by [ofProfile] and always carries a real
+ * [accessRevision] and [resolvedGeneration] (issue #62). There is no
+ * legacy factory that fabricates zero-revision / UNKNOWN sentinels.
  */
 data class AccessIdentity(
     val profileId: String,
@@ -25,19 +29,6 @@ data class AccessIdentity(
     val serverId: String get() = profileId
 
     companion object {
-        fun of(serverId: String, authMode: AuthMode, username: String): AccessIdentity {
-            val normalizedServer = serverId.trim().trimEnd('/').ifBlank { "<default>" }
-            val normalizedPrincipal = username.trim().ifBlank { "<anonymous>" }
-            return AccessIdentity(
-                profileId = normalizedServer,
-                accessRevision = 0,
-                canonicalEndpoint = normalizedServer,
-                resolvedGeneration = NacosApiGeneration.UNKNOWN,
-                authMode = authMode,
-                principal = normalizedPrincipal
-            )
-        }
-
         fun ofProfile(
             profileId: String,
             accessRevision: Long,
