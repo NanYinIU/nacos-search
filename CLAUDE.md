@@ -62,7 +62,7 @@ Plugin signing is configured via the `intellijPlatform.signing` block and reads 
 1. Validates `NacosSettings`.
 2. Kicks off background cache loading via `CacheService` (does not block the EDT).
 3. Tests the Nacos connection asynchronously.
-4. Loads initial configuration metadata if the cache is empty or disabled, then warms the `NacosKeyResolver` key index and preheats the full namespace index in the background so the first search and gutter markers are instant.
+4. Loads initial configuration metadata if the cache is empty or disabled, then warms the `NacosKeyIndexService` key index and preheats the full namespace index in the background so the first search and gutter markers are instant.
 5. Schedules an automatic cache refresh job when enabled.
 
 `RefreshCacheAction` / `ClearCacheAction` delegate to `NacosSearchPlugin.refreshCache()` / `clearCache()`. The `Disposable` implementation cancels the plugin's `CoroutineScope` and auto-refresh job on shutdown.
@@ -99,6 +99,12 @@ Cache loads run in the background; read methods await a `CompletableDeferred` lo
 
 `observation` is the sequence the operation took **when it started** (`ObservationSequence.process`, or `OperationGateway.beginObservation()`), never when it writes. A gateway read returns it alongside the payload as `Observed<T>` so painting a result and writing the cache entry derived from the same read are ordered by one number (ADR-0047). `ObservationHighWater` is the single gate implementation, keyed on the complete access identity plus the coordinate; a mutation must outrank every scope on its chain (global → namespace → coordinate) and raises only its own, and only once it has actually landed. `HistoryMemoryCache` holds one for the read-only history path.
 
+#### One versioned snapshot instead of lent-out internals
+
+Callers that cache a derivation of the cache take a `CacheSnapshot` (issue #64). It carries the two facts a derivation needs and nothing else: a `version` that advances when the cache's content changes — an accepted mutation advances it, one the gate drops does not — and an `asOfMillis` that every freshness judgement made from it is against, so one gutter-marker decision cannot straddle a freshness boundary. Taking one is O(1); its payload views are lazy. The cache lends out no modification counter, no clock accessor, and no coroutine scope, and no JVM identity hash serves as a generation token anywhere.
+
+The derived `@NacosValue` key index is `NacosKeyIndexService`, an application service owning its own `CoroutineScope` and `Disposable` lifecycle, so clearing the cache leaves no rebuild running in a scope that no longer makes sense. `NacosKeyResolver` beside it is pure: it derives a `KeyIndex` from a snapshot and ranks hits, holding no state and starting no work. `KeyDefinition` (what the index holds, timeless) is separate from `KeyHit` (judged at one instant) so an unjudged freshness cannot be read by accident. Key extraction stays in `psi/` — it is configuration-format knowledge, and moving it into the cache would make the cache module depend on the code-navigation layer.
+
 Consequences worth knowing:
 
 - Only a read that reaches the **server** takes a sequence. A read served from cache returns `Observed.NO_OBSERVATION`, which can never outrank any mark — so a caller that derives a write from a cache hit is silently dropped instead of restamping the entry it just read and locking out a genuine remote read that started earlier.
@@ -117,7 +123,8 @@ The `psi/` package (registered in `plugin.xml` for `language="JAVA"`) is the plu
 - `NacosValueLineMarkerProvider` — renders a three-state gutter icon: fresh resolved (blue solid), stale resolved (amber solid with a clock), or unresolved (gray hollow). Shown only when the key is cached or a dataId context allows remote fallback; only a fresh, complete namespace index may prove that a dataId is absent. Clicking navigates, and multiple namespace matches open a chooser.
 - `NacosConfigKeyReferenceSearcher` — reverse **Find Usages**: from a Nacos config key to the Java usages. Honors the search cancel signal.
 - `NacosPlaceholderIndex` — a `FileBasedIndex` mapping placeholder keys → `.java` files, for fast reverse lookup without scanning the project.
-- `NacosKeyResolver` — resolves a placeholder key to the cached `NacosConfiguration`(s) that define it. Pure w.r.t. PSI (reads only `CacheService`); builds an in-memory `KeyIndex` and orders hits by namespace relevance (active namespace > public > others). The index is rebuilt lazily when the cache's modification count changes.
+- `NacosKeyIndexService` — application service holding the one derived `KeyIndex` and the scope its rebuilds run in. Rebuilds lazily and off the calling thread when the snapshot's version moves; serves the previous index for the same access identity meanwhile, and never one built for a different identity.
+- `NacosKeyResolver` — pure derivation and ranking beside it: builds a `KeyIndex` from a `CacheSnapshot`, resolves a placeholder key against one, and orders hits by namespace relevance (active namespace > public > others). Holds no state and starts no work.
 - Supporting: `ConfigKeyExtractor` (key + `KeyLocation` extraction from config content), `NacosConfigNavigator` (navigate to the config detail panel), `NacosConfigKeyElement` (PSI element carrying the source element for lazy-load), `NacosPopupChoiceItems` / `NacosUsagePresentation` (popup + Find Usages presentation).
 
 ### Authentication Modes

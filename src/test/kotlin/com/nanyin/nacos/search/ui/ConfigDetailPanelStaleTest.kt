@@ -98,8 +98,7 @@ class ConfigDetailPanelStaleTest {
 
         withTimeout(5_000L) {
             notFoundReturned.await()
-            while (cacheService.configDetailState(
-                    settings.captureAccessIdentity(),
+            while (cacheService.snapshot(settings.captureAccessIdentity()).detail(
                     "dev",
                     "deleted.properties",
                     "DEFAULT_GROUP"

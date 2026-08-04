@@ -27,7 +27,7 @@ import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.NacosUpgradeSummary
 import com.nanyin.nacos.search.settings.OperationContextSnapshotCache
-import com.nanyin.nacos.search.psi.NacosKeyResolver
+import com.nanyin.nacos.search.psi.NacosKeyIndexService
 import com.intellij.openapi.components.service
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.Disposable
@@ -1010,7 +1010,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 // switch is the primary source of background IO saturation.
                 val existing = cacheService.getNamespaceIndex(indexRequest.key.identity, namespaceId)
                 if (existing != null) {
-                    NacosKeyResolver.ensureIndexBuilt(cacheService, indexRequest.key.identity)
+                    ApplicationManager.getApplication()
+                        .getService(NacosKeyIndexService::class.java)
+                        .ensureIndexBuilt(cacheService.snapshot(indexRequest.key.identity))
                     return@launch
                 }
 

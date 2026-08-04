@@ -29,13 +29,18 @@ import java.util.concurrent.atomic.AtomicLong
  * and the key list that names them together, so the cache cannot leave a payload
  * behind that no reclamation path can see (issue #61).
  *
- * **Writes go through [apply] and nowhere else** (ADR-0045). It takes a
+ * **Writes go through [applyMutation] and nowhere else** (ADR-0045). It takes a
  * [CacheMutation] together with the observation sequence of the operation that
  * produced it, and both the cache-entry gate and the profile-deletion tombstone
  * check live inside it, so the gate's scope equals the mutation's coordinate by
  * construction. Reads stay named operations returning their own types: the
  * argument for collapsing writes is that the gate must be unbypassable, and
  * reads have no such property.
+ *
+ * Callers that cache a derivation of this cache take a [CacheSnapshot], which
+ * carries its own version and as-of instant. The cache lends out no
+ * modification counter, no clock, and no coroutine scope, so no caller can
+ * assemble an invalidation rule out of its internals (issue #64).
  */
 @Service(Service.Level.APP)
 class CacheService internal constructor(
@@ -57,12 +62,24 @@ class CacheService internal constructor(
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val detailCache = ConcurrentHashMap<String, CacheEntry<NacosConfiguration>>()
-    @Volatile
-    private var detailSnapshot: Map<String, CacheEntry<NacosConfiguration>> = emptyMap()
     private val listPageCache = ConcurrentHashMap<String, CacheEntry<ConfigListResponse>>()
     private val namespaceIndexCache = ConcurrentHashMap<String, CacheEntry<List<NacosConfiguration>>>()
     private val namespaceIndexAuthority = ConcurrentHashMap<String, Boolean>()
-    private val modificationCount = AtomicLong(0)
+
+    /**
+     * The immutable state a [CacheSnapshot] is cut from. Version and payload are
+     * published together so a reader can never pair a version with content from
+     * a different one.
+     */
+    private class PublishedState(
+        val version: Long,
+        val details: Map<String, CacheEntry<NacosConfiguration>>,
+        val namespaceIndexes: Map<String, NamespaceIndexRecord>
+    )
+
+    @Volatile
+    private var publishedState = PublishedState(0, emptyMap(), emptyMap())
+    private val publishLock = Any()
 
     /**
      * The cache-entry gate. Scopes are derived from the **complete** access
@@ -98,9 +115,22 @@ class CacheService internal constructor(
             // Raise only once the mutation has actually landed: a store write
             // that throws must not leave a mark that locks out the retry.
             applyLocked(mutation, observation)
+            // Exactly here, and only here for a mutation: an accepted mutation
+            // advances the snapshot version, a gated or entombed one returns
+            // above without reaching this line.
+            publish()
             highWater.raise(scopeChain.last(), observation)
             true
         }
+    }
+
+    /**
+     * A versioned, self-dating view of this cache for [identity]. Taking one is
+     * O(1); its payload views are computed on first use.
+     */
+    fun snapshot(identity: AccessIdentity): CacheSnapshot {
+        val state = publishedState
+        return CacheSnapshot(state.version, currentTimeMillis(), identity, state.details, state.namespaceIndexes)
     }
 
     /**
@@ -178,8 +208,6 @@ class CacheService internal constructor(
                 detailCache[key] = entry
                 store.putDetail(key, entry)
                 cleanupOversizedCaches()
-                publishDetailSnapshot()
-                markModified()
             }
             is CacheMutation.WriteListPage -> {
                 val key = listPageKey(mutation.identity, mutation.namespaceId, mutation.requestKey)
@@ -206,14 +234,10 @@ class CacheService internal constructor(
                 // Raise the discard mark before removing anything, so a lazy
                 // load already reading this key from the store cannot publish it.
                 discardGeneration.incrementAndGet()
-                val wasInMemory = detailCache.remove(key) != null
+                detailCache.remove(key)
                 // Unconditional: the entry may be in the store without having
                 // been loaded into memory yet, and it must not survive there.
                 store.removeDetail(key)
-                if (wasInMemory) {
-                    publishDetailSnapshot()
-                    markModified()
-                }
             }
             is CacheMutation.InvalidateNamespace -> invalidateNamespaceLocked(mutation)
             CacheMutation.Clear -> {
@@ -228,8 +252,6 @@ class CacheService internal constructor(
                 namespaceIndexCache.clear()
                 namespaceIndexAuthority.clear()
                 store.clear()
-                publishDetailSnapshot()
-                markModified()
                 logger.info("Cache cleared")
             }
         }
@@ -256,10 +278,6 @@ class CacheService internal constructor(
         namespaceIndexAuthority[indexKey] = true
         reclaimDetailsAbsentFromIndexLocked(mutation, summaries, observation)
         cleanupOversizedCaches()
-        // The namespace index answers data-id existence and global search;
-        // key-index rebuilds read the detail snapshot, so a pure index write
-        // publishes no detail snapshot change.
-        markModified()
     }
 
     /**
@@ -296,7 +314,6 @@ class CacheService internal constructor(
             detailCache.remove(key)
             store.removeDetail(key)
         }
-        publishDetailSnapshot()
     }
 
     private suspend fun invalidateNamespaceLocked(mutation: CacheMutation.InvalidateNamespace) {
@@ -313,13 +330,6 @@ class CacheService internal constructor(
         }
         namespaceIndexCache.remove(indexKey)
         namespaceIndexAuthority.remove(indexKey)
-        publishDetailSnapshot()
-        markModified()
-    }
-
-    /** Runs memory-only derived-state work in this application service's lifecycle scope. */
-    fun launchSnapshotRefresh(refresh: () -> Unit) {
-        serviceScope.launch(Dispatchers.Default) { refresh() }
     }
 
     /**
@@ -329,54 +339,6 @@ class CacheService internal constructor(
      */
     suspend fun awaitLoadCompleted() {
         loadCompleted.await()
-    }
-
-    fun configurationSnapshot(identity: AccessIdentity): List<NacosConfiguration> {
-        val keyPrefix = identityPrefix(identity)
-        val now = currentTimeMillis()
-        return detailSnapshot.asSequence()
-            .filter { (key, entry) ->
-                key.startsWith("$keyPrefix|") && !entry.isExpired(now)
-            }
-            .map { it.value.data }
-            .distinctBy(::legacyKey)
-            .toList()
-    }
-
-    /** Immutable detail view used by code navigation, including stale targets. */
-    fun configurationNavigationSnapshot(identity: AccessIdentity): List<CachedConfiguration> {
-        val keyPrefix = identityPrefix(identity)
-        val now = currentTimeMillis()
-        return detailSnapshot.asSequence()
-            .filter { (key, _) -> key.startsWith("$keyPrefix|") }
-            .map { (_, entry) -> entry.toCachedConfiguration(now) }
-            .distinctBy { legacyKey(it.configuration) }
-            .toList()
-    }
-
-    fun configDetailState(
-        identity: AccessIdentity,
-        namespaceId: String?,
-        dataId: String,
-        group: String
-    ): CachedConfiguration? = detailSnapshot[detailKey(identity, namespaceId, dataId, group)]
-        ?.toCachedConfiguration(currentTimeMillis())
-
-    /** Non-blocking completeness/freshness view for gutter absence checks. */
-    fun namespaceIndexState(identity: AccessIdentity, namespaceId: String?): NamespaceIndexState? {
-        val key = namespaceKey(identity, namespaceId)
-        val entry = namespaceIndexCache[key] ?: return null
-        return entry.toNamespaceIndexState(namespaceIndexAuthority[key] == true)
-    }
-
-    private fun CacheEntry<List<NacosConfiguration>>.toNamespaceIndexState(
-        authoritativeForAbsence: Boolean
-    ): NamespaceIndexState {
-        return NamespaceIndexState(
-            dataIds = data.asSequence().map { it.dataId }.filter { it.isNotBlank() }.toSet(),
-            freshness = freshness(currentTimeMillis()),
-            authoritativeForAbsence = authoritativeForAbsence
-        )
     }
 
     companion object {
@@ -507,7 +469,10 @@ class CacheService internal constructor(
             detailCache.remove(key, published)
             return null
         }
-        if (loadCompleted.isCompleted) publishDetailSnapshot()
+        // Content changed without a mutation, so the snapshot version has to
+        // move or a derived index would never see the reconstituted entry. It
+        // still carries no observation sequence and raises no gate mark.
+        if (loadCompleted.isCompleted) publish()
         return published
     }
 
@@ -549,12 +514,8 @@ class CacheService internal constructor(
 
     suspend fun getAllCachedConfigurations(identity: AccessIdentity): List<NacosConfiguration> {
         loadCompleted.await()
-        return configurationSnapshot(identity)
+        return snapshot(identity).freshConfigurations
     }
-
-    fun getModificationCount(): Long = modificationCount.get()
-
-    internal fun cacheTimeMillis(): Long = currentTimeMillis()
 
     private suspend fun loadCacheFromPersistence() {
         // Hold the write lock for the whole load so the background load is mutually
@@ -565,8 +526,7 @@ class CacheService internal constructor(
         cacheMutex.withLock {
             loadIdentityScopedDetailsFromStore()
             loadIdentityScopedListPagesFromStore()
-            publishDetailSnapshot()
-            markModified()
+            publish()
         }
     }
 
@@ -617,21 +577,26 @@ class CacheService internal constructor(
         trimOldest(namespaceIndexCache) { /* in-memory only, never persisted */ }
     }
 
-    private fun markModified() {
-        modificationCount.incrementAndGet()
+    /**
+     * Cuts a new immutable published state and advances its version. Version and
+     * payload are assembled under one lock so a reader can never see a version
+     * that does not describe the content published with it.
+     *
+     * Namespace-index records are rebuilt with the state rather than derived per
+     * read, so the data-id set behind an absence check is computed at most once
+     * per version instead of once per gutter decision.
+     */
+    private fun publish() {
+        synchronized(publishLock) {
+            publishedState = PublishedState(
+                publishedState.version + 1,
+                detailCache.toMap(),
+                namespaceIndexCache.entries.associate { (key, entry) ->
+                    key to NamespaceIndexRecord(entry, namespaceIndexAuthority[key] == true)
+                }
+            )
+        }
     }
-
-    private fun publishDetailSnapshot() {
-        detailSnapshot = detailCache.toMap()
-    }
-
-    private fun CacheEntry<NacosConfiguration>.toCachedConfiguration(now: Long): CachedConfiguration =
-        CachedConfiguration(
-            data,
-            freshness(now),
-            freshUntilMillis = createdAt + ttlMs,
-            deepStaleAtMillis = createdAt + DEEP_STALE_AGE_MILLIS
-        )
 
     private suspend fun <T> trimOldest(
         cache: ConcurrentHashMap<String, CacheEntry<T>>,
@@ -677,10 +642,6 @@ class CacheService internal constructor(
 
     private fun normalizeNamespace(namespaceId: String?): String {
         return namespaceId?.takeIf { it.isNotBlank() && it != "public" } ?: "public"
-    }
-
-    private fun legacyKey(configuration: NacosConfiguration): String {
-        return "${configuration.dataId}:${configuration.group}:${configuration.tenantId ?: ""}"
     }
 
     data class CacheEntry<T>(

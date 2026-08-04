@@ -22,7 +22,6 @@ import com.nanyin.nacos.search.psi.ConfigKeyExtractor
 import com.nanyin.nacos.search.psi.NacosCodeContextExtractor
 import com.nanyin.nacos.search.psi.NacosConfigKeyElement
 import com.nanyin.nacos.search.psi.NacosConfigKeyReferenceSearcher
-import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.nanyin.nacos.search.psi.NacosUsageChoiceItem
 import com.nanyin.nacos.search.psi.NacosUsagePresentation
 import com.intellij.openapi.project.Project
@@ -640,8 +639,7 @@ private fun setupEventHandlers() {
         }
         updateMetadata(configuration, generation)
         val accessIdentity = project.captureSelectedAccessIdentity(settings)
-        val cachedState = cacheService.configDetailState(
-            accessIdentity,
+        val cachedState = cacheService.snapshot(accessIdentity).detail(
             configuration.tenantId,
             configuration.dataId,
             configuration.group
