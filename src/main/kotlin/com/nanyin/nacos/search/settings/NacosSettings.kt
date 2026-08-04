@@ -292,6 +292,9 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     fun applyServers(newServers: List<NacosServerConfig>, newActiveId: String) {
         val previousIds = servers.map { it.id }.toSet()
         val previousPasswords = servers.associate { it.id to it.password }
+        val previousActiveId = activeServerId
+        val previousRevisions = profiles.associate { it.id to (it.profileRevision to it.accessRevision) }
+        val previousNamespaces = servers.associate { it.id to it.namespace }
         val currentIds = newServers.map { it.id }.toSet()
         // Entomb profiles that are about to disappear before publishing the new
         // set, so late in-flight responses for the deleted identity cannot
@@ -302,8 +305,23 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         syncFromActiveServer()
         persistCredentials(previousIds)
         updateProfilesFromServers(previousPasswords)
-        // Profile / credential / policy changes invalidate in-flight browse results.
-        com.nanyin.nacos.search.services.ProjectSessionEpochs.bumpAllOpenProjects()
+        // Preference-only changes (e.g. navigationDetailPrefetchEnabled,
+        // allowCrossNamespaceNavigation, displayName) must not advance the
+        // session epoch (ADR-0042). Bump only when the active server set,
+        // connection-affecting revisions, or per-server namespace selection
+        // actually changed.
+        val epochRelevant = previousActiveId != activeServerId ||
+            previousIds != currentIds ||
+            profiles.any { profile ->
+                val prev = previousRevisions[profile.id]
+                prev == null ||
+                    prev.first != profile.profileRevision ||
+                    prev.second != profile.accessRevision
+            } ||
+            servers.any { server -> previousNamespaces[server.id] != server.namespace }
+        if (epochRelevant) {
+            com.nanyin.nacos.search.services.ProjectSessionEpochs.bumpAllOpenProjects()
+        }
     }
 
     /** Persists a deletion tombstone for a profile removed from the settings. */

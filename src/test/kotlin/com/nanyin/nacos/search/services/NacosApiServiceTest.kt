@@ -451,18 +451,28 @@ class NacosApiServiceTest {
     }
 
     @Test
-    fun `getAllConfigurations fetches per-item content concurrently`() = runBlocking {
+    fun `getAllConfigurations loads summaries without per-item detail requests`() = runBlocking {
         activeDetail.set(0)
         inFlightMax.set(0)
-        val start = System.currentTimeMillis()
         val result = apiService.getAllConfigurations("concurrent-ns", useCache = false)
-        val elapsed = System.currentTimeMillis() - start
         assertTrue(result.isSuccess)
         assertEquals(12, result.getOrNull()!!.size)
-        // Sequential fetching of 12 items at 50ms each would take >= 600ms; bounded
-        // parallelism (<= 8) must finish well under that.
-        assertTrue(elapsed < 500, "expected concurrent fetch to be fast, took ${elapsed}ms")
-        // And at least two requests must have overlapped (proving parallelism, not just speed).
-        assertTrue(inFlightMax.get() >= 2, "expected overlapping detail requests, max in-flight was ${inFlightMax.get()}")
+        // Issue #52: namespace load is summary-only — zero detail endpoints.
+        assertEquals(0, activeDetail.get(), "summary-only index must not call per-item detail endpoints")
+        assertEquals(0, inFlightMax.get())
+        // Mock list endpoint returns cfg1..cfg12 without bodies.
+        assertTrue(result.getOrNull()!!.all { it.dataId.startsWith("cfg") })
+    }
+
+    @Test
+    fun `loadNamespace completeness ignores detail state and follows summary pagination`() = runBlocking {
+        val result = apiService.loadNamespace("concurrent-ns", useCache = false, operationContext = capturedContext())
+        assertTrue(result.isSuccess)
+        val load = result.getOrNull()!!
+        assertEquals(DatasetCompleteness.COMPLETE, load.completeness)
+        assertEquals(12, load.expectedCount)
+        assertEquals(12, load.configurations.size)
+        assertTrue(load.failures.isEmpty())
+        assertEquals(0, activeDetail.get())
     }
 }

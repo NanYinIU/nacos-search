@@ -75,6 +75,7 @@ class NacosConfigurable @JvmOverloads constructor(
     private lateinit var defaultGroupField: JBTextField
     private lateinit var connectionTimeoutSpinner: JSpinner
     private lateinit var crossNamespaceNavigationCheckBox: JCheckBox
+    private lateinit var navigationDetailPrefetchCheckBox: JCheckBox
     private lateinit var writeIntentCheckBox: JCheckBox
 
     // Test connection UI
@@ -224,6 +225,7 @@ class NacosConfigurable @JvmOverloads constructor(
         server.defaultGroup = defaultGroupField.text.trim()
         server.connectionTimeoutMs = connectionTimeoutSpinner.value as Int
         server.allowCrossNamespaceNavigation = crossNamespaceNavigationCheckBox.isSelected
+        server.navigationDetailPrefetchEnabled = navigationDetailPrefetchCheckBox.isSelected
         server.writeIntent = writeIntentCheckBox.isSelected
         // Refresh the list display so name/host changes show immediately
         val idx = serverListModel.indexOf(server)
@@ -384,6 +386,11 @@ class NacosConfigurable @JvmOverloads constructor(
         crossNamespaceNavigationCheckBox = JCheckBox().apply {
             putClientProperty("nacos.automation.id", "nacos.settings.crossNamespaceNavigation")
             toolTipText = NacosSearchBundle.message("settings.server.cross.namespace.navigation.tooltip")
+            addActionListener { commitDetailFormToDraft() }
+        }
+        navigationDetailPrefetchCheckBox = JCheckBox().apply {
+            putClientProperty("nacos.automation.id", "nacos.settings.navigationDetailPrefetch")
+            toolTipText = NacosSearchBundle.message("settings.server.navigation.detail.prefetch.tooltip")
             addActionListener { commitDetailFormToDraft() }
         }
         writeIntentCheckBox = JCheckBox().apply {
@@ -722,6 +729,12 @@ class NacosConfigurable @JvmOverloads constructor(
         advGbc.gridx = 1; advGbc.weightx = 1.0; advGbc.fill = GridBagConstraints.HORIZONTAL
         advBody.add(crossNamespaceNavigationCheckBox, advGbc)
 
+        // Navigation detail prefetch checkbox (preference-only, ADR-0042)
+        advGbc.gridx = 0; advGbc.gridy++; advGbc.weightx = 0.0
+        advBody.add(formLabel("settings.server.navigation.detail.prefetch"), advGbc)
+        advGbc.gridx = 1; advGbc.weightx = 1.0; advGbc.fill = GridBagConstraints.HORIZONTAL
+        advBody.add(navigationDetailPrefetchCheckBox, advGbc)
+
         // Default to collapsed
         advBody.isVisible = false
 
@@ -839,6 +852,7 @@ class NacosConfigurable @JvmOverloads constructor(
             defaultGroupField.text = server.defaultGroup
             connectionTimeoutSpinner.value = server.connectionTimeoutMs
             crossNamespaceNavigationCheckBox.isSelected = server.allowCrossNamespaceNavigation
+            navigationDetailPrefetchCheckBox.isSelected = server.navigationDetailPrefetchEnabled
             writeIntentCheckBox.isSelected = server.writeIntent
             applyAuthFormEffects(authMode, clearCredentials = false)
             updateDetailHeader(server)
@@ -894,6 +908,7 @@ class NacosConfigurable @JvmOverloads constructor(
                 d.authMode != s.authMode || d.defaultGroup != s.defaultGroup ||
                 d.connectionTimeoutMs != s.connectionTimeoutMs ||
                 d.allowCrossNamespaceNavigation != s.allowCrossNamespaceNavigation ||
+                d.navigationDetailPrefetchEnabled != s.navigationDetailPrefetchEnabled ||
                 d.writeIntent != s.writeIntent
             ) return true
         }

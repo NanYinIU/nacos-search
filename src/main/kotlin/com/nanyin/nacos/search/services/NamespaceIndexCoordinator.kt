@@ -290,16 +290,10 @@ class NamespaceIndexCoordinator internal constructor(
                     )
                 }
                 DatasetCompleteness.PARTIAL -> {
-                    // Partial: write successful details but do not refresh index timestamps
+                    // Partial summary pagination: do not publish an authoritative
+                    // index and do not seed the detail cache (issue #52). Details
+                    // arrive only via navigation prefetch or explicit reads.
                     cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
-                    if (loadResult.configurations.isNotEmpty()) {
-                        cacheService.putNamespaceDetails(
-                            key.identity,
-                            key.namespaceId,
-                            loadResult.configurations,
-                            request.cacheTtlMillis
-                        )
-                    }
                     IndexOutcome.Partial(
                         loadResult.configurations.size,
                         loadResult.expectedCount,

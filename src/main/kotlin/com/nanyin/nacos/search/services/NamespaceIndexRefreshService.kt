@@ -14,7 +14,12 @@ import kotlinx.coroutines.withContext
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.settings.NacosSettings
 
-/** Bridges non-blocking gutter observations to the Namespace single-flight coordinator. */
+/**
+ * Bridges non-blocking gutter observations to the Namespace single-flight
+ * coordinator. After a successful index load it rebuilds the in-memory key
+ * index view. The navigation detail prefetch is triggered independently on
+ * the same PSI path (ADR-0043) and is never a continuation of index completion.
+ */
 @Service(Service.Level.APP)
 class NamespaceIndexRefreshService internal constructor(
     private val requester: NamespaceIndexRequester,
@@ -41,8 +46,19 @@ class NamespaceIndexRefreshService internal constructor(
      * so the synchronous freshness check stays EDT-safe; the full request —
      * which may read the credential — is captured off-EDT inside the launched
      * coroutine (design §11/§19.7).
+     *
+     * The navigation detail prefetch is always requested independently for
+     * [project] with its own freshness gate (ADR-0043), so a newly declared
+     * data id is fetched without waiting for the namespace index TTL.
      */
     fun requestIfNeeded(identity: AccessIdentity, namespaceId: String, project: Project?) {
+        // Independent flight — not gated on index freshness or completion.
+        if (project != null && !project.isDisposed) {
+            ApplicationManager.getApplication()
+                .getService(NavigationDetailPrefetchService::class.java)
+                .requestIfNeeded(project, identity, namespaceId)
+        }
+
         val state = cacheService.namespaceIndexState(identity, namespaceId)
         if (state?.freshness == CacheService.DetailFreshness.FRESH) return
 

@@ -167,28 +167,36 @@ class CacheServiceTest {
                 cacheService.putNamespaceIndex("http://nacos:8848", "dev", configurations)
             }
            while (!writer.isCompleted) {
-               observedSizes += cacheService.configurationSnapshot("http://nacos:8848").size
+               observedSizes += cacheService.getNamespaceIndex("http://nacos:8848", "dev")?.size ?: 0
                yield()
            }
             writer.join()
         }
-        observedSizes += cacheService.configurationSnapshot("http://nacos:8848").size
+        observedSizes += cacheService.getNamespaceIndex("http://nacos:8848", "dev")?.size ?: 0
 
+        // Issue #52: index write is atomic w.r.t. the summary set, and does not
+        // seed the detail snapshot.
         assertTrue(observedSizes.all { it == 0 || it == configurations.size })
-        assertEquals(configurations.size, cacheService.configurationSnapshot("http://nacos:8848").size)
+        assertEquals(configurations.size, cacheService.getNamespaceIndex("http://nacos:8848", "dev")?.size)
+        assertEquals(0, cacheService.configurationSnapshot("http://nacos:8848").size)
     }
 
     @Test
-    fun `complete namespace replacement removes deleted details only from that namespace`() = runBlocking {
+    fun `complete namespace index replacement does not delete or seed details`() = runBlocking {
         val cacheService = CacheService()
         cacheService.clearAll()
-        cacheService.putNamespaceIndex(
+        // Explicit detail writes (e.g. prior prefetch / browse) stay independent
+        // of the summary index (issue #52).
+        cacheService.putConfigDetail(
             "http://nacos:8848",
             "dev",
-            listOf(
-                NacosConfiguration("keep.properties", "DEFAULT_GROUP", "dev", "v=old"),
-                NacosConfiguration("deleted.properties", "DEFAULT_GROUP", "dev", "gone=true")
-            ),
+            NacosConfiguration("keep.properties", "DEFAULT_GROUP", "dev", "v=old"),
+            ttl = 60_000L
+        )
+        cacheService.putConfigDetail(
+            "http://nacos:8848",
+            "dev",
+            NacosConfiguration("orphan.properties", "DEFAULT_GROUP", "dev", "gone=true"),
             ttl = 60_000L
         )
         cacheService.putConfigDetail(
@@ -205,22 +213,24 @@ class CacheServiceTest {
             ttl = 60_000L
         )
 
-        assertNull(
-            cacheService.getConfigDetail(
-                "http://nacos:8848",
-                "dev",
-                "deleted.properties",
-                "DEFAULT_GROUP",
-                allowStale = true
-            )
-        )
+        // Index write neither seeds nor purges details.
         assertEquals(
-            "v=new",
+            "v=old",
             cacheService.getConfigDetail(
                 "http://nacos:8848",
                 "dev",
                 "keep.properties",
                 "DEFAULT_GROUP"
+            )?.content
+        )
+        assertEquals(
+            "gone=true",
+            cacheService.getConfigDetail(
+                "http://nacos:8848",
+                "dev",
+                "orphan.properties",
+                "DEFAULT_GROUP",
+                allowStale = true
             )?.content
         )
         assertEquals(
@@ -231,6 +241,10 @@ class CacheServiceTest {
                 "prod.properties",
                 "DEFAULT_GROUP"
             )?.content
+        )
+        assertEquals(
+            setOf("keep.properties"),
+            cacheService.namespaceIndexState("http://nacos:8848", "dev")?.dataIds
         )
     }
 
@@ -427,7 +441,7 @@ class CacheServiceTest {
     }
 
     @Test
-    fun `putNamespaceIndex also seeds individual config details for the resolver`() = runBlocking {
+    fun `putNamespaceIndex does not seed individual config details`() = runBlocking {
         val cacheService = CacheService()
         cacheService.clearAll()
 
@@ -440,10 +454,13 @@ class CacheServiceTest {
             ttl = 60_000L
         )
 
-        // Preheating the namespace index makes individual configs resolvable
-        // by detail key, which is what NacosKeyResolver scans.
+        // Issue #52: namespace index is summary-only; details arrive via
+        // navigation prefetch or explicit reads, not from index writes.
         val detail = cacheService.getConfigDetail("http://nacos:8848", null, "app.properties", "DEFAULT_GROUP")
-        assertEquals("timeout=30", detail?.content)
+        assertNull(detail)
+        val index = cacheService.getNamespaceIndex("http://nacos:8848", null)
+        assertEquals(1, index?.size)
+        assertEquals("", index!![0].content)
     }
 
     @Test
@@ -484,7 +501,7 @@ class CacheServiceTest {
     }
 
     @Test
-    fun `putNamespaceIndex persists seeded details for reload`() = runBlocking {
+    fun `putNamespaceIndex does not persist details for reload`() = runBlocking {
         val first = CacheService()
         first.clearAll()
         first.putNamespaceIndex(
@@ -496,12 +513,10 @@ class CacheServiceTest {
             ttl = 60_000L
         )
 
-        // A fresh instance reloads from persistence; the seeded detail must survive
-        // because putNamespaceIndex now persists it (previously only the keys list was
-        // updated, leaving orphan keys pointing at never-written blobs).
+        // Issue #52: summary index must not leave detail blobs behind.
         val reloaded = CacheService()
         val detail = reloaded.getConfigDetail("http://nacos:8848", "dev", "seed.properties", "DEFAULT_GROUP")
-        assertEquals("seeded=true", detail?.content)
+        assertNull(detail)
         reloaded.clearAll()
     }
 
@@ -620,14 +635,11 @@ class CacheServiceTest {
 
         assertEquals(listOf("alice.yaml"), cacheService.getNamespaceIndex(alice, "dev")?.map { it.dataId })
         assertEquals(listOf("bob.yaml"), cacheService.getNamespaceIndex(bob, "dev")?.map { it.dataId })
-        assertEquals(
-            listOf("alice.yaml"),
-            cacheService.configurationNavigationSnapshot(alice).map { it.configuration.dataId }
-        )
-        assertEquals(
-            listOf("bob.yaml"),
-            cacheService.configurationNavigationSnapshot(bob).map { it.configuration.dataId }
-        )
+        // Issue #52: namespace index no longer seeds the detail/navigation snapshot.
+        // Isolation is proven by the summary index itself; detail writes remain
+        // identity-scoped via putConfigDetail (covered elsewhere).
+        assertTrue(cacheService.configurationNavigationSnapshot(alice).isEmpty())
+        assertTrue(cacheService.configurationNavigationSnapshot(bob).isEmpty())
         cacheService.clearAll()
     }
     @Test

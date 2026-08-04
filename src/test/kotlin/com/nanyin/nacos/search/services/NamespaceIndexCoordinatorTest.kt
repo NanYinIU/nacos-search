@@ -217,12 +217,11 @@ class NamespaceIndexCoordinatorTest {
     }
 
     @Test
-    fun `partial namespace load updates captured scope and preserves stale details`() = runBlocking {
+    fun `partial namespace load preserves existing details and does not seed new ones`() = runBlocking {
         val apiService = mock<NacosApiService>()
         val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
         whenever(apiService.operationGateway()).thenReturn(gateway)
-        var now = 2_000_000L
-        val cacheService = CacheService { now }
+        val cacheService = CacheService { 2_000_000L }
         cacheService.clearAll()
         cacheService.putConfigDetail(
             identity,
@@ -231,8 +230,7 @@ class NamespaceIndexCoordinatorTest {
             ttl = -1L
         )
         val fresh = NacosConfiguration("fresh.yaml", "DEFAULT_GROUP", "ns-a", "new=true")
-        val cacheTtlMillis = 17L * 60 * 1000
-        val request = indexRequest(cacheTtlMillis = cacheTtlMillis)
+        val request = indexRequest()
         whenever(
             apiService.loadNamespace(
                 namespaceId = "ns-a",
@@ -254,10 +252,11 @@ class NamespaceIndexCoordinatorTest {
             .requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
 
         assertTrue(outcome is IndexOutcome.Partial)
-        assertEquals(
-            "new=true",
-            cacheService.getConfigDetail(identity, "ns-a", "fresh.yaml", "DEFAULT_GROUP")?.content
+        // Issue #52: partial summary index never seeds the detail cache.
+        assertNull(
+            cacheService.getConfigDetail(identity, "ns-a", "fresh.yaml", "DEFAULT_GROUP")
         )
+        // Pre-existing stale details must survive the partial index attempt.
         assertEquals(
             "old=true",
             cacheService.getConfigDetail(
@@ -267,21 +266,6 @@ class NamespaceIndexCoordinatorTest {
                 "DEFAULT_GROUP",
                 allowStale = true
             )?.content
-        )
-        assertNull(
-            cacheService.getConfigDetail(
-                AccessIdentity.of("", AuthMode.BASIC, "admin"),
-                "ns-a",
-                "fresh.yaml",
-                "DEFAULT_GROUP",
-                allowStale = true
-            )
-        )
-        assertEquals(
-            CacheService.DetailFreshness.FRESH,
-            cacheService.configurationNavigationSnapshot(identity)
-                .single { it.configuration.dataId == "fresh.yaml" }
-                .freshness
         )
     }
 

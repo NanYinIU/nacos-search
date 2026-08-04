@@ -23,6 +23,13 @@ data class NacosServerConfig(
     var connectionTimeoutMs: Int = 30000,
     var autoRefreshOnOpen: Boolean = true,
     var allowCrossNamespaceNavigation: Boolean = false,
+    /**
+     * Per-environment preference: when true, the navigation detail prefetch
+     * loads configuration bodies for the project's declared configuration
+     * sources so gutter markers resolve without browsing. Preference-only —
+     * must not live on [EnvironmentProfile] (ADR-0042).
+     */
+    var navigationDetailPrefetchEnabled: Boolean = true,
     /** Explicit publish intent; defaults false for new/migrated environments. */
     var writeIntent: Boolean = false
 ) {
@@ -40,6 +47,7 @@ data class NacosServerConfig(
             connectionTimeoutMs = connectionTimeoutMs,
             autoRefreshOnOpen = autoRefreshOnOpen,
             allowCrossNamespaceNavigation = allowCrossNamespaceNavigation,
+            navigationDetailPrefetchEnabled = navigationDetailPrefetchEnabled,
             writeIntent = writeIntent
         )
     }

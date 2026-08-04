@@ -112,7 +112,48 @@ object NacosKeyResolver {
             .filter { allowCrossNamespace || sameNamespace(it.namespaceId, activeNamespaceId) }
         val hits = preferDataIdHits(scoped, preferredDataId)
             .map { it.atTime(cacheService.cacheTimeMillis()) }
+        if (hits.isNotEmpty()) return resolutionFromHits(hits)
+
+        // No detail hit for the key. When a preferred data id is declared, the
+        // complete namespace summary index decides absence (UNRESOLVED) vs
+        // "exists but body not loaded" (UNDECIDABLE) — issue #52 / ADR-0041.
+        val dataId = preferredDataId?.takeIf { it.isNotBlank() }
+        if (dataId != null) {
+            return dataIdPresenceResolution(
+                dataId = dataId,
+                cacheService = cacheService,
+                activeServerUrl = activeServerUrl,
+                activeNamespaceId = activeNamespaceId,
+                activeIdentity = activeIdentity
+            )
+        }
         return resolutionFromHits(hits)
+    }
+
+    /**
+     * Classifies a preferred data id against the authoritative namespace summary
+     * index when no key hit exists in the detail-backed key index.
+     */
+    internal fun dataIdPresenceResolution(
+        dataId: String,
+        cacheService: CacheService,
+        activeServerUrl: String?,
+        activeNamespaceId: String?,
+        activeIdentity: AccessIdentity?
+    ): ConfigResolution {
+        val namespaceState = activeIdentity?.let { cacheService.namespaceIndexState(it, activeNamespaceId) }
+            ?: cacheService.namespaceIndexState(activeServerUrl.orEmpty(), activeNamespaceId)
+            ?: return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
+        if (namespaceState.freshness != CacheService.DetailFreshness.FRESH ||
+            !namespaceState.authoritativeForAbsence
+        ) {
+            return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
+        }
+        return if (dataId in namespaceState.dataIds) {
+            ConfigResolution(ConfigReferenceStatus.UNDECIDABLE, emptyList())
+        } else {
+            ConfigResolution(ConfigReferenceStatus.UNRESOLVED, emptyList())
+        }
     }
 
     /**
