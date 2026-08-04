@@ -6,6 +6,7 @@ import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.operations.GenerationProbeFlight
+import com.nanyin.nacos.search.services.operations.OperationTarget
 import com.nanyin.nacos.search.services.operations.SessionGenerationState
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.CredentialSnapshot
@@ -58,9 +59,7 @@ class SessionGenerationHarness(
 
     /** Any URL path segment that is generation-one (hardcoded V1 Open API). */
     fun generationOneRequestCount(): Int =
-        transport.urls.count { url ->
-            url.contains("/nacos/v1/") || url.contains("/v1/")
-        }
+        transport.urls.count { it.contains("/v1/") }
 
     fun clearRecorded() = transport.urls.clear()
 
@@ -125,6 +124,12 @@ class SessionGenerationHarness(
             operationContext = context
         )
     }
+
+    /** The gateway target the coordinator gates namespace-index writes on. */
+    fun indexTarget(
+        context: NacosOperationContext,
+        namespaceId: String = "public"
+    ): OperationTarget = OperationTarget(context, namespaceId.ifBlank { "public" })
 
     /**
      * Recording transport that answers V3 state, V3 list, and V1 list

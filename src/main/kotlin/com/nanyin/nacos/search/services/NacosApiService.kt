@@ -442,55 +442,6 @@ class NacosApiService(
        }
    }
 
-   private suspend fun listConfigurations(
-       server: NacosServerSnapshot,
-       namespaceId: String?,
-       pageNo: Int,
-       pageSize: Int,
-       policy: RequestPolicy
-   ): Result<ConfigListResponse> = try {
-       val params = buildMap {
-           put("pageNo", pageNo.toString())
-           put("pageSize", pageSize.toString())
-           put("dataId", "")
-           put("group", "")
-           put("appName", "")
-           put("config_tags", "")
-           put("search", "accurate")
-           namespaceId?.let { put("tenant", it) }
-       }
-       val url = buildUrl(server, CONFIG_LIST_ENDPOINT, params)
-       val response = requestJsonWithReplay(server, url, policy)
-       Result.success(gson.fromJson(response, object : TypeToken<ConfigListResponse>() {}.type) as ConfigListResponse)
-   } catch (e: Exception) {
-       logger.warn("Error listing configurations for captured server", e)
-       Result.failure(e)
-   }
-
-   private suspend fun getConfigurationFromItem(
-       server: NacosServerSnapshot,
-       item: ConfigItem,
-       policy: RequestPolicy
-   ): NacosConfiguration {
-       if (!item.content.isNullOrEmpty()) {
-           return NacosConfiguration(
-               dataId = item.dataId,
-               group = item.group,
-               tenantId = item.tenant,
-               content = item.content,
-               type = item.type
-           )
-       }
-       val params = buildMap {
-           put("dataId", item.dataId)
-           put("group", item.group)
-           put("show", "all")
-           item.tenant?.let { put("tenant", it) }
-       }
-       val response = requestJsonWithReplay(server, buildUrl(server, CONFIG_LIST_ENDPOINT, params), policy)
-       return gson.fromJson(response, object : TypeToken<NacosConfiguration>() {}.type) as NacosConfiguration
-   }
-
    private sealed class FetchResult {
        data class Success(val config: NacosConfiguration) : FetchResult()
        data class Failure(val dataId: String, val group: String, val error: Throwable) : FetchResult()
@@ -590,55 +541,6 @@ class NacosApiService(
         return CapturedRequest(url, headers)
     }
 
-    private suspend fun buildUrl(
-        server: NacosServerSnapshot,
-        endpoint: String,
-        params: Map<String, String>
-    ): String {
-        val mutableParams = params.toMutableMap()
-        val shouldUseToken = when (server.authMode) {
-            AuthMode.TOKEN, AuthMode.NACOS_PASSWORD -> true
-            AuthMode.BASIC -> false
-            AuthMode.HTTP_BASIC, AuthMode.BEARER_TOKEN -> throw ConfigurationRequired(
-                listOf("Explicit V1 authentication strategies require a V1-locked profile")
-            )
-            AuthMode.HYBRID -> server.enableTokenAuth
-            AuthMode.ANONYMOUS -> false
-        }
-        if (shouldUseToken) {
-            authService.getValidAccessToken(server)?.let { mutableParams["accessToken"] = it }
-        }
-        val queryParams = mutableParams.entries.joinToString("&") { (key, value) ->
-            "$key=${URLEncoder.encode(value, StandardCharsets.UTF_8.name())}"
-        }
-        return if (queryParams.isEmpty()) "${server.serverUrl}$endpoint" else "${server.serverUrl}$endpoint?$queryParams"
-    }
-
-    private suspend fun buildAuthHeaders(server: NacosServerSnapshot): Map<String, String> {
-        val headers = mutableMapOf<String, String>()
-        when (server.authMode) {
-            AuthMode.TOKEN, AuthMode.NACOS_PASSWORD -> if (server.enableTokenAuth) authService.getValidAccessToken(server)
-            AuthMode.HYBRID -> {
-                val token = if (server.enableTokenAuth) authService.getValidAccessToken(server) else null
-                if (token == null) addBasicAuthHeader(headers, server)
-            }
-            AuthMode.BASIC -> addBasicAuthHeader(headers, server)
-            AuthMode.HTTP_BASIC, AuthMode.BEARER_TOKEN -> throw ConfigurationRequired(
-                listOf("Explicit V1 authentication strategies require a V1-locked profile")
-            )
-            AuthMode.ANONYMOUS -> Unit
-        }
-        return headers
-    }
-
-    private fun addBasicAuthHeader(headers: MutableMap<String, String>, server: NacosServerSnapshot) {
-        if (server.username.isNotEmpty() && server.password.isNotEmpty()) {
-            val credentials = "${server.username}:${server.password}"
-            headers["Authorization"] = "Basic " + java.util.Base64.getEncoder()
-                .encodeToString(credentials.toByteArray())
-        }
-    }
-
     private fun addBasicAuthHeader(headers: MutableMap<String, String>, context: NacosOperationContext) {
         if (context.identity.principal != "<anonymous>" && context.credential.secret.isNotEmpty()) {
             val credentials = "${context.identity.principal}:${context.credential.secret}"
@@ -670,19 +572,6 @@ class NacosApiService(
            authService.invalidateToken(context)
            val replay = buildCapturedRequest(context, endpoint, params)
            return executor.get(replay.url, policy, replay.headers)
-       }
-   }
-
-   private suspend fun requestJsonWithReplay(
-       server: NacosServerSnapshot,
-       url: String,
-       policy: RequestPolicy
-   ): String {
-       try {
-           return executor.get(url, policy, buildAuthHeaders(server))
-       } catch (e: NacosRequestError.Authentication) {
-           authService.invalidateToken()
-           return executor.get(url, policy, buildAuthHeaders(server))
        }
    }
 
@@ -984,12 +873,6 @@ class NacosApiService(
         if (context.identity.principal == "<anonymous>" || context.credential.secret.isBlank()) return emptyMap()
         val credentials = "${context.identity.principal}:${context.credential.secret}"
         return mapOf("Authorization" to "Basic " + java.util.Base64.getEncoder().encodeToString(credentials.toByteArray()))
-    }
-
-    private fun isIncomplete(server: NacosServerSnapshot): Boolean {
-        val endpointValid = com.nanyin.nacos.search.models.CanonicalNacosEndpoint.parse(server.serverUrl).isSuccess
-        val credentialsComplete = server.username.isBlank() == server.password.isBlank()
-        return !endpointValid || !credentialsComplete
     }
 
     

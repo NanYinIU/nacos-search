@@ -179,11 +179,9 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
     suspend fun refreshCache(namespaceId: String): Result<Int> {
         return try {
             logger.info("Refreshing full namespace cache for '${namespaceId.ifBlank { "public" }}'")
-            val indexRequest = try {
-                settings.captureNamespaceIndexRequest(namespaceId)
-            } catch (e: Exception) {
-                return Result.failure(e)
-            }
+            // captureNamespaceIndexRequest fails closed with ConfigurationRequired;
+            // the surrounding catch turns it into Result.failure (issue #50).
+            val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
             when (val outcome = indexCoordinator.requestManualNamespaceRefresh(indexRequest)) {
                 is IndexOutcome.Complete -> {
                     ApplicationManager.getApplication()

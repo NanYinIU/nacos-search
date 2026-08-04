@@ -96,18 +96,67 @@ class SessionGenerationIntegrationTest {
     }
 
     @Test
-    fun `complete namespace index write advances the observation sequence`() = runBlocking {
+    fun `complete namespace index write carries an observation sequence`() = runBlocking {
         val before = harness.apiService.operationGateway().currentObservationSequence()
         val request = harness.indexRequest(harness.lockedContext(NacosApiGeneration.V1))
         val outcome = harness.coordinator.requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
-        assertTrue(outcome is IndexOutcome.Complete || outcome is IndexOutcome.Partial || outcome is IndexOutcome.Failed)
-        if (outcome is IndexOutcome.Complete) {
-            val after = harness.apiService.operationGateway().currentObservationSequence()
-            assertTrue(
-                after > before,
-                "namespace index write must carry an observation sequence (before=$before after=$after)"
-            )
-        }
+        assertTrue(
+            outcome is IndexOutcome.Complete,
+            "expected a complete index load, got $outcome (urls=${harness.recordedUrls})"
+        )
+        val after = harness.apiService.operationGateway().currentObservationSequence()
+        assertTrue(
+            after > before,
+            "namespace index write must carry an observation sequence (before=$before after=$after)"
+        )
+    }
+
+    /**
+     * ADR-0020: the sequence is taken when the load *starts*, so a load that
+     * started earlier must not overwrite one that started later, even when it
+     * finishes afterwards. Two loads for the same identity+namespace can overlap
+     * once a SEARCH trigger hits its 15-second cutoff and drops its in-flight
+     * entry while the job keeps running.
+     *
+     * A competing load is simulated at the transport seam — it starts, and wins
+     * the high-water mark, while this load is still fetching pages. This load's
+     * write must then be discarded rather than delete the newer index.
+     *
+     * Regression guard: taking the sequence at write time instead would hand
+     * this load the higher number, and the older view would win.
+     */
+    @Test
+    fun `an index load that started earlier does not overwrite a newer index`() = runBlocking {
+        lateinit var competing: SessionGenerationHarness
+        val transport = SessionGenerationHarness.RecordingTransport(
+            onRequest = { url ->
+                if (url.contains("/cs/config")) {
+                    val gateway = competing.apiService.operationGateway()
+                    val newer = gateway.beginNamespaceIndexObservation()
+                    gateway.commitNamespaceIndexWrite(
+                        competing.indexTarget(competing.lockedContext(NacosApiGeneration.V1)),
+                        newer
+                    )
+                }
+            }
+        )
+        competing = SessionGenerationHarness(transport)
+        competing.cacheService.clearAll()
+
+        val context = competing.lockedContext(NacosApiGeneration.V1)
+        val outcome = competing.coordinator.requestIndex(
+            competing.indexRequest(context),
+            IndexTrigger.NAMESPACE_SWITCH
+        )
+
+        assertTrue(
+            outcome is IndexOutcome.Stale,
+            "expected the obsolete write to be discarded, got $outcome"
+        )
+        assertNull(
+            competing.cacheService.getNamespaceIndex(context.identity, "public"),
+            "an older observation must not land in the namespace index"
+        )
     }
 
     @Test

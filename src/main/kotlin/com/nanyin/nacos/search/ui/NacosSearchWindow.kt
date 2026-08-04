@@ -767,23 +767,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         }
     }
     
-    private suspend fun searchConfigurations(
-        namespace: NamespaceInfo,
-        _criteria: SearchCriteria
-    ): List<NacosConfiguration> {
-        return withContext(Dispatchers.IO) {
-            val context = selectedOperationContext()
-                ?: return@withContext emptyList()
-            val listConfigurations = nacosApiService.listConfigurations(
-                namespace.namespaceId,
-                operationContext = context
-            )
-            listConfigurations.getOrNull()?.pageItems?.map { item ->
-                nacosApiService.getConfigurationFromItem(item, useCache = true, operationContext = context)
-            } ?: emptyList()
-        }
-    }
-    
     private suspend fun matchesSearchCriteria(
         config: NacosConfiguration,
         criteria: SearchCriteria

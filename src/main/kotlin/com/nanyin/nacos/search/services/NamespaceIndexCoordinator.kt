@@ -158,12 +158,14 @@ sealed interface IndexOutcome {
  * (single-flight), that PSI triggers respect a five-minute cooldown after
  * failure, and that the latest foreground request wins.
  *
- * Search requests are bounded by a 15-second front-end cutoff; preheat
- * requests use PREHEAT policy (no retry).
+ * Search requests are bounded by a 15-second front-end cutoff.
  *
  * Every generation is dispatched through [NacosApiService.loadNamespace] with
  * the captured operation context — there is no generation branch and no
- * legacy server-snapshot path here (issue #50).
+ * legacy server-snapshot path here (issue #50). Note that retry behaviour now
+ * comes from the centralized transport seam (ADR-0021), which classifies by
+ * operation kind; the [RequestPolicy] carried by a trigger no longer reaches
+ * the gateway dispatch.
  */
 @Service(Service.Level.APP)
 class NamespaceIndexCoordinator internal constructor(
@@ -233,6 +235,12 @@ class NamespaceIndexCoordinator internal constructor(
     private suspend fun executeIndex(request: NamespaceIndexRequest, policy: RequestPolicy): IndexOutcome {
         val key = request.key
         val context = request.operationContext
+        val target = OperationTarget(context, key.namespaceId.ifBlank { "public" })
+        // Namespace-index writes delete data, so they are ordered by observation
+        // sequence (ADR-0020 / issue #50). The sequence is taken *before* the
+        // load starts — a load that started earlier must lose to one that
+        // started later, even when it happens to finish afterwards.
+        val observation = apiService.operationGateway().beginNamespaceIndexObservation()
         return try {
             // Mandatory operation context — every generation (V1, V3, AUTO)
             // resolves through the gateway. No server snapshot, no generation
@@ -249,28 +257,22 @@ class NamespaceIndexCoordinator internal constructor(
                 val error = result.exceptionOrNull()
                 return IndexOutcome.Failed(
                     if (error is NacosRequestError) error
-                    else if (error is ConfigurationRequired) NacosRequestError.Connection(error)
                     else NacosRequestError.Connection(error ?: RuntimeException("Unknown"))
                 )
             }
 
             val loadResult = result.getOrNull()!!
             val now = System.currentTimeMillis()
-            val target = OperationTarget(
-                context,
-                key.namespaceId.ifBlank { "public" }
-            )
 
             when (loadResult.completeness) {
                 DatasetCompleteness.COMPLETE -> {
-                    // Namespace-index writes delete data; they must carry an
-                    // observation sequence (ADR-0020 / issue #50). A rejected
-                    // sequence means a newer observation already won — discard.
-                    val sequence = apiService.operationGateway().beginNamespaceIndexWrite(target)
-                    if (sequence == null) {
+                    // A rejected sequence means a later-started observation
+                    // already owns this identity+namespace — discard this one
+                    // rather than let an older view delete newer entries.
+                    if (!apiService.operationGateway().commitNamespaceIndexWrite(target, observation)) {
                         logger.info(
                             "Discarded obsolete namespace index write for ${key.namespaceId} " +
-                                "(observation sequence lost the high-water race)"
+                                "(observation $observation lost to a later-started load)"
                         )
                         return IndexOutcome.Stale(
                             loadResult.configurations.size,
@@ -312,10 +314,6 @@ class NamespaceIndexCoordinator internal constructor(
                     IndexOutcome.Failed(NacosRequestError.Connection(RuntimeException("Namespace list failed")))
                 }
             }
-        } catch (e: ConfigurationRequired) {
-            cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
-            recordPsiFailure(key)
-            IndexOutcome.Failed(NacosRequestError.Connection(e))
         } catch (e: Exception) {
             cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
             recordPsiFailure(key)
