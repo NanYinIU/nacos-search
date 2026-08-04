@@ -16,7 +16,6 @@ import com.nanyin.nacos.search.services.IndexOutcome
 import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
 import com.nanyin.nacos.search.services.NamespaceIndexRequest
 import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
-import com.nanyin.nacos.search.services.captureServerSnapshot
 import com.nanyin.nacos.search.services.requestSwitchedNamespaceIndex
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.settings.NacosConfigurable
@@ -25,6 +24,7 @@ import com.nanyin.nacos.search.settings.NacosSettingsListener
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.NacosUpgradeSummary
+import com.nanyin.nacos.search.settings.OperationContextSnapshotCache
 import com.nanyin.nacos.search.psi.NacosKeyResolver
 import com.intellij.openapi.components.service
 import com.intellij.openapi.application.ApplicationManager
@@ -98,22 +98,37 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      * handlers consume this prepared immutable snapshot instead of capturing
      * fresh on the EDT (design §11/§19.7). It is refreshed off-EDT whenever the
      * selected profile, namespace, or settings change.
+     *
+     * Publishes are epoch-ordered: a late capture for profile A cannot overwrite
+     * a newer capture for profile B after a rapid environment switch.
      */
-    @Volatile
-    private var operationContextSnapshot: NacosOperationContext? = null
+    private val operationContextCache = OperationContextSnapshotCache()
 
     private fun selectedProfileId(): String {
         projectSession.healSelection(settings)
         return projectSession.sessionState.selectedProfileId.ifBlank { settings.resolveDefaultProfileId() }
     }
 
-    private fun selectedOperationContext(): NacosOperationContext? = operationContextSnapshot
+    private fun selectedOperationContext(): NacosOperationContext? {
+        val profileId = selectedProfileId()
+        return operationContextCache.resolve(profileId, settings.getProfile(profileId))
+    }
 
     private suspend fun refreshOperationContextSnapshot() {
+        val epoch = operationContextCache.beginRefresh()
         val profileId = selectedProfileId()
-        operationContextSnapshot = withContext(Dispatchers.IO) {
+        val captured = withContext(Dispatchers.IO) {
             settings.captureOperationContext(profileId).getOrNull()
         }
+        // Re-read selection after IO so a switch during capture discards the result.
+        val stillSelected = selectedProfileId()
+        operationContextCache.publishIfCurrent(
+            epochAtStart = epoch,
+            capturedProfileId = profileId,
+            selectedProfileId = stillSelected,
+            selectedProfile = settings.getProfile(stillSelected),
+            context = captured
+        )
     }
     
     init {
@@ -326,6 +341,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun handleSettingsChanged() {
         // Switcher label reflects the new active environment immediately.
         SwingUtilities.invokeLater { environmentSwitcher.refresh() }
+        // Invalidate immediately so in-flight handlers cannot reuse a stale
+        // prepared context while the off-EDT refresh is still running.
+        operationContextCache.invalidate()
         coroutineScope.launch {
             refreshOperationContextSnapshot()
             nacosApiService.clearCache()
@@ -349,6 +367,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
 
     private fun handleProjectEnvironmentSelectionChanged() {
+        // Drop the previous environment's prepared context before the async
+        // refresh so a search scheduled mid-switch cannot pin the old server.
+        operationContextCache.invalidate()
         coroutineScope.launch {
             refreshOperationContextSnapshot()
             nacosSearchService.resetSearch()
@@ -377,22 +398,22 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 initializationManager.initialize(
                      namespacePanel = namespacePanel,
                      paginationPanel = paginationPanel,
-                     onInitializationComplete = { state ->
-                         when (state) {
-                             is InitializationManager.InitializationState.Success -> {
-                                 SwingUtilities.invokeLater {
-                                     // Initialization completed successfully
-                                 }
+                     profileId = selectedProfileId()
+                 ) { state ->
+                     when (state) {
+                         is InitializationManager.InitializationState.Success -> {
+                             SwingUtilities.invokeLater {
+                                 // Initialization completed successfully
                              }
-                             is InitializationManager.InitializationState.Error -> {
-                                 SwingUtilities.invokeLater {
-                                     showError(NacosSearchBundle.message("error.config.load.failed") + ": ${state.message}")
-                                 }
-                             }
-                             else -> {}
                          }
+                         is InitializationManager.InitializationState.Error -> {
+                             SwingUtilities.invokeLater {
+                                 showError(NacosSearchBundle.message("error.config.load.failed") + ": ${state.message}")
+                             }
+                         }
+                         else -> {}
                      }
-                 )
+                 }
             } catch (e: Exception) {
             SwingUtilities.invokeLater {
                 showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
@@ -436,14 +457,12 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             refreshOperationContextSnapshot()
             val profileId = selectedProfileId()
             val operationContext = selectedOperationContext()
-            val serverSnapshot = settings.captureServerSnapshot(profileId, operationContext)
             val request = NacosSearchService.SearchRequest(
                 namespace = newNamespace,
                 pageNo = 1,
                 pageSize = paginationPanel.getCurrentPageSize(),
                 forceRefresh = false,
                 serverId = profileId,
-                serverSnapshot = serverSnapshot,
                 operationContext = operationContext
             )
             currentSearchRequest = request
@@ -491,7 +510,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
              return
          }
          
-         // Create enhanced SearchRequest for prefix asterisk fuzzy search
+         // Create enhanced SearchRequest for prefix asterisk fuzzy search.
+         // Uses the prepared operation context (refreshed off-EDT) — never
+         // capture credentials on the event dispatch thread (issue #53).
          val searchRequest = NacosSearchService.SearchRequest(
              dataId = (criteria.dataId.ifBlank { criteria.query }),
              group = criteria.group,
@@ -503,7 +524,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
              pageNo = 1,
              pageSize = paginationPanel.getCurrentPageSize(),
              serverId = selectedProfileId(),
-             serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
              operationContext = selectedOperationContext()
          )
          currentNamespace = searchNameSpace;
@@ -556,7 +576,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             pageNo = 1,
             pageSize = paginationPanel.getCurrentPageSize(),
             serverId = selectedProfileId(),
-            serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
             operationContext = selectedOperationContext()
         )
        currentSearchRequest = searchRequest
@@ -572,7 +591,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             val currentRequest = NacosSearchService.SearchRequest(
                  namespace = namespacePanel.getSelectedNamespace(),
                  serverId = selectedProfileId(),
-                 serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
                  operationContext = selectedOperationContext()
              )
             nacosSearchService.previousPage(currentSearchRequest ?: currentRequest, nacosApiService)
@@ -584,7 +602,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             val currentRequest = NacosSearchService.SearchRequest(
                  namespace = namespacePanel.getSelectedNamespace(),
                  serverId = selectedProfileId(),
-                 serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
                  operationContext = selectedOperationContext()
              )
             nacosSearchService.nextPage(currentSearchRequest ?: currentRequest, nacosApiService)
@@ -597,7 +614,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                  namespace = namespacePanel.getSelectedNamespace(),
                  pageSize = pageSize,
                  serverId = selectedProfileId(),
-                 serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
                  operationContext = selectedOperationContext()
              )
             currentSearchRequest = (currentSearchRequest ?: currentRequest).copy(pageNo = 1, pageSize = pageSize)
@@ -719,7 +735,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             namespace = namespacePanel.getSelectedNamespace(),
             pageSize = paginationPanel.getCurrentPageSize(),
             serverId = selectedProfileId(),
-            serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
             operationContext = selectedOperationContext()
         )).copy(forceRefresh = true)
         loadConfigurations()
@@ -753,7 +768,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     pageNo = 1,
                     pageSize = paginationPanel.getCurrentPageSize(),
                     serverId = selectedProfileId(),
-                    serverSnapshot = settings.captureServerSnapshot(selectedProfileId()),
                     operationContext = selectedOperationContext()
                 )).copy(namespace = namespace)
                 currentSearchRequest = request

@@ -32,27 +32,10 @@ enum class IndexTrigger { NAMESPACE_SWITCH, SEARCH, MANUAL_REFRESH, PSI }
 data class NamespaceIndexKey(val identity: AccessIdentity, val namespaceId: String)
 
 /**
- * Captured connection coordinates used by the legacy auth/login path and by
- * search request tickets that still carry a snapshot. Namespace indexing no
- * longer accepts this type — index requests carry a mandatory
- * [NacosOperationContext] only (issue #50).
- */
-data class NacosServerSnapshot(
-    val serverUrl: String,
-    val username: String,
-    val password: String,
-    val authMode: com.nanyin.nacos.search.settings.AuthMode,
-    val enableTokenAuth: Boolean,
-    val identity: AccessIdentity = AccessIdentity.of("", AuthMode.TOKEN, "")
-) {
-    override fun toString(): String =
-        "NacosServerSnapshot(serverUrl=$serverUrl, username=$username, password=***, authMode=$authMode, enableTokenAuth=$enableTokenAuth)"
-}
-
-/**
- * Immutable index request. Carries a mandatory operation context and no
- * server snapshot — every generation routes through the operation gateway
- * (issue #50 / ADR-0010).
+ * Immutable index request. Carries a mandatory operation context — every
+ * generation routes through the operation gateway (issue #50 / ADR-0010).
+ * The redundant captured-server snapshot type was deleted in issue #53;
+ * callers pass a prepared [NacosOperationContext] only.
  */
 data class NamespaceIndexRequest(
     val key: NamespaceIndexKey,
@@ -105,30 +88,6 @@ internal fun NacosSettings.captureAccessIdentity(profileId: String? = null): Acc
             principal = ""
         )
     return OperationContextResolver.identityFromProfile(profile)
-}
-
-/**
- * Captures a server snapshot for search/auth call sites that still need one.
- * Namespace indexing no longer uses this — prefer [captureNamespaceIndexRequest]
- * with an operation context.
- */
-internal fun NacosSettings.captureServerSnapshot(
-    profileId: String? = null,
-    operationContext: NacosOperationContext? = null
-): NacosServerSnapshot {
-    val context = operationContext ?: captureOperationContext(profileId).getOrNull()
-    return if (context == null) {
-        NacosServerSnapshot("", "", "", AuthMode.TOKEN, false, captureAccessIdentity(profileId))
-    } else {
-        NacosServerSnapshot(
-            serverUrl = context.endpoint.value,
-            username = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty(),
-            password = context.credential.secret,
-            authMode = context.authMode,
-            enableTokenAuth = context.authMode != AuthMode.BASIC,
-            identity = context.identity
-        )
-    }
 }
 
 interface NamespaceIndexRequester {

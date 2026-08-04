@@ -190,7 +190,6 @@ class NacosSearchServiceTest {
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
         val context = settings.captureOperationContext().getOrThrow()
-        val snapshot = settings.captureServerSnapshot(operationContext = context)
 
         cache.putNamespaceIndex(
             context.identity,
@@ -205,7 +204,6 @@ class NacosSearchServiceTest {
             NacosSearchService.SearchRequest(
                 dataId = "*",
                 namespace = NamespaceInfo.createPublicNamespace(),
-                serverSnapshot = snapshot,
                 operationContext = context
             ),
             mock<NacosApiService>()
@@ -219,6 +217,36 @@ class NacosSearchServiceTest {
         // index-backed result claimed WITHIN_TTL regardless of its real age (#42).
         assertEquals(entry?.createdAtMillis, success.confidence.fetchedAtMillis)
         Unit
+    }
+
+    @Test
+    fun `search request cache key excludes credentials and uses prepared operation context only`() {
+        // Issue #53: SearchRequest carries a prepared operation context; credentials
+        // must not participate in cache keys (or any other identity-derived key).
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        settings.resetToDefaults()
+        settings.serverUrl = "https://nacos.example"
+        settings.username = "alice"
+        settings.password = "s3cret-one"
+        settings.authMode = AuthMode.NACOS_PASSWORD
+        settings.getActiveServer().apply {
+            serverUrl = "https://nacos.example"
+            username = "alice"
+            password = "s3cret-one"
+            authMode = AuthMode.NACOS_PASSWORD
+        }
+        val context = settings.captureOperationContext().getOrThrow()
+        val request = NacosSearchService.SearchRequest(
+            dataId = "app.yaml",
+            namespace = NamespaceInfo.createPublicNamespace(),
+            serverId = settings.activeServerId,
+            operationContext = context
+        )
+        val cacheKey = request.toCacheKey()
+        assertFalse(cacheKey.contains("s3cret-one"))
+        assertFalse(cacheKey.contains(context.credential.secret))
+        assertEquals(context, request.operationContext)
+        assertFalse(request.toString().contains("s3cret-one"))
     }
 
     private fun stubApi(): NacosApiService {
