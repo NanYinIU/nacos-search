@@ -1,0 +1,23 @@
+docs/adr/0049-keep-one-persisted-environment-model.md
+  s_9388b6a8cc2e4d::t_20f8e9c3d4b245 1-5
+CONTEXT.md
+  s_9388b6a8cc2e4d::t_63df0575774358 63-66
+docs/adr/0048-one-protocol-core-and-two-dialects.md
+  s_9388b6a8cc2e4d::t_388fcb68b0f319 1-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "8a7cc678502b90ec549f5371c9eeef487f6eb0a8",
+  "prompts": {},
+  "sessions": {
+    "s_9388b6a8cc2e4d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fee94daa-a1fa-44d7-95b8-b379a5f6ec74",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
