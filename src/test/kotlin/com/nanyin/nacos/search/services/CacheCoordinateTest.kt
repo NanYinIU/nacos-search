@@ -1,16 +1,15 @@
 package com.nanyin.nacos.search.services
 
-import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.models.testIdentity
 import com.nanyin.nacos.search.settings.AuthMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CacheCoordinateTest {
 
-    private val identityA = AccessIdentity.of("http://nacos:8848", AuthMode.TOKEN, "admin")
-    private val identityB = AccessIdentity.of("http://nacos:8848", AuthMode.TOKEN, "user")
+    private val identityA = testIdentity("http://nacos:8848", "admin", AuthMode.TOKEN)
+    private val identityB = testIdentity("http://nacos:8848", "user", AuthMode.TOKEN)
 
     @Test
     fun `detail coordinates with different identities produce different storage keys`() {
@@ -28,10 +27,10 @@ class CacheCoordinateTest {
 
     @Test
     fun `anonymous identity is distinct from named`() {
-        val anon = AccessIdentity.of("http://nacos:8848", AuthMode.BASIC, "")
-        val named = AccessIdentity.of("http://nacos:8848", AuthMode.BASIC, "admin")
-       val keyAnon = CacheCoordinate.Detail(anon, "http://nacos:8848", "public", "d", "g").storageKey()
-       val keyNamed = CacheCoordinate.Detail(named, "http://nacos:8848", "public", "d", "g").storageKey()
+        val anon = testIdentity("http://nacos:8848", "", AuthMode.BASIC)
+        val named = testIdentity("http://nacos:8848", "admin", AuthMode.BASIC)
+        val keyAnon = CacheCoordinate.Detail(anon, "http://nacos:8848", "public", "d", "g").storageKey()
+        val keyNamed = CacheCoordinate.Detail(named, "http://nacos:8848", "public", "d", "g").storageKey()
         assertFalse(keyAnon == keyNamed)
     }
 
@@ -39,7 +38,6 @@ class CacheCoordinateTest {
     fun `storage key never contains secrets`() {
         val coord = CacheCoordinate.Detail(identityA, "http://nacos:8848", "dev", "app.properties", "DEFAULT_GROUP")
         val key = coord.storageKey()
-        // AuthMode name (TOKEN/BASIC/HYBRID) is expected; but no password or accessToken value
         assertFalse("Key should not contain 'password'", key.contains("password", ignoreCase = true))
         assertFalse("Key should not contain 'accessToken='", key.contains("accessToken=", ignoreCase = true))
         assertFalse("Key should not contain 'Authorization'", key.contains("Authorization", ignoreCase = true))
@@ -49,6 +47,15 @@ class CacheCoordinateTest {
     fun `list page key includes request key`() {
         val a = CacheCoordinate.ListPage(identityA, "http://nacos:8848", "dev", "page=1&size=100")
         val b = CacheCoordinate.ListPage(identityA, "http://nacos:8848", "dev", "page=2&size=100")
+        assertFalse(a.storageKey() == b.storageKey())
+    }
+
+    @Test
+    fun `access revision participates in storage key`() {
+        val rev1 = testIdentity(accessRevision = 1)
+        val rev2 = testIdentity(accessRevision = 2)
+        val a = CacheCoordinate.Detail(rev1, rev1.canonicalEndpoint, "dev", "app.properties", "DEFAULT_GROUP")
+        val b = CacheCoordinate.Detail(rev2, rev2.canonicalEndpoint, "dev", "app.properties", "DEFAULT_GROUP")
         assertFalse(a.storageKey() == b.storageKey())
     }
 }

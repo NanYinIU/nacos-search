@@ -2,6 +2,7 @@ package com.nanyin.nacos.search.psi
 
 import com.intellij.testFramework.ApplicationRule
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.testIdentity
 import com.nanyin.nacos.search.services.CacheService
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -16,6 +17,7 @@ class NacosKeyResolverTest {
     val applicationRule = ApplicationRule()
 
     private lateinit var cache: CacheService
+    private val identity = testIdentity("http://localhost:8848")
 
     @Before
     fun setUp() = runBlocking {
@@ -26,14 +28,30 @@ class NacosKeyResolverTest {
     private fun cfg(dataId: String, group: String, tenant: String?, content: String, type: String) =
         NacosConfiguration(dataId, group, tenant, content, type)
 
-    private suspend fun seedConfigurations(configurations: List<NacosConfiguration>) {
-        cache.cacheConfigurations(configurations)
-        NacosKeyResolver.refreshIndex(cache, activeServerUrl = null)
+    private suspend fun seedConfigurations(
+        configurations: List<NacosConfiguration>,
+        forIdentity: com.nanyin.nacos.search.models.AccessIdentity = identity
+    ) {
+        configurations.forEach { config ->
+            cache.putConfigDetail(
+                identity = forIdentity,
+                namespaceId = config.tenantId,
+                configuration = config,
+                ttl = 60_000L
+            )
+        }
+        NacosKeyResolver.refreshIndex(cache, forIdentity)
     }
 
     @Test
-    fun `empty cache returns no hits`() {
+    fun `empty cache returns no hits without identity`() {
         assertTrue(NacosKeyResolver.resolve("anything", cache).isEmpty())
+    }
+
+    @Test
+    fun `empty cache returns no hits with identity`() = runBlocking {
+        NacosKeyResolver.refreshIndex(cache, identity)
+        assertTrue(NacosKeyResolver.resolve("anything", cache, activeIdentity = identity).isEmpty())
     }
 
     @Test
@@ -49,7 +67,7 @@ class NacosKeyResolverTest {
         val timedCache = CacheService { now }
         timedCache.clearAll()
         timedCache.putConfigDetail(
-            serverUrl = "http://localhost:8848",
+            identity = identity,
             namespaceId = "dev",
             configuration = cfg(
                 "app.properties",
@@ -63,7 +81,7 @@ class NacosKeyResolverTest {
 
         var resolution = NacosKeyResolver.resolveStatus(
             "feature.enabled",
-            NacosKeyResolver.refreshIndex(timedCache, "http://localhost:8848")
+            NacosKeyResolver.refreshIndex(timedCache, identity)
         )
         assertEquals(ConfigReferenceStatus.RESOLVED, resolution.status)
         assertEquals(CacheService.DetailFreshness.FRESH, resolution.hits.single().freshness)
@@ -71,7 +89,7 @@ class NacosKeyResolverTest {
         now += 101L
         resolution = NacosKeyResolver.resolveStatus(
             "feature.enabled",
-            NacosKeyResolver.refreshIndex(timedCache, "http://localhost:8848")
+            NacosKeyResolver.refreshIndex(timedCache, identity)
         )
         assertEquals(ConfigReferenceStatus.STALE, resolution.status)
         assertEquals(CacheService.DetailFreshness.STALE, resolution.hits.single().freshness)
@@ -79,7 +97,7 @@ class NacosKeyResolverTest {
         now = 3_000_000L + 8L * 24 * 60 * 60 * 1000
         resolution = NacosKeyResolver.resolveStatus(
             "feature.enabled",
-            NacosKeyResolver.refreshIndex(timedCache, "http://localhost:8848")
+            NacosKeyResolver.refreshIndex(timedCache, identity)
         )
         assertEquals(ConfigReferenceStatus.STALE, resolution.status)
         assertEquals(CacheService.DetailFreshness.DEEP_STALE, resolution.hits.single().freshness)
@@ -91,19 +109,19 @@ class NacosKeyResolverTest {
         val timedCache = CacheService { now }
         timedCache.clearAll()
         timedCache.putConfigDetail(
-            "http://localhost:8848",
+            identity,
             "dev",
             cfg("app.properties", "DEFAULT_GROUP", "dev", "timeout=30\n", "properties"),
             ttl = 100L
         )
-        NacosKeyResolver.refreshIndex(timedCache, "http://localhost:8848")
+        NacosKeyResolver.refreshIndex(timedCache, identity)
 
         assertEquals(
             ConfigReferenceStatus.RESOLVED,
             NacosKeyResolver.resolveCurrentState(
                 "timeout",
                 timedCache,
-                "http://localhost:8848"
+                activeIdentity = identity
             ).status
         )
 
@@ -112,7 +130,7 @@ class NacosKeyResolverTest {
         val stale = NacosKeyResolver.resolveCurrentState(
             "timeout",
             timedCache,
-            "http://localhost:8848"
+            activeIdentity = identity
         )
         assertEquals(ConfigReferenceStatus.STALE, stale.status)
         assertEquals(CacheService.DetailFreshness.STALE, stale.hits.single().freshness)
@@ -124,45 +142,45 @@ class NacosKeyResolverTest {
         val timedCache = CacheService { now }
         timedCache.clearAll()
         timedCache.putConfigDetail(
-            "http://localhost:8848",
+            identity,
             "dev",
             cfg("other.properties", "DEFAULT_GROUP", "dev", "other=true\n", "properties"),
             ttl = 100L
         )
-        NacosKeyResolver.refreshIndex(timedCache, "http://localhost:8848")
+        NacosKeyResolver.refreshIndex(timedCache, identity)
 
         assertTrue(
             NacosKeyResolver.isDataIdKnown(
                 "target.properties",
                 timedCache,
-                "http://localhost:8848",
-                activeNamespaceId = "dev"
+                activeNamespaceId = "dev",
+                activeIdentity = identity
             )
         )
 
         timedCache.putNamespaceIndex(
-            "http://localhost:8848",
+            identity,
             "dev",
             listOf(cfg("other.properties", "DEFAULT_GROUP", "dev", "other=true\n", "properties")),
             ttl = 100L
         )
-        NacosKeyResolver.refreshIndex(timedCache, "http://localhost:8848")
+        NacosKeyResolver.refreshIndex(timedCache, identity)
         assertFalse(
             NacosKeyResolver.isDataIdKnown(
                 "target.properties",
                 timedCache,
-                "http://localhost:8848",
-                activeNamespaceId = "dev"
+                activeNamespaceId = "dev",
+                activeIdentity = identity
             )
         )
 
-        timedCache.markNamespaceIndexNonAuthoritative("http://localhost:8848", "dev")
+        timedCache.markNamespaceIndexNonAuthoritative(identity, "dev")
         assertTrue(
             NacosKeyResolver.isDataIdKnown(
                 "target.properties",
                 timedCache,
-                "http://localhost:8848",
-                activeNamespaceId = "dev"
+                activeNamespaceId = "dev",
+                activeIdentity = identity
             )
         )
 
@@ -171,8 +189,8 @@ class NacosKeyResolverTest {
             NacosKeyResolver.isDataIdKnown(
                 "target.properties",
                 timedCache,
-                "http://localhost:8848",
-                activeNamespaceId = "dev"
+                activeNamespaceId = "dev",
+                activeIdentity = identity
             )
         )
     }
@@ -182,7 +200,7 @@ class NacosKeyResolverTest {
         seedConfigurations(
             listOf(cfg("app.properties", "DEFAULT_GROUP", null, "timeout=3000\n", "properties"))
         )
-        val hits = NacosKeyResolver.resolve("timeout", cache)
+        val hits = NacosKeyResolver.resolve("timeout", cache, activeIdentity = identity)
         assertEquals(1, hits.size)
         assertEquals("3000", hits[0].location.value)
     }
@@ -195,30 +213,32 @@ class NacosKeyResolverTest {
                 cfg("common.yaml", "SHARED", "dev", "timeout: 5000\n", "yaml")
             )
         )
-        val hits = NacosKeyResolver.resolve("timeout", cache)
+        val hits = NacosKeyResolver.resolve("timeout", cache, activeIdentity = identity)
         assertEquals(2, hits.size)
     }
 
     @Test
-    fun `active server url scopes resolution`() = runBlocking {
+    fun `active access identity scopes resolution`() = runBlocking {
+        val dev = testIdentity("http://dev-nacos:8848")
+        val prod = testIdentity("http://prod-nacos:8848")
         cache.putConfigDetail(
-            serverUrl = "http://dev-nacos:8848",
+            identity = dev,
             namespaceId = null,
             configuration = cfg("app.properties", "DEFAULT_GROUP", null, "app.name=dev\n", "properties"),
             ttl = 60_000L
         )
         cache.putConfigDetail(
-            serverUrl = "http://prod-nacos:8848",
+            identity = prod,
             namespaceId = null,
             configuration = cfg("app.properties", "DEFAULT_GROUP", null, "app.name=prod\n", "properties"),
             ttl = 60_000L
         )
-        NacosKeyResolver.refreshIndex(cache, "http://prod-nacos:8848")
+        NacosKeyResolver.refreshIndex(cache, prod)
 
         val hits = NacosKeyResolver.resolve(
             "app.name",
             cache,
-            activeServerUrl = "http://prod-nacos:8848/"
+            activeIdentity = prod
         )
 
         assertEquals(1, hits.size)
@@ -226,25 +246,34 @@ class NacosKeyResolverTest {
     }
 
     @Test
+    fun `without active identity resolve is a genuine miss`() = runBlocking {
+        seedConfigurations(
+            listOf(cfg("app.properties", "DEFAULT_GROUP", null, "timeout=3000\n", "properties"))
+        )
+        // Index exists for identity, but a call with no identity must not fall
+        // back to a legacy server-URL key space.
+        assertTrue(NacosKeyResolver.resolve("timeout", cache, activeIdentity = null).isEmpty())
+    }
+
+    @Test
     fun `active namespace sorts first`() = runBlocking {
         seedConfigurations(
             listOf(
-                // public
                 cfg("p.properties", "DEFAULT_GROUP", null, "k=pub\n", "properties"),
-                // dev namespace (active)
                 cfg("d.properties", "DEFAULT_GROUP", "dev", "k=dev\n", "properties"),
-                // other namespace
                 cfg("o.properties", "DEFAULT_GROUP", "sit", "k=sit\n", "properties")
             )
         )
-        val hits = NacosKeyResolver.resolve("k", cache, activeNamespaceId = "dev")
+        val hits = NacosKeyResolver.resolve(
+            "k",
+            cache,
+            activeNamespaceId = "dev",
+            activeIdentity = identity
+        )
         assertEquals(3, hits.size)
-        // active namespace (dev) first
         assertEquals("dev", hits[0].config.tenantId)
         assertEquals("dev", hits[0].location.value)
-        // then public
         assertEquals(null, hits[1].config.tenantId)
-        // then other
         assertEquals("sit", hits[2].config.tenantId)
     }
 
@@ -261,7 +290,8 @@ class NacosKeyResolverTest {
             key = "room.key",
             cacheService = cache,
             activeNamespaceId = "namespace1",
-            allowCrossNamespace = false
+            allowCrossNamespace = false,
+            activeIdentity = identity
         )
 
         assertEquals(1, hits.size)
@@ -283,7 +313,8 @@ class NacosKeyResolverTest {
             key = "room.key",
             cacheService = cache,
             activeNamespaceId = "public",
-            allowCrossNamespace = false
+            allowCrossNamespace = false,
+            activeIdentity = identity
         )
 
         assertEquals(2, hits.size)
@@ -303,7 +334,8 @@ class NacosKeyResolverTest {
             key = "room.key",
             cacheService = cache,
             activeNamespaceId = "namespace1",
-            allowCrossNamespace = true
+            allowCrossNamespace = true,
+            activeIdentity = identity
         )
 
         assertEquals(2, hits.size)
@@ -320,7 +352,12 @@ class NacosKeyResolverTest {
             )
         )
 
-        val hits = NacosKeyResolver.resolve("timeout", cache, preferredGroup = "APP_GROUP")
+        val hits = NacosKeyResolver.resolve(
+            "timeout",
+            cache,
+            preferredGroup = "APP_GROUP",
+            activeIdentity = identity
+        )
 
         assertEquals(2, hits.size)
         assertEquals("APP_GROUP", hits[0].config.group)
@@ -341,7 +378,8 @@ class NacosKeyResolverTest {
             cacheService = cache,
             preferredDataId = "common.properties",
             activeNamespaceId = "uxinlive",
-            allowCrossNamespace = false
+            allowCrossNamespace = false,
+            activeIdentity = identity
         )
 
         assertEquals(1, hits.size)
@@ -361,7 +399,8 @@ class NacosKeyResolverTest {
         val hits = NacosKeyResolver.resolve(
             key = "timeout",
             cacheService = cache,
-            preferredDataId = "common.properties"
+            preferredDataId = "common.properties",
+            activeIdentity = identity
         )
 
         assertEquals(2, hits.size)
@@ -377,8 +416,12 @@ class NacosKeyResolverTest {
                 cfg("b.properties", "g", null, "k=pub\n", "properties")
             )
         )
-        val hits = NacosKeyResolver.resolve("k", cache, activeNamespaceId = "uat")
-        // uat not present -> public before sit
+        val hits = NacosKeyResolver.resolve(
+            "k",
+            cache,
+            activeNamespaceId = "uat",
+            activeIdentity = identity
+        )
         assertEquals(null, hits[0].config.tenantId)
         assertEquals("sit", hits[1].config.tenantId)
     }
@@ -388,12 +431,12 @@ class NacosKeyResolverTest {
         seedConfigurations(
             listOf(cfg("app.properties", "g", null, "a=1\n", "properties"))
         )
-        assertTrue(NacosKeyResolver.resolve("nope", cache).isEmpty())
+        assertTrue(NacosKeyResolver.resolve("nope", cache, activeIdentity = identity).isEmpty())
     }
 
     @Test
     fun `blank key returns empty`() {
-        assertTrue(NacosKeyResolver.resolve("   ", cache).isEmpty())
+        assertTrue(NacosKeyResolver.resolve("   ", cache, activeIdentity = identity).isEmpty())
     }
 
     @Test
@@ -403,9 +446,9 @@ class NacosKeyResolverTest {
                 cfg("app.yaml", "g", null, "server:\n  port: 8080\n", "yaml")
             )
         )
-       val hits = NacosKeyResolver.resolve("server.port", cache)
-       assertEquals(1, hits.size)
-       assertEquals("8080", hits[0].location.value)
+        val hits = NacosKeyResolver.resolve("server.port", cache, activeIdentity = identity)
+        assertEquals(1, hits.size)
+        assertEquals("8080", hits[0].location.value)
     }
 
     @Test
@@ -413,47 +456,45 @@ class NacosKeyResolverTest {
         seedConfigurations(
             listOf(cfg("app.properties", "g", null, "timeout=3000\n", "properties"))
         )
-        val index = NacosKeyResolver.refreshIndex(cache, activeServerUrl = null)
+        val index = NacosKeyResolver.refreshIndex(cache, identity)
         assertEquals(1, index.hitsByKey.size)
 
-        assertTrue(NacosKeyResolver.hasKey("timeout", cache))
-        assertFalse(NacosKeyResolver.hasKey("missing", cache))
-        assertEquals("3000", NacosKeyResolver.resolve("timeout", cache).single().location.value)
+        assertTrue(NacosKeyResolver.hasKey("timeout", cache, activeIdentity = identity))
+        assertFalse(NacosKeyResolver.hasKey("missing", cache, activeIdentity = identity))
+        assertEquals(
+            "3000",
+            NacosKeyResolver.resolve("timeout", cache, activeIdentity = identity).single().location.value
+        )
     }
 
     @Test
     fun `refreshIndex again after cache change reflects new keys`() = runBlocking {
-        NacosKeyResolver.refreshIndex(cache, activeServerUrl = null)
-        assertFalse(NacosKeyResolver.hasKey("new.key", cache))
+        NacosKeyResolver.refreshIndex(cache, identity)
+        assertFalse(NacosKeyResolver.hasKey("new.key", cache, activeIdentity = identity))
 
         seedConfigurations(
             listOf(cfg("app.properties", "g", null, "new.key=v\n", "properties"))
         )
-        NacosKeyResolver.refreshIndex(cache, activeServerUrl = null)
-        assertTrue(NacosKeyResolver.hasKey("new.key", cache))
+        NacosKeyResolver.refreshIndex(cache, identity)
+        assertTrue(NacosKeyResolver.hasKey("new.key", cache, activeIdentity = identity))
     }
 
     @Test
     fun `lazy load flow caches config then rebuild makes key resolvable`() = runBlocking {
-        // Simulates what NacosValueLineMarkerProvider.lazyLoadAndNavigate does:
-        // before the remote fetch the key is unknown (gray marker),
-        assertFalse(NacosKeyResolver.hasKey("db.url", cache))
+        assertFalse(NacosKeyResolver.hasKey("db.url", cache, activeIdentity = identity))
 
-        // then putConfigDetail persists the freshly fetched configuration,
         cache.putConfigDetail(
-            serverUrl = "http://localhost:8848",
+            identity = identity,
             namespaceId = null,
             configuration = cfg("datasource.properties", "DEFAULT_GROUP", null, "db.url=jdbc:test\n", "properties"),
             ttl = 60_000L
         )
 
-        // and a synchronous index rebuild makes the key immediately resolvable
-        // so the gutter icon turns solid on the next highlighter pass.
-        NacosKeyResolver.refreshIndex(cache, activeServerUrl = "http://localhost:8848")
-        assertTrue(NacosKeyResolver.hasKey("db.url", cache, activeServerUrl = "http://localhost:8848"))
+        NacosKeyResolver.refreshIndex(cache, identity)
+        assertTrue(NacosKeyResolver.hasKey("db.url", cache, activeIdentity = identity))
         assertEquals(
             "jdbc:test",
-            NacosKeyResolver.resolve("db.url", cache, activeServerUrl = "http://localhost:8848").single().location.value
+            NacosKeyResolver.resolve("db.url", cache, activeIdentity = identity).single().location.value
         )
     }
 }
