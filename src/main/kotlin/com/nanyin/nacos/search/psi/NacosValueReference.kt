@@ -1,10 +1,12 @@
 package com.nanyin.nacos.search.psi
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiPolyVariantReferenceBase
 import com.intellij.psi.ResolveResult
+import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.settings.allowCrossNamespaceNavigation
 import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
 import com.nanyin.nacos.search.settings.selectedNacosNamespaceId
@@ -13,7 +15,7 @@ import com.nanyin.nacos.search.settings.selectedNacosNamespaceId
  * A reference from a `${...}` placeholder inside `@NacosValue` / `@Value` to the
  * Nacos configuration that defines the key.
  *
- * Resolves against the local configuration cache via [NacosKeyResolver]; each
+ * Resolves against the local configuration cache via [NacosKeyIndexService]; each
  * hit becomes a [NacosConfigKeyElement]. When the cache is empty or the key is
  * absent the reference resolves to nothing (navigation is a no-op).
  */
@@ -28,14 +30,17 @@ class NacosValueReference(
     override fun multiResolve(incompleteCode: Boolean): Array<ResolveResult> {
         val project: Project = element.project ?: return emptyArray()
         val allowCrossNamespace = project.allowCrossNamespaceNavigation()
-        val hits = NacosKeyResolver.resolve(
+        val application = ApplicationManager.getApplication()
+        val snapshot = application.getService(CacheService::class.java)
+            .snapshot(project.captureSelectedAccessIdentity())
+        val hits = application.getService(NacosKeyIndexService::class.java).resolve(
+            snapshot = snapshot,
             key = key,
             preferredGroup = codeContext.group,
             preferredNamespaceId = codeContext.namespaceId,
             preferredDataId = codeContext.dataId,
             allowCrossNamespace = allowCrossNamespace,
-            activeNamespaceId = project.selectedNacosNamespaceId(),
-            activeIdentity = project.captureSelectedAccessIdentity()
+            activeNamespaceId = project.selectedNacosNamespaceId()
         )
         return hits.map { hit ->
             object : ResolveResult {

@@ -43,7 +43,7 @@ class CacheServiceTest {
     @Test
     fun `configuration snapshot is immediately callable without a coroutine`() {
         val cacheService = CacheService(InMemoryCacheStore())
-        assertTrue(cacheService.configurationSnapshot(defaultIdentity).isEmpty())
+        assertTrue(cacheService.snapshot(defaultIdentity).freshConfigurations.isEmpty())
     }
 
     @Test
@@ -55,7 +55,7 @@ class CacheServiceTest {
             ttl = -1L
         )
 
-        assertTrue(cacheService.configurationSnapshot(defaultIdentity).isEmpty())
+        assertTrue(cacheService.snapshot(defaultIdentity).freshConfigurations.isEmpty())
     }
 
     @Test
@@ -119,19 +119,19 @@ class CacheServiceTest {
 
         assertEquals(
             CacheService.DetailFreshness.FRESH,
-            cacheService.configurationNavigationSnapshot(defaultIdentity).single().freshness
+            cacheService.snapshot(defaultIdentity).configurations.single().freshness
         )
 
         now += 101L
         assertEquals(
             CacheService.DetailFreshness.STALE,
-            cacheService.configurationNavigationSnapshot(defaultIdentity).single().freshness
+            cacheService.snapshot(defaultIdentity).configurations.single().freshness
         )
 
         now = 1_000_000L + 8L * 24 * 60 * 60 * 1000
         assertEquals(
             CacheService.DetailFreshness.DEEP_STALE,
-            cacheService.configurationNavigationSnapshot(defaultIdentity).single().freshness
+            cacheService.snapshot(defaultIdentity).configurations.single().freshness
         )
     }
 
@@ -149,7 +149,7 @@ class CacheServiceTest {
             NacosConfiguration("two.properties", "DEFAULT_GROUP", null, "k=two", "properties")
         )
 
-        assertEquals(listOf("one.properties"), cacheService.configurationSnapshot(one).map { it.dataId })
+        assertEquals(listOf("one.properties"), cacheService.snapshot(one).freshConfigurations.map { it.dataId })
     }
 
     @Test
@@ -176,7 +176,7 @@ class CacheServiceTest {
         // seed the detail snapshot.
         assertTrue(observedSizes.all { it == 0 || it == configurations.size })
         assertEquals(configurations.size, cacheService.getNamespaceIndex(defaultIdentity, "dev")?.size)
-        assertEquals(0, cacheService.configurationSnapshot(defaultIdentity).size)
+        assertEquals(0, cacheService.snapshot(defaultIdentity).freshConfigurations.size)
     }
 
     /**
@@ -257,7 +257,7 @@ class CacheServiceTest {
         )
         assertEquals(
             setOf("keep.properties", "never.fetched"),
-            cacheService.namespaceIndexState(defaultIdentity, "dev")?.dataIds
+            cacheService.snapshot(defaultIdentity).namespaceIndex("dev")?.dataIds
         )
     }
 
@@ -389,27 +389,6 @@ class CacheServiceTest {
             detail,
             cacheService.getConfigDetail(defaultIdentity, "dev", "app.yaml", "DEFAULT_GROUP")
         )
-    }
-
-    @Test
-    fun `cache modification count changes when detail cache changes`() = runBlocking {
-        val cacheService = CacheService(InMemoryCacheStore())
-        cacheService.awaitLoadCompleted()
-        val initial = cacheService.getModificationCount()
-
-        cacheService.writeDetail(
-            identity = defaultIdentity,
-            namespaceId = "dev",
-            configuration = NacosConfiguration("app.yaml", "DEFAULT_GROUP", "dev", "feature=true"),
-            ttl = 60_000L
-        )
-
-        val afterPut = cacheService.getModificationCount()
-        assertEquals(initial + 1, afterPut)
-
-        cacheService.clearAll()
-
-        assertEquals(afterPut + 1, cacheService.getModificationCount())
     }
 
     @Test
@@ -634,8 +613,8 @@ class CacheServiceTest {
 
         assertEquals(listOf("alice.yaml"), cacheService.getNamespaceIndex(alice, "dev")?.map { it.dataId })
         assertEquals(listOf("bob.yaml"), cacheService.getNamespaceIndex(bob, "dev")?.map { it.dataId })
-        assertTrue(cacheService.configurationNavigationSnapshot(alice).isEmpty())
-        assertTrue(cacheService.configurationNavigationSnapshot(bob).isEmpty())
+        assertTrue(cacheService.snapshot(alice).configurations.isEmpty())
+        assertTrue(cacheService.snapshot(bob).configurations.isEmpty())
     }
 
     @Test

@@ -13,7 +13,7 @@ import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.NavigationDetailPrefetchService
 import com.nanyin.nacos.search.services.requestManualNamespaceRefresh
 import com.nanyin.nacos.search.services.requestStartupNamespaceIndex
-import com.nanyin.nacos.search.psi.NacosKeyResolver
+import com.nanyin.nacos.search.psi.NacosKeyIndexService
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
@@ -40,6 +40,9 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
     private val cacheService by lazy { ApplicationManager.getApplication().getService(CacheService::class.java) }
     private val searchService by lazy { ApplicationManager.getApplication().getService(SearchService::class.java) }
     private val indexCoordinator by lazy { ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java) }
+
+    private fun keyIndexService(): NacosKeyIndexService =
+        ApplicationManager.getApplication().getService(NacosKeyIndexService::class.java)
 
     override suspend fun execute(project: Project) {
         logger.info("Initializing Nacos Search Plugin")
@@ -127,7 +130,7 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
                // Warm the @NacosValue key index from persisted/opened configs so
                // code gutter markers appear without blocking the highlighter.
                val identity = settings.captureAccessIdentity()
-               NacosKeyResolver.ensureIndexBuilt(cacheService, identity)
+               keyIndexService().ensureIndexBuilt(cacheService.snapshot(identity))
 
                 // Preheat the full namespace index in the background so the
                 // first content/regex search does not have to pull every page
@@ -172,7 +175,7 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
                 val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
                 val existing = cacheService.getNamespaceIndex(indexRequest.key.identity, namespaceId)
                 if (existing != null) {
-                    NacosKeyResolver.ensureIndexBuilt(cacheService, indexRequest.key.identity)
+                    keyIndexService().ensureIndexBuilt(cacheService.snapshot(indexRequest.key.identity))
                     return@launch
                 }
 

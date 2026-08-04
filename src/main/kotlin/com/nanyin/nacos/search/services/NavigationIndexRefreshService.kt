@@ -4,7 +4,7 @@ import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
-import com.nanyin.nacos.search.psi.NacosKeyResolver
+import com.nanyin.nacos.search.psi.NacosKeyIndexService
 import com.nanyin.nacos.search.models.AccessIdentity
 
 /** Publishes cache changes to code navigation and requests a fresh gutter pass. */
@@ -12,7 +12,9 @@ import com.nanyin.nacos.search.models.AccessIdentity
 class NavigationIndexRefreshService {
     fun refresh(identity: AccessIdentity, project: Project?) {
         val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
-        NacosKeyResolver.refreshIndex(cacheService, identity)
+        ApplicationManager.getApplication()
+            .getService(NacosKeyIndexService::class.java)
+            .refreshIndex(cacheService.snapshot(identity))
 
         ApplicationManager.getApplication().invokeLater {
             val projects = if (project == null) {

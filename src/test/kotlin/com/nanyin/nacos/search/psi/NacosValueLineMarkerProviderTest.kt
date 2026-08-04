@@ -9,6 +9,7 @@ import com.intellij.psi.PsiFileFactory
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.ApplicationRule
 import com.nanyin.nacos.search.NacosIcons
+import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.CacheService
@@ -47,9 +48,19 @@ class NacosValueLineMarkerProviderTest {
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
             cache.clearAll()
-            NacosKeyResolver.refreshIndex(cache, settings.captureAccessIdentity())
+            refreshKeyIndex(cache, settings.captureAccessIdentity())
         }
         ApplicationManager.getApplication().getService(NamespaceService::class.java).setCurrentNamespace(null)
+    }
+
+    /**
+     * The production path: the application-level index service rebuilds from a
+     * snapshot the cache hands out. Nothing here reaches into cache internals.
+     */
+    private fun refreshKeyIndex(cache: CacheService, identity: AccessIdentity) {
+        ApplicationManager.getApplication()
+            .getService(NacosKeyIndexService::class.java)
+            .refreshIndex(cache.snapshot(identity))
     }
 
     private fun selectProjectNamespace(namespaceId: String) {
@@ -63,7 +74,7 @@ class NacosValueLineMarkerProviderTest {
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         cache.writeDetail(settings.captureAccessIdentity(), null, configuration)
-        NacosKeyResolver.refreshIndex(cache, settings.captureAccessIdentity())
+        refreshKeyIndex(cache, settings.captureAccessIdentity())
     }
 
     @Test
@@ -92,7 +103,7 @@ class NacosValueLineMarkerProviderTest {
             NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo", "properties"),
             ttl = -1L
         )
-        NacosKeyResolver.refreshIndex(cache, settings.captureAccessIdentity())
+        refreshKeyIndex(cache, settings.captureAccessIdentity())
 
         val marker = markerFor(
             """
@@ -117,7 +128,7 @@ class NacosValueLineMarkerProviderTest {
             NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo", "properties"),
             ttl = -1L
         )
-        NacosKeyResolver.refreshIndex(cache, settings.captureAccessIdentity())
+        refreshKeyIndex(cache, settings.captureAccessIdentity())
 
         var observed = false
         val provider = NacosValueLineMarkerProvider { _, _ -> observed = true }
@@ -157,7 +168,7 @@ class NacosValueLineMarkerProviderTest {
                 ),
                 ttl = 60_000L
             )
-            NacosKeyResolver.refreshIndex(cache, settings.captureAccessIdentity())
+            refreshKeyIndex(cache, settings.captureAccessIdentity())
         }
 
         val marker = markerFor(
@@ -205,7 +216,7 @@ class NacosValueLineMarkerProviderTest {
                 ttl = 60_000L
             )
             // App-active profile cache stays empty — gutter must not look there.
-            NacosKeyResolver.refreshIndex(cache, qaIdentity)
+            refreshKeyIndex(cache, qaIdentity)
         }
 
         val marker = markerFor(
@@ -247,7 +258,7 @@ class NacosValueLineMarkerProviderTest {
                null,
                listOf(NacosConfiguration("other.properties", "DEFAULT_GROUP", null, "other.key=val\n", "properties"))
            )
-           NacosKeyResolver.refreshIndex(cache, settings.captureAccessIdentity())
+           refreshKeyIndex(cache, settings.captureAccessIdentity())
        }
 
        val marker = markerFor(
@@ -321,7 +332,7 @@ class NacosValueLineMarkerProviderTest {
                 namespaceId = null,
                 configuration = NacosConfiguration("datasource.properties", "DEFAULT_GROUP", null, "db.url=jdbc:test\n", "properties")
             )
-            NacosKeyResolver.refreshIndex(cache, settings.captureAccessIdentity())
+            refreshKeyIndex(cache, settings.captureAccessIdentity())
         }
 
         // After the rebuild the key is resolvable → solid icon.
@@ -424,7 +435,7 @@ class NacosValueLineMarkerProviderTest {
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
                 ttl = 60_000L
             )
-            NacosKeyResolver.refreshIndex(cache, settings.captureAccessIdentity())
+            refreshKeyIndex(cache, settings.captureAccessIdentity())
         }
 
         val results = resolveReferenceForKey("room.key")
@@ -456,7 +467,7 @@ class NacosValueLineMarkerProviderTest {
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
                 ttl = 60_000L
             )
-            NacosKeyResolver.refreshIndex(cache, settings.captureAccessIdentity())
+            refreshKeyIndex(cache, settings.captureAccessIdentity())
         }
 
         val results = resolveReferenceForKey("room.key")
@@ -513,7 +524,7 @@ class NacosValueLineMarkerProviderTest {
                 configuration = NacosConfiguration("room.properties", "DEFAULT_GROUP", "namespace2", "room.key=two\n", "properties"),
                 ttl = 60_000L
             )
-            NacosKeyResolver.refreshIndex(cache, settings.captureAccessIdentity())
+            refreshKeyIndex(cache, settings.captureAccessIdentity())
         }
     }
 

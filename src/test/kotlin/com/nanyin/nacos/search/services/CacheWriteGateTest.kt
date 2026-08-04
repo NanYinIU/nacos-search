@@ -111,7 +111,7 @@ class CacheWriteGateTest {
         )
         assertFalse(cacheService.applyMutation(CacheMutation.MarkNamespaceIndexNonAuthoritative(identity, "dev"), 6))
 
-        assertTrue(cacheService.namespaceIndexState(identity, "dev")!!.authoritativeForAbsence)
+        assertTrue(cacheService.snapshot(identity).namespaceIndex("dev")!!.authoritativeForAbsence)
     }
 
     @Test
@@ -201,7 +201,7 @@ class CacheWriteGateTest {
         cacheService.applyMutation(CacheMutation.WriteDetail(before, "dev", config("a.properties", "old creds"), TTL), 1)
 
         assertNull(cacheService.getConfigDetail(after, "dev", "a.properties", "DEFAULT_GROUP"))
-        assertTrue(cacheService.configurationSnapshot(after).isEmpty())
+        assertTrue(cacheService.snapshot(after).freshConfigurations.isEmpty())
     }
 
     @Test
@@ -300,7 +300,7 @@ class CacheWriteGateTest {
         }
 
         assertNull(cacheService.getConfigDetail(identity, "dev", "a.properties", "DEFAULT_GROUP", allowStale = true))
-        assertTrue(cacheService.configurationSnapshot(identity).isEmpty())
+        assertTrue(cacheService.snapshot(identity).freshConfigurations.isEmpty())
     }
 
     @Test
@@ -370,7 +370,7 @@ class CacheWriteGateTest {
         assertTrue(cacheService.applyMutation(CacheMutation.MarkNamespaceIndexNonAuthoritative(identity, "dev"), 3))
 
         assertNotNull(cacheService.getConfigDetail(identity, "dev", "a.properties", "DEFAULT_GROUP"))
-        assertFalse(cacheService.namespaceIndexState(identity, "dev")!!.authoritativeForAbsence)
+        assertFalse(cacheService.snapshot(identity).namespaceIndex("dev")!!.authoritativeForAbsence)
     }
 
     @Test
@@ -380,14 +380,14 @@ class CacheWriteGateTest {
         first.applyMutation(
             CacheMutation.ReplaceNamespaceIndex(identity, "dev", listOf(config("a.properties", "")), TTL), 1
         )
-        assertTrue(first.namespaceIndexState(identity, "dev")!!.authoritativeForAbsence)
+        assertTrue(first.snapshot(identity).namespaceIndex("dev")!!.authoritativeForAbsence)
 
         // "Restart": a second cache over the same store. Index authority is
         // memory-only on purpose, so absence is undecidable rather than proven.
         val restarted = cache(store)
         restarted.awaitLoadCompleted()
 
-        assertNull(restarted.namespaceIndexState(identity, "dev"))
+        assertNull(restarted.snapshot(identity).namespaceIndex("dev"))
         // A code reference to a data id the pre-restart index did not list is
         // reported as undecidable, never as an unresolved (confidently absent)
         // one — no amount of ordering machinery turns restored data into a
@@ -396,9 +396,8 @@ class CacheWriteGateTest {
             ConfigReferenceStatus.UNRESOLVED,
             NacosKeyResolver.dataIdPresenceResolution(
                 dataId = "never.listed",
-                cacheService = restarted,
-                activeNamespaceId = "dev",
-                activeIdentity = identity
+                snapshot = restarted.snapshot(identity),
+                activeNamespaceId = "dev"
             ).status
         )
         // The same check against the live index does prove absence.
@@ -406,9 +405,8 @@ class CacheWriteGateTest {
             ConfigReferenceStatus.UNRESOLVED,
             NacosKeyResolver.dataIdPresenceResolution(
                 dataId = "never.listed",
-                cacheService = first,
-                activeNamespaceId = "dev",
-                activeIdentity = identity
+                snapshot = first.snapshot(identity),
+                activeNamespaceId = "dev"
             ).status
         )
     }
@@ -434,7 +432,7 @@ class CacheWriteGateTest {
 
         assertNull(cacheService.getConfigDetail(identity, "dev", "a.properties", "DEFAULT_GROUP", allowStale = true))
         assertNull(cacheService.getListPage(identity, "dev", "page-1", allowStale = true))
-        assertNull(cacheService.namespaceIndexState(identity, "dev"))
+        assertNull(cacheService.snapshot(identity).namespaceIndex("dev"))
         assertTrue(store.loadDetails().isEmpty())
         assertTrue(store.loadListPages().isEmpty())
     }
