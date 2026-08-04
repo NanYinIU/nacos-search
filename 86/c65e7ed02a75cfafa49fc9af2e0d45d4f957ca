@@ -1,0 +1,81 @@
+src/test/kotlin/com/nanyin/nacos/search/services/CacheStoreContractTest.kt
+  s_dd730dd0c828c9::t_632afa0d6f0342 19
+  s_dd730dd0c828c9::t_8c6cb060c69bb2 50-61
+  s_dd730dd0c828c9::t_e06ecd800376e5 84-96
+  s_dd730dd0c828c9::t_234bd3b2cb5588 1-18,20-49,97
+  s_dd730dd0c828c9::t_1f2fc40e4da5a4 62-83
+src/test/kotlin/com/nanyin/nacos/search/services/SessionGenerationHarness.kt
+  s_dd730dd0c828c9::t_cb335ca067794f 43
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceSummaryIndexTest.kt
+  s_dd730dd0c828c9::t_cb041ab28056bb 101,125,150,174,219
+src/main/kotlin/com/nanyin/nacos/search/services/FileCacheStore.kt
+  s_dd730dd0c828c9::t_c1ed2986a05b87 42-58,62,65-72,76,78,81,83,85-86,89-110,114,118,122,124,129,134-150,153,156,162-164,170,183,185,192-194,199-206,234-235,238,240,242-245,247,251-262,264-266,269,276-279,282-283,313-321,325-328
+  s_dd730dd0c828c9::t_22efb6b1b6a042 1-41,59-61,63-64,73-75,77,79-80,82,84,87-88,111-113,115-117,119-121,123,125-128,130-133,151-152,154-155,157-161,165-169,171-182,184,186-191,195-198,207-233,236-237,239,241,246,248-250,263,267-268,270-275,280-281,284-312,322-324,329-369
+CLAUDE.md
+  s_dd730dd0c828c9::t_4ca2dd37613b16 89,92,94
+  s_dd730dd0c828c9::t_0ae9ddaf6d9082 91
+src/test/kotlin/com/nanyin/nacos/search/services/CacheServiceTest.kt
+  s_dd730dd0c828c9::t_edc94daa088033 7,22-27,34,45,52,64-65,93,109,143,158,185,274,311,334-335,368,392,413,439,463,497-498,507-510,514-516,523-529,531,535-539,543-553,555-572,574-575,577-579,583-585,593-598,600,605-606,613,620,643,647,670,697,723-735
+src/test/kotlin/com/nanyin/nacos/search/services/InMemoryCacheStoreTest.kt
+  s_dd730dd0c828c9::t_cfb356f0ddeae7 1-2,4-5
+  s_dd730dd0c828c9::t_ddaf71b9c02338 3
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_dd730dd0c828c9::t_ed6646b66765c4 734-735,741-747,751-754,757,766
+  s_dd730dd0c828c9::t_90c730fd0839ef 657
+  s_dd730dd0c828c9::t_4e671c4f498390 603,607
+  s_dd730dd0c828c9::t_ceb4f1a2fe867d 698
+  s_dd730dd0c828c9::t_05e931de40a872 318-320,324,327
+  s_dd730dd0c828c9::t_c92106854da68f 315
+  s_dd730dd0c828c9::t_53982dbce22a0a 276
+  s_dd730dd0c828c9::t_8834fcab85a444 455
+  s_dd730dd0c828c9::t_c382ab501a58e7 783-784
+  s_dd730dd0c828c9::t_a41aa6b5426af5 806,814
+  s_dd730dd0c828c9::t_2cd9a6c4c0877c 259
+  s_dd730dd0c828c9::t_30fde8a9887380 407
+  s_dd730dd0c828c9::t_6b273dfd64713a 379
+  s_dd730dd0c828c9::t_25ef8471e5bcd0 23-26,31-32,34-37
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinatorTest.kt
+  s_dd730dd0c828c9::t_cb335ca067794f 177
+  s_dd730dd0c828c9::t_210c17a1113005 224
+src/test/kotlin/com/nanyin/nacos/search/services/FileCacheStoreTest.kt
+  s_dd730dd0c828c9::t_0980ade63cc113 3
+  s_dd730dd0c828c9::t_572eb3566ff776 102-152
+  s_dd730dd0c828c9::t_1c6841b85f7a7f 1-2,4-17,21-39,41,43-48,50-58,60-68,70-80,82-93,95-101,153
+  s_dd730dd0c828c9::t_73490771239b07 18-20
+  s_dd730dd0c828c9::t_1ec05cd32f7b15 40,42,49,59,69,81,94
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolverTest.kt
+  s_dd730dd0c828c9::t_210c17a1113005 50,92,125
+  s_dd730dd0c828c9::t_93091ece882587 6
+  s_dd730dd0c828c9::t_cb041ab28056bb 23
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexRefreshServiceTest.kt
+  s_dd730dd0c828c9::t_cb041ab28056bb 35
+src/main/kotlin/com/nanyin/nacos/search/services/CacheStore.kt
+  s_dd730dd0c828c9::t_3a1c7c57ed67ae 25-31
+  s_dd730dd0c828c9::t_94a548fa84db23 32-34
+  s_dd730dd0c828c9::t_fbe31d1960517b 23-24
+  s_dd730dd0c828c9::t_711a4fae1fabb4 51-54
+  s_dd730dd0c828c9::t_287fa59a147a20 1-22,35-39,41-50,71
+  s_dd730dd0c828c9::t_7fcf23b97d63b3 55-65
+  s_dd730dd0c828c9::t_43376f3dfb6c72 66-70
+  s_dd730dd0c828c9::t_2a3a3a09301f6a 40
+src/test/kotlin/com/nanyin/nacos/search/services/NavigationDetailPrefetchServiceTest.kt
+  s_dd730dd0c828c9::t_cb041ab28056bb 103,167,187,241,292
+src/test/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanelStaleTest.kt
+  s_dd730dd0c828c9::t_0926b026ce332a 9,27,63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "86c65e7ed02a75cfafa49fc9af2e0d45d4f957ca",
+  "prompts": {},
+  "sessions": {
+    "s_dd730dd0c828c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1387c579-5020-43cb-843e-5eec8c1659fb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
