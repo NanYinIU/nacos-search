@@ -16,6 +16,7 @@ import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NamespaceIndexRefreshService
 import com.nanyin.nacos.search.services.captureAccessIdentity
+import com.nanyin.nacos.search.services.operations.ObservedDetailRecorder
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.allowCrossNamespaceNavigation
 import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
@@ -176,10 +177,24 @@ class NacosValueLineMarkerProvider internal constructor(
             val config = observed?.value ?: return@executeOnPooledThread
 
             // The gutter marker decides resolved vs. unresolved from the cache,
-            // and the read above already cached this detail under the observation
-            // sequence it took. This layer navigates; it does not write to the
-            // cache (issue #65).
-            //
+            // so the fetched config has to be there under the identity *this*
+            // layer reads with. That is not always the identity the gateway
+            // wrote under: an AUTO profile resolves its generation per
+            // operation, while captureAccessIdentity leaves it UNKNOWN because
+            // the hot path may not touch PasswordSafe, and the generation is
+            // part of the cache key. Recording it carries the read's own
+            // observation sequence, so it can neither outrank a newer read nor
+            // restamp what the gateway already wrote (issue #65).
+            runBlocking {
+                ObservedDetailRecorder(cacheService).recordDetail(
+                    accessIdentity,
+                    namespaceId,
+                    config,
+                    settings.getCacheTtlMillis(),
+                    observed.observation
+                )
+            }
+
             // Rebuild the key index synchronously. We are on a pooled thread
             // (never the highlighter/dispatch thread), so a blocking rebuild is
             // safe and makes hasKey()/resolve() reflect the freshly cached

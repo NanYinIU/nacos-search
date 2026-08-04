@@ -14,11 +14,14 @@ package com.nanyin.nacos.search.services
  * of what the gateway just wrote or a sequence it invented, and neither is
  * something review has reliably caught here.
  *
- * Opting in is deliberate and greppable. It belongs on components that
- * perform remote operations and therefore own an observation sequence:
- * the gateway's cache adapter, the namespace index coordinator, the
- * navigation detail prefetch, the API service's clear gestures, and the
- * cache module's own tests. It does not belong in `ui/` or `psi/`.
+ * Opting in is deliberate and greppable. It belongs to the operation layer:
+ * components that perform remote operations and own an observation sequence,
+ * and the recorders that turn a completed operation's observation into a
+ * mutation on its caller's behalf. Today that is the gateway's cache adapter,
+ * the namespace index coordinator, the navigation detail prefetch,
+ * [com.nanyin.nacos.search.services.operations.ObservedDetailRecorder], the API
+ * service's clear gestures, and the cache module's own tests. It does not
+ * belong in `ui/` or `psi/`.
  */
 @RequiresOptIn(
     level = RequiresOptIn.Level.ERROR,
@@ -26,10 +29,5 @@ package com.nanyin.nacos.search.services
         "that orders them. UI and code-navigation code reads the cache; it does not write to it."
 )
 @Retention(AnnotationRetention.BINARY)
-@Target(
-    AnnotationTarget.CLASS,
-    AnnotationTarget.FUNCTION,
-    AnnotationTarget.PROPERTY,
-    AnnotationTarget.CONSTRUCTOR
-)
+@Target(AnnotationTarget.CLASS, AnnotationTarget.FUNCTION)
 annotation class CacheWriteAccess
