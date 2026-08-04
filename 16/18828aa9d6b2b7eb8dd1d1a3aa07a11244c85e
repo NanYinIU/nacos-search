@@ -1,0 +1,19 @@
+src/test/kotlin/com/nanyin/nacos/search/services/operations/SessionGenerationStateTest.kt
+  s_290c851dd0d1b8::t_344ff9f2410a85 1-149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "1618828aa9d6b2b7eb8dd1d1a3aa07a11244c85e",
+  "prompts": {},
+  "sessions": {
+    "s_290c851dd0d1b8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "457eb96b-e308-419c-8b03-cbe1bf74e54a",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
