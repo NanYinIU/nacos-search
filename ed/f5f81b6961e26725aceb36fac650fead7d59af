@@ -1,0 +1,43 @@
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_3443752093bab1::t_00654eb278d863 485-498,503-509,513
+  s_3443752093bab1::t_479f0130433635 239,248
+  s_3443752093bab1::t_231e902e08ac73 478
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceTest.kt
+  s_3443752093bab1::t_8a6827bcb42687 16
+  s_3443752093bab1::t_6279fa4bf2b506 188-223
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosConfigurable.kt
+  s_3443752093bab1::t_75ba2ebdcad337 927-931
+  s_3443752093bab1::t_d706765711f9c3 952-953
+src/main/kotlin/com/nanyin/nacos/search/services/network/NacosRequestExecutor.kt
+  s_3443752093bab1::t_6c7f471a73c010 135-139
+  s_3443752093bab1::t_5b28f36d9e5982 230-237,240-241
+src/test/kotlin/com/nanyin/nacos/search/settings/SettingsApplyConnectionChangeTest.kt
+  s_3443752093bab1::t_194bd3f8bc0a49 100-115
+  s_3443752093bab1::t_4683b7ba916161 99
+src/test/kotlin/com/nanyin/nacos/search/services/CacheServiceTest.kt
+  s_3443752093bab1::t_f6453cdd952599 655-682
+  s_3443752093bab1::t_7096d18d550e50 654
+src/test/kotlin/com/nanyin/nacos/search/services/network/DefaultHttpTransportTest.kt
+  s_3443752093bab1::t_e70b78cd5312eb 1-127
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_3443752093bab1::t_18a66fc360ba6b 328
+  s_3443752093bab1::t_ae39f213747733 446-451
+  s_3443752093bab1::t_7de4d713f13a18 378,383-386,389-390,400,403-404,406-410,413-414
+  s_3443752093bab1::t_e63489b5580608 494-498,503
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "edf5f81b6961e26725aceb36fac650fead7d59af",
+  "prompts": {},
+  "sessions": {
+    "s_3443752093bab1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4108f581-a65f-4542-8e7e-4af1523b30cd",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
