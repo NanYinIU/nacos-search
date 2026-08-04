@@ -464,15 +464,18 @@ class CacheService internal constructor(
         val discardsBeforeRead = discardGeneration.get()
         val fromStore = store.loadDetail(key) ?: return null
         if (discardGeneration.get() != discardsBeforeRead) return null
-        val published = detailCache.putIfAbsent(key, fromStore) ?: fromStore
+        val alreadyInMemory = detailCache.putIfAbsent(key, fromStore)
+        val published = alreadyInMemory ?: fromStore
         if (discardGeneration.get() != discardsBeforeRead) {
             detailCache.remove(key, published)
             return null
         }
-        // Content changed without a mutation, so the snapshot version has to
-        // move or a derived index would never see the reconstituted entry. It
-        // still carries no observation sequence and raises no gate mark.
-        if (loadCompleted.isCompleted) publish()
+        // Publish only when this read actually added an entry. It changed the
+        // cache's content without being a mutation, so the version has to move
+        // or a derived index would never see the reconstituted entry — but a
+        // read that found the entry already in memory changed nothing, and
+        // moving the version for it would rebuild that index for no reason.
+        if (alreadyInMemory == null && loadCompleted.isCompleted) publish()
         return published
     }
 
@@ -578,9 +581,15 @@ class CacheService internal constructor(
     }
 
     /**
-     * Cuts a new immutable published state and advances its version. Version and
-     * payload are assembled under one lock so a reader can never see a version
-     * that does not describe the content published with it.
+     * Cuts a new immutable published state and advances its version. The lock
+     * pairs the two: a reader never sees a version alongside content published
+     * under a different one.
+     *
+     * It does not make the read of the live maps atomic against a mutation in
+     * progress. Every mutation publishes at the end of [applyMutation] while
+     * still holding the write lock, so the only publish that can observe a
+     * half-applied mutation is the one on the read path, and the mutation's own
+     * publish supersedes it at a higher version.
      *
      * Namespace-index records are rebuilt with the state rather than derived per
      * read, so the data-id set behind an absence check is computed at most once
@@ -613,13 +622,13 @@ class CacheService internal constructor(
     }
 
     private fun detailKey(identity: AccessIdentity, namespaceId: String?, dataId: String, group: String): String =
-        CacheCoordinate.Detail(identity, identity.serverId, namespaceId.orEmpty(), dataId, group).storageKey()
+        CacheCoordinate.detailKey(identity, namespaceId, dataId, group)
 
     private fun listPageKey(identity: AccessIdentity, namespaceId: String?, requestKey: String): String =
-        CacheCoordinate.ListPage(identity, identity.serverId, namespaceId.orEmpty(), requestKey).storageKey()
+        CacheCoordinate.listPageKey(identity, namespaceId, requestKey)
 
     private fun namespaceKey(identity: AccessIdentity, namespaceId: String?): String =
-        CacheCoordinate.NamespaceIndex(identity, identity.serverId, namespaceId.orEmpty()).storageKey()
+        CacheCoordinate.namespaceIndexKey(identity, namespaceId)
 
     private fun identityPrefix(identity: AccessIdentity): String = CacheCoordinate.identityPrefix(identity)
 

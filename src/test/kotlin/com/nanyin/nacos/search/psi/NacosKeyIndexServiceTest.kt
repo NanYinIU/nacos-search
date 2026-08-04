@@ -7,7 +7,7 @@ import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.InMemoryCacheStore
 import com.nanyin.nacos.search.services.clearAll
 import com.nanyin.nacos.search.services.writeDetail
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -18,6 +18,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import kotlin.coroutines.CoroutineContext
 
 /**
  * Drives real cache mutations against the real index service: the derived key
@@ -25,8 +26,10 @@ import org.junit.Test
  * it does not. Nothing here fakes the index service — the thing under test is
  * the rebuild decision itself (issue #64).
  *
- * The scope is [Dispatchers.Unconfined] so a scheduled rebuild has run by the
- * time the scheduling call returns; production uses the service's own scope.
+ * Most cases dispatch rebuilds on [Dispatchers.Unconfined] so a scheduled one
+ * has run by the time the scheduling call returns; the case that is about what
+ * happens *while* a rebuild is outstanding uses [QueueingDispatcher] instead.
+ * Either way the service builds and owns the scope, as it does in production.
  */
 class NacosKeyIndexServiceTest {
     @get:Rule
@@ -34,7 +37,7 @@ class NacosKeyIndexServiceTest {
 
     private val identity = testIdentity("http://nacos:8848")
 
-    private fun indexService() = NacosKeyIndexService(CoroutineScope(Dispatchers.Unconfined))
+    private fun indexService() = NacosKeyIndexService(Dispatchers.Unconfined)
 
     /**
      * The background persistent load publishes once it finishes, which advances
@@ -95,7 +98,7 @@ class NacosKeyIndexServiceTest {
     @Test
     fun `the index service owns its scope and stops rebuilding once disposed`() = runBlocking {
         val cache = loadedCache()
-        val service = NacosKeyIndexService(CoroutineScope(Dispatchers.Unconfined))
+        val service = NacosKeyIndexService(Dispatchers.Unconfined)
         cache.writeDetail(identity, null, config("app.properties", "timeout=1\n"))
         val built = service.currentIndex(cache.snapshot(identity))!!
 
@@ -153,6 +156,26 @@ class NacosKeyIndexServiceTest {
     }
 
     @Test
+    fun `an ask that arrives while a rebuild is queued is picked up, not dropped`() = runBlocking {
+        val dispatcher = QueueingDispatcher()
+        val cache = loadedCache()
+        val service = NacosKeyIndexService(dispatcher)
+        cache.writeDetail(identity, null, config("app.properties", "timeout=1\n"))
+        service.ensureIndexBuilt(cache.snapshot(identity))
+
+        // Arrives while the first rebuild is still waiting to run. ensureIndexBuilt
+        // is fire-and-forget, so a dropped ask has no later pass to heal on.
+        cache.writeDetail(identity, null, config("other.properties", "retries=3\n"))
+        service.ensureIndexBuilt(cache.snapshot(identity))
+        dispatcher.drain()
+
+        assertEquals(
+            setOf("timeout", "retries"),
+            service.currentIndex(cache.snapshot(identity))!!.definitionsByKey.keys
+        )
+    }
+
+    @Test
     fun `every hit in one decision is judged at the deciding snapshot's instant`() = runBlocking {
         var now = 2_000_000L
         val cache = loadedCache { now }
@@ -180,12 +203,28 @@ class NacosKeyIndexServiceTest {
     @Test
     fun `an unbuilt index is unavailable rather than unresolved`() = runBlocking {
         val cache = loadedCache()
-        val service = NacosKeyIndexService(CoroutineScope(Dispatchers.Unconfined))
+        val service = NacosKeyIndexService(Dispatchers.Unconfined)
         service.dispose()
 
         val resolution = service.resolveCurrentState(cache.snapshot(identity), "db.url")
 
         assertEquals(ConfigReferenceStatus.UNAVAILABLE, resolution.status)
         assertNull(service.currentIndex(cache.snapshot(identity)))
+    }
+}
+
+/** Runs nothing until [drain], so a rebuild can be observed while still queued. */
+private class QueueingDispatcher : CoroutineDispatcher() {
+    private val queued = ArrayDeque<Runnable>()
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        synchronized(queued) { queued.addLast(block) }
+    }
+
+    fun drain() {
+        while (true) {
+            val next = synchronized(queued) { queued.removeFirstOrNull() } ?: return
+            next.run()
+        }
     }
 }

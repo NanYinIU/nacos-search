@@ -147,18 +147,6 @@ object NacosKeyResolver {
         return resolutionFromHits(hits)
     }
 
-    fun hasKey(
-        key: String,
-        index: KeyIndex?,
-        activeNamespaceId: String? = null,
-        allowCrossNamespace: Boolean = true
-    ): Boolean {
-        if (key.isBlank()) return false
-        val definitions = index?.definitionsByKey?.get(key) ?: return false
-        return if (allowCrossNamespace) definitions.isNotEmpty()
-        else definitions.any { sameNamespace(it.namespaceId, activeNamespaceId) }
-    }
-
     /**
      * Returns true when [dataId] is known to exist among the cached
      * configurations behind [snapshot].
@@ -189,7 +177,7 @@ object NacosKeyResolver {
      * Classifies a preferred data id against the authoritative namespace summary
      * index when no key hit exists in the detail-backed key index.
      */
-    fun dataIdPresenceResolution(
+    internal fun dataIdPresenceResolution(
         dataId: String,
         snapshot: CacheSnapshot,
         activeNamespaceId: String?

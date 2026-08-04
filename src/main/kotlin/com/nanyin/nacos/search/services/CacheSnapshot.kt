@@ -59,7 +59,7 @@ class CacheSnapshot internal constructor(
 
     /** One configuration detail by coordinate, judged at [asOfMillis]. */
     fun detail(namespaceId: String?, dataId: String, group: String): CacheService.CachedConfiguration? =
-        details[CacheCoordinate.Detail(identity, identity.serverId, namespaceId.orEmpty(), dataId, group).storageKey()]
+        details[CacheCoordinate.detailKey(identity, namespaceId, dataId, group)]
             ?.cachedConfigurationAt(asOfMillis)
 
     /**
@@ -71,7 +71,7 @@ class CacheSnapshot internal constructor(
      * prove a configuration gone.
      */
     fun namespaceIndex(namespaceId: String?): CacheService.NamespaceIndexState? =
-        namespaceIndexes[CacheCoordinate.NamespaceIndex(identity, identity.serverId, namespaceId.orEmpty()).storageKey()]
+        namespaceIndexes[CacheCoordinate.namespaceIndexKey(identity, namespaceId)]
             ?.stateAt(asOfMillis)
 
     private fun CacheService.CacheEntry<NacosConfiguration>.cachedConfigurationAt(

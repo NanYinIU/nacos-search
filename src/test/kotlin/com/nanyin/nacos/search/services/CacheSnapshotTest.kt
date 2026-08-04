@@ -5,6 +5,9 @@ import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.testIdentity
 import com.nanyin.nacos.search.settings.AuthMode
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -110,6 +113,48 @@ class CacheSnapshotTest {
     }
 
     @Test
+    fun `a read that reconstitutes an entry advances the version`() = runBlocking {
+        val store = LazyOnlyDetailStore()
+        CacheService(store).writeDetail(identity, "dev", config("app.properties", "k=v", "dev"))
+
+        // The full load sees nothing in this store, so only a single-key read
+        // can reach the entry — and the index must be told, or go-to-declaration
+        // would never see what the read just published.
+        val cacheService = CacheService(store).also { it.awaitLoadCompleted() }
+        val before = cacheService.snapshot(identity).version
+
+        assertNotNull(cacheService.getConfigDetail(identity, "dev", "app.properties", "DEFAULT_GROUP"))
+
+        assertTrue(cacheService.snapshot(identity).version > before)
+    }
+
+    @Test
+    fun `two reads racing to reconstitute one entry advance the version once`() = runBlocking {
+        val store = LazyOnlyDetailStore()
+        CacheService(store).writeDetail(identity, "dev", config("app.properties", "k=v", "dev"))
+        val cacheService = CacheService(store).also { it.awaitLoadCompleted() }
+
+        store.parkNextRead()
+        coroutineScope {
+            val parked = async {
+                cacheService.getConfigDetail(identity, "dev", "app.properties", "DEFAULT_GROUP")
+            }
+            store.awaitParked()
+
+            // A second read gets there first and publishes the entry.
+            assertNotNull(cacheService.getConfigDetail(identity, "dev", "app.properties", "DEFAULT_GROUP"))
+            val afterPublished = cacheService.snapshot(identity).version
+
+            // The parked read finds the entry already in memory. It changed
+            // nothing, so it must not move the version and rebuild the derived
+            // index for no reason.
+            store.releaseParkedRead()
+            assertNotNull(parked.await())
+            assertEquals(afterPublished, cacheService.snapshot(identity).version)
+        }
+    }
+
+    @Test
     fun `taking a snapshot does not advance the version`() = runBlocking {
         val cacheService = loadedCache()
         cacheService.writeDetail(identity, null, config("app.properties", "k=v"))
@@ -208,5 +253,43 @@ class CacheSnapshotTest {
         restarted.awaitLoadCompleted()
 
         assertNull(restarted.snapshot(identity).namespaceIndex("dev"))
+    }
+}
+
+/**
+ * Store adapter whose entries the full background load never sees, so only a
+ * single-key read can reach them. It can also park one such read after it has
+ * taken the entry out of the store but before the cache publishes it, which is
+ * the only window in which two reads race to publish the same entry.
+ */
+private class LazyOnlyDetailStore(
+    private val delegate: InMemoryCacheStore = InMemoryCacheStore()
+) : CacheStore by delegate {
+    private val parked = CompletableDeferred<Unit>()
+    private val release = CompletableDeferred<Unit>()
+
+    @Volatile
+    private var parkNext = false
+
+    fun parkNextRead() {
+        parkNext = true
+    }
+
+    suspend fun awaitParked() = parked.await()
+
+    fun releaseParkedRead() {
+        release.complete(Unit)
+    }
+
+    override suspend fun loadDetails(): Map<String, CacheService.CacheEntry<NacosConfiguration>> = emptyMap()
+
+    override suspend fun loadDetail(key: String): CacheService.CacheEntry<NacosConfiguration>? {
+        val entry = delegate.loadDetail(key)
+        if (parkNext) {
+            parkNext = false
+            parked.complete(Unit)
+            release.await()
+        }
+        return entry
     }
 }

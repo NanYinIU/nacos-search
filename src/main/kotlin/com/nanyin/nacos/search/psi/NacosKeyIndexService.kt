@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.psi
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.nanyin.nacos.search.services.CacheSnapshot
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,14 +26,32 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 @Service(Service.Level.APP)
 class NacosKeyIndexService internal constructor(
-    private val scope: CoroutineScope
+    rebuildDispatcher: CoroutineDispatcher
 ) : Disposable {
-    constructor() : this(CoroutineScope(Dispatchers.Default + SupervisorJob()))
+    constructor() : this(Dispatchers.Default)
+
+    /**
+     * Built here rather than accepted as a parameter. A constructor taking a
+     * bare [CoroutineScope] is the signature the platform injects a
+     * service-owned scope into, and then [dispose] would be cancelling a scope
+     * this service did not create. A dispatcher is not injectable, so the
+     * no-argument constructor is unambiguously the one the platform uses and
+     * the scope is this service's own.
+     */
+    private val scope = CoroutineScope(rebuildDispatcher + SupervisorJob())
 
     @Volatile
     private var index: NacosKeyResolver.KeyIndex? = null
     private val building = AtomicBoolean(false)
     private val publishLock = Any()
+
+    /**
+     * The most recent snapshot asked for while a rebuild was already running.
+     * Without it the ask would simply be dropped, and the fire-and-forget
+     * [ensureIndexBuilt] callers have no later pass to heal on.
+     */
+    @Volatile
+    private var pendingRebuild: CacheSnapshot? = null
 
     /**
      * The index for [snapshot], or null while none has been built for its access
@@ -62,21 +81,20 @@ class NacosKeyIndexService internal constructor(
     }
 
     /**
-     * Publishes [built] unless what is already there describes a later version of
-     * the same access identity. A rebuild that started earlier can finish after
-     * one that started later; letting it win would make the next decision see a
-     * version that moved backwards and rebuild again for nothing — the very
-     * churn a version-stamped index exists to avoid.
+     * Publishes [built] unless what is already there was derived from a later
+     * snapshot. A rebuild that started earlier can finish after one that started
+     * later; letting it win would make the next decision see a version that
+     * moved backwards and rebuild again for nothing — the very churn a
+     * version-stamped index exists to avoid.
+     *
+     * The comparison ignores access identity on purpose: versions come from one
+     * cache-wide counter, so they order builds for different identities too, and
+     * an environment switch with no intervening mutation compares equal and
+     * publishes.
      */
     private fun publishUnlessOlder(built: NacosKeyResolver.KeyIndex) {
         synchronized(publishLock) {
-            val current = index
-            if (current != null &&
-                current.accessIdentity == built.accessIdentity &&
-                current.version > built.version
-            ) {
-                return
-            }
+            if ((index?.version ?: Long.MIN_VALUE) > built.version) return
             index = built
         }
     }
@@ -125,18 +143,6 @@ class NacosKeyIndexService internal constructor(
         allowCrossNamespace = allowCrossNamespace
     )
 
-    fun hasKey(
-        snapshot: CacheSnapshot,
-        key: String,
-        activeNamespaceId: String? = null,
-        allowCrossNamespace: Boolean = true
-    ): Boolean = NacosKeyResolver.hasKey(
-        key = key,
-        index = currentIndex(snapshot),
-        activeNamespaceId = activeNamespaceId,
-        allowCrossNamespace = allowCrossNamespace
-    )
-
     fun isDataIdKnown(
         snapshot: CacheSnapshot,
         dataId: String,
@@ -148,11 +154,23 @@ class NacosKeyIndexService internal constructor(
         activeNamespaceId = activeNamespaceId
     )
 
+    /**
+     * Runs at most one rebuild at a time. An ask that arrives while one is
+     * running is remembered rather than dropped, and picked up when the running
+     * one finishes: a highlighter pass would heal a dropped ask on its own, but
+     * [ensureIndexBuilt] is fire-and-forget and has no later pass to heal on.
+     */
     private fun scheduleRebuild(snapshot: CacheSnapshot) {
+        pendingRebuild = snapshot
         if (!building.compareAndSet(false, true)) return
         scope.launch {
             try {
-                refreshIndex(snapshot)
+                var next = pendingRebuild
+                while (next != null) {
+                    pendingRebuild = null
+                    refreshIndex(next)
+                    next = pendingRebuild
+                }
             } finally {
                 building.set(false)
             }

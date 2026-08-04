@@ -5,7 +5,6 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.testIdentity
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.InMemoryCacheStore
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -32,7 +31,7 @@ class NacosKeyResolverTest {
         runBlocking {
             cache = CacheService(InMemoryCacheStore())
             cache.clearAll()
-            indexService = NacosKeyIndexService(CoroutineScope(Dispatchers.Unconfined))
+            indexService = NacosKeyIndexService(Dispatchers.Unconfined)
         }
     }
 
@@ -427,15 +426,14 @@ class NacosKeyResolverTest {
     }
 
     @Test
-    fun `refreshIndex produces an index that hasKey reads immediately`() = runBlocking {
+    fun `refreshIndex produces an index that resolve reads immediately`() = runBlocking {
         seedConfigurations(
             listOf(cfg("app.properties", "g", null, "timeout=3000\n", "properties"))
         )
         val index = indexService.refreshIndex(cache.snapshot(identity))
         assertEquals(1, index.definitionsByKey.size)
 
-        assertTrue(indexService.hasKey(cache.snapshot(identity), "timeout"))
-        assertFalse(indexService.hasKey(cache.snapshot(identity), "missing"))
+        assertTrue(indexService.resolve(cache.snapshot(identity), "missing").isEmpty())
         assertEquals(
             "3000",
             indexService.resolve(cache.snapshot(identity), "timeout").single().location.value
@@ -445,19 +443,19 @@ class NacosKeyResolverTest {
     @Test
     fun `refreshIndex again after cache change reflects new keys`() = runBlocking {
         indexService.refreshIndex(cache.snapshot(identity))
-        assertFalse(indexService.hasKey(cache.snapshot(identity), "new.key"))
+        assertTrue(indexService.resolve(cache.snapshot(identity), "new.key").isEmpty())
 
         seedConfigurations(
             listOf(cfg("app.properties", "g", null, "new.key=v\n", "properties"))
         )
         indexService.refreshIndex(cache.snapshot(identity))
-        assertTrue(indexService.hasKey(cache.snapshot(identity), "new.key"))
+        assertTrue(indexService.resolve(cache.snapshot(identity), "new.key").isNotEmpty())
     }
 
     @Test
     fun `lazy load flow caches config then rebuild makes key resolvable`() = runBlocking {
         indexService.refreshIndex(cache.snapshot(identity))
-        assertFalse(indexService.hasKey(cache.snapshot(identity), "db.url"))
+        assertTrue(indexService.resolve(cache.snapshot(identity), "db.url").isEmpty())
 
         cache.writeDetail(
             identity = identity,
@@ -467,7 +465,6 @@ class NacosKeyResolverTest {
         )
 
         indexService.refreshIndex(cache.snapshot(identity))
-        assertTrue(indexService.hasKey(cache.snapshot(identity), "db.url"))
         assertEquals(
             "jdbc:test",
             indexService.resolve(cache.snapshot(identity), "db.url").single().location.value

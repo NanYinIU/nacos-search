@@ -53,6 +53,20 @@ sealed interface CacheCoordinate {
         private fun ns(namespaceId: String): String =
             namespaceId.takeIf { it.isNotBlank() && it != "public" } ?: "public"
 
+        // The one derivation of each storage key. Both the cache and the
+        // snapshot it hands out look entries up by these, so a lookup and the
+        // write it should find can never be derived two different ways —
+        // the failure mode issue #62 removed for access identities.
+
+        fun detailKey(identity: AccessIdentity, namespaceId: String?, dataId: String, group: String): String =
+            Detail(identity, identity.serverId, namespaceId.orEmpty(), dataId, group).storageKey()
+
+        fun listPageKey(identity: AccessIdentity, namespaceId: String?, requestKey: String): String =
+            ListPage(identity, identity.serverId, namespaceId.orEmpty(), requestKey).storageKey()
+
+        fun namespaceIndexKey(identity: AccessIdentity, namespaceId: String?): String =
+            NamespaceIndex(identity, identity.serverId, namespaceId.orEmpty()).storageKey()
+
         fun identityPrefix(identity: AccessIdentity): String = listOf(
             "v2",
             identity.profileId,
