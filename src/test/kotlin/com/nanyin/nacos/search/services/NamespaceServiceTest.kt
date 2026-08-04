@@ -1,8 +1,14 @@
 package com.nanyin.nacos.search.services
 
+import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
+import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.nanyin.nacos.search.services.NamespaceServiceState
+import com.nanyin.nacos.search.settings.AuthMode
+import com.nanyin.nacos.search.settings.CredentialSnapshot
+import com.nanyin.nacos.search.settings.NacosOperationContext
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Assertions.*
@@ -15,6 +21,22 @@ class NamespaceServiceTest {
     
     private lateinit var namespaceService: NamespaceService
     private lateinit var mockNacosApiService: NacosApiService
+    private val testContext = NacosOperationContext(
+        identity = AccessIdentity.ofProfile(
+            profileId = "test",
+            accessRevision = 1,
+            canonicalEndpoint = "http://localhost:8848",
+            resolvedGeneration = NacosApiGeneration.V1,
+            authMode = AuthMode.ANONYMOUS,
+            principal = "<anonymous>"
+        ),
+        endpoint = CanonicalNacosEndpoint.parse("http://localhost:8848").getOrThrow(),
+        credential = CredentialSnapshot(""),
+        authMode = AuthMode.ANONYMOUS,
+        profileRevision = 1,
+        accessRevision = 1,
+        resolvedGeneration = NacosApiGeneration.V1
+    )
     
     @BeforeEach
     fun setUp() {
@@ -269,14 +291,14 @@ class NamespaceServiceTest {
             NamespaceInfo(namespaceId = "ns2", namespaceName = "Namespace 2"),
             NamespaceInfo(namespaceId = "ns3", namespaceName = "Namespace 3")
         )
-        whenever(mockNacosApiService.getNamespaces()).thenReturn(Result.success(namespaces))
+        whenever(mockNacosApiService.getNamespaces(org.mockito.kotlin.any())).thenReturn(Result.success(namespaces))
         
         // Set up saved state with previously selected namespace
         val savedState = NamespaceServiceState(currentNamespaceId = "ns2")
         namespaceService.loadState(savedState)
         
-        // When
-        val result = namespaceService.loadNamespacesAsync().await()
+        // When — pass an operation context so the service never reads settings.
+        val result = namespaceService.loadNamespacesAsync(testContext).await()
         
         // Then
         assertTrue(result.isSuccess)
@@ -293,14 +315,14 @@ class NamespaceServiceTest {
             NamespaceInfo(namespaceId = "ns1", namespaceName = "Namespace 1"),
             NamespaceInfo(namespaceId = "ns2", namespaceName = "Namespace 2")
         )
-        whenever(mockNacosApiService.getNamespaces()).thenReturn(Result.success(namespaces))
+        whenever(mockNacosApiService.getNamespaces(org.mockito.kotlin.any())).thenReturn(Result.success(namespaces))
         
         // Set up saved state with non-existent namespace
         val savedState = NamespaceServiceState(currentNamespaceId = "non-existent")
         namespaceService.loadState(savedState)
         
         // When
-        val result = namespaceService.loadNamespacesAsync().await()
+        val result = namespaceService.loadNamespacesAsync(testContext).await()
         
         // Then
         assertTrue(result.isSuccess)

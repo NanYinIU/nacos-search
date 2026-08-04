@@ -139,6 +139,24 @@ class OperationGateway(
         return adapter.discoverNamespaces(target)
     }
 
+    /**
+     * Obtains an observation sequence for a namespace-index write (the one cache
+     * mutation that deletes data). Returns the sequence when the write may
+     * proceed, or null when a newer observation already owns the high-water
+     * mark and the write must be discarded (ADR-0020 / issue #50).
+     *
+     * Whether the observation gate later moves inside the cache module is a
+     * separate decision (#43); this method only ensures the index write carries
+     * a sequence through the gateway.
+     */
+    fun beginNamespaceIndexWrite(target: OperationTarget): Long? {
+        val seq = observationSequence.next()
+        return if (acceptObservation(namespaceIndexGateKey(target), seq)) seq else null
+    }
+
+    /** Test/inspection helper: last issued observation sequence. */
+    fun currentObservationSequence(): Long = observationSequence.current()
+
     private fun acceptObservation(key: String, seq: Long): Boolean =
         observationGates.computeIfAbsent(key) { ObservationGate() }.acceptIfNewer(seq)
 
@@ -151,6 +169,11 @@ class OperationGateway(
         "detail|" + target.context.identity.profileId + "|" +
             target.context.identity.accessRevision + "|" +
             target.namespaceId + "|" + coordinate.dataId + "|" + coordinate.group
+
+    private fun namespaceIndexGateKey(target: OperationTarget): String =
+        "ns-index|" + target.context.identity.profileId + "|" +
+            target.context.identity.accessRevision + "|" +
+            target.namespaceId
 
     private fun adapterFor(target: OperationTarget): ProtocolAdapter? = adapters[target.context.resolvedGeneration]
 

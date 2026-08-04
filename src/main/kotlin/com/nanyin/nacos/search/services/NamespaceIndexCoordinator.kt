@@ -11,29 +11,33 @@ import com.nanyin.nacos.search.models.DataSource
 import com.nanyin.nacos.search.models.DataFreshness
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.AuthMode
+import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.OperationContextResolver
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.RequestPolicy
-import kotlinx.coroutines.CompletableDeferred
+import com.nanyin.nacos.search.services.operations.OperationTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
 
 enum class IndexTrigger { NAMESPACE_SWITCH, SEARCH, MANUAL_REFRESH, PSI }
 
 data class NamespaceIndexKey(val identity: AccessIdentity, val namespaceId: String)
 
+/**
+ * Captured connection coordinates used by the legacy auth/login path and by
+ * search request tickets that still carry a snapshot. Namespace indexing no
+ * longer accepts this type — index requests carry a mandatory
+ * [NacosOperationContext] only (issue #50).
+ */
 data class NacosServerSnapshot(
     val serverUrl: String,
     val username: String,
@@ -46,17 +50,40 @@ data class NacosServerSnapshot(
         "NacosServerSnapshot(serverUrl=$serverUrl, username=$username, password=***, authMode=$authMode, enableTokenAuth=$enableTokenAuth)"
 }
 
+/**
+ * Immutable index request. Carries a mandatory operation context and no
+ * server snapshot — every generation routes through the operation gateway
+ * (issue #50 / ADR-0010).
+ */
 data class NamespaceIndexRequest(
     val key: NamespaceIndexKey,
-    val server: NacosServerSnapshot,
     val cacheTtlMillis: Long,
-    /** V1 uses this immutable operation snapshot instead of the legacy wire path. */
-    val operationContext: NacosOperationContext? = null
+    val operationContext: NacosOperationContext
 )
 
+/**
+ * Captures a namespace-index request from the active profile. Fails closed with
+ * [ConfigurationRequired] when no valid operation context can be built, so
+ * callers surface a fix-my-settings entry point instead of an empty list.
+ */
 internal fun NacosSettings.captureNamespaceIndexRequest(namespaceId: String?): NamespaceIndexRequest {
-    val context = captureOperationContext().getOrNull()
-    return captureNamespaceIndexRequest(namespaceId, captureServerSnapshot(operationContext = context), context)
+    val context = captureOperationContext().getOrElse { throw it }
+    return captureNamespaceIndexRequest(namespaceId, context)
+}
+
+/**
+ * Builds an index request from an already-captured operation context (UI and
+ * search paths that prepared the context off the EDT).
+ */
+internal fun NacosSettings.captureNamespaceIndexRequest(
+    namespaceId: String?,
+    operationContext: NacosOperationContext
+): NamespaceIndexRequest {
+    return NamespaceIndexRequest(
+        key = NamespaceIndexKey(operationContext.identity, namespaceId.orEmpty()),
+        cacheTtlMillis = getCacheTtlMillis(),
+        operationContext = operationContext
+    )
 }
 
 /**
@@ -81,25 +108,11 @@ internal fun NacosSettings.captureAccessIdentity(profileId: String? = null): Acc
     return OperationContextResolver.identityFromProfile(profile)
 }
 
-internal fun NacosSettings.captureNamespaceIndexRequest(
-    namespaceId: String?,
-    snapshot: NacosServerSnapshot,
-    operationContext: NacosOperationContext? = null
-): NamespaceIndexRequest {
-    require(operationContext == null || operationContext.identity == snapshot.identity) {
-        "Namespace index operation context does not match its captured server snapshot"
-    }
-    return NamespaceIndexRequest(
-        NamespaceIndexKey(
-            snapshot.identity,
-            namespaceId.orEmpty()
-        ),
-        snapshot,
-        getCacheTtlMillis(),
-        operationContext
-    )
-}
-
+/**
+ * Captures a server snapshot for search/auth call sites that still need one.
+ * Namespace indexing no longer uses this — prefer [captureNamespaceIndexRequest]
+ * with an operation context.
+ */
 internal fun NacosSettings.captureServerSnapshot(
     profileId: String? = null,
     operationContext: NacosOperationContext? = null
@@ -147,6 +160,10 @@ sealed interface IndexOutcome {
  *
  * Search requests are bounded by a 15-second front-end cutoff; preheat
  * requests use PREHEAT policy (no retry).
+ *
+ * Every generation is dispatched through [NacosApiService.loadNamespace] with
+ * the captured operation context — there is no generation branch and no
+ * legacy server-snapshot path here (issue #50).
  */
 @Service(Service.Level.APP)
 class NamespaceIndexCoordinator internal constructor(
@@ -171,25 +188,14 @@ class NamespaceIndexCoordinator internal constructor(
     private val psiCooldownMs = 5L * 60 * 1000 // 5 minutes
 
     /**
-     * Requests a full namespace index load for [key]. If an identical request
+     * Requests a full namespace index load for [request]. If an identical request
      * is already in flight, the caller joins it. The [trigger] determines the
      * request policy and whether PSI cooldown applies.
      */
     override suspend fun requestIndex(request: NamespaceIndexRequest, trigger: IndexTrigger): IndexOutcome {
         val key = request.key
-        val snapshotIdentity = request.server.identity
-        require(
-            if (snapshotIdentity.canonicalEndpoint != "<default>") {
-                key.identity == snapshotIdentity
-            } else {
-                key.identity.canonicalEndpoint == com.nanyin.nacos.search.models.CanonicalNacosEndpoint
-                    .parse(request.server.serverUrl).getOrNull()?.value &&
-                    key.identity.authMode == request.server.authMode &&
-                    key.identity.principal == request.server.username.trim().ifBlank { "<anonymous>" }
-            }
-        ) { "Namespace index key does not match its captured server snapshot" }
         require(request.cacheTtlMillis > 0) { "Namespace index cache TTL must be positive" }
-        require(request.operationContext == null || request.operationContext.identity == key.identity) {
+        require(request.operationContext.identity == key.identity) {
             "Namespace index key does not match its captured operation context"
         }
         // PSI cooldown: skip if recently failed
@@ -226,36 +232,51 @@ class NamespaceIndexCoordinator internal constructor(
 
     private suspend fun executeIndex(request: NamespaceIndexRequest, policy: RequestPolicy): IndexOutcome {
         val key = request.key
+        val context = request.operationContext
         return try {
-            // Prefer the captured operation context for every generation so AUTO
-            // resolves once per project session and V1/V3 locked profiles use the
-            // gateway. The legacy server-snapshot path remains only for callers
-            // that have not yet captured a context (and for characterisation tests).
-            val result = if (request.operationContext != null) {
-                apiService.loadNamespace(
-                    key.namespaceId,
-                    useCache = false,
-                    server = null,
-                    policy = policy,
-                    operationContext = request.operationContext
-                )
-            } else {
-                apiService.loadNamespace(key.namespaceId, useCache = false, server = request.server, policy = policy)
-            }
+            // Mandatory operation context — every generation (V1, V3, AUTO)
+            // resolves through the gateway. No server snapshot, no generation
+            // branch above the adapters (issue #50).
+            val result = apiService.loadNamespace(
+                namespaceId = key.namespaceId,
+                useCache = false,
+                policy = policy,
+                operationContext = context
+            )
             if (result.isFailure) {
                 cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
                 recordPsiFailure(key)
                 val error = result.exceptionOrNull()
                 return IndexOutcome.Failed(
-                    if (error is NacosRequestError) error else NacosRequestError.Connection(error ?: RuntimeException("Unknown"))
+                    if (error is NacosRequestError) error
+                    else if (error is ConfigurationRequired) NacosRequestError.Connection(error)
+                    else NacosRequestError.Connection(error ?: RuntimeException("Unknown"))
                 )
             }
 
             val loadResult = result.getOrNull()!!
             val now = System.currentTimeMillis()
+            val target = OperationTarget(
+                context,
+                key.namespaceId.ifBlank { "public" }
+            )
 
             when (loadResult.completeness) {
                 DatasetCompleteness.COMPLETE -> {
+                    // Namespace-index writes delete data; they must carry an
+                    // observation sequence (ADR-0020 / issue #50). A rejected
+                    // sequence means a newer observation already won — discard.
+                    val sequence = apiService.operationGateway().beginNamespaceIndexWrite(target)
+                    if (sequence == null) {
+                        logger.info(
+                            "Discarded obsolete namespace index write for ${key.namespaceId} " +
+                                "(observation sequence lost the high-water race)"
+                        )
+                        return IndexOutcome.Stale(
+                            loadResult.configurations.size,
+                            DatasetState(DataSource.REMOTE, DataFreshness.UNKNOWN, DatasetCompleteness.COMPLETE, now)
+                        )
+                    }
                     cacheService.putNamespaceIndex(
                         key.identity,
                         key.namespaceId,
@@ -291,6 +312,10 @@ class NamespaceIndexCoordinator internal constructor(
                     IndexOutcome.Failed(NacosRequestError.Connection(RuntimeException("Namespace list failed")))
                 }
             }
+        } catch (e: ConfigurationRequired) {
+            cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
+            recordPsiFailure(key)
+            IndexOutcome.Failed(NacosRequestError.Connection(e))
         } catch (e: Exception) {
             cacheService.markNamespaceIndexNonAuthoritative(key.identity, key.namespaceId)
             recordPsiFailure(key)
