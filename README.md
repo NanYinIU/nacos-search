@@ -1,11 +1,5 @@
 # Nacos Search
 
-<script src="https://plugins.jetbrains.com/assets/scripts/mp-widget.js"></script>
-<script>
-  // Please, replace #yourelement with a real element id on your webpage
-  MarketplaceWidget.setupMarketplaceWidget('install', 28107, "#yourelement");
-</script>
-
 在 IntelliJ IDEA 里搜索、查看和定位 Nacos 配置，不必在 IDE 与 Nacos 控制台之间反复切换。
 
 Nacos Search 支持管理多个 Nacos 环境，通过命名空间、Data ID、Group 和配置内容快速检索配置；同时将 Java 代码中的 `@NacosValue` / Spring `@Value` 占位符与 Nacos 配置键关联起来，提供 gutter 图标跳转、反向查找引用和源码用量导航。
