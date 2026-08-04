@@ -1,7 +1,6 @@
 package com.nanyin.nacos.search.services
 
 import com.nanyin.nacos.search.models.NacosApiResponse
-import com.nanyin.nacos.search.models.ConfigLoadFailure
 import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NamespaceLoadResult
 import com.nanyin.nacos.search.models.NacosConfiguration
@@ -158,7 +157,6 @@ class NacosApiService(
        private const val CONFIG_ENDPOINT = "/nacos/v1/cs/configs"
        private const val CONFIG_LIST_ENDPOINT = "/nacos/v1/cs/configs"
        private const val NAMESPACE_ENDPOINT = "/nacos/v1/console/namespaces"
-        private const val FETCH_CONCURRENCY = 8
         /** Process-wide formal probe flight shared by all NacosApiService instances. */
         private val sharedProbeFlight = GenerationProbeFlight()
 
@@ -401,10 +399,11 @@ class NacosApiService(
    }
 
    /**
-    * Loads all configurations for a namespace, preserving completeness metadata.
-    * Individual detail-fetch failures are collected instead of silently swallowed;
-    * the result distinguishes COMPLETE (no failures), PARTIAL (some failures),
-    * and FAILED (list-level failure).
+    * Loads configuration **summaries** for a namespace (ADR-0016 / ADR-0041).
+    * Issues one list request per summary page and never fetches configuration
+    * bodies — completeness depends only on summary pagination. Detail content
+    * for code navigation is supplied by the independent navigation detail
+    * prefetch (issue #51), not by this path.
     *
     * Requires an already-captured [operationContext]; never reads settings or the
     * credential store (issue #50). Every generation is resolved and dispatched
@@ -421,8 +420,7 @@ class NacosApiService(
        operationContext: NacosOperationContext
    ): Result<NamespaceLoadResult> {
        return try {
-           val allConfigs = mutableListOf<NacosConfiguration>()
-           val failures = mutableListOf<ConfigLoadFailure>()
+           val allSummaries = mutableListOf<NacosConfiguration>()
            var expectedCount = 0
            var pageNo = 1
            val pageSize = 100
@@ -434,61 +432,51 @@ class NacosApiService(
                    operationContext = operationContext
                )
                if (result.isFailure) {
+                   // First page failure with nothing loaded → FAILED; a later
+                   // page failure with some rows → PARTIAL (summary pagination
+                   // incomplete). Detail failures cannot occur here.
+                   val completeness = if (allSummaries.isEmpty()) {
+                       DatasetCompleteness.FAILED
+                   } else {
+                       DatasetCompleteness.PARTIAL
+                   }
                    return Result.success(
-                       NamespaceLoadResult(DatasetCompleteness.FAILED, expectedCount, allConfigs, failures)
+                       NamespaceLoadResult(completeness, expectedCount, allSummaries, emptyList())
                    )
                }
 
                val response = result.getOrNull() ?: break
                expectedCount = response.totalCount
 
-               // Bounded parallelism: fetch each item's content concurrently with
-               // supervisor semantics so one detail failure doesn't cancel the batch.
-               val pageResults = coroutineScope {
-                   val semaphore = kotlinx.coroutines.sync.Semaphore(FETCH_CONCURRENCY)
-                   response.pageItems.map { item ->
-                       async {
-                           semaphore.withPermit {
-                               try {
-                                   FetchResult.Success(
-                                       getConfigurationFromItem(item, useCache, operationContext)
-                                   )
-                               } catch (ce: kotlinx.coroutines.CancellationException) {
-                                   throw ce
-                               } catch (e: Exception) {
-                                   FetchResult.Failure(item.dataId, item.group, e)
-                               }
-                           }
-                       }
-                   }.awaitAll()
-               }
-               pageResults.forEach { r ->
-                   when (r) {
-                       is FetchResult.Success -> allConfigs.add(r.config)
-                       is FetchResult.Failure -> failures.add(
-                           ConfigLoadFailure(r.dataId, r.group, toRequestError(r.error))
+               // Summaries only — empty content is intentional; the namespace
+               // index never promises bodies (ADR-0041 / issue #52).
+               response.pageItems.forEach { item ->
+                   allSummaries.add(
+                       NacosConfiguration(
+                           dataId = item.dataId,
+                           group = item.group,
+                           tenantId = item.tenant,
+                           content = item.content.orEmpty(),
+                           type = item.type
                        )
-                   }
+                   )
                }
                pageNo++
-           } while (response.pageItems.size == pageSize)
+               if (response.pageItems.size < pageSize) break
+           } while (true)
 
-           val completeness = if (failures.isEmpty()) DatasetCompleteness.COMPLETE else DatasetCompleteness.PARTIAL
-           Result.success(NamespaceLoadResult(completeness, expectedCount, allConfigs, failures))
+           // Completeness from summary pagination alone: we got every expected
+           // summary row (or the server reported zero). A detail failure can no
+           // longer mark the index partial because we never request details.
+           val completeness = when {
+               expectedCount > 0 && allSummaries.size < expectedCount -> DatasetCompleteness.PARTIAL
+               else -> DatasetCompleteness.COMPLETE
+           }
+           Result.success(NamespaceLoadResult(completeness, expectedCount, allSummaries, emptyList()))
        } catch (e: Exception) {
            logger.warn("Error loading namespace", e)
            Result.failure(e)
        }
-   }
-
-   private sealed class FetchResult {
-       data class Success(val config: NacosConfiguration) : FetchResult()
-       data class Failure(val dataId: String, val group: String, val error: Throwable) : FetchResult()
-   }
-
-   private fun toRequestError(e: Throwable): NacosRequestError = when (e) {
-       is NacosRequestError -> e
-       else -> NacosRequestError.Connection(e)
    }
     
     /**

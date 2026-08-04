@@ -117,6 +117,10 @@
         <fileBasedIndex
             implementation="com.nanyin.nacos.search.psi.NacosPlaceholderIndex"/>
 
+        <!-- Persistent index: declared configuration-source dataId -> .java files -->
+        <fileBasedIndex
+            implementation="com.nanyin.nacos.search.psi.NacosDeclaredSourceIndex"/>
+
         <!-- Services are now registered via @Service annotations -->
     </extensions>
 

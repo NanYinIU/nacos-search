@@ -8,6 +8,7 @@ import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
 import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
 import com.nanyin.nacos.search.services.captureAccessIdentity
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
+import com.nanyin.nacos.search.services.NavigationDetailPrefetchService
 import com.nanyin.nacos.search.services.requestManualNamespaceRefresh
 import com.nanyin.nacos.search.services.requestStartupNamespaceIndex
 import com.nanyin.nacos.search.psi.NacosKeyResolver
@@ -147,6 +148,23 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
      */
     private fun preheatNamespaceIndex(namespaceId: String?) {
         if (!settings.cacheEnabled) return
+        // Prefetch is project-scoped and independent of index completion
+        // (ADR-0043). Kick it for every open project up front — do not wait
+        // for the namespace index flight, which carries no project at startup.
+        val identityForPrefetch = try {
+            settings.captureAccessIdentity()
+        } catch (_: Exception) {
+            null
+        }
+        if (identityForPrefetch != null) {
+            com.intellij.openapi.project.ProjectManager.getInstance().openProjects
+                .filter { !it.isDefault && !it.isDisposed }
+                .forEach { openProject ->
+                    ApplicationManager.getApplication()
+                        .getService(NavigationDetailPrefetchService::class.java)
+                        .requestIfNeeded(openProject, identityForPrefetch, namespaceId)
+                }
+        }
         coroutineScope.launch {
             try {
                 val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
@@ -182,6 +200,16 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
             // captureNamespaceIndexRequest fails closed with ConfigurationRequired;
             // the surrounding catch turns it into Result.failure (issue #50).
             val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
+            // Prefetch is independent of index completion (ADR-0043). Manual
+            // refresh carries no project, so each open project self-triggers
+            // before the index flight returns.
+            com.intellij.openapi.project.ProjectManager.getInstance().openProjects
+                .filter { !it.isDefault && !it.isDisposed }
+                .forEach { openProject ->
+                    ApplicationManager.getApplication()
+                        .getService(NavigationDetailPrefetchService::class.java)
+                        .requestIfNeeded(openProject, indexRequest.key.identity, namespaceId)
+                }
             when (val outcome = indexCoordinator.requestManualNamespaceRefresh(indexRequest)) {
                 is IndexOutcome.Complete -> {
                     ApplicationManager.getApplication()

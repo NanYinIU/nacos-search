@@ -538,6 +538,12 @@ class CacheService internal constructor(
         }
     }
 
+    /**
+     * Stores the complete configuration **summary** set for a namespace
+     * (ADR-0016 / ADR-0041 / issue #52). Summaries do not seed the detail
+     * cache and never delete existing detail entries — bodies arrive only
+     * through explicit detail reads or the navigation detail prefetch.
+     */
     private suspend fun putNamespaceIndexByIdentity(
         identity: AccessIdentity?,
         serverUrl: String,
@@ -548,36 +554,25 @@ class CacheService internal constructor(
     ) {
         cacheMutex.withLock {
             val now = currentTimeMillis()
-            val namespacePrefix = identity?.let { "${identityPrefix(it)}|${normalizeNamespace(namespaceId)}|" }
-                ?: "${identityPrefix(legacyIdentity(serverUrl))}|${normalizeNamespace(namespaceId)}|"
-            val replacementKeys = configurations
-                .mapTo(mutableSetOf()) { config ->
-                    identity?.let { detailKey(it, namespaceId, config.dataId, config.group) }
-                        ?: detailKey(serverUrl, namespaceId, config.dataId, config.group)
-                }
-            detailCache.keys
-                .filter { it.startsWith(namespacePrefix) && it !in replacementKeys }
-                .forEach { key ->
-                    detailCache.remove(key)
-                    cacheStorage.removeDetail(key)
-                }
             val indexKey = identity?.let { namespaceKey(it, namespaceId) }
                 ?: namespaceKey(serverUrl, namespaceId)
-            namespaceIndexCache[indexKey] =
-                CacheEntry(CacheEntryType.NAMESPACE_INDEX, configurations, now, ttl, source)
-            namespaceIndexAuthority[indexKey] = true
-           configurations.forEach { config ->
-               val key = identity?.let { detailKey(it, namespaceId, config.dataId, config.group) }
-                   ?: detailKey(serverUrl, namespaceId, config.dataId, config.group)
-               detailCache[key] = CacheEntry(CacheEntryType.CONFIG_DETAIL, config, now, ttl, source)
-                persistDetail(key, detailCache[key]!!)
+            // Persist summaries with empty/lightweight content only. Callers
+            // may pass rows that still carry content (legacy paths); strip it
+            // so the index never pretends to own bodies.
+            val summaries = configurations.map { config ->
+                if (config.content.isEmpty()) config
+                else config.copy(content = "")
             }
-           updateDetailKeysList()
-           cleanupOversizedCaches()
-           publishDetailSnapshot()
-           markModified()
-       }
-   }
+            namespaceIndexCache[indexKey] =
+                CacheEntry(CacheEntryType.NAMESPACE_INDEX, summaries, now, ttl, source)
+            namespaceIndexAuthority[indexKey] = true
+            cleanupOversizedCaches()
+            // Namespace index is used for data-id existence and global search
+            // identity; key-index rebuilds read the detail snapshot, so do not
+            // publish a detail snapshot change here.
+            markModified()
+        }
+    }
 
     suspend fun markNamespaceIndexNonAuthoritative(serverUrl: String, namespaceId: String?) {
         markNamespaceIndexNonAuthoritative(namespaceKey(serverUrl, namespaceId))

@@ -10,9 +10,11 @@ interface NacosSettingsListener {
 
     /**
      * Fired when only non-connection preferences changed (e.g.
-    * allowCrossNamespaceNavigation, displayName).
+     * allowCrossNamespaceNavigation, navigationDetailPrefetchEnabled, displayName).
      * Subscribers that only care about connection-level changes can ignore
      * this; subscribers that need to refresh UI markers should handle it.
+     * Preference-only changes must not bump the profile revision or advance
+     * the session epoch (ADR-0042).
      */
     fun preferencesChanged() {}
 

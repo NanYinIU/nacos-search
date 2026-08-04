@@ -222,6 +222,10 @@ class NacosValueLineMarkerProvider internal constructor(
                 NacosIcons.GutterConfigStale,
                 "nacosvalue.marker.tooltip.stale"
             )
+            ConfigReferenceStatus.UNDECIDABLE -> MarkerPresentation(
+                NacosIcons.GutterConfigUnresolved,
+                "nacosvalue.marker.tooltip.undecidable"
+            )
             ConfigReferenceStatus.UNRESOLVED, ConfigReferenceStatus.UNAVAILABLE -> MarkerPresentation(
                 NacosIcons.GutterConfigUnresolved,
                 "nacosvalue.marker.tooltip.unresolved"
