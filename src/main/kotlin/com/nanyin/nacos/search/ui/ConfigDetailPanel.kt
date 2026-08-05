@@ -36,15 +36,14 @@ import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.currentSessionEpoch
+import com.nanyin.nacos.search.services.operations.ConfigurationCoordinate
 import com.nanyin.nacos.search.services.operations.ObservedDetailRecorder
-import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.services.operations.DraftDiscardListener
 import com.nanyin.nacos.search.services.operations.EditSessionService
-import com.nanyin.nacos.search.services.operations.EditStart
 import com.nanyin.nacos.search.services.operations.PublishState
-import com.nanyin.nacos.search.services.operations.WriteIntent
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosProjectSession
+import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
 import com.nanyin.nacos.search.settings.operationNamespaceIdFor
 import kotlinx.coroutines.*
@@ -55,65 +54,46 @@ import java.util.concurrent.locks.ReentrantLock
 import javax.swing.*
 import kotlin.concurrent.withLock
 
-
 /**
- * Loads one configuration's detail and reports the observation sequence the
- * read took, so an authoritative not-found can delete the cached entry under
- * that same number rather than under a fresh one that would outrank a newer
- * read (ADR-0047).
- */
-internal fun interface ConfigurationDetailLoader {
-    suspend fun load(configuration: NacosConfiguration, forceRefresh: Boolean): Result<Observed<NacosConfiguration?>>
-}
-
-/**
- * Panel for displaying configuration details with syntax highlighting
+ * Renders a closed [DetailViewState] set with one exhaustive branch and holds
+ * no decision (issue #81). Mapping from load / edit / publish outcomes lives in
+ * [DetailController] / [DetailPresentation]; this panel receives its
+ * collaborators in the constructor rather than locating them.
  */
 class ConfigDetailPanel internal constructor(
     private val project: Project,
-    private val detailLoader: ConfigurationDetailLoader,
+    private val apiService: NacosApiService,
     private val cacheService: CacheService,
-    private val settings: NacosSettings
+    private val settings: NacosSettings,
+    private val editSessions: EditSessionService,
+    private val navigationRefresh: NavigationIndexRefreshService,
+    private val observedDetailRecorder: ObservedDetailRecorder,
+    private val captureOperationContext: suspend () -> NacosOperationContext?
 ) : JPanel(BorderLayout()), Disposable, NacosLanguageListener {
     constructor(project: Project) : this(
-        project,
-        ConfigurationDetailLoader { configuration, forceRefresh ->
-            ApplicationManager.getApplication().getService(NacosApiService::class.java).getConfiguration(
-                dataId = configuration.dataId,
-                group = configuration.group,
-                namespaceId = configuration.tenantId,
-                useCache = true,
-                forceRefresh = forceRefresh,
-                operationContext = withContext(Dispatchers.IO) {
-                    project.getService(NacosProjectSession::class.java)?.let { session ->
-                        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-                        // Do not heal: deleted explicit profiles must fail closed (ADR 0025).
-                        settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
-                    }
+        project = project,
+        apiService = ApplicationManager.getApplication().getService(NacosApiService::class.java),
+        cacheService = ApplicationManager.getApplication().getService(CacheService::class.java),
+        settings = ApplicationManager.getApplication().getService(NacosSettings::class.java),
+        editSessions = project.getService(EditSessionService::class.java),
+        navigationRefresh = ApplicationManager.getApplication()
+            .getService(NavigationIndexRefreshService::class.java),
+        observedDetailRecorder = ObservedDetailRecorder(
+            ApplicationManager.getApplication().getService(CacheService::class.java)
+        ),
+        captureOperationContext = {
+            withContext(Dispatchers.IO) {
+                project.getService(NacosProjectSession::class.java)?.let { session ->
+                    val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+                    // Do not heal: deleted explicit profiles must fail closed (ADR 0025).
+                    settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
                 }
-            )
-        },
-        ApplicationManager.getApplication().getService(CacheService::class.java),
-        ApplicationManager.getApplication().getService(NacosSettings::class.java)
+            }
+        }
     )
-
-    /**
-     * The panel reads the cache directly but never writes to it. Reporting an
-     * authoritative not-found is a cache mutation, and mutations belong to the
-     * operation layer (issue #65).
-     */
-    private val observedDetailRecorder = ObservedDetailRecorder(cacheService)
 
     companion object {
         private const val DETAIL_HORIZONTAL_INSET = 10
-    }
-
-    private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
-    private suspend fun selectedOperationContext() = withContext(Dispatchers.IO) {
-        project.getService(NacosProjectSession::class.java)?.let { session ->
-            // Do not heal: deleted explicit profiles must fail closed (ADR 0025).
-            settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
-        }
     }
 
     /** Namespace for history and publish — the one derivation, shared with the window. */
@@ -141,11 +121,9 @@ class ConfigDetailPanel internal constructor(
     private lateinit var freshnessLabel: JBLabel
 
     /**
-     * The project's draft. The panel renders it and reports what the user
-     * types; it does not own it, because a session held inside the tool-window
-     * content could not block that content from being destroyed (ADR-0046).
+     * The project's draft is injected via the constructor — the panel renders
+     * it and reports what the user types; it does not own it (ADR-0046).
      */
-    private val editSessions = project.getService(EditSessionService::class.java)
 
     /**
      * Unregisters the external-discard listener. Settings (and other non-panel
@@ -207,16 +185,27 @@ class ConfigDetailPanel internal constructor(
     private var isLoading = false
     /** What the dirty indicators currently show, so they are only repainted on a change. */
     private var renderedDirty = false
+    /** Last closed view state rendered — language change re-derives copy from it. */
+    private var viewState: DetailViewState = DetailViewState.Empty
+    /** Cached body kept visible across a deep-stale refresh. */
+    private var keptCachedBody: DetailViewState.Body? = null
 
     /**
      * The one judgement of whether an asynchronous result may still update this
-     * panel (ADR-0047). The panel keeps no counter of its own: what is selected
-     * is [selectedCoordinate] and the ordering between two remote reads is the
-     * observation sequence each of them took.
+     * panel (ADR-0047). Shared with [detailController] so load and editor paint
+     * raise the same mark.
      */
     private val presentation = PresentationGate(
         currentSessionEpoch = { project.currentSessionEpoch() },
         currentCoordinate = { selectedCoordinate }
+    )
+
+    private val detailController = DetailController(
+        gateway = apiService.operationGateway(),
+        presentation = presentation,
+        onAuthoritativeNotFound = { identity, namespaceId, dataId, group, observation ->
+            observedDetailRecorder.recordMissing(identity, namespaceId, dataId, group, observation)
+        }
     )
 
     // Coroutine scope for async operations
@@ -514,28 +503,20 @@ private fun setupEventHandlers() {
               baselineContent = editor.document.text
           )
           withContext(Dispatchers.Main) {
-              when (start) {
-                  is EditStart.WritesWithheld -> com.intellij.openapi.ui.Messages.showInfoMessage(
-                      NacosSearchBundle.message(
-                          when (start.cause) {
-                              WriteIntent.Cause.NO_PROFILE_SELECTED -> "config.detail.publish.no.profile"
-                              WriteIntent.Cause.NOT_OPTED_IN -> "config.detail.publish.writes.disabled"
-                          }
-                      ),
-                      NacosSearchBundle.message("config.detail.action.edit")
-                  )
-                  is EditStart.Unavailable -> com.intellij.openapi.ui.Messages.showErrorDialog(
-                      start.error.message ?: NacosSearchBundle.message("error.connection.incomplete"),
-                      NacosSearchBundle.message("common.error")
-                  )
-                  is EditStart.Started -> {
+              // Always go through the closed set — even Started is a Body with
+              // editing=true so render owns the edit-mode chrome.
+              when (val state = DetailPresentation.fromEditStart(start)) {
+                  is DetailViewState.Body -> {
+                      // Keep the live editor; recreating it would drop undo/caret.
+                      currentConfiguration = state.configuration
                       editor.document.setReadOnly(false)
-                      // Swap the edit lifecycle: hide Edit, reveal Save/Revert (only shown while editing)
                       editButton.isVisible = false
                       revertButton.isVisible = true
                       saveButton.isVisible = true
+                      viewState = state
                       checkDirtyState(editor.document.text)
                   }
+                  else -> render(state)
               }
           }
       }
@@ -712,24 +693,15 @@ private fun setupEventHandlers() {
             configuration.dataId,
             configuration.group
         )
-        val freshness = cachedState?.freshness
-        val cachedFirst = freshness != null && freshness != CacheService.DetailFreshness.FRESH
-        if (cachedFirst) {
-            displayConfigurationContentSafely(configuration, fromCache)
-            showCard("content")
-        }
-        if (freshness == CacheService.DetailFreshness.STALE) {
-            hideFreshnessStatus()
-            return
-        }
-        if (freshness == CacheService.DetailFreshness.DEEP_STALE) {
-            showFreshnessStatus("config.detail.cache.refreshing")
-        }
+        val plan = detailController.planSelection(cachedState)
+        keptCachedBody = plan.immediate
+        plan.immediate?.let { render(it) }
+        if (!plan.shouldLoad) return
         loadConfigurationContent(
             configuration,
             fromCache,
-            forceRefresh = freshness == CacheService.DetailFreshness.DEEP_STALE,
-            keepCachedVisible = cachedFirst
+            forceRefresh = plan.forceRefresh,
+            keepCachedVisible = plan.keepCachedVisible
         )
     }
 
@@ -968,90 +940,84 @@ private fun setupEventHandlers() {
         currentLoadingJob?.cancel()
 
         setLoadingState(true)
-        if (!keepCachedVisible) showCard("loading")
+        if (!keepCachedVisible) {
+            render(DetailViewState.Loading)
+        }
 
         currentLoadingJob = coroutineScope.launch {
             try {
-                val result = detailLoader.load(configuration, forceRefresh)
-
-                // Check if operation was cancelled
-                if (!isActive) return@launch
-
-                // The read reports the observation sequence it took, so this
-                // paint and the cache entry derived from the same read are
-                // ordered by one number (ADR-0047). A failed read reports none,
-                // so its error state is judged on epoch and coordinate alone.
-                val presented = issued.copy(
-                    observation = result.getOrNull()?.observation ?: Observed.NO_OBSERVATION
-                )
-                if (!presentation.admitAndRecord(presented)) {
+                val context = captureOperationContext()
+                if (context == null) {
+                    if (!isActive) return@launch
+                    if (!presentation.admitAndRecord(issued)) {
+                        setLoadingState(false)
+                        render(DetailViewState.Stale)
+                        return@launch
+                    }
                     setLoadingState(false)
+                    render(DetailViewState.ConfigurationRequired())
+                    return@launch
+                }
+                val namespaceId = operationNamespaceId(configuration)
+                val target = apiService.resolveOperationTarget(context, namespaceId).getOrElse { error ->
+                    if (!isActive) return@launch
+                    if (!presentation.admitAndRecord(issued)) {
+                        setLoadingState(false)
+                        render(DetailViewState.Stale)
+                        return@launch
+                    }
+                    setLoadingState(false)
+                    if (keepCachedVisible && keptCachedBody != null) {
+                        render(
+                            DetailPresentation.fromRefreshFailure(
+                                keptCachedBody!!.configuration,
+                                keptCachedBody!!.confidence
+                            )
+                        )
+                    } else {
+                        render(DetailPresentation.fromFailure(error, error.message ?: "Unknown error"))
+                    }
                     return@launch
                 }
 
-                result.onSuccess { observed ->
-                    observed.value?.let { config ->
-                        displayConfigurationContentSafely(config, presented)
-                        currentConfiguration = config
-                        setLoadingState(false)
-                        showCard("content")
-                        hideFreshnessStatus()
-                        refreshNavigationState()
+                val state = detailController.load(
+                    target = target,
+                    coordinate = ConfigurationCoordinate(configuration.dataId, configuration.group),
+                    sessionEpoch = issued.sessionEpoch,
+                    forceRefresh = forceRefresh,
+                    useCache = true,
+                    keepCachedVisible = keepCachedVisible,
+                    cachedBody = keptCachedBody
+                )
 
-                        // Update size information and status bar
-                        ApplicationManager.getApplication().invokeLater({
-                            val contentSize = config.content.length
-                            sizeLabel.text = formatSize(contentSize)
-                        }, ModalityState.defaultModalityState())
-                        updateStatusBar(config.content)
-                    } ?: run {
-                        setLoadingState(false)
-                        if (keepCachedVisible) {
-                            // An authoritative not-found deletes the cached entry
-                            // under the sequence of the read that proved it gone,
-                            // so a later-started read can still restore a
-                            // recreated configuration (ADR-0020).
-                            observedDetailRecorder.recordMissing(
-                                project.captureSelectedAccessIdentity(settings),
-                                configuration.tenantId,
-                                configuration.dataId,
-                                configuration.group,
-                                observed.observation
-                            )
-                            showFreshnessStatus("config.detail.cache.deleted")
-                            refreshNavigationState()
-                        } else {
-                            showCard("error")
-                        }
-                    }
-                }.onFailure { error ->
-                    if (isActive) {
-                        handleLoadFailure(
-                            keepCachedVisible,
-                            "Failed to load configuration",
-                            error.message ?: "Unknown error"
-                        )
-                    }
+                if (!isActive) return@launch
+                setLoadingState(false)
+                render(state)
+                if (state is DetailViewState.Body && state.overlay == DetailOverlay.None) {
+                    refreshNavigationState()
+                } else if (state is DetailViewState.Body && state.overlay == DetailOverlay.Deleted) {
+                    refreshNavigationState()
                 }
             } catch (e: Exception) {
                 if (isActive && presentation.admitAndRecord(issued)) {
-                    handleLoadFailure(
-                        keepCachedVisible,
-                        "Error loading configuration",
-                        e.message ?: "Unknown error"
-                    )
+                    setLoadingState(false)
+                    if (keepCachedVisible && keptCachedBody != null) {
+                        render(
+                            DetailPresentation.fromRefreshFailure(
+                                keptCachedBody!!.configuration,
+                                keptCachedBody!!.confidence
+                            )
+                        )
+                    } else {
+                        render(
+                            DetailPresentation.fromFailure(
+                                e,
+                                e.message ?: "Unknown error"
+                            )
+                        )
+                    }
                 }
             }
-        }
-    }
-
-    private fun handleLoadFailure(keepCachedVisible: Boolean, title: String, message: String) {
-        setLoadingState(false)
-        if (keepCachedVisible) {
-            showFreshnessStatus("config.detail.cache.refresh.failed")
-        } else {
-            showCard("error")
-            showError(title, message)
         }
     }
     
@@ -1278,6 +1244,157 @@ private fun setupEventHandlers() {
         }, ModalityState.defaultModalityState())
     }
 
+    private val bundleMessage: (String, Array<out Any>) -> String = { key, params ->
+        if (params.isEmpty()) NacosSearchBundle.message(key)
+        else NacosSearchBundle.message(key, *params)
+    }
+
+    /**
+     * Renders one closed [DetailViewState] with an exhaustive branch — no
+     * catch-all. Decisions live in [DetailController] / [DetailPresentation].
+     */
+    fun render(state: DetailViewState) {
+        viewState = state
+        when (state) {
+            is DetailViewState.Empty -> {
+                currentConfiguration = null
+                keptCachedBody = null
+                showCard("empty")
+                hideFreshnessStatus()
+                updateActionsEnabled()
+            }
+            is DetailViewState.Loading -> {
+                if (::loadingLabel.isInitialized) {
+                    loadingLabel.text = NacosSearchBundle.message("config.detail.loading")
+                    loadingLabel.isVisible = true
+                }
+                showCard("loading")
+                hideFreshnessStatus()
+            }
+            is DetailViewState.Body -> {
+                val sameEditor = editor != null &&
+                    currentConfiguration?.getKey() == state.configuration.getKey() &&
+                    state.editing
+                currentConfiguration = state.configuration
+                keptCachedBody = state
+                val presented = PresentedResult(
+                    project.currentSessionEpoch(),
+                    selectedCoordinate,
+                    state.observation
+                )
+                if (!sameEditor) {
+                    displayConfigurationContentSafely(state.configuration, presented)
+                }
+                showCard("content")
+                val overlayText = DetailCopy.overlayMessage(state.overlay, bundleMessage)
+                if (overlayText != null) {
+                    ApplicationManager.getApplication().invokeLater {
+                        freshnessLabel.text = overlayText
+                        freshnessLabel.isVisible = true
+                    }
+                } else {
+                    hideFreshnessStatus()
+                }
+                if (state.editing) {
+                    editor?.document?.setReadOnly(false)
+                    if (::editButton.isInitialized) editButton.isVisible = false
+                    if (::revertButton.isInitialized) revertButton.isVisible = true
+                    if (::saveButton.isInitialized) saveButton.isVisible = true
+                }
+                if (state.dirty != renderedDirty) {
+                    updateDirtyUI(state.dirty)
+                }
+                ApplicationManager.getApplication().invokeLater({
+                    sizeLabel.text = formatSize(state.configuration.content.length)
+                }, ModalityState.defaultModalityState())
+                updateStatusBar(state.configuration.content)
+            }
+            is DetailViewState.WriteIntentDisabled -> {
+                com.intellij.openapi.ui.Messages.showInfoMessage(
+                    DetailCopy.writeIntentMessage(state.cause, bundleMessage),
+                    NacosSearchBundle.message("config.detail.action.edit")
+                )
+            }
+            is DetailViewState.ConfigurationRequired -> {
+                com.intellij.openapi.ui.Messages.showErrorDialog(
+                    state.detail?.takeIf { it.isNotBlank() }
+                        ?: NacosSearchBundle.message("error.connection.incomplete"),
+                    NacosSearchBundle.message("common.error")
+                )
+            }
+            is DetailViewState.AwaitingConfirmation -> {
+                // Confirmation is a ceremony gesture: the save path shows the
+                // dialog and waits. Render keeps the named target/diff on the
+                // state for tests and for any future non-modal UI.
+            }
+            is DetailViewState.Publishing -> {
+                if (::loadingLabel.isInitialized) {
+                    loadingLabel.text = NacosSearchBundle.message("config.detail.publish.publishing")
+                    loadingLabel.isVisible = true
+                }
+            }
+            is DetailViewState.Verifying -> {
+                if (::loadingLabel.isInitialized) {
+                    loadingLabel.text = NacosSearchBundle.message("config.detail.publish.verifying")
+                    loadingLabel.isVisible = true
+                }
+            }
+            is DetailViewState.Verified -> {
+                if (::loadingLabel.isInitialized) loadingLabel.isVisible = false
+                val verified = state.configuration
+                if (verified != null) {
+                    currentConfiguration = verified
+                }
+                exitEditMode()
+                if (::saveButton.isInitialized) saveButton.isEnabled = false
+                if (::revertButton.isInitialized) revertButton.isEnabled = false
+                updateDirtyUI(false)
+                updateStatusBar(verified?.content ?: currentConfiguration?.content.orEmpty())
+                com.intellij.openapi.ui.Messages.showInfoMessage(
+                    NacosSearchBundle.message("message.configuration.saved"),
+                    NacosSearchBundle.message("common.success")
+                )
+            }
+            is DetailViewState.Conflict -> {
+                if (::loadingLabel.isInitialized) loadingLabel.isVisible = false
+                openConflictDiff(state.remoteContent, state.draftContent)
+                com.intellij.openapi.ui.Messages.showErrorDialog(
+                    NacosSearchBundle.message("config.detail.publish.conflict"),
+                    NacosSearchBundle.message("common.error")
+                )
+            }
+            is DetailViewState.ServerStateUnknown -> {
+                if (::loadingLabel.isInitialized) loadingLabel.isVisible = false
+                if (::saveButton.isInitialized) {
+                    saveButton.text = NacosSearchBundle.message("config.detail.publish.reconcile")
+                    saveButton.isEnabled = true
+                }
+                com.intellij.openapi.ui.Messages.showErrorDialog(
+                    NacosSearchBundle.message("config.detail.publish.unknown"),
+                    NacosSearchBundle.message("common.error")
+                )
+            }
+            is DetailViewState.Failed -> {
+                if (::loadingLabel.isInitialized) loadingLabel.isVisible = false
+                if (state.asErrorCard) {
+                    showCard("error")
+                }
+                val body = DetailCopy.failedBody(state, bundleMessage)
+                ApplicationManager.getApplication().invokeLater({
+                    JOptionPane.showMessageDialog(
+                        this,
+                        body,
+                        NacosSearchBundle.message("common.error"),
+                        JOptionPane.ERROR_MESSAGE
+                    )
+                }, ModalityState.defaultModalityState())
+            }
+            is DetailViewState.Stale -> {
+                // A discarded late arrival must not change what is already shown.
+            }
+        }
+    }
+
     private fun showFreshnessStatus(messageKey: String) {
         ApplicationManager.getApplication().invokeLater {
             freshnessLabel.text = NacosSearchBundle.message(messageKey)
@@ -1292,25 +1409,11 @@ private fun setupEventHandlers() {
     }
 
     private fun refreshNavigationState() {
-        ApplicationManager.getApplication()
-            .getService(NavigationIndexRefreshService::class.java)
-            .refresh(project.captureSelectedAccessIdentity(settings), project)
+        navigationRefresh.refresh(project.captureSelectedAccessIdentity(settings), project)
     }
     
     private fun showEmptyState() {
-        showCard("empty")
-        updateActionsEnabled()
-    }
-    
-    private fun showError(title: String, message: String) {
-        ApplicationManager.getApplication().invokeLater({
-            JOptionPane.showMessageDialog(
-                this,
-                message,
-                title,
-                JOptionPane.ERROR_MESSAGE
-            )
-        }, ModalityState.defaultModalityState())
+        render(DetailViewState.Empty)
     }
     
     private fun disposeEditorSafely() {
@@ -1362,8 +1465,11 @@ private fun setupEventHandlers() {
                 val presented = issue()
                 val result = editSessions.reconcilePublish() ?: return@launch
                 withContext(Dispatchers.Main) {
-                    if (!presentation.admitAndRecord(presented)) return@withContext
-                    presentPublishOutcome(result, session.draftContent)
+                    if (!presentation.admitAndRecord(presented)) {
+                        render(DetailViewState.Stale)
+                        return@withContext
+                    }
+                    render(detailController.fromPublishResult(result, session.draftContent))
                 }
             }
             return
@@ -1374,6 +1480,7 @@ private fun setupEventHandlers() {
                 val prepareResult = editSessions.requestPublish() ?: return@launch
                 when (val state = prepareResult.state) {
                     is PublishState.AwaitingConfirmation -> {
+                        render(detailController.fromPublishState(state, session.draftContent))
                         val target = state.namedTarget
                         val confirm = withContext(Dispatchers.Main) {
                             com.intellij.openapi.ui.Messages.showYesNoDialog(
@@ -1396,26 +1503,14 @@ private fun setupEventHandlers() {
                         }
                         val progressJob = launch {
                             editSessions.publishState.collect { phase ->
-                                withContext(Dispatchers.Main) {
-                                    when (phase) {
-                                        is PublishState.Publishing -> {
-                                            if (::loadingLabel.isInitialized) {
-                                                loadingLabel.text = NacosSearchBundle.message(
-                                                    "config.detail.publish.publishing"
-                                                )
-                                                loadingLabel.isVisible = true
-                                            }
+                                when (phase) {
+                                    is PublishState.Publishing,
+                                    is PublishState.Verifying -> {
+                                        withContext(Dispatchers.Main) {
+                                            render(detailController.fromPublishState(phase))
                                         }
-                                        is PublishState.Verifying -> {
-                                            if (::loadingLabel.isInitialized) {
-                                                loadingLabel.text = NacosSearchBundle.message(
-                                                    "config.detail.publish.verifying"
-                                                )
-                                                loadingLabel.isVisible = true
-                                            }
-                                        }
-                                        else -> Unit
                                     }
+                                    else -> Unit
                                 }
                             }
                         }
@@ -1428,105 +1523,50 @@ private fun setupEventHandlers() {
                             }
                         }
                         if (publishResult == null) {
-                            showSaveError(
-                                NacosSearchBundle.message("config.detail.publish.confirmation.expired")
-                            )
+                            withContext(Dispatchers.Main) {
+                                render(
+                                    DetailViewState.Failed(
+                                        detailKey = "config.detail.publish.confirmation.expired",
+                                        asErrorCard = false
+                                    )
+                                )
+                            }
                             return@launch
                         }
                         withContext(Dispatchers.Main) {
-                            if (!presentation.admitAndRecord(presented)) return@withContext
-                            presentPublishOutcome(publishResult, session.draftContent)
+                            if (!presentation.admitAndRecord(presented)) {
+                                render(DetailViewState.Stale)
+                                return@withContext
+                            }
+                            render(detailController.fromPublishResult(publishResult, session.draftContent))
                         }
                     }
                     is PublishState.Dirty -> {
                         withContext(Dispatchers.Main) {
-                            if (!presentation.admitAndRecord(presented)) return@withContext
-                            com.intellij.openapi.ui.Messages.showErrorDialog(
-                                NacosSearchBundle.message("config.detail.publish.confirmation.expired"),
-                                NacosSearchBundle.message("common.error")
+                            if (!presentation.admitAndRecord(presented)) {
+                                render(DetailViewState.Stale)
+                                return@withContext
+                            }
+                            render(
+                                DetailViewState.Failed(
+                                    detailKey = "config.detail.publish.confirmation.expired",
+                                    asErrorCard = false
+                                )
                             )
                         }
                     }
                     else -> {
                         withContext(Dispatchers.Main) {
-                            if (!presentation.admitAndRecord(presented)) return@withContext
-                            presentPublishOutcome(prepareResult, session.draftContent)
+                            if (!presentation.admitAndRecord(presented)) {
+                                render(DetailViewState.Stale)
+                                return@withContext
+                            }
+                            render(detailController.fromPublishResult(prepareResult, session.draftContent))
                         }
                     }
                 }
             } catch (e: Exception) {
                 showSaveError(e.message ?: e.toString())
-            }
-        }
-    }
-
-    private fun presentPublishOutcome(
-        publishResult: com.nanyin.nacos.search.services.operations.PublishResult,
-        draftContent: String
-    ) {
-        when (val state = publishResult.state) {
-            is PublishState.Verified -> {
-                val verified = publishResult.verifiedDetail
-                if (verified != null) {
-                    currentConfiguration = verified
-                }
-                exitEditMode()
-                saveButton.isEnabled = false
-                revertButton.isEnabled = false
-                updateDirtyUI(false)
-                updateStatusBar(verified?.content ?: draftContent)
-                com.intellij.openapi.ui.Messages.showInfoMessage(
-                    NacosSearchBundle.message("message.configuration.saved"),
-                    NacosSearchBundle.message("common.success")
-                )
-            }
-            is PublishState.RemoteConflict -> {
-                openConflictDiff(state.remoteContent, draftContent)
-                com.intellij.openapi.ui.Messages.showErrorDialog(
-                    NacosSearchBundle.message("config.detail.publish.conflict"),
-                    NacosSearchBundle.message("common.error")
-                )
-            }
-            is PublishState.TargetDeleted -> {
-                com.intellij.openapi.ui.Messages.showErrorDialog(
-                    NacosSearchBundle.message("config.detail.publish.deleted"),
-                    NacosSearchBundle.message("common.error")
-                )
-            }
-            is PublishState.PermissionDenied -> {
-                com.intellij.openapi.ui.Messages.showErrorDialog(
-                    NacosSearchBundle.message("config.detail.publish.permission"),
-                    NacosSearchBundle.message("common.error")
-                )
-            }
-            is PublishState.ServerStateUnknown -> {
-                // Keep the draft; save becomes reconcile on the next press.
-                if (::saveButton.isInitialized) {
-                    saveButton.text = NacosSearchBundle.message("config.detail.publish.reconcile")
-                    saveButton.isEnabled = true
-                }
-                com.intellij.openapi.ui.Messages.showErrorDialog(
-                    NacosSearchBundle.message("config.detail.publish.unknown"),
-                    NacosSearchBundle.message("common.error")
-                )
-            }
-            is PublishState.ReadOnly -> {
-                com.intellij.openapi.ui.Messages.showErrorDialog(
-                    NacosSearchBundle.message("config.detail.publish.readonly", state.reason),
-                    NacosSearchBundle.message("common.error")
-                )
-            }
-            is PublishState.Dirty -> {
-                com.intellij.openapi.ui.Messages.showErrorDialog(
-                    NacosSearchBundle.message("config.detail.publish.not.verified"),
-                    NacosSearchBundle.message("common.error")
-                )
-            }
-            else -> {
-                com.intellij.openapi.ui.Messages.showErrorDialog(
-                    NacosSearchBundle.message("error.config.save.failed") + ": $state",
-                    NacosSearchBundle.message("common.error")
-                )
             }
         }
     }
@@ -1550,9 +1590,12 @@ private fun setupEventHandlers() {
 
     private suspend fun showSaveError(message: String) {
         withContext(Dispatchers.Main) {
-            com.intellij.openapi.ui.Messages.showErrorDialog(
-                NacosSearchBundle.message("error.config.save.failed") + ": $message",
-                NacosSearchBundle.message("common.error")
+            render(
+                DetailViewState.Failed(
+                    titleKey = DetailPresentation.SAVE_FAILED_TITLE_KEY,
+                    detail = message,
+                    asErrorCard = false
+                )
             )
         }
     }
@@ -1560,23 +1603,17 @@ private fun setupEventHandlers() {
     private fun openHistoryBrowser() {
         val config = currentConfiguration ?: return
         coroutineScope.launch {
-            val context = selectedOperationContext()
+            val context = captureOperationContext()
             if (context == null) {
                 withContext(Dispatchers.Main) {
-                    com.intellij.openapi.ui.Messages.showErrorDialog(
-                        NacosSearchBundle.message("error.connection.incomplete"),
-                        NacosSearchBundle.message("common.error")
-                    )
+                    render(DetailViewState.ConfigurationRequired())
                 }
                 return@launch
             }
             val namespaceId = operationNamespaceId(config)
-            val target = nacosApiService.resolveOperationTarget(context, namespaceId).getOrElse {
+            val target = apiService.resolveOperationTarget(context, namespaceId).getOrElse {
                 withContext(Dispatchers.Main) {
-                    com.intellij.openapi.ui.Messages.showErrorDialog(
-                        it.message ?: it.toString(),
-                        NacosSearchBundle.message("common.error")
-                    )
+                    render(DetailPresentation.fromFailure(it, it.message ?: it.toString()))
                 }
                 return@launch
             }
@@ -1587,7 +1624,7 @@ private fun setupEventHandlers() {
                     target = target,
                     configuration = config,
                     currentContent = currentText,
-                    gateway = nacosApiService.operationGateway(),
+                    gateway = apiService.operationGateway(),
                     sessionEpochProvider = { project.currentSessionEpoch() }
                 ).show()
             }
@@ -1606,6 +1643,7 @@ private fun setupEventHandlers() {
         // names a coordinate this panel does not present, and is discarded.
         currentConfiguration = null
         selectedCoordinate = null
+        keptCachedBody = null
         exitEditMode()
         disposeEditorSafely()
         showEmptyState()
@@ -1667,6 +1705,28 @@ private fun setupEventHandlers() {
 
         // Rebuild error panel with new language
         rebuildErrorPanel()
+
+        // Re-derive structured copy from the closed state (ADR-0036) without
+        // re-firing one-shot dialogs for Failed / Verified / Conflict.
+        when (val state = viewState) {
+            is DetailViewState.Body -> {
+                val overlayText = DetailCopy.overlayMessage(state.overlay, bundleMessage)
+                if (overlayText != null) {
+                    freshnessLabel.text = overlayText
+                    freshnessLabel.isVisible = true
+                }
+            }
+            is DetailViewState.Loading -> {
+                loadingLabel.text = NacosSearchBundle.message("config.detail.loading")
+            }
+            is DetailViewState.Publishing -> {
+                loadingLabel.text = NacosSearchBundle.message("config.detail.publish.publishing")
+            }
+            is DetailViewState.Verifying -> {
+                loadingLabel.text = NacosSearchBundle.message("config.detail.publish.verifying")
+            }
+            else -> Unit
+        }
 
         // Revalidate and repaint the UI
         revalidate()
