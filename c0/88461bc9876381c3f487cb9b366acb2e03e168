@@ -1,0 +1,19 @@
+src/test/kotlin/com/nanyin/nacos/search/services/operations/PublishControllerTest.kt
+  s_81ccb3df44c3da::t_4aa11bdef9a53c 27,29-31,41,43-44,57,59-81,93,111,115,128,146,162,178,193,208,225,227-228,252,277,300,308-317,322-330,378-381,387-388,397-400
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "c088461bc9876381c3f487cb9b366acb2e03e168",
+  "prompts": {},
+  "sessions": {
+    "s_81ccb3df44c3da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "68a46d70-a2fa-49e2-b048-4b4dee8599ab",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
