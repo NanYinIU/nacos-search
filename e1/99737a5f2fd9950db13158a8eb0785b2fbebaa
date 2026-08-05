@@ -1,0 +1,44 @@
+src/test/kotlin/com/nanyin/nacos/search/services/operations/ReleaseGateSuiteTest.kt
+  s_c31c349a162f0b::t_5f4e51a997e1df 47-49
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchWindow.kt
+  s_c31c349a162f0b::t_19780c1498055d 675,684-690,692-696,698-707,710
+  s_c31c349a162f0b::t_dd25ced8c1eb45 770-771,777
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanel.kt
+  s_c31c349a162f0b::t_e43944bb9ff8c0 646-651
+  s_c31c349a162f0b::t_334a54896a69fa 907
+  s_c31c349a162f0b::t_5f4e51a997e1df 1316-1318
+  s_c31c349a162f0b::t_74162c02a497f3 1449
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosProjectSession.kt
+  s_c31c349a162f0b::t_5545fdab9b45ab 11-12
+  s_c31c349a162f0b::t_905fce978e92da 124,129
+src/test/kotlin/com/nanyin/nacos/search/ui/UiButtonInteractionTest.kt
+  s_c31c349a162f0b::t_68a4e7228b102e 54
+src/main/kotlin/com/nanyin/nacos/search/services/operations/EditSessionService.kt
+  s_c31c349a162f0b::t_8eb464a10f42d0 195-204,208
+  s_c31c349a162f0b::t_2b5d986cfa0c57 69-71
+  s_c31c349a162f0b::t_7984216a3a1a23 241,244
+  s_c31c349a162f0b::t_4a82cf617f71ce 245
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigListPanel.kt
+  s_c31c349a162f0b::t_2844ce00e2484d 147-153
+src/test/kotlin/com/nanyin/nacos/search/services/operations/EditSessionServiceTest.kt
+  s_c31c349a162f0b::t_af93954b68d3c0 379-380,385-387,393-395
+  s_c31c349a162f0b::t_749fc786304bc6 87,98,139,267
+  s_c31c349a162f0b::t_4931f1f5daa0c7 129-138,140-147
+  s_c31c349a162f0b::t_d90b20daa76db5 128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "e199737a5f2fd9950db13158a8eb0785b2fbebaa",
+  "prompts": {},
+  "sessions": {
+    "s_c31c349a162f0b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f937ebb2-63b4-4ec2-815e-adfc8bb6345a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
