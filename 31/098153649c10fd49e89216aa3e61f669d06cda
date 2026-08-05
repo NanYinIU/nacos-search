@@ -1,0 +1,96 @@
+src/main/resources/messages/NacosSearchBundle.properties
+  s_c31c349a162f0b::t_cf9e298c1dc9f8 139-144
+src/test/kotlin/com/nanyin/nacos/search/services/operations/ReleaseGateSuiteTest.kt
+  s_c31c349a162f0b::t_f4013cb5d1a26a 45-46,50,57-59,63-64,67-68,70,176-177,179
+  s_c31c349a162f0b::t_d042d9471f5c74 211-226
+src/main/kotlin/com/nanyin/nacos/search/ui/DraftDiscardPrompt.kt
+  s_c31c349a162f0b::t_104aa2ac7ebbe3 1-28
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanel.kt
+  s_c31c349a162f0b::t_19598edd5246e3 1300-1302,1305-1306,1314-1317,1326,1339
+  s_c31c349a162f0b::t_3e52fee53a818f 48
+  s_c31c349a162f0b::t_12096ed571b743 903,905
+  s_c31c349a162f0b::t_112eba5c0efbe4 141-148
+  s_c31c349a162f0b::t_96a21de7ce2191 548
+  s_c31c349a162f0b::t_85c03033c88c71 646-649
+  s_c31c349a162f0b::t_591c5af5c5073f 1447
+  s_c31c349a162f0b::t_2f61a2b77c9d1a 41-42,44
+  s_c31c349a162f0b::t_2ce4f85f7137c1 1066
+  s_c31c349a162f0b::t_2e29ca46768747 470-471,483-486,489-490,492-496,498-509,512-519,526-528,531,541-543,546-547
+  s_c31c349a162f0b::t_f1a764922e5b6f 118-120
+  s_c31c349a162f0b::t_2c0857c521d4da 200-201
+  s_c31c349a162f0b::t_a56f7813652656 558
+  s_c31c349a162f0b::t_24115b6fc59447 896,1457
+src/test/kotlin/com/nanyin/nacos/search/services/operations/PublishControllerTest.kt
+  s_c31c349a162f0b::t_34b0f726ac4fe7 294-317,319-326,328
+  s_c31c349a162f0b::t_a4de5567a5285f 24-25
+  s_c31c349a162f0b::t_82d22302a8050f 27,40,56,72,90,106,124,140,156,171,186,203,230,255,278,342-355
+src/test/kotlin/com/nanyin/nacos/search/services/operations/EditSessionServiceTest.kt
+  s_c31c349a162f0b::t_6dede05279b836 62-66,70-73
+  s_c31c349a162f0b::t_79f5de5bdc71bd 33,87,89,91,100,102,108,112-113,117-121,132,134,199-200,246,249,252,254-267,276,290,305,308,320,355-356,360,365,373,377-388
+  s_c31c349a162f0b::t_fd8e132ac62376 1-32,34-61,67-69,74-86,88,90,92-99,101,103-107,109-111,114-116,122-131,133,135-198,201-245,247-248,250-251,253,268-275,277-289,291-304,306-307,309-319,321-354,357-359,361-364,366-372,374-376,389-436
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchToolWindowFactory.kt
+  s_c31c349a162f0b::t_9960b7dfa0902e 3,8,10-13
+  s_c31c349a162f0b::t_ecfdaff73b8442 34,36-37
+  s_c31c349a162f0b::t_a93e4cea7919f0 45-68
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigListPanel.kt
+  s_c31c349a162f0b::t_670e2d3e85ad2a 57-59
+  s_c31c349a162f0b::t_d41ad77ad7926e 212-232
+  s_c31c349a162f0b::t_b612bb930d8fa8 156,163
+CLAUDE.md
+  s_c31c349a162f0b::t_474a66fd21ea45 124-138
+  s_c31c349a162f0b::t_79fc8f8b733509 80
+src/test/kotlin/com/nanyin/nacos/search/ui/UiButtonInteractionTest.kt
+  s_c31c349a162f0b::t_d0713bdeb72cda 44-58
+  s_c31c349a162f0b::t_b8483ac1590640 8,11-14
+src/main/resources/messages/NacosSearchBundle_zh_CN.properties
+  s_c31c349a162f0b::t_67e7ef734a8027 139-144
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchWindow.kt
+  s_c31c349a162f0b::t_50b4b382878945 67-68
+  s_c31c349a162f0b::t_adfa6e11a8a8e9 776
+  s_c31c349a162f0b::t_606fc4fc10e60b 27-29
+  s_c31c349a162f0b::t_468a1cdb9681f0 669-673,675,683-707
+  s_c31c349a162f0b::t_db08e8b4253283 767-775
+src/main/kotlin/com/nanyin/nacos/search/services/operations/PublishController.kt
+  s_c31c349a162f0b::t_58e8128e02a945 16-19,22-24
+  s_c31c349a162f0b::t_d63095d55ab8ca 99
+  s_c31c349a162f0b::t_dca17a9cb59ded 131
+  s_c31c349a162f0b::t_eb16d7b80defa2 42-48,54,56
+src/test/kotlin/com/nanyin/nacos/search/services/operations/OperationGatewayPublishTest.kt
+  s_c31c349a162f0b::t_dee3ec24e79a18 74,76,80,84,89-95,102-103
+  s_c31c349a162f0b::t_aa3556ea7403f1 40,44-46,48,51,54
+src/main/kotlin/com/nanyin/nacos/search/services/operations/PublishTypes.kt
+  s_c31c349a162f0b::t_d0524721e020ab 51-57,59-95,97-135,143-144,148-151,153-154,157
+  s_c31c349a162f0b::t_640634d9eb5b52 3-4,6
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosProjectSession.kt
+  s_c31c349a162f0b::t_3569ea09e70956 112-131
+  s_81ccb3df44c3da::t_2094b7f4180465 111
+src/main/kotlin/com/nanyin/nacos/search/services/operations/OperationGatewayPublishGateway.kt
+  s_c31c349a162f0b::t_ded1bcb80125d2 7-8,14-17,19,26-27
+  s_c31c349a162f0b::t_0505e7ad8d308e 45-48,50
+src/main/kotlin/com/nanyin/nacos/search/services/operations/EditSessionService.kt
+  s_c31c349a162f0b::t_3a245198c346d4 1-238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "31098153649c10fd49e89216aa3e61f669d06cda",
+  "prompts": {},
+  "sessions": {
+    "s_81ccb3df44c3da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "68a46d70-a2fa-49e2-b048-4b4dee8599ab",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_c31c349a162f0b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f937ebb2-63b4-4ec2-815e-adfc8bb6345a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
