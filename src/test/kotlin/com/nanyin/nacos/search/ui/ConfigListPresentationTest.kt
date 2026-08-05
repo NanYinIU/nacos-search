@@ -183,6 +183,27 @@ class ConfigListPresentationTest {
     }
 
     @Test
+    fun `non-search failure keeps caller fallback when a throwable is present`() {
+        // Production showError(loadMessage, e) always passes both; the composed
+        // fallback is the full body and must not collapse to e.message alone.
+        val state = ConfigListPresentation.fromFailure(
+            error = RuntimeException("boom"),
+            fallbackMessage = "Failed to load configurations: boom",
+            titleKey = null
+        )
+
+        assertInstanceOf(ConfigListViewState.Failed::class.java, state)
+        val failed = state as ConfigListViewState.Failed
+        assertNull(failed.titleKey)
+        assertEquals("Failed to load configurations: boom", failed.detail)
+        assertEquals(
+            "Failed to load configurations: boom",
+            ConfigListCopy.failedBody(failed, message)
+        )
+        assertTrue(failed.detail != "boom")
+    }
+
+    @Test
     fun `strips legacy Chinese search prefix from fallback detail`() {
         val state = ConfigListPresentation.fromSearchState(
             NacosSearchService.SearchState.Error(

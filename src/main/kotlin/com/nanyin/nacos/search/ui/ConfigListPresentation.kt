@@ -84,7 +84,7 @@ object ConfigListPresentation {
             )
             else -> ConfigListViewState.Failed(
                 titleKey = titleKey,
-                detail = failureDetail(root, fallbackMessage)
+                detail = failureDetail(root, fallbackMessage, titleKey)
             )
         }
     }
@@ -98,11 +98,23 @@ object ConfigListPresentation {
         ConfigListViewState.Empty(status = ListStatus.Bundle(key, params.toList()))
 
     /**
-     * Detail text for a Failed state: prefer the unwrapped throwable message,
-     * fall back to [fallback], and strip legacy Chinese/English search prefixes
-     * so presentation can own a single localised title.
+     * Detail text for a Failed state.
+     *
+     * - When [titleKey] is null (load/nav path): the caller-composed
+     *   [fallback] **is** the full body — never replace it with a bare
+     *   throwable message.
+     * - When [titleKey] is set (search path): prefer the unwrapped throwable
+     *   message, then [fallback], and strip legacy Chinese/English search
+     *   prefixes so presentation can own a single localised title.
      */
-    internal fun failureDetail(error: Throwable?, fallback: String): String {
+    internal fun failureDetail(
+        error: Throwable?,
+        fallback: String,
+        titleKey: String? = null
+    ): String {
+        if (titleKey == null) {
+            return stripLegacySearchPrefix(fallback.trim())
+        }
         val raw = when {
             error != null && !error.message.isNullOrBlank() -> error.message!!.trim()
             else -> fallback.trim()
