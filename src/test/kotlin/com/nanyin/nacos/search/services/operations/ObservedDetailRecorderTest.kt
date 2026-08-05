@@ -7,79 +7,25 @@ import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.InMemoryCacheStore
 import com.nanyin.nacos.search.services.writeDetail
 import kotlinx.coroutines.runBlocking
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
 /**
  * The operation layer's record of what a read observed about one configuration
- * detail. The subject is which observation sequence the mutation carries: the
- * one the read took, never a fresh one (issue #65 / ADR-0047).
+ * detail — today, that it is gone. The subject is which observation sequence
+ * the mutation carries: the one the read took, never a fresh one (issue #65 /
+ * ADR-0047).
  */
 class ObservedDetailRecorderTest {
     @get:Rule
     val applicationRule = ApplicationRule()
 
     private val identity = testIdentity()
-    private val ttl = 300_000L
 
     private fun config(dataId: String, content: String) =
         NacosConfiguration(dataId, "DEFAULT_GROUP", "dev", content, "properties")
-
-    @Test
-    fun `a returned detail is recorded at its coordinate`() = runBlocking {
-        val cacheService = CacheService(InMemoryCacheStore())
-
-        assertTrue(
-            ObservedDetailRecorder(cacheService)
-                .recordDetail(identity, "dev", config("app.properties", "v=1"), ttl, observation = 4)
-        )
-
-        assertEquals(
-            "v=1",
-            cacheService.getConfigDetail(identity, "dev", "app.properties", "DEFAULT_GROUP")?.content
-        )
-    }
-
-    @Test
-    fun `a detail read that started earlier does not displace a newer one`() = runBlocking {
-        val cacheService = CacheService(InMemoryCacheStore())
-        cacheService.writeDetail(identity, "dev", config("app.properties", "v=new"), observation = 7)
-
-        assertFalse(
-            ObservedDetailRecorder(cacheService)
-                .recordDetail(identity, "dev", config("app.properties", "v=old"), ttl, observation = 3)
-        )
-
-        assertEquals(
-            "v=new",
-            cacheService.getConfigDetail(identity, "dev", "app.properties", "DEFAULT_GROUP")?.content
-        )
-    }
-
-    @Test
-    fun `recording a detail the gateway already wrote under the same sequence is dropped`() = runBlocking {
-        val cacheService = CacheService(InMemoryCacheStore())
-        // The gateway's own write for this read.
-        cacheService.writeDetail(identity, "dev", config("app.properties", "v=gateway"), observation = 5)
-
-        // The same read reported again from a layer that reads under this
-        // identity. It cannot restamp the entry, so a genuinely newer read that
-        // started at 6 still wins.
-        assertFalse(
-            ObservedDetailRecorder(cacheService)
-                .recordDetail(identity, "dev", config("app.properties", "v=again"), ttl, observation = 5)
-        )
-
-        assertEquals(
-            "v=gateway",
-            cacheService.getConfigDetail(identity, "dev", "app.properties", "DEFAULT_GROUP")?.content
-        )
-    }
 
     @Test
     fun `an authoritative not-found deletes the cached detail`() = runBlocking {
