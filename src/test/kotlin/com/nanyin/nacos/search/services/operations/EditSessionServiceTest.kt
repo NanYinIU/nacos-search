@@ -84,7 +84,7 @@ class EditSessionServiceTest {
 
     @Test
     fun `the edit action explains a withheld write intent instead of starting an edit`() = runBlocking {
-        val service = service(StubEditEnvironment(profile = profile(writeIntent = false)))
+        val service = service(StubEditEnvironment(selected = profile(writeIntent = false)))
 
         val start = service.beginEdit(configuration(), "dev", baselineContent = "original")
 
@@ -95,7 +95,7 @@ class EditSessionServiceTest {
 
     @Test
     fun `an unselected profile withholds write intent for its own reason`() = runBlocking {
-        val service = service(StubEditEnvironment(profile = null))
+        val service = service(StubEditEnvironment(selected = null))
 
         val start = service.beginEdit(configuration(), "dev", baselineContent = "original")
 
@@ -123,6 +123,26 @@ class EditSessionServiceTest {
 
         assertInstanceOf(PublishState.ReadOnly::class.java, result.state)
         assertEquals(0, adapter.publishCalls)
+    }
+
+    @Test
+    fun `revoking write intent while a draft is open blocks the save path`() = runBlocking {
+        // ADR-0026's opt-in can be turned off in Settings while a draft is
+        // open. Blocking that gesture is a later slice, so until then the save
+        // path must fail closed rather than publish under a revoked opt-in.
+        val adapter = RecordingAdapter()
+        val environment = StubEditEnvironment()
+        val service = service(environment, adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        environment.profiles["p1"] = profile(writeIntent = false)
+
+        val result = requireNotNull(service.publish())
+
+        assertInstanceOf(PublishState.ReadOnly::class.java, result.state)
+        assertEquals(0, adapter.publishCalls)
+        assertTrue(service.isDirty())
     }
 
     @Test
@@ -244,7 +264,7 @@ class EditSessionServiceTest {
         service.updateDraft("edited")
 
         // The user retargets the tool window after starting the draft.
-        environment.profile = profile(id = "p2")
+        environment.selected = profile(id = "p2")
 
         val result = requireNotNull(service.publish())
 
@@ -356,17 +376,23 @@ class EditSessionServiceTest {
      * session never holds one.
      */
     private inner class StubEditEnvironment(
-        var profile: EnvironmentProfile? = profile(),
+        /** What the tool window has selected now — a draft outlives changes to it. */
+        var selected: EnvironmentProfile? = profile(),
         var credential: String = "",
         private val captureFailure: Throwable? = null,
         var accessRevision: Long = 1
     ) : EditEnvironment {
+        /** Every profile this environment knows, by id, as the settings store holds them. */
+        val profiles = mutableMapOf("p1" to profile())
+
         /** (profileId, namespaceId) of every capture this environment served. */
         val captures = mutableListOf<Pair<String, String>>()
 
         val identity: AccessIdentity get() = identityAt(accessRevision)
 
-        override fun selectedProfile(): EnvironmentProfile? = profile
+        override fun selectedProfile(): EnvironmentProfile? = selected
+
+        override fun profile(profileId: String): EnvironmentProfile? = profiles[profileId]
 
         override suspend fun captureTarget(profileId: String, namespaceId: String): Result<OperationTarget> {
             captureFailure?.let { return Result.failure(it) }

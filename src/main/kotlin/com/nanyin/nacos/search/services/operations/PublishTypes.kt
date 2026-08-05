@@ -145,10 +145,6 @@ data class EditSession(
 ) {
     val isDirty: Boolean get() = draftContent != baselineContent
 
-    val dataId: String get() = binding.dataId
-    val group: String get() = binding.group
-    val namespaceId: String get() = binding.namespaceId
-
     fun toCommand(remoteDetail: NacosConfiguration): PublishCommand = PublishCommand(
         dataId = binding.dataId,
         group = binding.group,

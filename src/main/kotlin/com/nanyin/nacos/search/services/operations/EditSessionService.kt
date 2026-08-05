@@ -66,6 +66,9 @@ interface EditEnvironment {
     /** The environment profile currently selected for this project, or null. */
     fun selectedProfile(): EnvironmentProfile?
 
+    /** The profile with [profileId] as it stands now, or null when it is gone. */
+    fun profile(profileId: String): EnvironmentProfile?
+
     /** Captures a fresh operation target for [profileId] in [namespaceId]. */
     suspend fun captureTarget(profileId: String, namespaceId: String): Result<OperationTarget>
 }
@@ -189,10 +192,20 @@ class EditSessionService internal constructor(
      */
     suspend fun publish(): PublishResult? {
         val current = currentSession() ?: return null
+        // ADR-0026's opt-in is one the user can still revoke while a draft is
+        // open, and blocking that revocation is a later slice (#77). Until then
+        // the save path fails closed by re-running the same check against the
+        // profile the draft is bound to — the check, not a snapshot of it.
+        if (WriteIntent.of(environment.profile(current.binding.profileId)) !is WriteIntent.Granted) {
+            return PublishResult(
+                PublishState.ReadOnly("Publishing is disabled for this environment"),
+                isDirty = current.isDirty
+            )
+        }
         val target = environment.captureTarget(current.binding.profileId, current.binding.namespaceId)
             .getOrElse {
                 return PublishResult(
-                    PublishState.ReadOnly(it.message ?: "The environment this draft belongs to is unavailable"),
+                    PublishState.ReadOnly("The environment this draft belongs to is unavailable"),
                     isDirty = current.isDirty
                 )
             }
@@ -225,8 +238,10 @@ private class ProjectEditEnvironment(private val project: Project) : EditEnviron
             ?.sessionState?.selectedProfileId
             ?.takeIf { it.isNotBlank() }
             ?: return null
-        return settings.getProfile(profileId)
+        return profile(profileId)
     }
+
+    override fun profile(profileId: String): EnvironmentProfile? = settings.getProfile(profileId)
 
     override suspend fun captureTarget(profileId: String, namespaceId: String): Result<OperationTarget> {
         // Do not heal: deleted explicit profiles must fail closed (ADR-0025).

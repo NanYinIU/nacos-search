@@ -44,9 +44,9 @@ class ReleaseGateSuiteTest {
     fun `misdirected write is blocked by edit session binding`() {
         val target = lockedTarget(NacosApiGeneration.V1)
         val session = v1EditSession(target)
-        assertEquals("app.yaml", session.dataId)
-        assertEquals("G", session.group)
-        assertEquals("public", session.namespaceId)
+        assertEquals("app.yaml", session.binding.dataId)
+        assertEquals("G", session.binding.group)
+        assertEquals("public", session.binding.namespaceId)
         assertEquals(target.context.identity, session.binding.identity)
     }
 

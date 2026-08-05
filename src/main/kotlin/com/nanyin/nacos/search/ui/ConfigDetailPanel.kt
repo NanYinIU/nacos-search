@@ -643,10 +643,12 @@ private fun setupEventHandlers() {
     }
 
     fun showConfiguration(configuration: NacosConfiguration, lineIndex: Int) {
-        // Retargeting the detail view ends any draft. Callers that must not
-        // lose one ask the project's guard before getting here — this panel is
-        // a renderer and does not decide whether a draft may be discarded.
-        editSessions.discardDraft()
+        // Retargeting the detail view ends any draft, and the edit controls go
+        // with it — a visible Save over a session that no longer exists would
+        // do nothing. Callers that must not lose a draft ask the project's
+        // guard before getting here: this panel is a renderer and does not
+        // decide whether a draft may be discarded.
+        exitEditMode()
         currentConfiguration = configuration
         selectedCoordinate = PresentedCoordinate.of(configuration)
         pendingNavigation = lineIndex.takeIf { it >= 0 }?.let {
@@ -902,7 +904,7 @@ private fun setupEventHandlers() {
     
     /** Refresh and Revert: both replace the editor's content, so both end the draft. */
     private fun loadConfigurationContent(configuration: NacosConfiguration, forceRefresh: Boolean = false) {
-        editSessions.discardDraft()
+        exitEditMode()
         loadConfigurationContent(configuration, issue(), forceRefresh)
     }
 
@@ -1311,9 +1313,9 @@ private fun setupEventHandlers() {
                         project,
                         NacosSearchBundle.message(
                             "config.detail.publish.confirm",
-                            session.dataId,
-                            session.group,
-                            session.namespaceId,
+                            session.binding.dataId,
+                            session.binding.group,
+                            session.binding.namespaceId,
                             session.binding.identity.canonicalEndpoint
                         ),
                         NacosSearchBundle.message("config.detail.action.save.publish"),
@@ -1444,7 +1446,7 @@ private fun setupEventHandlers() {
         // names a coordinate this panel does not present, and is discarded.
         currentConfiguration = null
         selectedCoordinate = null
-        editSessions.discardDraft()
+        exitEditMode()
         disposeEditorSafely()
         showEmptyState()
         editButton.isVisible = true

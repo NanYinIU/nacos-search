@@ -19,8 +19,6 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import kotlinx.coroutines.*
 import java.awt.*
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
 import javax.swing.*
 import javax.swing.plaf.basic.BasicButtonUI
 import java.util.concurrent.ConcurrentHashMap
@@ -146,19 +144,13 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
             onRefreshRequested?.invoke()
         }
 
-        configList.addMouseListener(object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) {
-                if (e.clickCount >= 1) {
-                    val idx = configList.locationToIndex(e.point)
-                    if (idx >= 0 && idx < listModel.size()) {
-                        val config = listModel.getElementAt(idx)
-                        configList.selectedIndex = idx
-                        if (!isRestoringSelection) onConfigurationSelected?.invoke(config)
-                    }
-                }
-            }
-        })
-
+        // Selection is dispatched from exactly one place. A click moves the
+        // selection in the list UI's own mouse handling, which fires this
+        // listener before any mouse listener of ours would run, so a second
+        // dispatch from a MouseListener only ever repeated what this one
+        // already did. That was invisible while selecting merely reloaded a
+        // detail; now that it can prompt to discard a draft, the same click
+        // asked the user up to three times.
         configList.addListSelectionListener { e ->
             if (!e.valueIsAdjusting && !isRestoringSelection) {
                 val idx = configList.selectedIndex

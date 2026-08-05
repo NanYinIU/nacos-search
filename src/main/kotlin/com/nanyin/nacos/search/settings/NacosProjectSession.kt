@@ -8,6 +8,8 @@ import com.intellij.openapi.components.Storage
 import com.intellij.openapi.project.Project
 import com.intellij.util.xmlb.XmlSerializerUtil
 import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.ResolvedGenerationLocator
 import com.nanyin.nacos.search.services.captureAccessIdentity
@@ -119,14 +121,12 @@ internal fun Project.selectedNacosNamespaceId(
  * window asks the same question when deciding whether a click retargets that
  * binding, so the two cannot disagree.
  */
-internal fun Project.operationNamespaceIdFor(
-    configuration: com.nanyin.nacos.search.models.NacosConfiguration
-): String {
+internal fun Project.operationNamespaceIdFor(configuration: NacosConfiguration): String {
     configuration.tenantId?.takeIf { it.isNotBlank() }?.let { return it }
     getService(NacosProjectSession::class.java)?.sessionState?.namespaceId
         ?.takeIf { it.isNotBlank() }
         ?.let { return it }
-    return com.nanyin.nacos.search.models.NamespaceInfo.PUBLIC
+    return NamespaceInfo.PUBLIC
 }
 
 /**

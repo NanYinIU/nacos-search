@@ -51,6 +51,7 @@ class UiButtonInteractionTest {
         whenever(it.getService(EditSessionService::class.java)).thenReturn(
             EditSessionService({ OperationGateway(emptyMap()) }, object : EditEnvironment {
                 override fun selectedProfile(): EnvironmentProfile? = null
+                override fun profile(profileId: String): EnvironmentProfile? = null
                 override suspend fun captureTarget(profileId: String, namespaceId: String) =
                     Result.failure<OperationTarget>(IllegalStateException("no environment"))
             })
