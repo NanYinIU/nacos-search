@@ -149,7 +149,7 @@ class NacosValueLineMarkerProviderTest {
     @Test
     fun `marker resolves against project-selected namespace not app-wide NamespaceService`() {
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        settings.getActiveServer().allowCrossNamespaceNavigation = false
+        setAllowCrossNamespaceNavigation(false)
         // App-wide service points at a different namespace than the project session.
         ApplicationManager.getApplication().getService(NamespaceService::class.java)
             .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("other-ns", "Other"))
@@ -415,8 +415,7 @@ class NacosValueLineMarkerProviderTest {
 
     @Test
     fun `value reference only resolves current namespace when cross namespace navigation is disabled`() {
-        ApplicationManager.getApplication().getService(NacosSettings::class.java)
-            .getActiveServer().allowCrossNamespaceNavigation = false
+        setAllowCrossNamespaceNavigation(false)
         selectProjectNamespace("namespace1")
         ApplicationManager.getApplication().getService(NamespaceService::class.java)
             .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("namespace1", "Namespace 1"))
@@ -447,8 +446,7 @@ class NacosValueLineMarkerProviderTest {
 
     @Test
     fun `value reference resolves other namespaces when cross namespace navigation is enabled`() {
-        ApplicationManager.getApplication().getService(NacosSettings::class.java)
-            .getActiveServer().allowCrossNamespaceNavigation = true
+        setAllowCrossNamespaceNavigation(true)
         selectProjectNamespace("namespace1")
         ApplicationManager.getApplication().getService(NamespaceService::class.java)
             .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("namespace1", "Namespace 1"))
@@ -510,8 +508,7 @@ class NacosValueLineMarkerProviderTest {
     }
 
     private fun cacheKeyInOtherNamespaceForActive(activeNamespaceId: String, allowCrossNamespace: Boolean) {
-        ApplicationManager.getApplication().getService(NacosSettings::class.java)
-            .getActiveServer().allowCrossNamespaceNavigation = allowCrossNamespace
+        setAllowCrossNamespaceNavigation(allowCrossNamespace)
         selectProjectNamespace(activeNamespaceId)
         ApplicationManager.getApplication().getService(NamespaceService::class.java)
             .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo(activeNamespaceId, "Namespace 1"))
@@ -526,6 +523,22 @@ class NacosValueLineMarkerProviderTest {
             )
             refreshKeyIndex(cache, settings.captureAccessIdentity())
         }
+    }
+
+    /**
+     * Publishes the cross-namespace preference through the preference record
+     * (issue #101). Mutating the legacy server entry alone is no longer enough.
+     */
+    private fun setAllowCrossNamespaceNavigation(enabled: Boolean) {
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val servers = settings.cloneServers().map {
+            if (it.id == settings.activeServerId) {
+                it.copy(allowCrossNamespaceNavigation = enabled)
+            } else {
+                it
+            }
+        }
+        settings.applyServers(servers, settings.activeServerId)
     }
 
     private fun markerFor(

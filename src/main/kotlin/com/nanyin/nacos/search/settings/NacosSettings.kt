@@ -6,6 +6,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.util.xmlb.XmlSerializerUtil
+import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosServerConfig
 
@@ -41,6 +42,15 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     var credentialSlotsPublished: Boolean = false
     var migratedDefaultProfileId: String = ""
     var migratedDefaultNamespaceId: String = "public"
+
+    /**
+     * Profile-associated preference-only records (ADR-0042 / issue #101).
+     * Keyed by environment profile id; holds no connection target or revisions.
+     * Runtime consumers must read this list, not the legacy [servers] fields.
+     */
+    var environmentPreferences: MutableList<EnvironmentPreferences> = mutableListOf(
+        EnvironmentPreferences.defaultsFor("s_local")
+    )
 
     // Server configuration (legacy flat fields — mirror of active server)
     var serverUrl: String = "http://localhost:8848"
@@ -114,6 +124,9 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         XmlSerializerUtil.copyBean(this, sanitized)
         sanitized.password = ""
         sanitized.servers = servers.map { it.copy(password = "") }.toMutableList()
+        sanitized.environmentPreferences = environmentPreferences
+            .map { it.copyPreferences() }
+            .toMutableList()
         return sanitized
     }
     
@@ -137,6 +150,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         // was read from the XML into the credential store on first run.
         loadAndMigrateCredentials()
         migrateLegacyProfiles()
+        // Seed / reconcile preference records before dual-writing onto servers.
+        reconcileEnvironmentPreferences()
         // Keep flat fields in sync with active server
         syncFromActiveServer()
     }
@@ -286,8 +301,35 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     fun cloneServers(): MutableList<NacosServerConfig> {
-        return servers.map { it.copy() }.toMutableList()
+        // Preference records are the runtime source of truth; mirror them onto
+        // the draft so the settings UI dual-writes without reading a stale
+        // server-entry field.
+        return servers.map { server ->
+            val prefs = preferencesFor(server.id)
+            server.copy(
+                allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
+                navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled
+            )
+        }.toMutableList()
     }
+
+    /**
+     * Preference-only values for [profileId], never null. Missing records resolve
+     * to product defaults without consulting the legacy server list.
+     */
+    fun preferencesFor(profileId: String): EnvironmentPreferences {
+        val id = profileId.trim().ifBlank { activeServerId.ifBlank { "s_local" } }
+        environmentPreferences.firstOrNull { it.profileId == id }?.let { return it.copyPreferences() }
+        return EnvironmentPreferences.defaultsFor(id)
+    }
+
+    /**
+     * All persisted preference records as immutable snapshots, keyed by profile id.
+     */
+    fun allEnvironmentPreferences(): Map<String, EnvironmentPreferences> =
+        environmentPreferences
+            .filter { it.profileId.isNotBlank() }
+            .associate { it.profileId to it.copyPreferences() }
 
     fun applyServers(newServers: List<NacosServerConfig>, newActiveId: String) {
         val previousIds = servers.map { it.id }.toSet()
@@ -302,6 +344,10 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         (previousIds - currentIds).forEach { entombDeletedProfile(it) }
         servers = newServers.map { it.copy() }.toMutableList()
         activeServerId = newActiveId
+        // Preference records are published from the same write: server-entry
+        // preference fields remain a dual-write input for the settings dialog
+        // until intents own them (issue #106), but runtime reads only the record.
+        publishEnvironmentPreferencesFromServers(newServers)
         syncFromActiveServer()
         persistCredentials(previousIds)
         updateProfilesFromServers(previousPasswords)
@@ -322,6 +368,48 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         if (epochRelevant) {
             com.nanyin.nacos.search.services.ProjectSessionEpochs.bumpAllOpenProjects()
         }
+    }
+
+    /**
+     * Replaces preference records from the server-entry dual-write surface.
+     * Drops records for removed environments; does not touch profile revisions.
+     */
+    private fun publishEnvironmentPreferencesFromServers(newServers: List<NacosServerConfig>) {
+        environmentPreferences = newServers
+            .map { EnvironmentPreferences.fromLegacyServer(it) }
+            .toMutableList()
+    }
+
+    /**
+     * Ensures every live server/profile has a preference record. Missing records
+     * are seeded from legacy server-entry fields once; existing records are the
+     * source of truth and are mirrored back onto servers for the settings UI.
+     */
+    private fun reconcileEnvironmentPreferences() {
+        val byId = environmentPreferences
+            .filter { it.profileId.isNotBlank() }
+            .associateBy { it.profileId }
+            .mapValues { (_, prefs) -> prefs.copyPreferences() }
+            .toMutableMap()
+
+        for (server in servers) {
+            val id = server.id.ifBlank { "default" }
+            val existing = byId[id]
+            if (existing == null) {
+                byId[id] = EnvironmentPreferences.fromLegacyServer(server.copy(id = id))
+            } else {
+                server.allowCrossNamespaceNavigation = existing.allowCrossNamespaceNavigation
+                server.navigationDetailPrefetchEnabled = existing.navigationDetailPrefetchEnabled
+            }
+        }
+        for (profile in profiles) {
+            if (profile.id.isBlank()) continue
+            byId.putIfAbsent(profile.id, EnvironmentPreferences.defaultsFor(profile.id))
+        }
+        if (byId.isEmpty() && activeServerId.isNotBlank()) {
+            byId[activeServerId] = EnvironmentPreferences.defaultsFor(activeServerId)
+        }
+        environmentPreferences = byId.values.toMutableList()
     }
 
     /** Persists a deletion tombstone for a profile removed from the settings. */
@@ -628,6 +716,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         )
         activeServerId = "s_local"
         profiles = mutableListOf()
+        environmentPreferences = mutableListOf(EnvironmentPreferences.defaultsFor("s_local"))
         profileMigrationCompleted = false
         credentialSlotsPublished = false
         migratedDefaultProfileId = ""
