@@ -1,0 +1,30 @@
+CONTEXT.md
+  h_231225c3625e99 67-70
+docs/adr/0042-keep-the-prefetch-toggle-out-of-the-environment-profile.md
+  h_231225c3625e99 3
+src/main/kotlin/com/nanyin/nacos/search/models/EnvironmentPreferences.kt
+  h_231225c3625e99 1-41
+src/main/kotlin/com/nanyin/nacos/search/models/NacosServerConfig.kt
+  h_231225c3625e99 25-30,33-37
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosProjectSession.kt
+  h_231225c3625e99 149,156-157,163,168-173
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosSettings.kt
+  h_231225c3625e99 9,46-54,127-129,153-154,304-323,326-333,347-350,373-414,719
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProviderTest.kt
+  h_231225c3625e99 152,418,449,511,528-543
+src/test/kotlin/com/nanyin/nacos/search/services/NavigationDetailPrefetchServiceTest.kt
+  h_231225c3625e99 76-81,172-175,329,336-337
+src/test/kotlin/com/nanyin/nacos/search/settings/EnvironmentPreferencesTest.kt
+  h_231225c3625e99 1-278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "7e25f96fb8a2fe087fd2eafa8603a240fa1b3840",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
