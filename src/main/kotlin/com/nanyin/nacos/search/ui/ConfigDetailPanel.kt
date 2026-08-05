@@ -122,10 +122,8 @@ class ConfigDetailPanel internal constructor(
     private lateinit var freshnessLabel: JBLabel
 
     /**
-     * The project's draft. The panel renders it and reports what the user
-     * types; it does not own it, because a session held inside the tool-window
-     * content could not block that content from being destroyed (ADR-0046).
-     * Injected via the constructor — the panel does not locate services itself.
+     * The project's draft is injected via the constructor — the panel renders
+     * it and reports what the user types; it does not own it (ADR-0046).
      */
 
     /**
