@@ -164,7 +164,7 @@ The tool window is registered in `META-INF/plugin.xml` and created by `NacosSear
 - `ConfigDetailPanel` — details of the selected configuration.
 - `PaginationPanel` — page navigation.
 
-Components implement `LanguageAwareComponent` so labels update when the plugin language is changed via `LanguageService`.
+Each panel subscribes to `NacosLanguageListener.TOPIC` itself and re-reads the bundle, so labels update when the plugin language is changed via `LanguageService`. There is no fan-out from the window: a component that forgets to subscribe simply does not exist on the topic, which is what the previous manual dispatch (and the `EnvironmentSwitcher` it silently skipped) could not express. Each subscriber anchors its connection on its own `Disposable`, and `NacosSearchWindow` registers all six with `Disposer`.
 
 ### Internationalization
 

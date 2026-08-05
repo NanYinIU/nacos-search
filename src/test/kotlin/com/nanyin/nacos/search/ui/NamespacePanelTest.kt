@@ -2,6 +2,7 @@ package com.nanyin.nacos.search.ui
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.NamespaceInfo
@@ -49,7 +50,9 @@ class NamespacePanelTest {
     @AfterEach
     fun tearDown() {
         if (::namespacePanel.isInitialized) {
-            namespacePanel.dispose()
+            // Disposer.dispose, not panel.dispose: the panel anchors a message-bus
+            // connection, so it also has to leave the Disposer tree.
+            Disposer.dispose(namespacePanel)
         }
         reset(mockNamespaceService, mockProject)
     }
@@ -174,7 +177,7 @@ class NamespacePanelTest {
     fun testDisposeCleansUpResources() {
         namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
 
-        namespacePanel.dispose()
+        Disposer.dispose(namespacePanel)
     }
 
     @Test

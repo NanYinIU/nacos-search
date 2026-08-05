@@ -4,7 +4,7 @@ import com.nanyin.nacos.search.models.NamespaceFilter
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.nanyin.nacos.search.services.NamespaceService
-import com.nanyin.nacos.search.services.LanguageService
+import com.nanyin.nacos.search.services.NacosLanguageListener
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
@@ -48,9 +48,8 @@ import javax.swing.plaf.basic.BasicButtonUI
 class NamespacePanel(
     private val project: Project,
     private val namespaceService: NamespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java),
-    private val languageService: LanguageService = ApplicationManager.getApplication().getService(LanguageService::class.java),
     private val dispatcher: CoroutineDispatcher = Dispatchers.Main
-) : JPanel(BorderLayout()), LanguageAwareComponent, NamespaceChangeListener, Disposable {
+) : JPanel(BorderLayout()), NacosLanguageListener, NamespaceChangeListener, Disposable {
 
     private val projectSession: NacosProjectSession? = project.getService(NacosProjectSession::class.java)
     private val settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
@@ -80,6 +79,8 @@ class NamespacePanel(
         initializeComponents()
         setupLayout()
         setupEventHandlers()
+        ApplicationManager.getApplication().messageBus.connect(this)
+            .subscribe(NacosLanguageListener.TOPIC, this)
         loadNamespaces()
     }
 
@@ -556,17 +557,10 @@ class NamespacePanel(
     /**
      * Called when the language is changed
      */
-    override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) {
+    override fun languageChanged() {
         refreshUIText()
         revalidate()
         repaint()
-    }
-
-    /**
-     * Get the current language service
-     */
-    override fun getLanguageService(): LanguageService {
-        return languageService
     }
 
     /**

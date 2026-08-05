@@ -3,7 +3,7 @@ package com.nanyin.nacos.search.ui
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NamespaceService
-import com.nanyin.nacos.search.services.LanguageService
+import com.nanyin.nacos.search.services.NacosLanguageListener
 import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.icons.AllIcons
@@ -32,10 +32,9 @@ import javax.swing.border.EmptyBorder
  * Uses a JBList with a custom cell renderer that shows the config's
  * dataId, group, and a colored file-type badge (YAML / JSON / properties).
  */
-class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), NamespaceChangeListener, LanguageAwareComponent, Disposable {
+class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), NamespaceChangeListener, NacosLanguageListener, Disposable {
 
     private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
-    private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
 
     // UI Components
     private lateinit var configList: JBList<NacosConfiguration>
@@ -51,8 +50,6 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     private var isLoading = false
     private var configurations: List<NacosConfiguration> = emptyList()
     private var currentNamespace: NamespaceInfo? = null
-    private var currentPage = 1
-    private var pageSize = 10
     // Current search query for highlighting matched fragments in the list
     private var currentSearchQuery: String = ""
     // Set of config keys that have unsaved edits (for the red dot indicator)
@@ -68,6 +65,8 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         setupLayout()
         setupEventHandlers()
         namespaceService.addNamespaceChangeListener(this)
+        ApplicationManager.getApplication().messageBus.connect(this)
+            .subscribe(NacosLanguageListener.TOPIC, this)
         currentNamespace = namespaceService.getCurrentNamespace()
     }
 
@@ -195,10 +194,6 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     // Public API (kept compatible with NacosSearchWindow)
     // ------------------------------------------------------------------
 
-    fun refresh() {
-        onRefreshRequested?.invoke()
-    }
-
     /**
      * Programmatically selects the given configuration and fires the selection
      * callback. Used by @NacosValue navigation.
@@ -243,22 +238,6 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         setLoadingState(false)
         showCard("empty")
         updateStatus(message)
-    }
-
-    /**
-     * Compact one-line status indicator appended to the existing status label.
-     * Shows data source (Remote / Cache / Stale cache) without layout changes.
-     */
-    fun setDataSourceStatus(source: com.nanyin.nacos.search.services.NacosSearchService.SearchSource) {
-        val label = when (source) {
-            com.nanyin.nacos.search.services.NacosSearchService.SearchSource.REMOTE ->
-                NacosSearchBundle.message("config.list.status.source.remote")
-            com.nanyin.nacos.search.services.NacosSearchService.SearchSource.CACHE ->
-                NacosSearchBundle.message("config.list.status.source.cache")
-            com.nanyin.nacos.search.services.NacosSearchService.SearchSource.STALE_CACHE ->
-                NacosSearchBundle.message("config.list.status.source.stale")
-        }
-        updateStatus(label)
     }
 
     /**
@@ -309,14 +288,6 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         updateStatus(parts.joinToString(" · "))
     }
 
-    fun setPage(page: Int) {
-        currentPage = page
-    }
-
-    fun getCurrentPage(): Int = currentPage
-    fun getPageSize(): Int = pageSize
-    fun getConfigurationCount(): Int = configurations.size
-
     override fun dispose() {
         namespaceService.removeNamespaceChangeListener(this)
         coroutineScope.cancel()
@@ -346,8 +317,6 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
 
     override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
         currentNamespace = newNamespace
-        currentPage = 1
-        pageSize = 10
         // Clear the list immediately for feedback; NacosSearchWindow owns reloading configs
         // for the newly selected namespace (avoids a duplicate/duplicate-origin reload).
         SwingUtilities.invokeLater {
@@ -532,10 +501,10 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     }
 
     // ------------------------------------------------------------------
-    // LanguageAwareComponent
+    // NacosLanguageListener
     // ------------------------------------------------------------------
 
-    override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) {
+    override fun languageChanged() {
         SwingUtilities.invokeLater {
             loadingLabel.text = NacosSearchBundle.message("config.list.loading")
             updateStatus(
@@ -547,6 +516,4 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
             repaint()
         }
     }
-
-    override fun getLanguageService(): LanguageService = languageService
 }

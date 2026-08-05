@@ -1,13 +1,11 @@
 package com.nanyin.nacos.search.ui
 
-import com.nanyin.nacos.search.managers.InitializationManager
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.models.SearchCriteria
 import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NacosApiService
-import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 // import com.nanyin.nacos.search.services.NacosConfigService // Not needed
 import com.nanyin.nacos.search.services.NacosSearchService
@@ -52,21 +50,17 @@ import javax.swing.*
 * Main window for Nacos Search plugin
  * Integrates all UI components and manages their interactions
  */
-class NacosSearchWindow(private val project: Project, private val toolWindow: ToolWindow) : JPanel(BorderLayout()), LanguageAwareComponent, NamespaceChangeListener, Disposable {
-    
+class NacosSearchWindow(private val project: Project, private val toolWindow: ToolWindow) : JPanel(BorderLayout()), NamespaceChangeListener, Disposable {
+
     // Services
     private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
-    private val languageService = com.intellij.openapi.application.ApplicationManager.getApplication().getService(LanguageService::class.java)
     // private val nacosConfigService = project.service<NacosConfigService>() // Not needed
     private val nacosSearchService = project.service<NacosSearchService>()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
     private val projectSession = project.service<NacosProjectSession>()
     private val indexCoordinator = ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java)
-    
-    // Managers
-    private lateinit var initializationManager: InitializationManager
-    
+
     // UI Components
     private lateinit var namespacePanel: NamespacePanel
     private lateinit var searchPanel: SearchPanel
@@ -84,9 +78,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private var currentConfiguration: NacosConfiguration? = null
     // Stashed (config, line) consumed after a namespace switch reloads the list.
     private var pendingNavigationTarget: Pair<NacosConfiguration, Int>? = null
-    private var searchCriteria: SearchCriteria? = null
     private var currentSearchRequest: NacosSearchService.SearchRequest? = null
-    private var currentConfigurations = listOf<NacosConfiguration>()
     private var isSearching = false
     
     // Coroutine scope for async operations
@@ -151,18 +143,12 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         configDetailPanel = ConfigDetailPanel(project)
         paginationPanel = PaginationPanel()
         Disposer.register(this, namespacePanel)
+        Disposer.register(this, environmentSwitcher)
+        Disposer.register(this, searchPanel)
         Disposer.register(this, configListPanel)
         Disposer.register(this, configDetailPanel)
         Disposer.register(this, paginationPanel)
-        
-        // Initialize managers
-        initializationManager = InitializationManager(
-            namespaceService,
-            nacosApiService,
-            nacosSearchService,
-            coroutineScope
-        )
-        
+
         // Configure components
         configListPanel.preferredSize = Dimension(400, 200)
         configDetailPanel.preferredSize = Dimension(400, 250)
@@ -323,10 +309,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         
         // Search service state observation
         setupSearchServiceObservers()
-        
-        // NamespacePanel performs project-scoped initialization itself. The
-        // legacy InitializationManager reads app-wide selection state, so it
-        // must not run from a project window.
+
+        // NamespacePanel performs project-scoped initialization itself: a
+        // manager that reads app-wide selection state must not run from a
+        // project window.
     }
 
     /**
@@ -391,39 +377,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         }
     }
     
-    /**
-     * Performs initial setup using InitializationManager
-     */
-    private fun performInitialization() {
-        coroutineScope.launch {
-            try {
-                initializationManager.initialize(
-                     namespacePanel = namespacePanel,
-                     paginationPanel = paginationPanel,
-                     profileId = selectedProfileId()
-                 ) { state ->
-                     when (state) {
-                         is InitializationManager.InitializationState.Success -> {
-                             SwingUtilities.invokeLater {
-                                 // Initialization completed successfully
-                             }
-                         }
-                         is InitializationManager.InitializationState.Error -> {
-                             SwingUtilities.invokeLater {
-                                 showError(NacosSearchBundle.message("error.config.load.failed") + ": ${state.message}")
-                             }
-                         }
-                         else -> {}
-                     }
-                 }
-            } catch (e: Exception) {
-            SwingUtilities.invokeLater {
-                showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
-            }
-        }
-        }
-    }
-    
     private fun loadInitialData() {
         coroutineScope.launch {
             try {
@@ -447,7 +400,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // subsequent reloads target the correct namespace.
         currentNamespace = newNamespace
         currentConfiguration = null
-        searchCriteria = null
         currentSearchRequest = null
 
         clearSearchUi()
@@ -528,19 +480,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
              serverId = selectedProfileId(),
              operationContext = selectedOperationContext()
          )
-         currentNamespace = searchNameSpace;
-         
-         val processedCriteria = SearchCriteria(
-             dataId = searchRequest.getProcessedDataId(),
-             group = criteria.group ?: "",
-             namespaceId = searchNameSpace.namespaceId,
-             query = criteria.query,
-             searchContent = criteria.searchContent,
-             useRegex = criteria.useRegex,
-             caseSensitive = criteria.caseSensitive
-         )
-         
-         searchCriteria = processedCriteria
+         currentNamespace = searchNameSpace
          currentSearchRequest = searchRequest
          coroutineScope.launch {
              nacosSearchService.performSearch(searchRequest, nacosApiService)
@@ -548,7 +488,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      }
     
     private fun handleSearchCleared() {
-        searchCriteria = null
         loadConfigurations()
         paginationPanel.reset()
         nacosSearchService.resetSearch()
@@ -689,7 +628,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
     
     private fun updateConfigurationList(configurations: List<NacosConfiguration>) {
-        currentConfigurations = configurations
         configListPanel.setConfigurations(configurations)
         // Populate group filter with unique groups from current results
         searchPanel.setAvailableGroups(configurations.map { it.group }.filter { it.isNotBlank() })
@@ -722,16 +660,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         }
     }
     
-    private fun handleConfigurationDoubleClicked(config: NacosConfiguration) {
-        // Handle double-click on configuration
-        // This could open the configuration in an editor or show detailed view
-        currentConfiguration = config
-        loadConfigurationDetail(config)
-        
-        // Focus on the detail panel to show the configuration content
-        configDetailPanel.requestFocus()
-    }
-    
     private fun handleRefreshRequested() {
         currentSearchRequest = (currentSearchRequest ?: NacosSearchService.SearchRequest(
             namespace = namespacePanel.getSelectedNamespace(),
@@ -741,21 +669,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         )).copy(forceRefresh = true)
         loadConfigurations()
     }
-    
-    private fun handleDetailRefreshRequested() {
-        currentConfiguration?.let { config ->
-            loadConfigurationDetail(config)
-        }
-    }
-    
-    private fun handleConfigurationUpdated(config: NacosConfiguration) {
-        // Refresh the configuration list to reflect changes
-        configListPanel.refresh()
-        
-        // Update current configuration
-        currentConfiguration = config
-    }
-    
+
     private fun loadConfigurations() {
         val namespace = currentNamespace
         if (namespace == null) {
@@ -783,112 +697,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         }
     }
     
-    private suspend fun matchesSearchCriteria(
-        config: NacosConfiguration,
-        criteria: SearchCriteria
-    ): Boolean {
-        return withContext(Dispatchers.IO) {
-            // Check general query
-            if (!criteria.query.isNullOrEmpty()) {
-                val query = if (criteria.caseSensitive) criteria.query else criteria.query.lowercase()
-                val dataId = if (criteria.caseSensitive) config.dataId else config.dataId.lowercase()
-                val group = if (criteria.caseSensitive) config.group else config.group.lowercase()
-                
-                val matches = if (criteria.useRegex) {
-                    try {
-                        val regex = Regex(query)
-                        regex.containsMatchIn(dataId) || regex.containsMatchIn(group)
-                    } catch (e: Exception) {
-                        dataId.contains(query) || group.contains(query)
-                    }
-                } else {
-                    dataId.contains(query) || group.contains(query)
-                }
-                
-                if (!matches) return@withContext false
-            }
-            
-            // Check specific field patterns
-            if (!criteria.dataId.isNullOrEmpty()) {
-                val pattern = if (criteria.caseSensitive) criteria.dataId else criteria.dataId.lowercase()
-                val dataId = if (criteria.caseSensitive) config.dataId else config.dataId.lowercase()
-                
-                val matches = if (criteria.useRegex) {
-                    try {
-                        val regex = Regex(pattern)
-                        regex.containsMatchIn(dataId)
-                    } catch (e: Exception) {
-                        dataId.contains(pattern)
-                    }
-                } else {
-                    dataId.contains(pattern)
-                }
-                
-                if (!matches) return@withContext false
-            }
-            
-            if (!criteria.group.isNullOrEmpty()) {
-                val pattern = if (criteria.caseSensitive) criteria.group else criteria.group.lowercase()
-                val group = if (criteria.caseSensitive) config.group else config.group.lowercase()
-                
-                val matches = if (criteria.useRegex) {
-                    try {
-                        val regex = Regex(pattern)
-                        regex.containsMatchIn(group)
-                    } catch (e: Exception) {
-                        group.contains(pattern)
-                    }
-                } else {
-                    group.contains(pattern)
-                }
-                
-                if (!matches) return@withContext false
-            }
-            
-            // Check content pattern (requires loading configuration content)
-            if (criteria.searchContent && !criteria.query.isNullOrEmpty()) {
-                try {
-                    val configResult = nacosApiService.getConfiguration(
-                        config.dataId,
-                        config.group,
-                        currentNamespace?.namespaceId,
-                        operationContext = selectedOperationContext()
-                    )
-                    
-                    val configDetail = configResult.getOrNull()?.value
-                    if (configDetail == null) {
-                        return@withContext false
-                    }
-                    
-                    val pattern = criteria.query
-                    val content = configDetail.content
-                    
-                    val matches = if (criteria.useRegex) {
-                        try {
-                            val regex = if (criteria.caseSensitive) {
-                                Regex(pattern)
-                            } else {
-                                Regex(pattern, RegexOption.IGNORE_CASE)
-                            }
-                            regex.containsMatchIn(content)
-                        } catch (e: Exception) {
-                            content.contains(pattern, ignoreCase = !criteria.caseSensitive)
-                        }
-                    } else {
-                        content.contains(pattern, ignoreCase = !criteria.caseSensitive)
-                    }
-                    
-                    if (!matches) return@withContext false
-                } catch (e: Exception) {
-                    // If we can't load content, exclude from results
-                    return@withContext false
-                }
-            }
-            
-            true
-        }
-    }
-    
     private fun loadConfigurationDetail(config: NacosConfiguration) {
         configDetailPanel.showConfiguration(config)
     }
@@ -899,23 +707,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         }
     }
     
-    /**
-     * Get current namespace
-     */
-    fun getCurrentNamespace(): NamespaceInfo? = currentNamespace
-    
-    /**
-     * Get current configuration
-     */
-    fun getCurrentConfiguration(): NacosConfiguration? = currentConfiguration
-    
-    /**
-     * Set focus to search field
-     */
-    fun focusSearch() {
-        searchPanel.focusSearchField()
-    }
-
     /**
      * Selects [config] in the list, shows its detail, and (when [lineIndex] >= 0)
      * positions the caret on that line. Used by @NacosValue navigation.
@@ -1027,21 +818,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
 
     /**
-     * Get the tool window
-     */
-    fun getToolWindow(): ToolWindow = toolWindow
-    
-    /**
-     * Check if window is ready
-     */
-    fun isReady(): Boolean {
-        return ::namespacePanel.isInitialized &&
-               ::searchPanel.isInitialized &&
-               ::configListPanel.isInitialized &&
-               ::configDetailPanel.isInitialized
-    }
-    
-    /**
      * Enable or disable all UI components
      */
     override fun setEnabled(enabled: Boolean) {
@@ -1051,39 +827,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         configListPanel.isEnabled = enabled
         configDetailPanel.isEnabled = enabled
     }
-    
-    /**
-     * Called when the language is changed
-     */
-    override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) {
-        // Refresh all child components
-        if (::namespacePanel.isInitialized) {
-            (namespacePanel as? LanguageAwareComponent)?.onLanguageChanged(newLanguage)
-        }
-        if (::searchPanel.isInitialized) {
-            (searchPanel as? LanguageAwareComponent)?.onLanguageChanged(newLanguage)
-        }
-        if (::configListPanel.isInitialized) {
-            (configListPanel as? LanguageAwareComponent)?.onLanguageChanged(newLanguage)
-        }
-        if (::configDetailPanel.isInitialized) {
-            (configDetailPanel as? LanguageAwareComponent)?.onLanguageChanged(newLanguage)
-        }
-        if (::paginationPanel.isInitialized) {
-            (paginationPanel as? LanguageAwareComponent)?.onLanguageChanged(newLanguage)
-        }
-        
-        // Revalidate and repaint the UI
-        revalidate()
-        repaint()
-    }
-    
-    /**
-     * Get the current language service
-     */
-    override fun getLanguageService(): LanguageService {
-        return languageService
-    }
+
     private inner class RefreshAllAction :
         AnAction(NacosSearchBundle.message("toolwindow.refresh.all"), NacosSearchBundle.message("toolwindow.refresh.all"), AllIcons.Actions.Refresh) {
         override fun actionPerformed(e: AnActionEvent) = refreshAll()

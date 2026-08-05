@@ -1,6 +1,7 @@
 package com.nanyin.nacos.search.ui
 
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
@@ -12,7 +13,7 @@ import com.intellij.openapi.ui.popup.util.BaseListPopupStep
 import com.intellij.util.ui.JBUI
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.nanyin.nacos.search.models.NacosServerConfig
-import com.nanyin.nacos.search.services.LanguageService
+import com.nanyin.nacos.search.services.NacosLanguageListener
 import com.nanyin.nacos.search.settings.NacosConfigurable
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosProjectSession
@@ -27,6 +28,7 @@ import javax.swing.JButton
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.SwingConstants
+import javax.swing.SwingUtilities
 import javax.swing.plaf.basic.BasicButtonUI
 
 /**
@@ -41,10 +43,8 @@ class EnvironmentSwitcher(
     private val project: Project,
     private val settings: NacosSettings =
         ApplicationManager.getApplication().getService(NacosSettings::class.java),
-    private val projectSession: NacosProjectSession? = project.getService(NacosProjectSession::class.java),
-    private val languageService: LanguageService =
-        ApplicationManager.getApplication().getService(LanguageService::class.java)
-) : JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)), LanguageAwareComponent {
+    private val projectSession: NacosProjectSession? = project.getService(NacosProjectSession::class.java)
+) : JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)), NacosLanguageListener, Disposable {
 
     /** Local callback: selecting an environment must not broadcast global state. */
     var onSelectionChanged: ((String) -> Unit)? = null
@@ -83,6 +83,8 @@ class EnvironmentSwitcher(
         add(envButton)
         add(caretLabel)
         refresh()
+        ApplicationManager.getApplication().messageBus.connect(this)
+            .subscribe(NacosLanguageListener.TOPIC, this)
     }
 
     /**
@@ -184,8 +186,12 @@ class EnvironmentSwitcher(
         }
     }
 
-    override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) = refresh()
-    override fun getLanguageService(): LanguageService = languageService
+    override fun languageChanged() {
+        SwingUtilities.invokeLater { refresh() }
+    }
+
+    /** Anchors the message-bus connection; the switcher holds nothing else to release. */
+    override fun dispose() = Unit
 
     private fun updateButtonWidthForContent() {
         val metrics = envButton.getFontMetrics(envButton.font)
