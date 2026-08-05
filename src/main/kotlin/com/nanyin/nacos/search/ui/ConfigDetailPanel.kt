@@ -38,6 +38,7 @@ import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.currentSessionEpoch
 import com.nanyin.nacos.search.services.operations.ObservedDetailRecorder
 import com.nanyin.nacos.search.services.operations.Observed
+import com.nanyin.nacos.search.services.operations.DraftDiscardListener
 import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.services.operations.EditStart
 import com.nanyin.nacos.search.services.operations.PublishState
@@ -146,6 +147,13 @@ class ConfigDetailPanel internal constructor(
      */
     private val editSessions = project.getService(EditSessionService::class.java)
 
+    /**
+     * Unregisters the external-discard listener. Settings (and other non-panel
+     * sites) can discard without going through [exitEditMode]; this is how the
+     * panel hears about that and leaves edit mode (issue #77 review).
+     */
+    private var discardListenerHandle: AutoCloseable? = null
+
     // Editor status bar components (UTF-8 · LF · pos · chars · md5)
     private lateinit var statusBar: JPanel
     private lateinit var statusEncodingLabel: JBLabel
@@ -229,6 +237,17 @@ class ConfigDetailPanel internal constructor(
             editor?.let { applyThemeScheme(it) }
         })
         busConnection.subscribe(NacosLanguageListener.TOPIC, this)
+        // When Settings (or any other site) discards the project draft, leave
+        // edit mode without the panel itself owning that discard.
+        discardListenerHandle = editSessions.addDiscardListener(DraftDiscardListener {
+            ApplicationManager.getApplication().invokeLater({
+                if (!project.isDisposed) applyViewModeUi()
+            }, ModalityState.any())
+        })
+        Disposer.register(this) {
+            discardListenerHandle?.close()
+            discardListenerHandle = null
+        }
         showEmptyState()
     }
     
@@ -526,15 +545,40 @@ private fun setupEventHandlers() {
      * Restores the read-only view mode: locks the editor and re-shows the Edit
      * button. The draft ends here — a caller that must not lose it asks
      * [EditSessionService.guardRetarget] or `guardDestroy` first.
+     *
+     * When the session is discarded elsewhere (Settings write-intent / profile
+     * delete / project close), [DraftDiscardListener] drives [applyViewModeUi]
+     * without going through this method — do not require the panel to own every
+     * discard.
      */
     private fun exitEditMode() {
         editSessions.discardDraft()
+        applyViewModeUi()
+    }
+
+    /**
+     * Swing-only half of leaving edit mode. Safe when the session is already
+     * null (external discard notified us) and idempotent when [exitEditMode]
+     * both discards and applies UI.
+     */
+    private fun applyViewModeUi() {
         editor?.document?.setReadOnly(true)
         // Restore view mode: re-show Edit and hide the Save/Revert commit buttons
-        editButton.isVisible = true
-        editButton.text = NacosSearchBundle.message("config.detail.action.edit")
-        saveButton.isVisible = false
-        revertButton.isVisible = false
+        if (::editButton.isInitialized) {
+            editButton.isVisible = true
+            editButton.text = NacosSearchBundle.message("config.detail.action.edit")
+        }
+        if (::saveButton.isInitialized) {
+            saveButton.isVisible = false
+            saveButton.isEnabled = false
+        }
+        if (::revertButton.isInitialized) {
+            revertButton.isVisible = false
+            revertButton.isEnabled = false
+        }
+        if (renderedDirty) {
+            updateDirtyUI(false)
+        }
     }
 
     /**

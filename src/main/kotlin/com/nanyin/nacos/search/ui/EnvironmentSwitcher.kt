@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.ui
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.components.service
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
@@ -14,6 +15,8 @@ import com.intellij.util.ui.JBUI
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.NacosLanguageListener
+import com.nanyin.nacos.search.services.operations.DraftGuard
+import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.settings.NacosConfigurable
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosProjectSession
@@ -137,6 +140,13 @@ class EnvironmentSwitcher(
             if (choice == 0) openSettings()
             return
         }
+        // ADR-0027: switching environment must not discard a dirty draft silently.
+        // Ask before mutating selection so cancel leaves env and draft unchanged.
+        if (!admitDraftGuard(
+                project.service<EditSessionService>().guardEnvironmentSwitch(entry.config.id),
+                "config.detail.draft.discard.environment"
+            )
+        ) return
         val namespace = projectSession?.sessionState?.namespaceId.orEmpty().ifBlank { "public" }
         projectSession?.select(entry.config.id, namespace)
         // Keep the Settings "default" badge in sync with the tool-window choice so
@@ -145,6 +155,22 @@ class EnvironmentSwitcher(
         project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)?.bump()
         onSelectionChanged?.invoke(entry.config.id)
         refresh()
+    }
+
+    /**
+     * Whether a guarded action may proceed. [ConfirmDiscard] prompts with the
+     * two ADR-0027 choices; asking never mutates — only an explicit discard does.
+     */
+    private fun admitDraftGuard(guard: DraftGuard, messageKey: String): Boolean = when (guard) {
+        DraftGuard.Proceed, DraftGuard.AlreadyEditing -> true
+        is DraftGuard.ConfirmDiscard -> {
+            if (confirmDraftDiscard(project, guard.draft, messageKey)) {
+                project.service<EditSessionService>().discardDraft()
+                true
+            } else {
+                false
+            }
+        }
     }
 
     private fun openSettings() {

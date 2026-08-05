@@ -5,11 +5,13 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The outcome of asking to start an edit. A closed set, so a caller cannot
@@ -56,6 +58,17 @@ sealed interface DraftGuard {
 }
 
 /**
+ * Notified when [EditSessionService.discardDraft] actually drops a held session.
+ * Panels that render the draft use this to leave edit mode when Settings (or
+ * any other non-panel site) discards on the caller's behalf — the session lives
+ * outside the tool window (ADR-0046), so discarding there cannot update Swing
+ * by itself.
+ */
+fun interface DraftDiscardListener {
+    fun onDraftDiscarded()
+}
+
+/**
  * The project selection an edit is started against, and the credentials a
  * publish runs with.
  *
@@ -80,9 +93,10 @@ interface EditEnvironment {
  *
  * ADR-0046: a session that lives inside the tool-window content cannot block
  * that content from being destroyed, and ADR-0027 requires exactly that. So the
- * draft belongs to the project, panels only render it, and the two actions that
- * would destroy it — selecting another configuration, and destroying the
- * tool-window content — ask this service first.
+ * draft belongs to the project, panels only render it, and every action that
+ * would destroy it — selecting another configuration, switching environment or
+ * namespace, turning write intent off, deleting its profile, closing the
+ * project, and destroying the tool-window content — asks this service first.
  *
  * Publishing lives here too, because ADR-0027 derives the publish target solely
  * from the session's binding: changing the selection after starting a draft
@@ -179,7 +193,9 @@ class EditSessionService internal constructor(
 
     /**
      * Drops the draft. This is the explicit discard a [DraftGuard.ConfirmDiscard]
-     * demands; nothing else in the plugin may throw a draft away.
+     * demands; nothing else in the plugin may throw a draft away. When a session
+     * was actually present, [DraftDiscardListener]s are notified so renderers
+     * outside this service can leave edit mode.
      */
     fun discardDraft() = synchronized(lock) {
         session = null
