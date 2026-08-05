@@ -919,7 +919,25 @@ class EditSessionServiceTest {
 
     @Test
     fun `CAS rejection yields conflict and keeps the draft`() = runBlocking {
-        val adapter = RecordingAdapter(publishOutcome = PublishOutcome.CasConflict)
+        // Preflight sees the baseline; post-CAS read-back sees the concurrent remote.
+        val adapter = object : RecordingAdapter(publishOutcome = PublishOutcome.CasConflict) {
+            private var reads = 0
+            override suspend fun readDetail(
+                target: OperationTarget,
+                coordinate: ConfigurationCoordinate
+            ): Result<NacosConfiguration?> {
+                reads++
+                val content = if (reads == 1) "original" else "concurrent remote"
+                val md5 = if (reads == 1) "base-md5" else "concurrent-md5"
+                return Result.success(
+                    NacosConfiguration(
+                        dataId = coordinate.dataId, group = coordinate.group,
+                        tenantId = target.namespaceId,
+                        content = content, type = "yaml", md5 = md5
+                    )
+                )
+            }
+        }
         val service = service(StubEditEnvironment(), adapter)
         service.beginEdit(configuration(), "dev", baselineContent = "original")
         service.updateDraft("edited")
@@ -927,7 +945,8 @@ class EditSessionServiceTest {
 
         val result = requireNotNull(service.confirmPublish())
 
-        assertInstanceOf(PublishState.RemoteConflict::class.java, result.state)
+        val conflict = assertInstanceOf(PublishState.RemoteConflict::class.java, result.state)
+        assertEquals("concurrent remote", conflict.remoteContent)
         assertTrue(result.isDirty)
         assertEquals("edited", service.currentSession()?.draftContent)
     }
@@ -949,11 +968,10 @@ class EditSessionServiceTest {
     @Test
     fun `transport failure after send enters server-state-unknown and demotes pre-write confirmation`() =
         runBlocking {
-            val demoter = RecordingDemoter()
             val adapter = RecordingAdapter(
                 publishFailure = RemoteOperationError.Connection(RuntimeException("disconnected"))
             )
-            val service = service(StubEditEnvironment(), adapter, demoter)
+            val service = service(StubEditEnvironment(), adapter)
             service.beginEdit(configuration(), "dev", baselineContent = "original")
             service.updateDraft("edited")
             requireNotNull(service.requestPublish())
@@ -966,7 +984,6 @@ class EditSessionServiceTest {
                 com.nanyin.nacos.search.models.DatasetConfirmation.UNCONFIRMED,
                 service.preWriteDetailConfirmation()
             )
-            assertEquals(1, demoter.calls)
             assertTrue(service.isDirty())
             // Second publish is blocked; only reconciliation is retryable.
             assertEquals(
@@ -1079,9 +1096,8 @@ class EditSessionServiceTest {
 
     private fun service(
         environment: StubEditEnvironment = StubEditEnvironment(),
-        adapter: ProtocolAdapter = RecordingAdapter(),
-        demoter: PreWriteDetailDemoter = NoOpPreWriteDetailDemoter
-    ) = EditSessionService({ gateway(adapter) }, environment, demoter)
+        adapter: ProtocolAdapter = RecordingAdapter()
+    ) = EditSessionService({ gateway(adapter) }, environment)
 
     private fun gateway(adapter: ProtocolAdapter) =
         OperationGateway(mapOf(NacosApiGeneration.V1 to adapter))
@@ -1101,19 +1117,6 @@ class EditSessionServiceTest {
         canonicalEndpoint = "https://nacos.example",
         writeIntent = writeIntent
     )
-
-    private class RecordingDemoter : PreWriteDetailDemoter {
-        var calls = 0
-        override fun demote(
-            identity: AccessIdentity,
-            namespaceId: String,
-            dataId: String,
-            group: String
-        ): Boolean {
-            calls++
-            return true
-        }
-    }
 
     /**
      * The project selection an edit starts against. Capturing a target is the
@@ -1232,6 +1235,11 @@ class EditSessionServiceTest {
             lastPublishTarget = target
             lastPublishedCommand = command
             publishFailure?.let { return Result.failure(it) }
+            // CAS rejection means the write did not land — do not treat the
+            // command as published for subsequent read-backs.
+            if (publishOutcome is PublishOutcome.CasConflict) {
+                return Result.success(publishOutcome)
+            }
             published = command
             return Result.success(publishOutcome)
         }

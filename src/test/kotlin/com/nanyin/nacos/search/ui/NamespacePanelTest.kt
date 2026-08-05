@@ -5,8 +5,13 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
+import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NamespaceService
+import com.nanyin.nacos.search.services.operations.EditEnvironment
+import com.nanyin.nacos.search.services.operations.EditSessionService
+import com.nanyin.nacos.search.services.operations.OperationGateway
+import com.nanyin.nacos.search.services.operations.OperationTarget
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -38,9 +43,20 @@ class NamespacePanelTest {
         NamespaceInfo("staging", "Staging Environment")
     )
 
+    private fun standInEditSessions() = EditSessionService(
+        { OperationGateway(emptyMap()) },
+        object : EditEnvironment {
+            override fun selectedProfile(): EnvironmentProfile? = null
+            override fun profile(profileId: String): EnvironmentProfile? = null
+            override suspend fun captureTarget(profileId: String, namespaceId: String) =
+                Result.failure<OperationTarget>(IllegalStateException("no environment"))
+        }
+    )
+
     @BeforeEach
     fun setUp() {
         mockProject = mock<Project>()
+        whenever(mockProject.getService(EditSessionService::class.java)).thenReturn(standInEditSessions())
         mockNamespaceService = mock<NamespaceService>()
 
         whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(CompletableDeferred(Result.success(testNamespaces)))

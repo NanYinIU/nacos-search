@@ -215,10 +215,14 @@ class PublishController(private val gateway: PublishGateway) {
             }
         }
 
-        // CAS conflict (V1 only)
+        // CAS conflict (V1 only) — re-read so the conflict diff shows the
+        // concurrent remote value, not the stale preflight baseline.
         if (writeResult.getOrNull() == PublishOutcome.CasConflict) {
+            onPhase(PublishState.Verifying)
+            val conflictRead = gateway.readBack(target, coordinate)
+            val remote = conflictRead.getOrNull() ?: remoteDetail
             return PublishResult(
-                PublishState.RemoteConflict(remoteDetail.content, remoteDetail.md5),
+                PublishState.RemoteConflict(remote.content, remote.md5),
                 isDirty = true
             )
         }

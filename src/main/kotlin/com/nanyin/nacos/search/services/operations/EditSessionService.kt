@@ -3,7 +3,6 @@ package com.nanyin.nacos.search.services.operations
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
-import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.DatasetConfirmation
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
@@ -112,34 +111,6 @@ interface EditEnvironment {
 }
 
 /**
- * Demotes the retained pre-write detail's confirmation when a publish enters
- * server-state-unknown (ADR-0028 / ADR-0036). Kept as a seam so tests can
- * observe demotion without a platform cache fixture.
- */
-fun interface PreWriteDetailDemoter {
-    /**
-     * Changes the retained pre-write detail from confirmed to unconfirmed.
-     * Returns true when the demotion landed.
-     */
-    fun demote(
-        identity: AccessIdentity,
-        namespaceId: String,
-        dataId: String,
-        group: String
-    ): Boolean
-}
-
-/** No-op demoter used when no cache collaborator is supplied. */
-object NoOpPreWriteDetailDemoter : PreWriteDetailDemoter {
-    override fun demote(
-        identity: AccessIdentity,
-        namespaceId: String,
-        dataId: String,
-        group: String
-    ): Boolean = false
-}
-
-/**
  * Holds the one edit session a project may have, outside the tool window.
  *
  * ADR-0046: a session that lives inside the tool-window content cannot block
@@ -155,8 +126,7 @@ object NoOpPreWriteDetailDemoter : PreWriteDetailDemoter {
 @Service(Service.Level.PROJECT)
 class EditSessionService internal constructor(
     private val gateway: () -> OperationGateway,
-    private val environment: EditEnvironment,
-    private val demoter: PreWriteDetailDemoter = NoOpPreWriteDetailDemoter
+    private val environment: EditEnvironment
 ) {
     @Suppress("unused")
     constructor(project: Project) : this(
@@ -249,7 +219,8 @@ class EditSessionService internal constructor(
     }
 
     fun updateDraft(content: String) = synchronized(lock) {
-        if (serverStateUnknown || isInFlightLocked()) return@synchronized
+        // Mid-write: do not mutate the in-flight command's draft identity.
+        if (isInFlightLocked()) return@synchronized
         pendingPublish = null
         if (_publishState.value is PublishState.AwaitingConfirmation) {
             _publishState.value = PublishState.Dirty
@@ -560,23 +531,15 @@ class EditSessionService internal constructor(
                 }
             }
             is PublishState.ServerStateUnknown -> {
-                val binding = prepared?.session?.binding ?: currentSession()?.binding
-                val alreadyUnknown = synchronized(lock) { serverStateUnknown }
+                // The retained pre-write detail for this draft is no longer
+                // confirmed (ADR-0028 / ADR-0036). AccessVisibility will own
+                // the durable confirmation machine later; while a draft is
+                // open, the session is what retains that detail.
                 synchronized(lock) {
                     serverStateUnknown = true
                     requiresFreshPreflight = true
                     preWriteConfirmation = DatasetConfirmation.UNCONFIRMED
                     _publishState.value = PublishState.ServerStateUnknown
-                }
-                // Demote once on first entry; reconciliation failures stay unknown
-                // without re-stamping.
-                if (!alreadyUnknown && binding != null) {
-                    demoter.demote(
-                        binding.identity,
-                        binding.namespaceId,
-                        binding.dataId,
-                        binding.group
-                    )
                 }
             }
             is PublishState.Dirty -> {

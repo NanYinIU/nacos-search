@@ -6,9 +6,14 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
+import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.NacosLanguageListener
 import com.nanyin.nacos.search.services.NamespaceService
+import com.nanyin.nacos.search.services.operations.EditEnvironment
+import com.nanyin.nacos.search.services.operations.EditSessionService
+import com.nanyin.nacos.search.services.operations.OperationGateway
+import com.nanyin.nacos.search.services.operations.OperationTarget
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.intellij.ui.components.JBLabel
 import kotlinx.coroutines.CompletableDeferred
@@ -36,8 +41,19 @@ import javax.swing.SwingUtilities
 @TestApplication
 class LanguageChangeSubscriptionTest {
 
-    private val mockProject: Project = mock()
+    private val mockProject: Project = mock<Project>().also {
+        whenever(it.getService(EditSessionService::class.java)).thenReturn(standInEditSessions())
+    }
 
+    private fun standInEditSessions() = EditSessionService(
+        { OperationGateway(emptyMap()) },
+        object : EditEnvironment {
+            override fun selectedProfile(): EnvironmentProfile? = null
+            override fun profile(profileId: String): EnvironmentProfile? = null
+            override suspend fun captureTarget(profileId: String, namespaceId: String) =
+                Result.failure<OperationTarget>(IllegalStateException("no environment"))
+        }
+    )
     @Test
     fun `environment switcher refreshes on a language change`() {
         val settings = NacosSettings().apply {
