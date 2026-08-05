@@ -125,8 +125,8 @@ class ConnectionDiagnostic(
         }
 
         // Stage 4: namespace discovery (optional, does not affect connection verdict).
-        // A dialect that declares discovery UNAVAILABLE is a coverage limitation,
-        // not a connection failure — keep the manual Namespace usable (ADR-0005).
+        // A dialect that declares discovery UNAVAILABLE is an unsupported
+        // operation — keep the manual Namespace usable (ADR-0005 / ADR-0048).
         val discoveryCaps = gateway.capabilities(generation)?.namespaceDiscovery
         val discoveryStage = if (discoveryCaps == CapabilityCoverage.UNAVAILABLE) {
             DiagnosticStageResult(

@@ -47,16 +47,17 @@ data class SearchCoverage(
 
 /**
  * Turns a dialect's content-search [CapabilityCoverage] into a [SearchCoverage]
- * report for a remote or local result set. Does not consult API generation.
+ * report. Does not consult API generation. [CapabilityCoverage.UNAVAILABLE]
+ * yields null — distinct from a missing dialect (caller may use
+ * [SearchCoverage.localComplete] for that case).
  */
 fun searchCoverageFromCapability(
     coverage: CapabilityCoverage,
     searched: Int,
     total: Int,
-    limitedReason: String,
-    localIndex: Boolean = false
+    limitedReason: String
 ): SearchCoverage? = when (coverage) {
     CapabilityCoverage.COMPLETE -> SearchCoverage.complete(searched, total)
     CapabilityCoverage.LIMITED -> SearchCoverage.partial(searched, total, limitedReason)
-    CapabilityCoverage.UNAVAILABLE -> if (localIndex) SearchCoverage.localComplete(searched, total) else null
+    CapabilityCoverage.UNAVAILABLE -> null
 }

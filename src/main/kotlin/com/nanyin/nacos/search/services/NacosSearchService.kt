@@ -10,7 +10,6 @@ import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.models.SearchCriteria
-import com.nanyin.nacos.search.services.operations.CapabilityCoverage
 import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.services.operations.SearchCoverage
 import com.nanyin.nacos.search.services.operations.searchCoverageFromCapability
@@ -779,19 +778,12 @@ class NacosSearchService(
     ): SearchCoverage? {
         if (!request.searchContent && request.query.isBlank()) return null
         val contentSearch = nacosApiService.protocolCapabilities(context.resolvedGeneration)?.contentSearch
-            ?: return searchCoverageFromCapability(
-                CapabilityCoverage.UNAVAILABLE,
-                searched = matched,
-                total = total,
-                limitedReason = "",
-                localIndex = true
-            )
+            ?: return SearchCoverage.localComplete(matched, total)
         return searchCoverageFromCapability(
             contentSearch,
             searched = matched,
             total = total,
-            limitedReason = "local index only",
-            localIndex = true
+            limitedReason = "local index only"
         )
     }
     

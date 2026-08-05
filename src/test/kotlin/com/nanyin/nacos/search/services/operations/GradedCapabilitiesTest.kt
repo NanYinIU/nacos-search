@@ -82,6 +82,27 @@ class GradedCapabilitiesTest {
     }
 
     @Test
+    fun `manual Namespace remains readable when discovery coverage is limited`() = runBlocking {
+        val adapter = DeclaringAdapter(
+            ProtocolCapabilities.NONE.copy(
+                namespaceDiscovery = CapabilityCoverage.LIMITED
+            ),
+            discoveryResult = Result.success(
+                listOf(DiscoveredNamespace("public", "public"))
+            )
+        )
+        val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to adapter))
+        val target = lockedTarget(NacosApiGeneration.V1, "team-manual")
+
+        val page = gateway.listSummaries(target, SummaryQuery()).getOrThrow().value
+        assertEquals("team-manual", page.items.single().tenantId)
+
+        val namespaces = gateway.discoverNamespaces(target).getOrThrow()
+        assertEquals(listOf("public"), namespaces.map { it.namespaceId })
+        assertEquals(1, adapter.discoveryCalls)
+    }
+
+    @Test
     fun `manual Namespace remains readable when discovery is unavailable`() = runBlocking {
         val adapter = DeclaringAdapter(
             ProtocolCapabilities.NONE.copy(
