@@ -1,0 +1,16 @@
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigListPresentation.kt
+  h_231225c3625e99 87,101-108,110-117
+src/test/kotlin/com/nanyin/nacos/search/ui/ConfigListPresentationTest.kt
+  h_231225c3625e99 185-205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "3f03589c8b1a64656bb00b8e3d655dfad4fadb07",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
