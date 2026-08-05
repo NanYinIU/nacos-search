@@ -11,6 +11,7 @@ import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The outcome of asking to start an edit. A closed set, so a caller cannot
@@ -54,6 +55,17 @@ sealed interface DraftGuard {
      * cancel the action, or discard the draft and proceed.
      */
     data class ConfirmDiscard(val draft: EditBinding) : DraftGuard
+}
+
+/**
+ * Notified when [EditSessionService.discardDraft] actually drops a held session.
+ * Panels that render the draft use this to leave edit mode when Settings (or
+ * any other non-panel site) discards on the caller's behalf — the session lives
+ * outside the tool window (ADR-0046), so discarding there cannot update Swing
+ * by itself.
+ */
+fun interface DraftDiscardListener {
+    fun onDraftDiscarded()
 }
 
 /**
@@ -106,12 +118,24 @@ class EditSessionService internal constructor(
 
     private val lock = Any()
     private var session: EditSession? = null
+    private val discardListeners = CopyOnWriteArrayList<DraftDiscardListener>()
 
     /** The draft this project holds, or null when nothing is being edited. */
     fun currentSession(): EditSession? = synchronized(lock) { session }
 
     /** Whether the held draft differs from the baseline it was started from. */
     fun isDirty(): Boolean = currentSession()?.isDirty == true
+
+    /**
+     * Registers [listener] for [discardDraft] notifications. Returns a handle
+     * that unregisters it — callers that own a [com.intellij.openapi.Disposable]
+     * should release the handle from that disposable so a disposed panel never
+     * hears about a later discard.
+     */
+    fun addDiscardListener(listener: DraftDiscardListener): AutoCloseable {
+        discardListeners.add(listener)
+        return AutoCloseable { discardListeners.remove(listener) }
+    }
 
     /**
      * Starts editing [configuration], binding the draft to the profile, access
@@ -162,9 +186,22 @@ class EditSessionService internal constructor(
 
     /**
      * Drops the draft. This is the explicit discard a [DraftGuard.ConfirmDiscard]
-     * demands; nothing else in the plugin may throw a draft away.
+     * demands; nothing else in the plugin may throw a draft away. When a session
+     * was actually present, [DraftDiscardListener]s are notified so renderers
+     * outside this service can leave edit mode.
      */
-    fun discardDraft() = synchronized(lock) { session = null }
+    fun discardDraft() {
+        val dropped = synchronized(lock) {
+            val had = session != null
+            session = null
+            had
+        }
+        if (dropped) {
+            for (listener in discardListeners) {
+                listener.onDraftDiscarded()
+            }
+        }
+    }
 
     /**
      * Whether selecting the configuration at [namespaceId]/[dataId]/[group] may

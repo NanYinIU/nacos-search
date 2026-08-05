@@ -485,6 +485,39 @@ class EditSessionServiceTest {
         assertEquals(DraftGuard.Proceed, service.guardProjectClose())
     }
 
+    // ---- discard notifies renderers that live outside the service ----
+
+    @Test
+    fun `discardDraft notifies listeners only when a session was present`() = runBlocking {
+        val service = service()
+        var notifications = 0
+        service.addDiscardListener { notifications++ }.use {
+            // No session yet — discard is a no-op and must not notify.
+            service.discardDraft()
+            assertEquals(0, notifications)
+
+            service.beginEdit(configuration(), "dev", baselineContent = "original")
+            service.updateDraft("edited")
+            service.discardDraft()
+            assertEquals(1, notifications)
+
+            // Second discard with nothing held must not re-fire.
+            service.discardDraft()
+            assertEquals(1, notifications)
+        }
+    }
+
+    @Test
+    fun `unregistering a discard listener stops further notifications`() = runBlocking {
+        val service = service()
+        var notifications = 0
+        val handle = service.addDiscardListener { notifications++ }
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        handle.close()
+        service.discardDraft()
+        assertEquals(0, notifications)
+    }
+
     // ---- the publish target comes from the binding, never the live selection ----
 
     @Test

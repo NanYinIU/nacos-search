@@ -12,7 +12,7 @@ import com.nanyin.nacos.search.ui.confirmDraftDiscard
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.options.Configurable
-import com.intellij.openapi.options.ConfigurationException
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
@@ -169,59 +169,123 @@ class NacosConfigurable @JvmOverloads constructor(
     }
 
     /**
-     * The project's [EditSessionService], when a project context is available.
-     * Settings opened without a project skip project-scoped draft guards.
+     * Every non-disposed open project. Write intent and the server list are
+     * application-global, so ADR-0027 settings guards must consult every
+     * project-scoped edit session — not only the focused one.
      */
-    private fun editSessions(): EditSessionService? =
-        contextProject()?.takeUnless { it.isDisposed }?.service()
+    private fun openProjects(): List<Project> =
+        ProjectManager.getInstance().openProjects.filter { !it.isDisposed }
 
     /**
-     * ADR-0027 draft guard for profile deletion. Returns [DraftGuard.Proceed]
-     * when no project context holds a draft.
+     * Whether [guard] may proceed for a known [project] / [sessions] pair.
+     * Asking never mutates — only an explicit discard does. Fail closed when
+     * [ConfirmDiscard] is presented without a usable project/service pair.
      */
-    private fun guardProfileDeletion(profileId: String): DraftGuard =
-        editSessions()?.guardProfileDeletion(profileId) ?: DraftGuard.Proceed
-
-    /**
-     * Whether a guarded settings action may proceed. Asking never mutates —
-     * only an explicit discard does. Without a project there is nothing to
-     * discard, so ConfirmDiscard is treated as Proceed.
-     */
-    private fun admitDraftGuard(guard: DraftGuard, messageKey: String): Boolean {
-        val sessions = editSessions()
-        val project = contextProject()
-        if (sessions == null || project == null) return true
-        return when (guard) {
-            DraftGuard.Proceed, DraftGuard.AlreadyEditing -> true
-            is DraftGuard.ConfirmDiscard -> {
-                if (confirmDraftDiscard(project, guard.draft, messageKey)) {
-                    sessions.discardDraft()
-                    true
-                } else {
-                    false
-                }
+    private fun admitDraftGuard(
+        project: Project?,
+        sessions: EditSessionService?,
+        guard: DraftGuard,
+        messageKey: String
+    ): Boolean = when (guard) {
+        DraftGuard.Proceed, DraftGuard.AlreadyEditing -> true
+        is DraftGuard.ConfirmDiscard -> {
+            if (project == null || sessions == null) {
+                // Cannot prompt or discard — refuse rather than proceed without
+                // honouring ConfirmDiscard (issue #77 review nit).
+                false
+            } else if (confirmDraftDiscard(project, guard.draft, messageKey)) {
+                sessions.discardDraft()
+                true
+            } else {
+                false
             }
         }
     }
 
     /**
+     * Asks every open project's [EditSessionService] via [guardOf]. Cancel on
+     * any project aborts the whole settings action. With no open projects the
+     * loop is empty and the action proceeds (nothing to orphan).
+     */
+    private fun admitAcrossProjects(
+        messageKey: String,
+        guardOf: (EditSessionService) -> DraftGuard
+    ): Boolean {
+        for (open in openProjects()) {
+            val sessions = open.service<EditSessionService>()
+            if (!admitDraftGuard(open, sessions, guardOf(sessions), messageKey)) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /**
+     * Abort Apply after the user already chose "Keep editing" on a discard
+     * prompt. [ProcessCanceledException] is silent — [com.intellij.openapi.options.ConfigurationException]
+     * would raise a second modal (SingleConfigurableEditor ApplyAction).
+     */
+    private fun abortApplyAfterDiscardCancel(): Nothing {
+        throw ProcessCanceledException()
+    }
+
+    /**
      * For every profile whose write intent is being turned off on this Apply,
-     * ask the project's edit session. Cancel aborts Apply via
-     * [ConfigurationException] so the settings draft stays open.
+     * ask every open project's edit session. Cancel aborts Apply without
+     * committing settings.
      */
     private fun admitWriteIntentOffGuards() {
         val savedById = settings.cloneServers().associateBy { it.id }
         for (draft in draftServers) {
             val saved = savedById[draft.id] ?: continue
             if (!saved.writeIntent || draft.writeIntent) continue
-            val guard = editSessions()?.guardWriteIntentOff(draft.id) ?: DraftGuard.Proceed
-            if (!admitDraftGuard(guard, "config.detail.draft.discard.write.intent")) {
-                // Abort Apply without a second modal: the discard prompt already
-                // collected the user's choice. Settings stay on the draft model.
-                throw ConfigurationException(
-                    NacosSearchBundle.message("config.detail.draft.discard.apply.aborted")
-                )
+            if (!admitAcrossProjects("config.detail.draft.discard.write.intent") {
+                    it.guardWriteIntentOff(draft.id)
+                }
+            ) {
+                abortApplyAfterDiscardCancel()
             }
+        }
+    }
+
+    /**
+     * For every profile that is about to disappear from the saved server list
+     * on this Apply, ask every open project's edit session. Deletion from the
+     * settings draft list alone must not discard a configuration draft — only
+     * a committed Apply may (issue #77 review).
+     */
+    private fun admitProfileDeletionGuards() {
+        val remainingIds = draftServers.map { it.id }.toSet()
+        val deletedIds = settings.cloneServers().map { it.id }.filter { it !in remainingIds }
+        for (profileId in deletedIds) {
+            if (!admitAcrossProjects("config.detail.draft.discard.profile.delete") {
+                    it.guardProfileDeletion(profileId)
+                }
+            ) {
+                abortApplyAfterDiscardCancel()
+            }
+        }
+    }
+
+    /**
+     * When Apply realigns the context project's selected environment to the
+     * blue-dot [draftActiveId], that is an environment switch for ADR-0027.
+     * Guard before commit so cancel keeps both the draft and the selection.
+     */
+    private fun admitEnvironmentRealignGuards() {
+        val ctx = contextProject() ?: return
+        val session = ctx.getService(NacosProjectSession::class.java) ?: return
+        val currentId = session.sessionState.selectedProfileId
+        if (currentId.isBlank() || currentId == draftActiveId) return
+        val sessions = ctx.service<EditSessionService>()
+        if (!admitDraftGuard(
+                ctx,
+                sessions,
+                sessions.guardEnvironmentSwitch(draftActiveId),
+                "config.detail.draft.discard.environment"
+            )
+        ) {
+            abortApplyAfterDiscardCancel()
         }
     }
 
@@ -859,15 +923,10 @@ class NacosConfigurable @JvmOverloads constructor(
             Messages.getQuestionIcon()
         )
         if (result != Messages.YES) return
-        // ADR-0027: deleting the draft's environment profile would leave a
-        // draft that can no longer be published. Ask after the delete
-        // confirmation so cancel keeps both the profile and the edit — never
-        // discard the draft only to abort the delete.
-        if (!admitDraftGuard(
-                guardProfileDeletion(current.id),
-                "config.detail.draft.discard.profile.delete"
-            )
-        ) return
+        // Only stage the deletion in the settings draft list. ADR-0027's
+        // profile-deletion guard runs on Apply — discarding the configuration
+        // draft here would permanently lose it if the user then Cancelled
+        // Settings (P0 has no draft shelf).
         val idx = draftServers.indexOf(current)
         draftServers.removeAt(idx)
         serverListModel.removeElementAt(idx)
@@ -1002,10 +1061,12 @@ class NacosConfigurable @JvmOverloads constructor(
             throw java.lang.IllegalStateException("Invalid server URL")
         }
 
-        // ADR-0027: turning write intent off for a profile that holds a dirty
-        // draft would silently orphan work that can no longer be published.
-        // Guard before committing so cancel aborts Apply with the draft intact.
+        // ADR-0027: settings-path actions that would destroy a draft must
+        // prompt before commit. Cancel aborts Apply (silent ProcessCanceledException)
+        // with the configuration draft and the settings draft model intact.
         admitWriteIntentOffGuards()
+        admitProfileDeletionGuards()
+        admitEnvironmentRealignGuards()
 
         // Decide connection-vs-preferences from the profile's access revision
         // (endpoint, API policy, auth strategy, principal, secret). The old
