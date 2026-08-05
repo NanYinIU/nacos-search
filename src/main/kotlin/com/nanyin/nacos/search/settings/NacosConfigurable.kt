@@ -33,7 +33,8 @@ import javax.swing.*
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import javax.swing.event.ListSelectionListener
-
+import com.intellij.openapi.application.ModalityState
+import com.nanyin.nacos.search.invokeOnEdt
 /**
  * Master-detail settings configurable for multi-server management.
  *
@@ -571,7 +572,7 @@ class NacosConfigurable @JvmOverloads constructor(
         splitter.rightComponent = buildDetailPanel()
         splitter.resizeWeight = 0.0
         splitter.setDividerLocation(256)
-        SwingUtilities.invokeLater {
+        invokeOnEdt(ModalityState.defaultModalityState()) {
             splitter.setDividerLocation(256)
         }
 
@@ -1168,7 +1169,7 @@ class NacosConfigurable @JvmOverloads constructor(
                     Result.failure(e)
                 }
 
-                ApplicationManager.getApplication().invokeLater {
+                invokeOnEdt(ModalityState.defaultModalityState()) {
                     testConnectionButton.isEnabled = true
                     val report = outcome.getOrNull()
                     if (report != null) {

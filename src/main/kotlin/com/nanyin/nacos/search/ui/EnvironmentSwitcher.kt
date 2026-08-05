@@ -31,9 +31,9 @@ import javax.swing.JButton
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.SwingConstants
-import javax.swing.SwingUtilities
 import javax.swing.plaf.basic.BasicButtonUI
-
+import com.intellij.openapi.application.ModalityState
+import com.nanyin.nacos.search.invokeOnEdt
 /**
  * Header control for quickly switching the active Nacos environment
  * (dev / sit / uat ...) without opening the settings dialog.
@@ -204,7 +204,7 @@ class EnvironmentSwitcher(
     }
 
     override fun languageChanged() {
-        SwingUtilities.invokeLater { refresh() }
+        invokeOnEdt(ModalityState.defaultModalityState()) { refresh() }
     }
 
     /** Anchors the message-bus connection; the switcher holds nothing else to release. */

@@ -17,7 +17,7 @@ import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JSpinner
-import javax.swing.SwingUtilities
+import com.intellij.util.ui.UIUtil
 
 @TestApplication
 class NacosConfigurableInteractionTest {
@@ -268,11 +268,7 @@ class NacosConfigurableInteractionTest {
     }
 
     private fun runOnEdt(action: () -> Unit) {
-        if (SwingUtilities.isEventDispatchThread()) {
-            action()
-        } else {
-            SwingUtilities.invokeAndWait(action)
-        }
+        UIUtil.invokeAndWaitIfNeeded(action)
     }
 
     private fun waitForUi() {

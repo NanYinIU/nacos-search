@@ -2,11 +2,10 @@ package com.nanyin.nacos.search.ui
 
 import com.intellij.diff.DiffManager
 import com.intellij.diff.DiffRequestPanel
-import com.intellij.openapi.application.ApplicationManager
+import com.intellij.CommonBundle
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.CommonBundle
 import com.intellij.ui.JBSplitter
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
@@ -36,6 +35,7 @@ import javax.swing.JComponent
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.ListSelectionModel
+import com.nanyin.nacos.search.invokeOnEdt
 
 /**
  * Read-only history browser for one configuration coordinate.
@@ -112,13 +112,13 @@ class HistoryBrowserDialog(
      * context, which the platform treats as NON_MODAL (blocked by this dialog).
      */
     private fun onDialogUi(gate: PresentationGate, action: () -> Unit) {
-        ApplicationManager.getApplication().invokeLater({
+        invokeOnEdt(ModalityState.any()) {
             // Re-ask the judgement on the EDT: a session change can land between
             // the controller's IO checkpoint and this modal resume. This paint
             // carries no new observation, so it only re-tests epoch and
             // coordinate and leaves the controller's mark where it is.
             if (!isDisposed && gate.admitAndRecord(PresentedResult(sessionEpoch, presented))) action()
-        }, ModalityState.any())
+        }
     }
 
     override fun createCenterPanel(): JComponent {

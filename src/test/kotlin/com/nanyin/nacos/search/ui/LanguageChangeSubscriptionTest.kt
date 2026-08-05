@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
 import javax.swing.JButton
-import javax.swing.SwingUtilities
+import com.intellij.util.ui.UIUtil
 
 /**
  * Every tool-window component subscribes to [NacosLanguageListener.TOPIC] itself.
@@ -202,11 +202,7 @@ class LanguageChangeSubscriptionTest {
     }
 
     private fun runOnEdt(action: () -> Unit) {
-        if (ApplicationManager.getApplication().isDispatchThread) {
-            action()
-        } else {
-            SwingUtilities.invokeAndWait(action)
-        }
+        UIUtil.invokeAndWaitIfNeeded(action)
     }
 
     private fun waitForUi() {

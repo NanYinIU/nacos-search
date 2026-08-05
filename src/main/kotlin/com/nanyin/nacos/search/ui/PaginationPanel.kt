@@ -16,7 +16,8 @@ import com.nanyin.nacos.search.services.NamespaceService
 import java.awt.*
 import javax.swing.*
 import javax.swing.plaf.basic.BasicButtonUI
-
+import com.intellij.openapi.application.ModalityState
+import com.nanyin.nacos.search.invokeOnEdt
 /**
  * Compact pagination strip for the config list.
  *
@@ -111,7 +112,7 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, NacosLa
 
     fun updatePagination(state: NacosSearchService.PaginationState) {
         paginationState = state
-        SwingUtilities.invokeLater {
+        invokeOnEdt(ModalityState.defaultModalityState()) {
             isVisible = true
             previousButton.isEnabled = state.hasPreviousPage
             nextButton.isEnabled = state.hasNextPage
@@ -126,7 +127,7 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, NacosLa
     }
 
     fun reset() {
-        SwingUtilities.invokeLater {
+        invokeOnEdt(ModalityState.defaultModalityState()) {
             previousButton.isEnabled = false
             nextButton.isEnabled = false
             pageInfoLabel.text = NacosSearchBundle.message("pagination.page.of.format", 1, 1)
@@ -137,7 +138,7 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, NacosLa
     }
 
     fun setLoading(loading: Boolean) {
-        SwingUtilities.invokeLater {
+        invokeOnEdt(ModalityState.defaultModalityState()) {
             previousButton.isEnabled = !loading
             nextButton.isEnabled = !loading
             pageSizeComboBox.isEnabled = !loading
@@ -167,7 +168,7 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, NacosLa
     }
 
     private fun refreshUIText() {
-        SwingUtilities.invokeLater {
+        invokeOnEdt(ModalityState.defaultModalityState()) {
             previousButton.toolTipText = NacosSearchBundle.message("pagination.previous")
             nextButton.toolTipText = NacosSearchBundle.message("pagination.next")
             pageSizeComboBox.toolTipText = NacosSearchBundle.message("tooltip.page.size")

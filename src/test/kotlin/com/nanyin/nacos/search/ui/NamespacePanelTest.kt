@@ -1,6 +1,5 @@
 package com.nanyin.nacos.search.ui
 
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.PlatformTestUtil
@@ -28,7 +27,7 @@ import org.mockito.kotlin.reset
 import org.mockito.kotlin.timeout
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
-import javax.swing.SwingUtilities
+import com.intellij.util.ui.UIUtil
 
 @TestApplication
 class NamespacePanelTest {
@@ -210,12 +209,8 @@ class NamespacePanelTest {
     }
 
     private fun waitForUi() {
-        if (ApplicationManager.getApplication().isDispatchThread) {
+        UIUtil.invokeAndWaitIfNeeded {
             PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
-        } else {
-            SwingUtilities.invokeAndWait {
-                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
-            }
         }
     }
 

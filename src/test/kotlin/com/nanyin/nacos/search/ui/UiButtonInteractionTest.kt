@@ -1,6 +1,5 @@
 package com.nanyin.nacos.search.ui
 
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.PlatformTestUtil
@@ -37,6 +36,7 @@ import javax.swing.SwingUtilities
 import javax.swing.border.EmptyBorder
 import javax.swing.border.Border
 import org.mockito.kotlin.whenever
+import com.intellij.util.ui.UIUtil
 
 @TestApplication
 class UiButtonInteractionTest {
@@ -350,11 +350,7 @@ class UiButtonInteractionTest {
     }
 
     private fun runOnEdt(action: () -> Unit) {
-        if (ApplicationManager.getApplication().isDispatchThread) {
-            action()
-        } else {
-            SwingUtilities.invokeAndWait(action)
-        }
+        UIUtil.invokeAndWaitIfNeeded(action)
     }
 
     private fun waitForUi() {
