@@ -1,0 +1,52 @@
+src/test/kotlin/com/nanyin/nacos/search/ui/ToolWindowSearchControllerTest.kt
+  s_c7baf167f20ecf::t_95c0f510aff064 213-217
+  s_c7baf167f20ecf::t_1260e8664af461 157-161,166-185
+  s_7ba55522b0b5e9::t_3a1961138c151a 186-187
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchWindow.kt
+  s_c7baf167f20ecf::t_c0916593366ea9 311-313,317-334
+src/main/kotlin/com/nanyin/nacos/search/services/SearchRequestAssembly.kt
+  s_c7baf167f20ecf::t_13aade5a472ade 19-20
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_c7baf167f20ecf::t_fa9e099a9e4aa6 682
+  s_c7baf167f20ecf::t_13ee20e71535a5 351-361,371
+  s_c7baf167f20ecf::t_8a93aaeebe7135 79-88,90,92-93
+  s_c7baf167f20ecf::t_68a07420e61fb5 387
+  s_c7baf167f20ecf::t_3a01c5a7b2c848 815-816,818
+  s_c7baf167f20ecf::t_7a8477a8616849 260-265,271,277-278,287-290,297,299,307-311,322-328,337,343
+  s_c7baf167f20ecf::t_731bba13a47b14 48-55
+  s_c7baf167f20ecf::t_08fdfa9b850965 397-398,400-401,403-406,416-417,420
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceTest.kt
+  s_c7baf167f20ecf::t_7cd1545212b244 346-366
+  s_7ba55522b0b5e9::t_227243a2db4959 345
+docs/adr/0054-make-search-targets-unnameable-outside-the-search-service.md
+  s_c7baf167f20ecf::t_2d583c22d0f920 1-11
+src/main/kotlin/com/nanyin/nacos/search/ui/ToolWindowSearchController.kt
+  s_c7baf167f20ecf::t_8d8e91b45b1528 32-43,54,57,59,63-66,72-74,77
+src/main/kotlin/com/nanyin/nacos/search/ui/NamespacePanel.kt
+  s_c7baf167f20ecf::t_118cb8af4fd9d8 189-192,194-195
+  s_c7baf167f20ecf::t_4d537d6d45bf1a 30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "5a7291a4856899c23906da4a32dd31a5b5a1107e",
+  "prompts": {},
+  "sessions": {
+    "s_7ba55522b0b5e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0a106df7-d66b-4f3f-919f-dc9774fdb08d",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_c7baf167f20ecf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "25c8e6a2-7b47-4106-b7ff-81783d2c74d7",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
