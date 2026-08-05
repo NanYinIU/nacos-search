@@ -25,7 +25,11 @@ import java.util.concurrent.ConcurrentHashMap
 import javax.swing.border.EmptyBorder
 
 /**
- * Panel for displaying configuration list with file-type badges.
+ * Panel for displaying the configuration result list with file-type badges.
+ *
+ * Renders a closed [ConfigListViewState] set with one exhaustive branch and
+ * holds no decision (issue #79). Mapping from search/access outcomes and
+ * status-line wording live in [ConfigListPresentation] / [ConfigListStatusLine].
  *
  * Uses a JBList with a custom cell renderer that shows the config's
  * dataId, group, and a colored file-type badge (YAML / JSON / properties).
@@ -43,9 +47,18 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     private lateinit var headerLabel: JBLabel
     private lateinit var refreshButton: JButton
     private lateinit var emptyStatePanel: JPanel
+    private lateinit var emptyMessageLabel: JBLabel
+    private lateinit var emptyInstructionLabel: JBLabel
+    private lateinit var failedStatePanel: JPanel
+    private lateinit var failedMessageLabel: JBLabel
+    private lateinit var failedInstructionLabel: JBLabel
+    private lateinit var blockedStatePanel: JPanel
+    private lateinit var blockedMessageLabel: JBLabel
+    private lateinit var blockedInstructionLabel: JBLabel
 
-    // State
-    private var isLoading = false
+    // State held only so language changes and selection helpers can re-apply it.
+    // Decisions about which state to show are made upstream.
+    private var viewState: ConfigListViewState = ConfigListViewState.Empty()
     private var configurations: List<NacosConfiguration> = emptyList()
     private var currentNamespace: NamespaceInfo? = null
     // Current search query for highlighting matched fragments in the list
@@ -110,7 +123,32 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
             isFocusPainted = false
         }
 
-        emptyStatePanel = createEmptyStatePanel()
+        val empty = createMessageCard(
+            icon = null,
+            messageKey = "config.list.empty",
+            instructionKey = "config.list.empty.instruction"
+        )
+        emptyStatePanel = empty.first
+        emptyMessageLabel = empty.second
+        emptyInstructionLabel = empty.third
+
+        val failed = createMessageCard(
+            icon = AllIcons.General.Error,
+            messageKey = "config.list.failed",
+            instructionKey = "config.list.failed.instruction"
+        )
+        failedStatePanel = failed.first
+        failedMessageLabel = failed.second
+        failedInstructionLabel = failed.third
+
+        val blocked = createMessageCard(
+            icon = AllIcons.General.Warning,
+            messageKey = "config.list.blocked.access",
+            instructionKey = "config.list.blocked.access.instruction"
+        )
+        blockedStatePanel = blocked.first
+        blockedMessageLabel = blocked.second
+        blockedInstructionLabel = blocked.third
     }
 
     private fun setupLayout() {
@@ -127,11 +165,13 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
             add(refreshButton, BorderLayout.EAST)
         }
 
-        // Center: list / loading / empty
+        // Center: results / loading / empty / failed / blocked — one card per closed state.
         val centerPanel = JPanel(CardLayout()).apply {
-            add(scrollPane, "table")
-            add(loadingLabel, "loading")
-            add(emptyStatePanel, "empty")
+            add(scrollPane, CARD_RESULTS)
+            add(loadingLabel, CARD_LOADING)
+            add(emptyStatePanel, CARD_EMPTY)
+            add(failedStatePanel, CARD_FAILED)
+            add(blockedStatePanel, CARD_BLOCKED)
         }
 
         add(headerPanel, BorderLayout.NORTH)
@@ -162,32 +202,112 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         }
     }
 
-    private fun createEmptyStatePanel(): JPanel {
-        return JPanel(BorderLayout()).apply {
-            val messageLabel = JBLabel(NacosSearchBundle.message("config.list.empty")).apply {
-                horizontalAlignment = SwingConstants.CENTER
-                foreground = JBColor.GRAY
-            }
-            val instructionLabel = JBLabel(NacosSearchBundle.message("config.list.empty.instruction")).apply {
-                horizontalAlignment = SwingConstants.CENTER
-                foreground = JBColor.GRAY
-                font = font.deriveFont(Font.ITALIC)
-            }
-            val centerPanel = JPanel().apply {
-                layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                add(Box.createVerticalGlue())
-                add(messageLabel)
-                add(Box.createVerticalStrut(5))
-                add(instructionLabel)
-                add(Box.createVerticalGlue())
-            }
+    /**
+     * Builds a centred message card. Platform icons only — no plugin SVG assets
+     * are added or replaced for these states (ADR-0036).
+     */
+    private fun createMessageCard(
+        icon: Icon?,
+        messageKey: String,
+        instructionKey: String
+    ): Triple<JPanel, JBLabel, JBLabel> {
+        val messageLabel = JBLabel(NacosSearchBundle.message(messageKey)).apply {
+            this.icon = icon
+            horizontalAlignment = SwingConstants.CENTER
+            foreground = JBColor.GRAY
+        }
+        val instructionLabel = JBLabel(NacosSearchBundle.message(instructionKey)).apply {
+            horizontalAlignment = SwingConstants.CENTER
+            foreground = JBColor.GRAY
+            font = font.deriveFont(Font.ITALIC)
+        }
+        val centerPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(Box.createVerticalGlue())
+            add(messageLabel.apply { alignmentX = Component.CENTER_ALIGNMENT })
+            add(Box.createVerticalStrut(5))
+            add(instructionLabel.apply { alignmentX = Component.CENTER_ALIGNMENT })
+            add(Box.createVerticalGlue())
+        }
+        val panel = JPanel(BorderLayout()).apply {
             add(centerPanel, BorderLayout.CENTER)
         }
+        return Triple(panel, messageLabel, instructionLabel)
     }
 
     // ------------------------------------------------------------------
-    // Public API (kept compatible with NacosSearchWindow)
+    // Public API
     // ------------------------------------------------------------------
+
+    /**
+     * Renders [state] with one exhaustive branch. The panel makes no decision
+     * about which state applies — that is [ConfigListPresentation]'s job —
+     * and does not invent status wording; [ConfigListCopy] resolves structured
+     * status / failure inputs against the current bundle.
+     */
+    fun render(state: ConfigListViewState) {
+        viewState = state
+        when (state) {
+            is ConfigListViewState.Empty -> {
+                configurations = emptyList()
+                updateList()
+                headerLabel.text = NacosSearchBundle.message("config.list.title")
+                emptyMessageLabel.icon = null
+                emptyMessageLabel.text = NacosSearchBundle.message("config.list.empty")
+                emptyInstructionLabel.text = NacosSearchBundle.message("config.list.empty.instruction")
+                showCard(CARD_EMPTY)
+                // Blank status is blank — never invent empty wording here.
+                statusLabel.text = ConfigListCopy.statusLine(state.status, bundleMessage)
+            }
+            is ConfigListViewState.Loading -> {
+                headerLabel.text = NacosSearchBundle.message("config.list.title")
+                loadingLabel.text = NacosSearchBundle.message("config.list.loading")
+                showCard(CARD_LOADING)
+                statusLabel.text = NacosSearchBundle.message("config.list.loading")
+            }
+            is ConfigListViewState.Results -> {
+                configurations = state.configurations
+                updateList()
+                headerLabel.text =
+                    "${NacosSearchBundle.message("config.list.title")}（${state.configurations.size}）"
+                showCard(CARD_RESULTS)
+                statusLabel.text = ConfigListCopy.statusLine(state.status, bundleMessage)
+            }
+            is ConfigListViewState.Blocked -> {
+                configurations = emptyList()
+                updateList()
+                headerLabel.text = NacosSearchBundle.message("config.list.title")
+                val body = ConfigListCopy.blockedBody(state, bundleMessage)
+                blockedMessageLabel.icon = AllIcons.General.Warning
+                blockedMessageLabel.text = body
+                blockedInstructionLabel.text = when (state.reason) {
+                    BlockedReason.REFUSED_ACCESS ->
+                        NacosSearchBundle.message("config.list.blocked.access.instruction")
+                    BlockedReason.CONFIGURATION_REQUIRED ->
+                        NacosSearchBundle.message("config.list.blocked.configuration.instruction")
+                }
+                showCard(CARD_BLOCKED)
+                statusLabel.text = body
+            }
+            is ConfigListViewState.Failed -> {
+                configurations = emptyList()
+                updateList()
+                headerLabel.text = NacosSearchBundle.message("config.list.title")
+                val body = ConfigListCopy.failedBody(state, bundleMessage)
+                failedMessageLabel.icon = AllIcons.General.Error
+                failedMessageLabel.text = body
+                failedInstructionLabel.text =
+                    NacosSearchBundle.message("config.list.failed.instruction")
+                showCard(CARD_FAILED)
+                statusLabel.text = body
+            }
+        }
+    }
+
+    private val bundleMessage: (String, Array<out Any>) -> String = { key, params ->
+        if (params.isEmpty()) NacosSearchBundle.message(key)
+        else NacosSearchBundle.message(key, *params)
+    }
 
     /**
      * Programmatically selects the given configuration and fires the selection
@@ -222,88 +342,6 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         }
     }
 
-    fun setConfigurations(newConfigurations: List<NacosConfiguration>) {
-        setLoadingState(false)
-        configurations = newConfigurations
-        updateList()
-
-        headerLabel.text = if (configurations.isEmpty()) {
-            NacosSearchBundle.message("config.list.title")
-        } else {
-            "${NacosSearchBundle.message("config.list.title")}（${configurations.size}）"
-        }
-
-        if (configurations.isEmpty()) {
-            showCard("empty")
-            updateStatus(NacosSearchBundle.message("config.list.empty"))
-        } else {
-            showCard("table")
-            updateStatus("")
-        }
-    }
-
-    fun setLoading(loading: Boolean) {
-        setLoadingState(loading)
-        if (loading) {
-            showCard("loading")
-            updateStatus(NacosSearchBundle.message("config.list.loading"))
-        }
-    }
-
-    fun showError(message: String) {
-        setLoadingState(false)
-        showCard("empty")
-        updateStatus(message)
-    }
-
-    /**
-     * Surfaces the three orthogonal [CacheConfidence] dimensions plus optional
-     * content-search coverage in the list status line.
-     */
-    fun setConfidenceStatus(
-        confidence: com.nanyin.nacos.search.models.CacheConfidence,
-        coverage: com.nanyin.nacos.search.services.operations.SearchCoverage? = null
-    ) {
-        val sourceLabel = when (confidence.source) {
-            com.nanyin.nacos.search.models.DataSource.REMOTE ->
-                NacosSearchBundle.message("config.list.status.source.remote")
-            com.nanyin.nacos.search.models.DataSource.CACHE ->
-                NacosSearchBundle.message("config.list.status.source.cache")
-        }
-        val confirmationLabel = when (confidence.confirmation) {
-            com.nanyin.nacos.search.models.DatasetConfirmation.CONFIRMED ->
-                NacosSearchBundle.message("config.list.status.confirmation.confirmed")
-            com.nanyin.nacos.search.models.DatasetConfirmation.UNCONFIRMED ->
-                NacosSearchBundle.message("config.list.status.confirmation.unconfirmed")
-            com.nanyin.nacos.search.models.DatasetConfirmation.REFRESH_FAILED ->
-                NacosSearchBundle.message("config.list.status.confirmation.refreshFailed")
-        }
-        val ageLabel = when (confidence.age) {
-            com.nanyin.nacos.search.models.CacheAge.WITHIN_TTL ->
-                NacosSearchBundle.message("config.list.status.age.fresh")
-            com.nanyin.nacos.search.models.CacheAge.STALE ->
-                NacosSearchBundle.message("config.list.status.age.stale")
-            com.nanyin.nacos.search.models.CacheAge.DEEP_STALE ->
-                NacosSearchBundle.message("config.list.status.age.deepStale")
-        }
-        val completenessLabel = when (confidence.completeness) {
-            com.nanyin.nacos.search.models.DatasetCompleteness.COMPLETE ->
-                NacosSearchBundle.message("config.list.status.completeness.complete")
-            com.nanyin.nacos.search.models.DatasetCompleteness.PARTIAL ->
-                NacosSearchBundle.message("config.list.status.completeness.partial")
-            com.nanyin.nacos.search.models.DatasetCompleteness.FAILED ->
-                NacosSearchBundle.message("config.list.status.completeness.failed")
-        }
-        val parts = mutableListOf(sourceLabel, confirmationLabel, ageLabel, completenessLabel)
-        if (coverage != null && !coverage.isComplete) {
-            parts += NacosSearchBundle.message(
-                "config.list.status.coverage.partial",
-                coverage.coverageText
-            )
-        }
-        updateStatus(parts.joinToString(" · "))
-    }
-
     override fun dispose() {
         namespaceService.removeNamespaceChangeListener(this)
         coroutineScope.cancel()
@@ -312,10 +350,6 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------
-
-    private fun setLoadingState(loading: Boolean) {
-        isLoading = loading
-    }
 
     private fun updateList() {
         listModel.clear()
@@ -327,18 +361,11 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         (centerPanel.layout as? CardLayout)?.show(centerPanel, cardName)
     }
 
-    private fun updateStatus(text: String) {
-        statusLabel.text = text
-    }
-
     override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
+        // Track selection only. Clearing/reloading the list is owned by
+        // NacosSearchWindow (clearSearchUi / openNamespace) so held viewState
+        // and the model cannot diverge across language re-renders.
         currentNamespace = newNamespace
-        // Clear the list immediately for feedback; NacosSearchWindow owns reloading configs
-        // for the newly selected namespace (avoids a duplicate/duplicate-origin reload).
-        SwingUtilities.invokeLater {
-            configurations = emptyList()
-            listModel.clear()
-        }
     }
 
     // ------------------------------------------------------------------
@@ -522,14 +549,23 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
 
     override fun languageChanged() {
         SwingUtilities.invokeLater {
-            loadingLabel.text = NacosSearchBundle.message("config.list.loading")
-            updateStatus(
-                if (configurations.isEmpty()) NacosSearchBundle.message("config.list.empty")
-                else NacosSearchBundle.message("config.list.loaded", configurations.size)
-            )
             refreshButton.toolTipText = NacosSearchBundle.message("tooltip.config.refresh")
+            // Always refresh static labels; the held card may not be the loading
+            // one, but its text still lives in the component tree.
+            loadingLabel.text = NacosSearchBundle.message("config.list.loading")
+            // Re-render the held state so card labels pick up the new bundle
+            // without re-deciding which state applies.
+            render(viewState)
             revalidate()
             repaint()
         }
+    }
+
+    companion object {
+        private const val CARD_RESULTS = "results"
+        private const val CARD_LOADING = "loading"
+        private const val CARD_EMPTY = "empty"
+        private const val CARD_FAILED = "failed"
+        private const val CARD_BLOCKED = "blocked"
     }
 }
