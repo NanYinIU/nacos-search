@@ -84,10 +84,11 @@ data class NamespaceInfo(
             namespaceId?.trim()?.takeIf { it.isNotEmpty() && it != PUBLIC } ?: PUBLIC
 
         /**
-         * Tenant field form used on configuration summaries, details and
-         * history entries: the public Namespace is `null`, every other id is
-         * the trimmed [canonicalId]. Discovery responses keep [canonicalId]
-         * (`"public"`) instead.
+         * Tenant-field spelling used on configuration summaries, details and
+         * history entries. The Namespace 标识 remains [canonicalId] (`"public"`);
+         * this returns `null` for that public Namespace so existing
+         * configuration/history field contracts stay stable, and the trimmed
+         * id for every other Namespace.
          */
         fun canonicalTenantId(tenant: String?): String? =
             canonicalId(tenant).takeUnless { it == PUBLIC }

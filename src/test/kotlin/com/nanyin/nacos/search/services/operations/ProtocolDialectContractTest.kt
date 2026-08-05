@@ -20,12 +20,17 @@ import org.junit.jupiter.api.Test
  * harness with execution-behaviour cases (auth recovery, budgets, retries).
  *
  * Contract assertions cover the request that was built, the outcome returned,
- * and the transport request count. Diagnostics name only method/path/query
- * keys — never credentials, tokens, or configuration content.
+ * and the transport request count. Failure diagnostics name only method/path/
+ * query keys — never credentials, tokens, or configuration content.
  */
 internal abstract class ProtocolDialectContractTest {
 
     protected abstract val generation: NacosApiGeneration
+    protected abstract val summaryPath: String
+    protected abstract val detailPath: String
+    protected abstract val historyListPath: String
+    protected abstract val historyDetailPath: String
+    protected abstract val discoveryPath: String
 
     protected abstract fun newAdapter(transport: ProtocolTransport): ProtocolAdapter
 
@@ -44,8 +49,11 @@ internal abstract class ProtocolDialectContractTest {
     /** Successful discovery list whose single entry has namespace id [rawNamespace]. */
     protected abstract fun discoveryBody(rawNamespace: String): String
 
-    /** Assert this dialect's public-Namespace encoding on a summary request. */
-    protected abstract fun assertPublicSummaryWire(request: ProtocolRequest)
+    /**
+     * Assert this dialect's public-Namespace wire encoding on a request that
+     * carries a Namespace selector (summary / detail / history-list).
+     */
+    protected abstract fun assertPublicNamespaceWire(request: ProtocolRequest)
 
     @Test
     fun `summary collapses blank whitespace and public tenants to one coordinate`() = runBlocking {
@@ -59,10 +67,8 @@ internal abstract class ProtocolDialectContractTest {
                 "summary tenant for ${describe(rawTenant)} on $generation"
             }
             assertEquals(NamespaceInfo.PUBLIC, NamespaceInfo.canonicalId(page.items.single().tenantId))
-            assertEquals(1, transport.requests.size) {
-                requestCountDiagnostic(transport)
-            }
-            assertNoSecretMaterial(transport.requests.single())
+            assertBuilt(transport, "GET", summaryPath)
+            assertPublicNamespaceWire(transport.requests.single())
         }
     }
 
@@ -75,7 +81,7 @@ internal abstract class ProtocolDialectContractTest {
 
         assertEquals("team-a", page.items.single().tenantId)
         assertEquals("team-a", NamespaceInfo.canonicalId(page.items.single().tenantId))
-        assertEquals(1, transport.requests.size) { requestCountDiagnostic(transport) }
+        assertBuilt(transport, "GET", summaryPath)
     }
 
     @Test
@@ -89,8 +95,8 @@ internal abstract class ProtocolDialectContractTest {
             requireNotNull(detail)
             assertNull(detail.tenantId) { "detail tenant for ${describe(rawTenant)} on $generation" }
             assertEquals(NamespaceInfo.PUBLIC, NamespaceInfo.canonicalId(detail.tenantId))
-            assertEquals(1, transport.requests.size) { requestCountDiagnostic(transport) }
-            assertNoSecretMaterial(transport.requests.single())
+            assertBuilt(transport, "GET", detailPath)
+            assertPublicNamespaceWire(transport.requests.single())
         }
     }
 
@@ -106,7 +112,8 @@ internal abstract class ProtocolDialectContractTest {
                 "history-list tenant for ${describe(rawTenant)} on $generation"
             }
             assertEquals(NamespaceInfo.PUBLIC, NamespaceInfo.canonicalId(page.items.single().tenantId))
-            assertEquals(1, transport.requests.size) { requestCountDiagnostic(transport) }
+            assertBuilt(transport, "GET", historyListPath)
+            assertPublicNamespaceWire(transport.requests.single())
         }
     }
 
@@ -122,7 +129,7 @@ internal abstract class ProtocolDialectContractTest {
                 "history-detail tenant for ${describe(rawTenant)} on $generation"
             }
             assertEquals(NamespaceInfo.PUBLIC, NamespaceInfo.canonicalId(detail.tenantId))
-            assertEquals(1, transport.requests.size) { requestCountDiagnostic(transport) }
+            assertBuilt(transport, "GET", historyDetailPath)
         }
     }
 
@@ -137,25 +144,38 @@ internal abstract class ProtocolDialectContractTest {
             assertEquals(NamespaceInfo.PUBLIC, namespaces.single().namespaceId) {
                 "discovery id for ${describe(rawNamespace)} on $generation"
             }
-            assertEquals(1, transport.requests.size) { requestCountDiagnostic(transport) }
+            assertBuilt(transport, "GET", discoveryPath)
         }
     }
 
     @Test
-    fun `public Namespace target uses the dialect wire contract on summary`() = runBlocking {
-        for (namespaceId in listOf("public", "", "   ", " public ")) {
-            val transport = ScriptedTransport(
-                ProtocolResponse(200, summaryBody(null))
-            )
-            newAdapter(transport)
-                .listSummaries(anonymousTarget(namespaceId), SummaryQuery(pageSize = 1))
-                .getOrThrow()
+    fun `public Namespace target uses the dialect wire contract on summary detail and history list`() =
+        runBlocking {
+            for (namespaceId in listOf("public", "", "   ", " public ")) {
+                val target = anonymousTarget(namespaceId)
 
-            assertEquals(1, transport.requests.size) { requestCountDiagnostic(transport) }
-            assertPublicSummaryWire(transport.requests.single())
-            assertNoSecretMaterial(transport.requests.single())
+                val summaryTransport = ScriptedTransport(ProtocolResponse(200, summaryBody(null)))
+                newAdapter(summaryTransport)
+                    .listSummaries(target, SummaryQuery(pageSize = 1))
+                    .getOrThrow()
+                assertBuilt(summaryTransport, "GET", summaryPath)
+                assertPublicNamespaceWire(summaryTransport.requests.single())
+
+                val detailTransport = ScriptedTransport(ProtocolResponse(200, detailBody(null)))
+                newAdapter(detailTransport)
+                    .readDetail(target, ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP"))
+                    .getOrThrow()
+                assertBuilt(detailTransport, "GET", detailPath)
+                assertPublicNamespaceWire(detailTransport.requests.single())
+
+                val historyTransport = ScriptedTransport(ProtocolResponse(200, historyListBody(null)))
+                (newAdapter(historyTransport) as HistoryCapability)
+                    .listHistory(target, HistoryQuery(ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP")))
+                    .getOrThrow()
+                assertBuilt(historyTransport, "GET", historyListPath)
+                assertPublicNamespaceWire(historyTransport.requests.single())
+            }
         }
-    }
 
     protected fun anonymousTarget(namespaceId: String = "public"): OperationTarget {
         val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
@@ -178,6 +198,9 @@ internal abstract class ProtocolDialectContractTest {
         return OperationTarget(context, namespaceId)
     }
 
+    protected fun tenantJson(rawTenant: String?): String =
+        if (rawTenant == null) "null" else "\"$rawTenant\""
+
     protected class ScriptedTransport(
         private vararg val responses: ProtocolResponse
     ) : ProtocolTransport {
@@ -192,22 +215,23 @@ internal abstract class ProtocolDialectContractTest {
         }
     }
 
+    private fun assertBuilt(transport: ScriptedTransport, method: String, path: String) {
+        val diagnostic = requestCountDiagnostic(transport)
+        assertEquals(1, transport.requests.size) { diagnostic }
+        val request = transport.requests.single()
+        assertEquals(method, request.method) { diagnostic }
+        assertEquals(path, request.path) { diagnostic }
+        // Diagnostics must stay free of configuration content and secrets.
+        assertFalse(diagnostic.contains("k=v")) { diagnostic }
+        assertFalse(diagnostic.contains("p@ss")) { diagnostic }
+        assertFalse(diagnostic.contains("accessToken")) { diagnostic }
+        assertFalse(diagnostic.contains("bearer-token")) { diagnostic }
+    }
+
     private fun requestCountDiagnostic(transport: ScriptedTransport): String =
         transport.requests.joinToString(prefix = "requests=", separator = "; ") { request ->
             "${request.method} ${request.path} keys=${request.query.map { it.first }}"
         }
-
-    private fun assertNoSecretMaterial(request: ProtocolRequest) {
-        val haystack = buildString {
-            append(request.path)
-            request.query.forEach { (key, value) -> append(key).append(value) }
-            request.headers.forEach { (key, value) -> append(key).append(value) }
-            request.body?.let { append(it) }
-        }
-        assertFalse(haystack.contains("p@ss"), "credential leaked into request diagnostic surface")
-        assertFalse(haystack.contains("accessToken="), "token leaked into request")
-        assertFalse(haystack.contains("bearer-token"), "token leaked into request")
-    }
 
     private fun describe(raw: String?): String = when (raw) {
         null -> "<null>"
@@ -222,6 +246,11 @@ internal abstract class ProtocolDialectContractTest {
 
 internal class V1ProtocolDialectContractTest : ProtocolDialectContractTest() {
     override val generation: NacosApiGeneration = NacosApiGeneration.V1
+    override val summaryPath: String = "/nacos/v1/cs/configs"
+    override val detailPath: String = "/nacos/v1/cs/configs"
+    override val historyListPath: String = "/nacos/v1/cs/history"
+    override val historyDetailPath: String = "/nacos/v1/cs/history"
+    override val discoveryPath: String = "/nacos/v1/console/namespaces"
 
     override fun newAdapter(transport: ProtocolTransport): ProtocolAdapter = V1ProtocolAdapter(transport)
 
@@ -240,20 +269,20 @@ internal class V1ProtocolDialectContractTest : ProtocolDialectContractTest() {
     override fun discoveryBody(rawNamespace: String): String =
         """{"data":[{"namespace":"$rawNamespace","namespaceShowName":"Name","namespaceDesc":"","configCount":0}]}"""
 
-    override fun assertPublicSummaryWire(request: ProtocolRequest) {
-        assertEquals("GET", request.method)
-        assertEquals("/nacos/v1/cs/configs", request.path)
+    override fun assertPublicNamespaceWire(request: ProtocolRequest) {
         assertFalse(request.query.any { it.first == "tenant" }) {
             "V1 public must omit tenant; keys=${request.query.map { it.first }}"
         }
     }
-
-    private fun tenantJson(rawTenant: String?): String =
-        if (rawTenant == null) "null" else "\"$rawTenant\""
 }
 
 internal class V3ProtocolDialectContractTest : ProtocolDialectContractTest() {
     override val generation: NacosApiGeneration = NacosApiGeneration.V3
+    override val summaryPath: String = "/nacos/v3/admin/cs/config/list"
+    override val detailPath: String = "/nacos/v3/admin/cs/config"
+    override val historyListPath: String = "/nacos/v3/admin/cs/history/list"
+    override val historyDetailPath: String = "/nacos/v3/admin/cs/history"
+    override val discoveryPath: String = "/nacos/v3/admin/core/namespace/list"
 
     override fun newAdapter(transport: ProtocolTransport): ProtocolAdapter = V3ProtocolAdapter(transport)
 
@@ -272,15 +301,10 @@ internal class V3ProtocolDialectContractTest : ProtocolDialectContractTest() {
     override fun discoveryBody(rawNamespace: String): String =
         """{"code":0,"message":"success","data":[{"namespace":"$rawNamespace","namespaceShowName":"Name","namespaceDesc":"","configCount":0}]}"""
 
-    override fun assertPublicSummaryWire(request: ProtocolRequest) {
-        assertEquals("GET", request.method)
-        assertEquals("/nacos/v3/admin/cs/config/list", request.path)
+    override fun assertPublicNamespaceWire(request: ProtocolRequest) {
         assertEquals("public", request.query.single { it.first == "namespaceId" }.second) {
             "V3 public must send namespaceId=public; keys=${request.query.map { it.first }}"
         }
         assertFalse(request.query.any { it.first == "tenant" })
     }
-
-    private fun tenantJson(rawTenant: String?): String =
-        if (rawTenant == null) "null" else "\"$rawTenant\""
 }
