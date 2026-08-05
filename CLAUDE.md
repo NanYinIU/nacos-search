@@ -116,6 +116,10 @@ Consequences worth knowing:
 - The tombstone is absolute: no observation sequence, however recent, outranks it.
 - The visibility-block gate stays **outside** this module. It orders dataset confirmation states over access identity, capability and optional namespace, not cache entries; do not fold the confirmation-state machine in here.
 
+#### One key space per environment
+
+The resolved API generation is part of the access identity, so a caller that cannot name it addresses a key space of its own. For an `AUTO` profile the generation is not in the profile — it is resolved per operation — and the hot paths must not read a credential to find it (ADR-0039). `ResolvedGenerationLocator` supplies it from the two credential-free sources that already hold it (ADR-0053): the generation this project session resolved, then the persisted last-known value. `NacosSettings.captureAccessIdentity` and `Project.captureSelectedAccessIdentity` apply it, so search, the key-index warm, the detail panel, the clear gesture, and gutter markers all address what the gateway wrote. A locked `V1`/`V3` identity is returned untouched; with neither source the generation stays unknown and the read is a **miss** — do not write into that space to make it look otherwise.
+
 ### `@NacosValue` Navigation & PSI Subsystem
 
 The `psi/` package (registered in `plugin.xml` for `language="JAVA"`) is the plugin's code-intelligence layer. It reads only from `CacheService`, so gutter markers and navigation are only as accurate as the locally cached configs. Components:
