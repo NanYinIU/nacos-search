@@ -73,7 +73,7 @@ Services are IntelliJ application- or project-level components registered with `
 
 - `NacosApiService` — HTTP client for the Nacos Open API (`/nacos/v1/cs/configs`, `/nacos/v1/cs/config`, `/nacos/v1/console/namespaces`). It also maintains a short-lived in-memory cache of configuration responses per namespace and handles auth headers. Requests retry transient IO failures.
 - `NacosAuthService` — Manages Nacos login tokens. Caches `accessToken` per `serverUrl+username`, refreshes before expiry, evicts stale entries on credential switch, and supports logout/validation.
-- `NacosSearchService` — Project-level search orchestrator. Exposes debounced search, pagination state via Kotlin `StateFlow`, and immediate `performSearch` (which cancels any pending debounced search so a late coroutine can't overwrite a fresh result). Translates wildcard queries like `*config` into Nacos `blur`/`accurate` search modes.
+- `NacosSearchService` — Project-level search orchestrator. It **holds the session context** every search targets (see **One held search session** below), exposes search state and pagination state via Kotlin `StateFlow`, and takes intents rather than requests: `search`, `searchAsYouType`, `clearCriteria`, `reload`, `nextPage`, `previousPage`, `changePageSize`. Translates wildcard queries like `*config` into Nacos `blur`/`accurate` search modes.
 - `SearchService` — Local search over the `CacheService` store with regex, content preview, highlighting, and scoring.
 - `CacheService` — Persistent local cache. See **Cache persistence** below.
 - `NamespaceService` — Persists the selected namespace (`PersistentStateComponent`, stored in `nacos-namespace-service.xml`) and notifies `NamespaceChangeListener`s when the user switches namespaces.
@@ -190,6 +190,18 @@ The tool window is registered in `META-INF/plugin.xml` and created by `NacosSear
 
 Each panel subscribes to `NacosLanguageListener.TOPIC` itself and re-reads the bundle, so labels update when the plugin language is changed via `LanguageService`. There is no fan-out from the window: a component that forgets to subscribe simply does not exist on the topic, which is what the previous manual dispatch (and the `EnvironmentSwitcher` it silently skipped) could not express. Each subscriber anchors its connection on its own `Disposable`, and `NacosSearchWindow` registers all six with `Disposer`.
 
+#### One held search session
+
+The window's search orchestration lives in `ToolWindowSearchController`, which holds no Swing. It does two things: it hands `NacosSearchService` the `SearchSessionContext` to search under whenever the project session changes — capturing the operation context through a function the window supplies on `Dispatchers.IO`, so no Swing handler ever reaches the credential store (ADR-0039 / ADR-0046) — and it turns panel gestures into the service's intents.
+
+The window itself assembles **no** search request. It used to build one in eight places, each deciding again which profile, namespace, and operation context the search targeted; naming a `SearchRequest` or the request-taking `performSearch` now requires `@OptIn(SearchRequestAssembly::class)`, so a panel that tries fails to compile and the eight sites cannot come back one handler at a time. Opting in belongs to the search service and to tests that assert what a request derives.
+
+Consequences worth knowing:
+
+- A search runs against the session held **when it started**. Adopting a different target advances a session generation, so a result from before the switch is dropped rather than attributed to the environment the user moved to. Re-capturing the *same* environment (a fresh credential snapshot, unchanged identity and revisions) is not a switch and leaves the results standing.
+- The window does not re-judge what the service publishes. The service already drops superseded requests and superseded sessions, so `SearchState.Success` carries its session epoch and observation sequence as a description of the read, not as something a view has to gate on. The `PresentationGate` still governs the detail view and the history dialog, which read outside the search service.
+- Page size is search state, not a widget's state: `changePageSize` publishes it before searching, and every later intent asks for it. `PaginationPanel` renders the published pagination state.
+
 ### Internationalization
 
 Message bundles live in `src/main/resources/messages/`:
@@ -209,7 +221,7 @@ Two actions are registered in `plugin.xml` and added to the `ToolsMenu`:
 ## Important Implementation Details
 
 - `NacosApiService.getConfigurationFromItem()` fetches full configuration content for each item returned by `listConfigurations`. `getAllConfigurations` now fetches these per-item contents concurrently (bounded at 8) rather than sequentially, but loading a large namespace still issues many HTTP calls.
-- `NacosSearchService.SearchRequest.isFuzzySearch()` treats `*` and `?` as wildcards. A leading `*` is stripped before calling the Nacos API in `getProcessedDataId()`.
+- `NacosSearchService.SearchRequest.isFuzzySearch()` treats `*` and `?` as wildcards. A leading `*` is stripped before calling the Nacos API in `getProcessedDataId()`. Naming a `SearchRequest` requires `@OptIn(SearchRequestAssembly::class)` — see **One held search session**.
 - Settings UI is built with **Kotlin UI DSL Version 2** (`com.intellij.ui.dsl.builder.panel`). If you modify `settings/NacosConfigurable.kt`, avoid the deprecated `com.intellij.ui.layout` DSL and `titledRow`.
 - The plugin targets **2024.3.5** as the build platform with `sinceBuild = 243` and `untilBuild = 261.*` for 2026.1 compatibility. Keep API usage limited to what's available in build 243 if you want broad compatibility.
 - `StartupActivity` has been migrated to **`ProjectActivity`** (`com.intellij.openapi.startup.projectActivity`) with a `postStartupActivity` extension in `plugin.xml`.

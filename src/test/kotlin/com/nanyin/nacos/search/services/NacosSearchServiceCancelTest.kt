@@ -1,3 +1,5 @@
+@file:OptIn(SearchRequestAssembly::class)
+
 package com.nanyin.nacos.search.services
 
 import com.intellij.openapi.project.Project
