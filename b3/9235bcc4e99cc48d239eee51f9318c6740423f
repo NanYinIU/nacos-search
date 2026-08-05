@@ -1,0 +1,23 @@
+src/main/kotlin/com/nanyin/nacos/search/services/operations/ObservedDetailRecorder.kt
+  s_cfe8150c4651fb::t_2fc3f5cbf715a8 12-18,20-38
+src/test/kotlin/com/nanyin/nacos/search/services/operations/ObservedDetailRecorderTest.kt
+  s_cfe8150c4651fb::t_d3c6ab0667826a 17-19
+docs/adr/0052-make-cache-writes-unreachable-outside-the-operation-layer.md
+  s_cfe8150c4651fb::t_cf051215640c72 13-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "b39235bcc4e99cc48d239eee51f9318c6740423f",
+  "prompts": {},
+  "sessions": {
+    "s_cfe8150c4651fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8ce0044d-4c0c-4ebb-bbfb-18ce078076c5",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
