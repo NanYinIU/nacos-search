@@ -5,6 +5,7 @@ import com.google.gson.JsonParseException
 import com.google.gson.reflect.TypeToken
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosOperationContext
@@ -312,8 +313,8 @@ class V1ProtocolAdapter(
 
     /** V1 alone decides how its public Namespace is represented on the wire. */
     private fun v1TenantQuery(namespaceId: String): Pair<String, String>? =
-        namespaceId.trim()
-            .takeUnless { it.isEmpty() || it == "public" }
+        NamespaceInfo.canonicalId(namespaceId)
+            .takeUnless { it == NamespaceInfo.PUBLIC }
             ?.let { "tenant" to it }
 
     private fun validate(target: OperationTarget) {
@@ -359,7 +360,7 @@ class V1ProtocolAdapter(
             pageNumber = raw.pageNumber,
             pagesAvailable = raw.pagesAvailable,
             items = raw.pageItems.map { item ->
-                ConfigurationSummary(item.dataId, item.group, normalizeTenant(item.tenant), item.content, item.type)
+                ConfigurationSummary(item.dataId, item.group, NamespaceInfo.canonicalTenantId(item.tenant), item.content, item.type)
             }
         )
     } catch (error: RemoteOperationError) {
@@ -379,7 +380,7 @@ class V1ProtocolAdapter(
         NacosConfiguration(
             dataId = raw.dataId,
             group = raw.group,
-            tenantId = normalizeTenant(raw.tenant),
+            tenantId = NamespaceInfo.canonicalTenantId(raw.tenant),
             content = raw.content ?: "",
             type = raw.type,
             md5 = raw.md5
@@ -405,7 +406,7 @@ class V1ProtocolAdapter(
                     id = item.id ?: "",
                     dataId = item.dataId,
                     group = item.group,
-                    tenantId = normalizeTenant(item.tenant),
+                    tenantId = NamespaceInfo.canonicalTenantId(item.tenant),
                     type = item.type,
                     md5 = item.md5,
                     lastModified = HistoryTimestamps.resolveMillis(
@@ -437,7 +438,7 @@ class V1ProtocolAdapter(
             id = raw.id,
             dataId = raw.dataId,
             group = raw.group,
-            tenantId = normalizeTenant(raw.tenant),
+            tenantId = NamespaceInfo.canonicalTenantId(raw.tenant),
             content = raw.content ?: "",
             type = raw.type,
             md5 = raw.md5,
@@ -469,8 +470,6 @@ class V1ProtocolAdapter(
         else -> RemoteOperationError.Connection(error)
     }
 
-    private fun normalizeTenant(tenant: String?): String? = tenant?.takeUnless { it.isBlank() || it == "public" }
-
     private fun parseNamespaceList(body: String): List<DiscoveredNamespace> = try {
         val element = gson.fromJson(body, com.google.gson.JsonElement::class.java)
             ?: throw RemoteOperationError.Protocol("V1 namespace response was empty")
@@ -487,7 +486,7 @@ class V1ProtocolAdapter(
             val rawId = obj.get("namespace")?.asString
                 ?: obj.get("namespaceId")?.asString
                 ?: return@mapNotNull null
-            val normalizedId = rawId.trim().ifBlank { "public" }
+            val normalizedId = NamespaceInfo.canonicalId(rawId)
             val displayName = obj.get("namespaceShowName")?.asString
                 ?: obj.get("namespaceName")?.asString
                 ?: normalizedId

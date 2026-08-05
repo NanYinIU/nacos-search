@@ -72,14 +72,26 @@ data class NamespaceInfo(
         /**
          * The canonical namespace id: null, blank and the literal `public` all
          * name the one public namespace (ADR-0015 / CONTEXT.md「Namespace 标识」).
+         * Surrounding whitespace is trimmed first so it cannot create a
+         * distinct cache coordinate across API generations.
          *
-         * This is the single derivation. Cache keys, cache scopes and the
-         * presentation judgement all go through it, so a coordinate derived
-         * from a list row and one derived from a detail read cannot differ by
-         * spelling alone.
+         * This is the single derivation. Cache keys, cache scopes,
+         * protocol-adapter responses and the presentation judgement all go
+         * through it, so a coordinate derived from a list row and one derived
+         * from a detail read cannot differ by spelling alone.
          */
         fun canonicalId(namespaceId: String?): String =
-            namespaceId?.takeIf { it.isNotBlank() && it != PUBLIC } ?: PUBLIC
+            namespaceId?.trim()?.takeIf { it.isNotEmpty() && it != PUBLIC } ?: PUBLIC
+
+        /**
+         * Tenant-field spelling used on configuration summaries, details and
+         * history entries. The Namespace 标识 remains [canonicalId] (`"public"`);
+         * this returns `null` for that public Namespace so existing
+         * configuration/history field contracts stay stable, and the trimmed
+         * id for every other Namespace.
+         */
+        fun canonicalTenantId(tenant: String?): String? =
+            canonicalId(tenant).takeUnless { it == PUBLIC }
 
         /**
          * 创建公共命名空间实例

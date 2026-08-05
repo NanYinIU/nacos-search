@@ -130,6 +130,31 @@ class NamespaceInfoTest {
         assertEquals(0, publicNamespace.type)
         assertTrue(publicNamespace.isPublicNamespace())
     }
+
+    @Test
+    fun `canonicalId collapses null blank whitespace and public to the one public Namespace`() {
+        assertEquals(NamespaceInfo.PUBLIC, NamespaceInfo.canonicalId(null))
+        assertEquals(NamespaceInfo.PUBLIC, NamespaceInfo.canonicalId(""))
+        assertEquals(NamespaceInfo.PUBLIC, NamespaceInfo.canonicalId("   "))
+        assertEquals(NamespaceInfo.PUBLIC, NamespaceInfo.canonicalId("public"))
+        assertEquals(NamespaceInfo.PUBLIC, NamespaceInfo.canonicalId(" public "))
+    }
+
+    @Test
+    fun `canonicalId trims surrounding whitespace so it cannot create a distinct coordinate`() {
+        assertEquals("team-a", NamespaceInfo.canonicalId(" team-a "))
+        assertEquals("team-a", NamespaceInfo.canonicalId("team-a"))
+    }
+
+    @Test
+    fun `canonicalTenantId uses null for the public Namespace and trims every other id`() {
+        assertNull(NamespaceInfo.canonicalTenantId(null))
+        assertNull(NamespaceInfo.canonicalTenantId(""))
+        assertNull(NamespaceInfo.canonicalTenantId("   "))
+        assertNull(NamespaceInfo.canonicalTenantId("public"))
+        assertNull(NamespaceInfo.canonicalTenantId(" public "))
+        assertEquals("team-a", NamespaceInfo.canonicalTenantId(" team-a "))
+    }
     
     @Test
     fun `test fromJsonMap with complete data`() {
