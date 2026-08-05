@@ -5,9 +5,14 @@ import com.nanyin.nacos.search.models.NacosApiPolicy
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.services.ProjectSessionEpochs
+import com.nanyin.nacos.search.services.operations.DraftGuard
+import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
+import com.nanyin.nacos.search.ui.confirmDraftDiscard
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.components.service
 import com.intellij.openapi.options.Configurable
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
@@ -161,6 +166,127 @@ class NacosConfigurable @JvmOverloads constructor(
             ?: IdeFocusManager.getGlobalInstance().lastFocusedFrame?.project
             ?: ProjectManager.getInstance().openProjects.singleOrNull()
         return candidate?.takeUnless { it.isDisposed }
+    }
+
+    /**
+     * Every non-disposed open project. Write intent and the server list are
+     * application-global, so ADR-0027 settings guards must consult every
+     * project-scoped edit session — not only the focused one.
+     */
+    private fun openProjects(): List<Project> =
+        ProjectManager.getInstance().openProjects.filter { !it.isDisposed }
+
+    /**
+     * Whether [guard] may proceed for a known [project] / [sessions] pair.
+     * Asking never mutates — only an explicit discard does. Fail closed when
+     * [ConfirmDiscard] is presented without a usable project/service pair.
+     */
+    private fun admitDraftGuard(
+        project: Project?,
+        sessions: EditSessionService?,
+        guard: DraftGuard,
+        messageKey: String
+    ): Boolean = when (guard) {
+        DraftGuard.Proceed, DraftGuard.AlreadyEditing -> true
+        is DraftGuard.ConfirmDiscard -> {
+            if (project == null || sessions == null) {
+                // Cannot prompt or discard — refuse rather than proceed without
+                // honouring ConfirmDiscard (issue #77 review nit).
+                false
+            } else if (confirmDraftDiscard(project, guard.draft, messageKey)) {
+                sessions.discardDraft()
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    /**
+     * Asks every open project's [EditSessionService] via [guardOf]. Cancel on
+     * any project aborts the whole settings action. With no open projects the
+     * loop is empty and the action proceeds (nothing to orphan).
+     */
+    private fun admitAcrossProjects(
+        messageKey: String,
+        guardOf: (EditSessionService) -> DraftGuard
+    ): Boolean {
+        for (open in openProjects()) {
+            val sessions = open.service<EditSessionService>()
+            if (!admitDraftGuard(open, sessions, guardOf(sessions), messageKey)) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /**
+     * Abort Apply after the user already chose "Keep editing" on a discard
+     * prompt. [ProcessCanceledException] is silent — [com.intellij.openapi.options.ConfigurationException]
+     * would raise a second modal (SingleConfigurableEditor ApplyAction).
+     */
+    private fun abortApplyAfterDiscardCancel(): Nothing {
+        throw ProcessCanceledException()
+    }
+
+    /**
+     * For every profile whose write intent is being turned off on this Apply,
+     * ask every open project's edit session. Cancel aborts Apply without
+     * committing settings.
+     */
+    private fun admitWriteIntentOffGuards() {
+        val savedById = settings.cloneServers().associateBy { it.id }
+        for (draft in draftServers) {
+            val saved = savedById[draft.id] ?: continue
+            if (!saved.writeIntent || draft.writeIntent) continue
+            if (!admitAcrossProjects("config.detail.draft.discard.write.intent") {
+                    it.guardWriteIntentOff(draft.id)
+                }
+            ) {
+                abortApplyAfterDiscardCancel()
+            }
+        }
+    }
+
+    /**
+     * For every profile that is about to disappear from the saved server list
+     * on this Apply, ask every open project's edit session. Deletion from the
+     * settings draft list alone must not discard a configuration draft — only
+     * a committed Apply may (issue #77 review).
+     */
+    private fun admitProfileDeletionGuards() {
+        val remainingIds = draftServers.map { it.id }.toSet()
+        val deletedIds = settings.cloneServers().map { it.id }.filter { it !in remainingIds }
+        for (profileId in deletedIds) {
+            if (!admitAcrossProjects("config.detail.draft.discard.profile.delete") {
+                    it.guardProfileDeletion(profileId)
+                }
+            ) {
+                abortApplyAfterDiscardCancel()
+            }
+        }
+    }
+
+    /**
+     * When Apply realigns the context project's selected environment to the
+     * blue-dot [draftActiveId], that is an environment switch for ADR-0027.
+     * Guard before commit so cancel keeps both the draft and the selection.
+     */
+    private fun admitEnvironmentRealignGuards() {
+        val ctx = contextProject() ?: return
+        val session = ctx.getService(NacosProjectSession::class.java) ?: return
+        val currentId = session.sessionState.selectedProfileId
+        if (currentId.isBlank() || currentId == draftActiveId) return
+        val sessions = ctx.service<EditSessionService>()
+        if (!admitDraftGuard(
+                ctx,
+                sessions,
+                sessions.guardEnvironmentSwitch(draftActiveId),
+                "config.detail.draft.discard.environment"
+            )
+        ) {
+            abortApplyAfterDiscardCancel()
+        }
     }
 
     private fun selectedDraft(): NacosServerConfig? {
@@ -796,18 +922,21 @@ class NacosConfigurable @JvmOverloads constructor(
             NacosSearchBundle.message("settings.servers.delete"),
             Messages.getQuestionIcon()
         )
-        if (result == Messages.YES) {
-            val idx = draftServers.indexOf(current)
-            draftServers.removeAt(idx)
-            serverListModel.removeElementAt(idx)
-            if (draftActiveId == current.id) {
-                draftActiveId = draftServers.firstOrNull()?.id ?: ""
-            }
-            val newIdx = minOf(idx, draftServers.size - 1).coerceAtLeast(0)
-            serverList.selectedIndex = newIdx
-            refreshServerListDecorations()
-            updateApplyEnabledState()
+        if (result != Messages.YES) return
+        // Only stage the deletion in the settings draft list. ADR-0027's
+        // profile-deletion guard runs on Apply — discarding the configuration
+        // draft here would permanently lose it if the user then Cancelled
+        // Settings (P0 has no draft shelf).
+        val idx = draftServers.indexOf(current)
+        draftServers.removeAt(idx)
+        serverListModel.removeElementAt(idx)
+        if (draftActiveId == current.id) {
+            draftActiveId = draftServers.firstOrNull()?.id ?: ""
         }
+        val newIdx = minOf(idx, draftServers.size - 1).coerceAtLeast(0)
+        serverList.selectedIndex = newIdx
+        refreshServerListDecorations()
+        updateApplyEnabledState()
     }
 
     private fun setActiveServer() {
@@ -931,6 +1060,13 @@ class NacosConfigurable @JvmOverloads constructor(
             if (idx >= 0) serverList.selectedIndex = idx
             throw java.lang.IllegalStateException("Invalid server URL")
         }
+
+        // ADR-0027: settings-path actions that would destroy a draft must
+        // prompt before commit. Cancel aborts Apply (silent ProcessCanceledException)
+        // with the configuration draft and the settings draft model intact.
+        admitWriteIntentOffGuards()
+        admitProfileDeletionGuards()
+        admitEnvironmentRealignGuards()
 
         // Decide connection-vs-preferences from the profile's access revision
         // (endpoint, API policy, auth strategy, principal, secret). The old

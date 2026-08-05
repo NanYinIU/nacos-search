@@ -132,7 +132,7 @@ Two actions ask before destroying a draft, and each offers exactly two answers �
 - Selecting another configuration — `NacosSearchWindow.admitRetarget` consults `guardRetarget`, and on cancel `ConfigListPanel.restoreSelection` puts the highlight back **without** re-firing the selection handler.
 - Destroying the tool-window content — `NacosSearchToolWindowFactory` vetoes `contentRemoveQuery` via `guardDestroy`. The prompt lives in the factory because a component being disposed cannot veto its own disposal.
 
-`DraftGuard` is a closed set of three: `Proceed`, `AlreadyEditing` (the view is already showing this draft, so the action must neither prompt nor reload/clear), and `ConfirmDiscard`. Asking never mutates — only `discardDraft()` throws work away. Environment switch, namespace switch, write-intent off, profile deletion and project close are **not** guarded yet (issue #77); they still discard as they did before.
+`DraftGuard` is a closed set of three: `Proceed`, `AlreadyEditing` (the view is already showing this draft, so the action must neither prompt nor reload/clear), and `ConfirmDiscard`. Asking never mutates — only `discardDraft()` throws work away. Every ADR-0027 blocking rule asks this service: retarget, clear (never prompts), destroy tool-window content, environment switch, namespace switch, write-intent off, profile deletion, and project close.
 
 **Prompting is not the answer to every path that would destroy a draft.** Three of them keep the draft and work around it instead, because they are not gestures aimed at the edit:
 
