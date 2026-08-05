@@ -21,7 +21,6 @@ import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosSettingsListener
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosUpgradeSummary
-import com.nanyin.nacos.search.settings.OperationContextSnapshotCache
 import com.nanyin.nacos.search.settings.operationNamespaceIdFor
 import com.nanyin.nacos.search.services.operations.DraftGuard
 import com.nanyin.nacos.search.services.operations.EditSessionService
@@ -354,7 +353,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     openSelectedNamespace()
                 }
             } catch (e: Exception) {
-                showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
+                showError(
+                    NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}",
+                    e
+                )
             }
         }
     }
@@ -395,7 +397,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             if (!hasPendingNav && editSessions.guardClear() == DraftGuard.Proceed) {
                 configDetailPanel.clearConfiguration()
             }
-            configListPanel.setConfigurations(emptyList())
+            configListPanel.render(ConfigListPresentation.empty())
             paginationPanel.reset()
         }
 
@@ -436,7 +438,12 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      */
     private fun hasNamespaceToSearch(): Boolean {
         if (searchController.sessionContext().namespace != null) return true
-        showError(NacosSearchBundle.message("namespace.select.first"))
+        // No namespace yet is empty, not a failed search.
+        configListPanel.render(
+            ConfigListPresentation.empty(
+                statusLine = NacosSearchBundle.message("namespace.select.first")
+            )
+        )
         return false
     }
 
@@ -465,7 +472,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     is NacosSearchService.SearchState.Loading -> {
                         SwingUtilities.invokeLater {
                             setSearching(true)
-                            configListPanel.setLoading(true)
+                            configListPanel.render(ConfigListPresentation.loading())
                             paginationPanel.setLoading(true)
                         }
                     }
@@ -475,12 +482,15 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                             // results from superseded requests and from sessions
                             // the user has switched away from, so judging them
                             // again here would only be a second opinion about an
-                            // ordering that has already been decided.
+                            // ordering that has already been decided. List state
+                            // and status-line wording are derived outside the panel.
                             setSearching(false)
                             paginationPanel.setLoading(false)
                             configListPanel.setSearchQuery(searchPanel.getSearchQuery())
-                            updateConfigurationList(state.configurations)
-                            configListPanel.setConfidenceStatus(state.confidence, state.coverage)
+                            configListPanel.render(
+                                ConfigListPresentation.fromSearchState(state, bundleMessage)
+                            )
+                            onConfigurationListPresented(state.configurations)
                             paginationPanel.updatePagination(
                                 NacosSearchService.PaginationState(
                                     currentPage = state.pageNumber,
@@ -494,9 +504,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     is NacosSearchService.SearchState.Error -> {
                         SwingUtilities.invokeLater {
                             setSearching(false)
-                            configListPanel.setLoading(false)
                             paginationPanel.setLoading(false)
-                            showError(NacosSearchBundle.message("error.search.failed") + ": ${state.message}")
+                            configListPanel.render(
+                                ConfigListPresentation.fromSearchState(state, bundleMessage)
+                            )
                         }
                     }
                 }
@@ -510,9 +521,13 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             }
         }
     }
-    
-    private fun updateConfigurationList(configurations: List<NacosConfiguration>) {
-        configListPanel.setConfigurations(configurations)
+
+    /**
+     * Side effects that follow a presented configuration list: group filter,
+     * draft-safe detail clear, and pending navigation selection. The list
+     * panel itself already rendered the closed state.
+     */
+    private fun onConfigurationListPresented(configurations: List<NacosConfiguration>) {
         // Populate group filter with unique groups from current results
         searchPanel.setAvailableGroups(configurations.map { it.group }.filter { it.isNotBlank() })
         // An empty result list says nothing about the configuration being
@@ -528,7 +543,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // Consume a navigation target stashed before a namespace switch.
         // The detail panel was already shown in navigateToConfig; here we
         // only need to select the row in the freshly loaded list.
-        pendingNavigationTarget?.let { (targetConfig, lineIndex) ->
+        pendingNavigationTarget?.let { (targetConfig, _) ->
             pendingNavigationTarget = null
             configListPanel.selectConfiguration(targetConfig)
             currentConfiguration = targetConfig
@@ -597,7 +612,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         val namespace = currentNamespace
         if (namespace == null) {
             searchController.leaveEnvironment()
-            configListPanel.setConfigurations(emptyList())
+            configListPanel.render(ConfigListPresentation.empty())
             return
         }
         searchController.openNamespace(namespace)
@@ -606,11 +621,24 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun loadConfigurationDetail(config: NacosConfiguration) {
         configDetailPanel.showConfiguration(config)
     }
-    
-    private fun showError(message: String) {
+
+    /**
+     * Surfaces a typed or free-form failure through the list's closed state set.
+     * Prefer [ConfigListPresentation.fromSearchState] when a [NacosSearchService.SearchState]
+     * is already available.
+     */
+    private fun showError(message: String, error: Throwable? = null) {
         SwingUtilities.invokeLater {
-            configListPanel.showError(message)
+            configListPanel.render(
+                ConfigListPresentation.fromFailure(error, message, bundleMessage)
+            )
         }
+    }
+
+    /** Bundle resolver shared with pure list presentation (issue #79). */
+    private val bundleMessage: (String, Array<out Any>) -> String = { key, params ->
+        if (params.isEmpty()) NacosSearchBundle.message(key)
+        else NacosSearchBundle.message(key, *params)
     }
     
     /**
@@ -693,7 +721,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     }
                 }
             } catch (e: Exception) {
-                showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
+                showError(
+                    NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}",
+                    e
+                )
             }
         }
     }
