@@ -194,10 +194,6 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     // Public API (kept compatible with NacosSearchWindow)
     // ------------------------------------------------------------------
 
-    fun refresh() {
-        onRefreshRequested?.invoke()
-    }
-
     /**
      * Programmatically selects the given configuration and fires the selection
      * callback. Used by @NacosValue navigation.

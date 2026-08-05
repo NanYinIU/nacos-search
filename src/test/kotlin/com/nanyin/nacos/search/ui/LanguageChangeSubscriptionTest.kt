@@ -27,6 +27,11 @@ import javax.swing.SwingUtilities
  * manually to five children — [EnvironmentSwitcher] was absent from that list and
  * never refreshed. Subscribing per component removes the fan-out and the omission
  * it allowed.
+ *
+ * Each case clobbers a label, publishes, and asserts the component put the bundle
+ * value back. What that pins is that the notification reaches the component and it
+ * re-reads its text — not that the text is translated: [NacosSearchBundle] resolves
+ * against the IDE locale, so the same key yields the same string within one run.
  */
 @TestApplication
 class LanguageChangeSubscriptionTest {

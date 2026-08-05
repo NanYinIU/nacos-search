@@ -14,8 +14,7 @@ import java.util.*
 @Service(Level.APP)
 class LanguageService {
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-    private val listeners = mutableListOf<LanguageChangeListener>()
-    
+
     /**
      * Supported languages
      */
@@ -51,35 +50,12 @@ class LanguageService {
     }
     
     /**
-     * Add language change listener
-     */
-    fun addLanguageChangeListener(listener: LanguageChangeListener) {
-        listeners.add(listener)
-    }
-    
-    /**
-     * Remove language change listener
-     */
-    fun removeLanguageChangeListener(listener: LanguageChangeListener) {
-        listeners.remove(listener)
-    }
-    
-    /**
-     * Notify all listeners about language change
+     * Notify all listeners about language change.
+     *
+     * One mechanism only: subscribers take [NacosLanguageListener.TOPIC]. Each
+     * re-reads the bundle itself and owns the thread it touches Swing on.
      */
     private fun notifyLanguageChanged(newLanguage: SupportedLanguage) {
-        // Notify registered listeners
-        listeners.forEach { listener ->
-            try {
-                listener.onLanguageChanged(newLanguage)
-            } catch (e: Exception) {
-                // Log error but don't fail the entire notification process
-                e.printStackTrace()
-            }
-        }
-
-        // Refresh UI components. Each subscriber re-reads the bundle itself and
-        // owns the thread it touches Swing on.
         try {
             ApplicationManager.getApplication().messageBus
                 .syncPublisher(NacosLanguageListener.TOPIC)
@@ -134,14 +110,4 @@ class LanguageService {
     fun getSupportedLanguages(): List<SupportedLanguage> {
         return SupportedLanguage.values().toList()
     }
-}
-
-/**
- * Interface for listening to language changes
- */
-fun interface LanguageChangeListener {
-    /**
-     * Called when the language is changed
-     */
-    fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage)
 }

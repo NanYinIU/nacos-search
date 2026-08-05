@@ -219,12 +219,11 @@ class ConfigDetailPanel internal constructor(
         setupEventHandlers()
         // Keep the in-memory editor's color scheme in sync with the active IDE
         // theme, so switching dark/light updates the detail panel too.
-        ApplicationManager.getApplication().messageBus.connect(this)
-            .subscribe(com.intellij.ide.ui.LafManagerListener.TOPIC, com.intellij.ide.ui.LafManagerListener {
-                editor?.let { applyThemeScheme(it) }
-            })
-        ApplicationManager.getApplication().messageBus.connect(this)
-            .subscribe(NacosLanguageListener.TOPIC, this)
+        val busConnection = ApplicationManager.getApplication().messageBus.connect(this)
+        busConnection.subscribe(com.intellij.ide.ui.LafManagerListener.TOPIC, com.intellij.ide.ui.LafManagerListener {
+            editor?.let { applyThemeScheme(it) }
+        })
+        busConnection.subscribe(NacosLanguageListener.TOPIC, this)
         showEmptyState()
     }
     
@@ -1488,15 +1487,6 @@ private fun setupEventHandlers() {
      * Get the current configuration
      */
     fun getCurrentConfiguration(): NacosConfiguration? = currentConfiguration
-    
-    /**
-     * Refresh the current configuration
-     */
-    fun refresh() {
-        currentConfiguration?.let { config ->
-            loadConfigurationContent(config)
-        }
-    }
     
     /**
      * Clean up resources

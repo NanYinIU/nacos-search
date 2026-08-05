@@ -78,9 +78,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private var currentConfiguration: NacosConfiguration? = null
     // Stashed (config, line) consumed after a namespace switch reloads the list.
     private var pendingNavigationTarget: Pair<NacosConfiguration, Int>? = null
-    private var searchCriteria: SearchCriteria? = null
     private var currentSearchRequest: NacosSearchService.SearchRequest? = null
-    private var currentConfigurations = listOf<NacosConfiguration>()
     private var isSearching = false
     
     // Coroutine scope for async operations
@@ -402,7 +400,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // subsequent reloads target the correct namespace.
         currentNamespace = newNamespace
         currentConfiguration = null
-        searchCriteria = null
         currentSearchRequest = null
 
         clearSearchUi()
@@ -483,19 +480,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
              serverId = selectedProfileId(),
              operationContext = selectedOperationContext()
          )
-         currentNamespace = searchNameSpace;
-         
-         val processedCriteria = SearchCriteria(
-             dataId = searchRequest.getProcessedDataId(),
-             group = criteria.group ?: "",
-             namespaceId = searchNameSpace.namespaceId,
-             query = criteria.query,
-             searchContent = criteria.searchContent,
-             useRegex = criteria.useRegex,
-             caseSensitive = criteria.caseSensitive
-         )
-         
-         searchCriteria = processedCriteria
+         currentNamespace = searchNameSpace
          currentSearchRequest = searchRequest
          coroutineScope.launch {
              nacosSearchService.performSearch(searchRequest, nacosApiService)
@@ -503,7 +488,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      }
     
     private fun handleSearchCleared() {
-        searchCriteria = null
         loadConfigurations()
         paginationPanel.reset()
         nacosSearchService.resetSearch()
@@ -644,7 +628,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
     
     private fun updateConfigurationList(configurations: List<NacosConfiguration>) {
-        currentConfigurations = configurations
         configListPanel.setConfigurations(configurations)
         // Populate group filter with unique groups from current results
         searchPanel.setAvailableGroups(configurations.map { it.group }.filter { it.isNotBlank() })

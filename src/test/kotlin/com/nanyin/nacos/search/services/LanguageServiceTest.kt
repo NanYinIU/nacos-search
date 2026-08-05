@@ -1,11 +1,14 @@
 package com.nanyin.nacos.search.services
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.settings.NacosSettings
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.util.concurrent.atomic.AtomicInteger
 
 @TestApplication
 class LanguageServiceTest {
@@ -69,30 +72,17 @@ class LanguageServiceTest {
     }
 
     @Test
-    fun `test language change listener notification`() {
-        var notifiedLanguage: LanguageService.SupportedLanguage? = null
-        val listener = LanguageChangeListener { language ->
-            notifiedLanguage = language
+    fun `test language change publishes on the language topic`() {
+        val subscription = Disposer.newDisposable("language-topic-test")
+        try {
+            val notifications = countNotifications(subscription)
+
+            languageService.setLanguage("zh")
+
+            assertEquals(1, notifications.get())
+        } finally {
+            Disposer.dispose(subscription)
         }
-
-        languageService.addLanguageChangeListener(listener)
-        languageService.setLanguage("zh")
-
-        assertEquals(LanguageService.SupportedLanguage.CHINESE, notifiedLanguage)
-    }
-
-    @Test
-    fun `test removeLanguageChangeListener`() {
-        var notifiedLanguage: LanguageService.SupportedLanguage? = null
-        val listener = LanguageChangeListener { language ->
-            notifiedLanguage = language
-        }
-
-        languageService.addLanguageChangeListener(listener)
-        languageService.removeLanguageChangeListener(listener)
-        languageService.setLanguage("zh")
-
-        assertNull(notifiedLanguage)
     }
 
     @Test
@@ -104,15 +94,27 @@ class LanguageServiceTest {
 
     @Test
     fun `test setLanguage does not notify when language unchanged`() {
-        var notificationCount = 0
-        val listener = LanguageChangeListener { _ ->
-            notificationCount++
+        val subscription = Disposer.newDisposable("language-topic-test")
+        try {
+            val notifications = countNotifications(subscription)
+
+            languageService.setLanguage("en")
+            languageService.setLanguage("en")
+
+            assertEquals(0, notifications.get())
+        } finally {
+            Disposer.dispose(subscription)
         }
+    }
 
-        languageService.addLanguageChangeListener(listener)
-        languageService.setLanguage("en")
-        languageService.setLanguage("en")
-
-        assertEquals(0, notificationCount)
+    private fun countNotifications(subscription: Disposable): AtomicInteger {
+        val count = AtomicInteger()
+        ApplicationManager.getApplication().messageBus.connect(subscription)
+            .subscribe(NacosLanguageListener.TOPIC, object : NacosLanguageListener {
+                override fun languageChanged() {
+                    count.incrementAndGet()
+                }
+            })
+        return count
     }
 }

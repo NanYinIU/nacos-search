@@ -109,18 +109,6 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, NacosLa
         }
     }
 
-    fun setInitialState() {
-        SwingUtilities.invokeLater {
-            isVisible = true
-            previousButton.isEnabled = false
-            nextButton.isEnabled = false
-            pageInfoLabel.text = NacosSearchBundle.message("pagination.page.of.format", 1, 1)
-            totalCountLabel.text = NacosSearchBundle.message("pagination.items.count", 0)
-            pageSizeComboBox.selectedItem = 10
-            pageSizeComboBox.isEnabled = true
-        }
-    }
-
     fun updatePagination(state: NacosSearchService.PaginationState) {
         paginationState = state
         SwingUtilities.invokeLater {
