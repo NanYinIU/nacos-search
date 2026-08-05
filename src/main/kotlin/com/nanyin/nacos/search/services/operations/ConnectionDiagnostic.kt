@@ -124,17 +124,29 @@ class ConnectionDiagnostic(
             return DiagnosticReport(connected = false, stages = stages, manualNamespaceRequired = false)
         }
 
-        // Stage 4: namespace discovery (optional, does not affect verdict)
-        val discoveryResult = timed("discovery") {
-            val probe = discoveryProbe ?: { gateway.probe(it) }
-            probe(resolvedTarget)
+        // Stage 4: namespace discovery (optional, does not affect connection verdict).
+        // A dialect that declares discovery UNAVAILABLE is a coverage limitation,
+        // not a connection failure — keep the manual Namespace usable (ADR-0005).
+        val discoveryCaps = gateway.capabilities(generation)?.namespaceDiscovery
+        val discoveryStage = if (discoveryCaps == CapabilityCoverage.UNAVAILABLE) {
+            DiagnosticStageResult(
+                stage = "discovery",
+                success = false,
+                durationMillis = 0,
+                sanitizedFailure = "Capability not supported"
+            )
+        } else {
+            val discoveryResult = timed("discovery") {
+                val probe = discoveryProbe ?: { t -> gateway.discoverNamespaces(t).map { } }
+                probe(resolvedTarget)
+            }
+            DiagnosticStageResult(
+                stage = "discovery",
+                success = discoveryResult.second.isSuccess,
+                durationMillis = discoveryResult.first,
+                sanitizedFailure = discoveryResult.second.exceptionOrNull()?.let { sanitize(it) }
+            )
         }
-        val discoveryStage = DiagnosticStageResult(
-            stage = "discovery",
-            success = discoveryResult.second.isSuccess,
-            durationMillis = discoveryResult.first,
-            sanitizedFailure = discoveryResult.second.exceptionOrNull()?.let { sanitize(it) }
-        )
         stages.add(discoveryStage)
 
         val connected = readStage.success

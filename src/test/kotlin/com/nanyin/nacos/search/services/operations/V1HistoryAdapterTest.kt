@@ -120,9 +120,11 @@ class V1HistoryAdapterTest {
     }
 
     @Test
-    fun `V1 adapter implements HistoryCapability`() {
+    fun `V1 adapter declares history and Namespace discovery`() {
         val adapter = V1ProtocolAdapter(RecordingTransport(ProtocolResponse(200, "{}")))
-        assertInstanceOf(HistoryCapability::class.java, adapter)
+        assertEquals(CapabilityCoverage.COMPLETE, adapter.capabilities.history)
+        assertEquals(CapabilityCoverage.COMPLETE, adapter.capabilities.namespaceDiscovery)
+        assertEquals(CapabilityCoverage.LIMITED, adapter.capabilities.contentSearch)
     }
 
     @Test

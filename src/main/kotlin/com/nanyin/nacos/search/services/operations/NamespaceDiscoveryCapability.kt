@@ -1,18 +1,12 @@
 package com.nanyin.nacos.search.services.operations
 
-import com.nanyin.nacos.search.models.NacosApiGeneration
-
 /**
- * Declares whether a protocol adapter can discover namespaces.
+ * A Namespace returned by dialect Namespace discovery.
  *
- * Namespace discovery is a distinct, permission-sensitive capability.
- * Discovery permission denial does not hide a manually readable namespace
- * or report a connection failure; it is surfaced as a capability limitation.
+ * Discovery permission denial does not hide a manually readable Namespace
+ * or report a connection failure; it is surfaced as a capability limitation
+ * (ADR-0005 / ADR-0013).
  */
-interface NamespaceDiscoveryCapability {
-    suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>>
-}
-
 data class DiscoveredNamespace(
     val namespaceId: String,
     val displayName: String,
@@ -23,10 +17,10 @@ data class DiscoveredNamespace(
 /**
  * Reports the content-search coverage for a given search result set.
  *
- * V3 declares server-side content search; V1 does not claim complete
- * server-side content search unless its pinned contract proves it.
+ * Dialects declare content-search grade via [ProtocolCapabilities]; callers
+ * turn that grade into [SearchCoverage] without switching on API generation.
  * Regex, case-sensitive, and cached-detail content search report coverage
- * rather than a false definitive no-match.
+ * rather than a false definitive no-match (ADR-0017).
  */
 data class SearchCoverage(
     val searchedCount: Int,
@@ -37,31 +31,32 @@ data class SearchCoverage(
     val coverageText: String
         get() = if (isComplete) "$searchedCount/$totalCount" else "$searchedCount/$totalCount (partial)"
 
- companion object {
-     /** V3 content search is a documented server-side capability. */
-     fun complete(searched: Int, total: Int) = SearchCoverage(searched, total, isComplete = true)
+    companion object {
+        /** Server-side content search declared COMPLETE by the dialect. */
+        fun complete(searched: Int, total: Int) = SearchCoverage(searched, total, isComplete = true)
 
-     /** V1 coverage-limited content search over locally available summaries/details. */
-     fun partial(searched: Int, total: Int, reason: String) =
-         SearchCoverage(searched, total, isComplete = false, reason = reason)
+        /** Coverage-limited content search (dialect declares LIMITED). */
+        fun partial(searched: Int, total: Int, reason: String) =
+            SearchCoverage(searched, total, isComplete = false, reason = reason)
 
-     /** Content search over a fully loaded namespace index (local). */
-     fun localComplete(searched: Int, total: Int) =
-         SearchCoverage(searched, total, isComplete = true, reason = "local index")
- }
+        /** Content search over a fully loaded namespace index (local). */
+        fun localComplete(searched: Int, total: Int) =
+            SearchCoverage(searched, total, isComplete = true, reason = "local index")
+    }
 }
 
-/** Declares the content-search capability for a protocol generation. */
-fun contentSearchCapability(generation: NacosApiGeneration): SearchCapability = when (generation) {
-    NacosApiGeneration.V3 -> SearchCapability.SERVER_SIDE
-    NacosApiGeneration.V1 -> SearchCapability.COVERAGE_LIMITED
-    NacosApiGeneration.UNKNOWN -> SearchCapability.UNKNOWN
-}
-
-enum class SearchCapability {
-     /** V3 documented server-side content search. */
-     SERVER_SIDE,
-     /** V1 coverage-limited local search; does not claim complete server-side search. */
-     COVERAGE_LIMITED,
-     UNKNOWN
+/**
+ * Turns a dialect's content-search [CapabilityCoverage] into a [SearchCoverage]
+ * report for a remote or local result set. Does not consult API generation.
+ */
+fun searchCoverageFromCapability(
+    coverage: CapabilityCoverage,
+    searched: Int,
+    total: Int,
+    limitedReason: String,
+    localIndex: Boolean = false
+): SearchCoverage? = when (coverage) {
+    CapabilityCoverage.COMPLETE -> SearchCoverage.complete(searched, total)
+    CapabilityCoverage.LIMITED -> SearchCoverage.partial(searched, total, limitedReason)
+    CapabilityCoverage.UNAVAILABLE -> if (localIndex) SearchCoverage.localComplete(searched, total) else null
 }

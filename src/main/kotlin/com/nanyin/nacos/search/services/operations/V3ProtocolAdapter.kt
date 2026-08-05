@@ -14,14 +14,6 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 
-/** Optional capabilities a V3 adapter may declare for the current identity. */
-enum class V3Capability {
-    CONTENT_SEARCH,
-    CONFIG_SUMMARY_LIST,
-    CONFIG_DETAIL,
-    NAMESPACE_DISCOVERY
-}
-
 /**
  * Owns every V3 wire decision for the read path: method, path,
  * query, namespaceId encoding, authentication placement, raw state-map
@@ -33,7 +25,9 @@ enum class V3Capability {
 class V3ProtocolAdapter(
     private val transport: ProtocolTransport,
     private val gson: Gson = Gson()
-) : ProtocolAdapter, HistoryCapability, NamespaceDiscoveryCapability {
+) : ProtocolAdapter {
+
+    override val capabilities: ProtocolCapabilities = ProtocolCapabilities.V3
 
     private val tokenCache = ConcurrentHashMap<String, CachedAccessToken>()
 
@@ -190,13 +184,6 @@ class V3ProtocolAdapter(
             throw RemoteOperationError.Connection(error)
         }
     }
-
-    fun declaredCapabilities(): Set<V3Capability> = setOf(
-        V3Capability.CONTENT_SEARCH,
-        V3Capability.CONFIG_SUMMARY_LIST,
-        V3Capability.CONFIG_DETAIL,
-        V3Capability.NAMESPACE_DISCOVERY
-    )
 
     // ---- request builders ----
 
