@@ -333,7 +333,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
 
     fun applyServers(newServers: List<NacosServerConfig>, newActiveId: String) {
         val previousIds = servers.map { it.id }.toSet()
-        val previousPasswords = servers.associate { it.id to it.password }
         val previousActiveId = activeServerId
         val previousRevisions = profiles.associate { it.id to (it.profileRevision to it.accessRevision) }
         val previousNamespaces = servers.associate { it.id to it.namespace }
@@ -341,7 +340,12 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         // Entomb profiles that are about to disappear before publishing the new
         // set, so late in-flight responses for the deleted identity cannot
         // resurrect their cache, token, or session state (design §19.2).
-        (previousIds - currentIds).forEach { entombDeletedProfile(it) }
+        (previousIds - currentIds).forEach { profileId ->
+            entombDeletedProfile(profileId)
+            // Slot removal is owned by the credential-slot seam and is
+            // idempotent — retrying after a partial failure is safe (#102).
+            DefaultCredentialSlotStore.removeAllForProfile(profileId)
+        }
         servers = newServers.map { it.copy() }.toMutableList()
         activeServerId = newActiveId
         // Preference records are published from the same write: server-entry
@@ -350,7 +354,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         publishEnvironmentPreferencesFromServers(newServers)
         syncFromActiveServer()
         persistCredentials(previousIds)
-        updateProfilesFromServers(previousPasswords)
+        updateProfilesFromServers()
         // Preference-only changes (e.g. navigationDetailPrefetchEnabled,
         // allowCrossNamespaceNavigation, displayName) must not advance the
         // session epoch (ADR-0042). Bump only when the active server set,
@@ -491,10 +495,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         if (requested != null) {
             // Project-owned selections must be resolved exclusively from the
             // global profile and its versioned credential slot. They must not
-            // inherit the mutable app-wide legacy active-server fields.
+            // inherit the mutable app-wide legacy active-server fields, and
+            // must not fall back to a predecessor slot (ADR-0035 / #102).
             return OperationContextResolver.resolve(
                 persistedProfile,
-                NacosCredentialStore.get(persistedProfile.credentialSlotId)
+                DefaultCredentialSlotStore.read(
+                    persistedProfile.id,
+                    persistedProfile.credentialSlotVersion
+                )
             )
         }
         if (configuredProfile == null) {
@@ -525,9 +533,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         // present, that slot is the sole secret source; falling back to flat
         // fields or a predecessor slot could pair a new identity with an old
         // credential after a partial update.
+        // Read only the slot named by this profile's published revision.
+        // Never fall back to a predecessor slot or a legacy server-id key.
         return OperationContextResolver.resolve(
             persistedProfile,
-            NacosCredentialStore.get(persistedProfile.credentialSlotId)
+            DefaultCredentialSlotStore.read(
+                persistedProfile.id,
+                persistedProfile.credentialSlotVersion
+            )
         )
     }
 
@@ -554,11 +567,17 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             if (!existingIds.add(id)) continue
             val created = EnvironmentProfile.fromLegacy(server.copy(id = id))
             val secret = server.password.ifEmpty { NacosCredentialStore.get(id).orEmpty() }
-            if (secret.isNotEmpty()) {
-                NacosCredentialStore.set(created.credentialSlotId, secret)
+            // Stage through the seam so a failed write cannot publish a profile
+            // whose required slot never became durable (#102).
+            when (DefaultCredentialSlotStore.stage(created.id, created.credentialSlotVersion, secret)) {
+                is CredentialStageResult.Success -> {
+                    profiles.add(created)
+                    added = true
+                }
+                is CredentialStageResult.Failure -> {
+                    // Leave the server list intact; the profile stays unpublished.
+                }
             }
-            profiles.add(created)
-            added = true
         }
         if (added) {
             profileMigrationCompleted = true
@@ -568,14 +587,22 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         }
     }
 
-    private fun updateProfilesFromServers(previousPasswords: Map<String, String> = emptyMap()) {
+    private fun updateProfilesFromServers() {
         val existing = profiles.associateBy { it.id }
-        val credentialSlots = CredentialSlotStager(PasswordSafeCredentialSlots)
-        profiles = servers.map { server ->
+        val slots = DefaultCredentialSlotStore
+        val stager = CredentialSlotStager(slots)
+        profiles = servers.mapNotNull { server ->
             val migrated = EnvironmentProfile.fromLegacy(server)
             val previous = existing[server.id]
-            val credentialChanged = previous != null &&
-                (previousPasswords[server.id] ?: NacosCredentialStore.get(previous.credentialSlotId).orEmpty()) != server.password
+            // Compare against the durable published slot — not the in-memory
+            // server password map. After a failed stage the server list may
+            // already hold the new secret while the profile still names the
+            // old slot; using the slot is what lets a retry open a new revision
+            // instead of trying to overwrite the immutable previous one.
+            val publishedSecret = previous?.let { profile ->
+                slots.read(profile.id, profile.credentialSlotVersion).orEmpty()
+            }.orEmpty()
+            val credentialChanged = previous != null && publishedSecret != server.password
             val credentialVersion = if (credentialChanged) previous!!.credentialSlotVersion + 1 else previous?.credentialSlotVersion ?: 1
             val credentialSlotId = credentialSlotId(server.id, credentialVersion)
             val updated = previous?.withUpdated(
@@ -591,10 +618,12 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 credentialSlotVersion = credentialVersion,
                 writeIntent = server.writeIntent
             )
-            // The fresh slot is durable before this map is assigned to
-            // [profiles], which is the single publication point for readers.
-            credentialSlots.stage(updated, server.password)
-            updated.copy(displayName = server.displayName)
+            // Stage before publication. A failed stage must not make the pending
+            // revision visible — keep the previous published profile (ADR-0035).
+            when (stager.stage(updated, server.password)) {
+                is CredentialStageResult.Success -> updated.copy(displayName = server.displayName)
+                is CredentialStageResult.Failure -> previous?.copy(displayName = server.displayName)
+            }
         }.toMutableList()
         migratedDefaultProfileId = activeServerId
         migratedDefaultNamespaceId = namespace.ifBlank { "public" }
