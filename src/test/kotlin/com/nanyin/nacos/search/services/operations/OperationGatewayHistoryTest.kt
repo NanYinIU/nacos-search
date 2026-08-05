@@ -1,5 +1,8 @@
 package com.nanyin.nacos.search.services.operations
 
+import com.nanyin.nacos.search.services.operations.CapabilityCoverage
+import com.nanyin.nacos.search.services.operations.ProtocolCapabilities
+
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
@@ -11,7 +14,7 @@ import org.junit.jupiter.api.Test
 class OperationGatewayHistoryTest {
 
     @Test
-    fun `gateway dispatches listHistory to the V1 adapter implementing HistoryCapability`() = runBlocking {
+    fun `gateway dispatches listHistory when dialect declares history`() = runBlocking {
         val adapter = StubHistoryAdapter()
         val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to adapter))
         val target = v1Target()
@@ -26,7 +29,7 @@ class OperationGatewayHistoryTest {
     }
 
     @Test
-    fun `gateway dispatches readHistoryDetail to the V1 adapter implementing HistoryCapability`() = runBlocking {
+    fun `gateway dispatches readHistoryDetail when dialect declares history`() = runBlocking {
         val adapter = StubHistoryAdapter()
         val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to adapter))
         val target = v1Target()
@@ -38,7 +41,7 @@ class OperationGatewayHistoryTest {
     }
 
     @Test
-    fun `gateway returns CapabilityUnsupported when adapter does not implement HistoryCapability`() = runBlocking {
+    fun `gateway returns CapabilityUnsupported when dialect declares history unavailable`() = runBlocking {
         val adapter = NonHistoryAdapter()
         val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to adapter))
         val target = v1Target()
@@ -157,9 +160,11 @@ class OperationGatewayHistoryTest {
         return OperationTarget(context, "public")
     }
 
-    private class StubHistoryAdapter : ProtocolAdapter, HistoryCapability {
+    private class StubHistoryAdapter : ProtocolAdapter {
         var listCalls = 0
         var detailCalls = 0
+
+        override val capabilities = ProtocolCapabilities.NONE.copy(history = CapabilityCoverage.COMPLETE)
 
         override suspend fun probe(target: OperationTarget) = Result.success(Unit)
 

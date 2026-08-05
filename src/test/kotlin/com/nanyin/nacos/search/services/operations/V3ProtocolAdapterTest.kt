@@ -199,7 +199,7 @@ class V3ProtocolAdapterTest {
         ).getOrThrow()
 
         assertEquals("db.yaml", page.items.single().dataId)
-        assertTrue(adapter.declaredCapabilities().contains(V3Capability.CONTENT_SEARCH))
+        assertEquals(CapabilityCoverage.COMPLETE, adapter.capabilities.contentSearch)
     }
 
     @Test

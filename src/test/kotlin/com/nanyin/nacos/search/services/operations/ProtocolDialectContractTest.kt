@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test
 internal abstract class ProtocolDialectContractTest {
 
     protected abstract val generation: NacosApiGeneration
+    protected abstract val expectedCapabilities: ProtocolCapabilities
     protected abstract val summaryPath: String
     protected abstract val detailPath: String
     protected abstract val historyListPath: String
@@ -54,6 +55,14 @@ internal abstract class ProtocolDialectContractTest {
      * carries a Namespace selector (summary / detail / history-list).
      */
     protected abstract fun assertPublicNamespaceWire(request: ProtocolRequest)
+
+    @Test
+    fun `dialect declares graded Namespace-discovery and content-search coverage`() {
+        val caps = newAdapter(ScriptedTransport(ProtocolResponse(200, "{}"))).capabilities
+        assertEquals(expectedCapabilities, caps)
+        assertEquals(CapabilityCoverage.COMPLETE, caps.history)
+        assertEquals(CapabilityCoverage.COMPLETE, caps.namespaceDiscovery)
+    }
 
     @Test
     fun `summary collapses blank whitespace and public tenants to one coordinate`() = runBlocking {
@@ -104,7 +113,7 @@ internal abstract class ProtocolDialectContractTest {
     fun `history list collapses blank whitespace and public tenants to one coordinate`() = runBlocking {
         for (rawTenant in PUBLIC_SPELLINGS) {
             val transport = ScriptedTransport(ProtocolResponse(200, historyListBody(rawTenant)))
-            val page = (newAdapter(transport) as HistoryCapability)
+            val page = newAdapter(transport)
                 .listHistory(anonymousTarget(), HistoryQuery(ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP")))
                 .getOrThrow()
 
@@ -121,7 +130,7 @@ internal abstract class ProtocolDialectContractTest {
     fun `history detail collapses blank whitespace and public tenants to one coordinate`() = runBlocking {
         for (rawTenant in PUBLIC_SPELLINGS) {
             val transport = ScriptedTransport(ProtocolResponse(200, historyDetailBody(rawTenant)))
-            val detail = (newAdapter(transport) as HistoryCapability)
+            val detail = newAdapter(transport)
                 .readHistoryDetail(anonymousTarget(), "123")
                 .getOrThrow()
 
@@ -137,7 +146,7 @@ internal abstract class ProtocolDialectContractTest {
     fun `namespace discovery collapses blank whitespace and public ids to public`() = runBlocking {
         for (rawNamespace in PUBLIC_SPELLINGS.filterNotNull()) {
             val transport = ScriptedTransport(ProtocolResponse(200, discoveryBody(rawNamespace)))
-            val namespaces = (newAdapter(transport) as NamespaceDiscoveryCapability)
+            val namespaces = newAdapter(transport)
                 .discoverNamespaces(anonymousTarget())
                 .getOrThrow()
 
@@ -169,7 +178,7 @@ internal abstract class ProtocolDialectContractTest {
                 assertPublicNamespaceWire(detailTransport.requests.single())
 
                 val historyTransport = ScriptedTransport(ProtocolResponse(200, historyListBody(null)))
-                (newAdapter(historyTransport) as HistoryCapability)
+                newAdapter(historyTransport)
                     .listHistory(target, HistoryQuery(ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP")))
                     .getOrThrow()
                 assertBuilt(historyTransport, "GET", historyListPath)
@@ -246,6 +255,7 @@ internal abstract class ProtocolDialectContractTest {
 
 internal class V1ProtocolDialectContractTest : ProtocolDialectContractTest() {
     override val generation: NacosApiGeneration = NacosApiGeneration.V1
+    override val expectedCapabilities: ProtocolCapabilities = ProtocolCapabilities.V1
     override val summaryPath: String = "/nacos/v1/cs/configs"
     override val detailPath: String = "/nacos/v1/cs/configs"
     override val historyListPath: String = "/nacos/v1/cs/history"
@@ -278,6 +288,7 @@ internal class V1ProtocolDialectContractTest : ProtocolDialectContractTest() {
 
 internal class V3ProtocolDialectContractTest : ProtocolDialectContractTest() {
     override val generation: NacosApiGeneration = NacosApiGeneration.V3
+    override val expectedCapabilities: ProtocolCapabilities = ProtocolCapabilities.V3
     override val summaryPath: String = "/nacos/v3/admin/cs/config/list"
     override val detailPath: String = "/nacos/v3/admin/cs/config"
     override val historyListPath: String = "/nacos/v3/admin/cs/history/list"

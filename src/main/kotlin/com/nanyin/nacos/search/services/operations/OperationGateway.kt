@@ -91,7 +91,7 @@ class OperationGateway(
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
-        if (adapter !is HistoryCapability) {
+        if (adapter.capabilities.history == CapabilityCoverage.UNAVAILABLE) {
             return Result.failure(
                 RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support configuration history")
             )
@@ -119,7 +119,7 @@ class OperationGateway(
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
-        if (adapter !is HistoryCapability) {
+        if (adapter.capabilities.history == CapabilityCoverage.UNAVAILABLE) {
             return Result.failure(
                 RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support configuration history")
             )
@@ -150,13 +150,21 @@ class OperationGateway(
 
     suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> {
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
-        if (adapter !is NamespaceDiscoveryCapability) {
+        if (adapter.capabilities.namespaceDiscovery == CapabilityCoverage.UNAVAILABLE) {
             return Result.failure(
                 RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support namespace discovery")
             )
         }
         return adapter.discoverNamespaces(target)
     }
+
+    /**
+     * Returns the selected dialect's capability declaration for [generation],
+     * or null when no adapter is registered. Upper layers must use this instead
+     * of switching on API generation for coverage (ADR-0048).
+     */
+    fun capabilities(generation: NacosApiGeneration): ProtocolCapabilities? =
+        adapters[generation]?.capabilities
 
     /**
      * Takes the observation sequence for an operation this gateway does not

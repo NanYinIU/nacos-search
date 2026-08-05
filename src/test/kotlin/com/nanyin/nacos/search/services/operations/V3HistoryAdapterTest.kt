@@ -122,9 +122,11 @@ class V3HistoryAdapterTest {
     }
 
     @Test
-    fun `V3 adapter implements HistoryCapability`() {
+    fun `V3 adapter declares history and Namespace discovery`() {
         val adapter = V3ProtocolAdapter(RecordingTransport(ProtocolResponse(200, RAW_STATE_MAP)))
-        assertInstanceOf(HistoryCapability::class.java, adapter)
+        assertEquals(CapabilityCoverage.COMPLETE, adapter.capabilities.history)
+        assertEquals(CapabilityCoverage.COMPLETE, adapter.capabilities.namespaceDiscovery)
+        assertEquals(CapabilityCoverage.COMPLETE, adapter.capabilities.contentSearch)
     }
 
     // ---- helpers ----

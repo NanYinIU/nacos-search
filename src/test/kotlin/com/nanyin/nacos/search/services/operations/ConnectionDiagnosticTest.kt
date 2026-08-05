@@ -155,6 +155,10 @@ class ConnectionDiagnosticTest {
     ) : ProtocolAdapter {
         var probeCount = 0
 
+        override val capabilities = ProtocolCapabilities.NONE.copy(
+            namespaceDiscovery = CapabilityCoverage.COMPLETE
+        )
+
         override suspend fun probe(target: OperationTarget): Result<Unit> {
             probeCount++
             return probeResult
@@ -167,12 +171,19 @@ class ConnectionDiagnosticTest {
             Result.success(null)
         override suspend fun publish(target: OperationTarget, command: PublishCommand) =
             Result.success(PublishOutcome.Written("true"))
+
+        override suspend fun discoverNamespaces(target: OperationTarget) =
+            Result.success(emptyList<DiscoveredNamespace>())
     }
 
     private class CountingProbeAdapter(
         val generation: NacosApiGeneration
     ) : ProtocolAdapter {
         var probeCount = 0
+
+        override val capabilities = ProtocolCapabilities.NONE.copy(
+            namespaceDiscovery = CapabilityCoverage.COMPLETE
+        )
 
         override suspend fun probe(target: OperationTarget): Result<Unit> {
             probeCount++
@@ -186,5 +197,8 @@ class ConnectionDiagnosticTest {
             Result.success(null)
         override suspend fun publish(target: OperationTarget, command: PublishCommand) =
             Result.success(PublishOutcome.Written("true"))
+
+        override suspend fun discoverNamespaces(target: OperationTarget) =
+            Result.success(emptyList<DiscoveredNamespace>())
     }
 }

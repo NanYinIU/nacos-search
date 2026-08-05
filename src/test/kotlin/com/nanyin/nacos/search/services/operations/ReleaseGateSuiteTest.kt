@@ -93,12 +93,24 @@ class ReleaseGateSuiteTest {
     @Test
     fun `the protocol contract declares the four P0 operations`() {
         // Real contract assertion: the ProtocolAdapter interface — not a local
-        // list — is the source of truth for which operations every adapter must
-        // implement. It declares exactly the four P0 operations, and both
-        // concrete adapters satisfy it.
-        assertEquals(4, ProtocolAdapter::class.java.declaredMethods.size)
+        // list — is the source of truth. P0 core ops are always present; optional
+        // history/discovery ride on the same seam and are gated by capabilities
+        // (ADR-0048) rather than separate binary interfaces.
+        // Suspend methods are JVM-mangled; match on the Kotlin-visible name prefix.
+        val names = ProtocolAdapter::class.java.declaredMethods.map { it.name }
+        fun hasOp(prefix: String) = names.any { it == prefix || it.startsWith("$prefix-") }
+        assertTrue(hasOp("probe"))
+        assertTrue(hasOp("listSummaries"))
+        assertTrue(hasOp("readDetail"))
+        assertTrue(hasOp("publish"))
+        assertTrue(hasOp("listHistory"))
+        assertTrue(hasOp("readHistoryDetail"))
+        assertTrue(hasOp("discoverNamespaces"))
+        assertTrue(names.contains("getCapabilities"))
         assertTrue(V1ProtocolAdapter(StubTransport()) is ProtocolAdapter)
         assertTrue(V3ProtocolAdapter(StubTransport()) is ProtocolAdapter)
+        assertEquals(CapabilityCoverage.COMPLETE, V1ProtocolAdapter(StubTransport()).capabilities.history)
+        assertEquals(CapabilityCoverage.COMPLETE, V3ProtocolAdapter(StubTransport()).capabilities.history)
     }
 
     @Test

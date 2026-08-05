@@ -3,8 +3,8 @@ package com.nanyin.nacos.search.services.operations
 /**
  * Read-only metadata for a single historical configuration version.
  *
- * A [HistoryEntry] from [HistoryCapability.listHistory] carries no content
- * body — call [HistoryCapability.readHistoryDetail] to load it.
+ * A [HistoryEntry] from [ProtocolAdapter.listHistory] carries no content
+ * body — call [ProtocolAdapter.readHistoryDetail] to load it.
  */
 data class HistoryEntry(
     val id: String,
@@ -52,21 +52,6 @@ data class HistoryQuery(
         "pageNo=$pageNo",
         "pageSize=$pageSize"
     ).joinToString("|")
-}
-
-/**
- * Declares whether a protocol adapter can list and read configuration
- * history. History is a distinct, permission-sensitive capability.
- *
- * All history data is scoped by the complete access identity, namespace, and
- * configuration coordinate captured in [OperationTarget]. History operations
- * never merge data across identities, generations, principals, or namespaces.
- * No restore, rollback, republish, or other mutation is exposed.
- */
-interface HistoryCapability {
-    suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage>
-
-    suspend fun readHistoryDetail(target: OperationTarget, historyId: String): Result<HistoryDetail>
 }
 
 /**

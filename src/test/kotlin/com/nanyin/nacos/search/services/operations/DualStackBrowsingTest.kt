@@ -50,9 +50,17 @@ class DualStackBrowsingTest {
     }
 
     @Test
-    fun `V3 content search capability is declared while V1 is coverage limited`() {
-        assertEquals(SearchCapability.SERVER_SIDE, contentSearchCapability(NacosApiGeneration.V3))
-        assertEquals(SearchCapability.COVERAGE_LIMITED, contentSearchCapability(NacosApiGeneration.V1))
+    fun `V3 content search is complete while V1 is coverage limited`() {
+        assertEquals(CapabilityCoverage.COMPLETE, ProtocolCapabilities.V3.contentSearch)
+        assertEquals(CapabilityCoverage.LIMITED, ProtocolCapabilities.V1.contentSearch)
+        assertEquals(
+            SearchCoverage.complete(100, 100),
+            searchCoverageFromCapability(CapabilityCoverage.COMPLETE, 100, 100, "unused")
+        )
+        assertEquals(
+            SearchCoverage.partial(50, 100, "V1 local index only"),
+            searchCoverageFromCapability(CapabilityCoverage.LIMITED, 50, 100, "V1 local index only")
+        )
     }
 
     @Test
