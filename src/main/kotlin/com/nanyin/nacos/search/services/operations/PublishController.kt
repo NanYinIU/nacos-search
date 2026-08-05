@@ -13,11 +13,15 @@ data class PublishResult(
  * The publish boundary. The controller does not know about adapters or
  * transports directly; it delegates to this interface so tests can script
  * outcomes and production wires it to the OperationGateway.
+ *
+ * Every call names the [OperationTarget] explicitly because the edit session
+ * holds no credential (ADR-0027): the target is captured fresh from the
+ * session's binding when a publish runs, and handed in here.
  */
 interface PublishGateway {
-    suspend fun preflight(session: EditSession): Result<NacosConfiguration?>
-    suspend fun write(session: EditSession, command: PublishCommand): Result<PublishOutcome>
-    suspend fun readBack(session: EditSession): Result<NacosConfiguration?>
+    suspend fun preflight(target: OperationTarget, coordinate: ConfigurationCoordinate): Result<NacosConfiguration?>
+    suspend fun write(target: OperationTarget, command: PublishCommand): Result<PublishOutcome>
+    suspend fun readBack(target: OperationTarget, coordinate: ConfigurationCoordinate): Result<NacosConfiguration?>
 }
 
 /**
@@ -35,15 +39,21 @@ interface PublishGateway {
  */
 class PublishController(private val gateway: PublishGateway) {
 
-    suspend fun publish(session: EditSession): PublishResult {
-        if (!session.writesEnabled) {
+    /**
+     * Publishes [session]'s draft to [target]. The target is captured fresh
+     * from the session's binding by the caller and is never carried on the
+     * session itself, which holds no credential (ADR-0027).
+     */
+    suspend fun publish(session: EditSession, target: OperationTarget): PublishResult {
+        if (session.writeIntent !is WriteIntent.Granted) {
             return PublishResult(
                 PublishState.ReadOnly("Publishing is disabled for this environment"),
                 isDirty = session.isDirty
             )
         }
+        val coordinate = session.binding.coordinate
         // Phase 1: Preflight
-        val preflightResult = gateway.preflight(session)
+        val preflightResult = gateway.preflight(target, coordinate)
         if (preflightResult.isFailure) {
             return when (val error = preflightResult.exceptionOrNull()!!) {
                 is RemoteOperationError.Authorization -> PublishResult(
@@ -86,7 +96,7 @@ class PublishController(private val gateway: PublishGateway) {
         val command = session.toCommand(remoteDetail)
 
         // Phase 4: Send one write (no transport or auth replay)
-        val writeResult = gateway.write(session, command)
+        val writeResult = gateway.write(target, command)
         if (writeResult.isFailure) {
             val error = writeResult.exceptionOrNull()!!
             return when (error) {
@@ -118,7 +128,7 @@ class PublishController(private val gateway: PublishGateway) {
         }
 
         // Phase 5: Immediate read-back using the original context
-        val readBackResult = gateway.readBack(session)
+        val readBackResult = gateway.readBack(target, coordinate)
         if (readBackResult.isFailure) {
             return PublishResult(
                 PublishState.ServerStateUnknown, isDirty = true

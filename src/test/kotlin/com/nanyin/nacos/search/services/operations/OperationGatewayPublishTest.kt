@@ -37,31 +37,21 @@ class OperationGatewayPublishTest {
     }
 
     @Test
-    fun `PublishGateway preflight write and readBack use the session target`() = runBlocking {
+    fun `PublishGateway preflight write and readBack use the target they are given`() = runBlocking {
         val adapter = RecordingPublishAdapter()
         val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to adapter))
         val publishGateway = OperationGatewayPublishGateway(gateway)
-        val session = EditSession(
-            target = v1Target(),
-            dataId = "app.yaml",
-            group = "G",
-            namespaceId = "public",
-            baselineContent = "old",
-            baselineMd5 = "m1",
-            baselineType = "yaml",
-            baselineAppName = null,
-            baselineDesc = null,
-            baselineConfigTags = null,
-            draftContent = "new"
-        )
+        val session = session()
+        val target = v1Target()
+        val coordinate = session.binding.coordinate
 
-        val preflight = publishGateway.preflight(session).getOrThrow()
+        val preflight = publishGateway.preflight(target, coordinate).getOrThrow()
         assertEquals("old", preflight?.content)
 
-        val write = publishGateway.write(session, session.toCommand(preflight!!)).getOrThrow()
+        val write = publishGateway.write(target, session.toCommand(preflight!!)).getOrThrow()
         assertEquals(PublishOutcome.Written("ok"), write)
 
-        val readBack = publishGateway.readBack(session).getOrThrow()
+        val readBack = publishGateway.readBack(target, coordinate).getOrThrow()
         assertEquals("old", readBack?.content)
         assertEquals(1, adapter.publishCalls)
         assertEquals(2, adapter.detailCalls)
@@ -81,31 +71,36 @@ class OperationGatewayPublishTest {
         val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to adapter), cache)
         val publishGateway = OperationGatewayPublishGateway(gateway)
         val session = session()
+        val target = v1Target()
 
-        publishGateway.readBack(session).getOrThrow()
+        publishGateway.readBack(target, session.binding.coordinate).getOrThrow()
 
         assertEquals(
             "old",
-            cache.getDetail(session.target.context.identity, "public", "app.yaml", "G")?.content
+            cache.getDetail(target.context.identity, "public", "app.yaml", "G")?.content
         )
         // It never reads through the cache: a read-back that could be served
         // from cache would verify a publish against the plugin's own memory.
-        publishGateway.readBack(session).getOrThrow()
+        publishGateway.readBack(target, session.binding.coordinate).getOrThrow()
         assertEquals(2, adapter.detailCalls)
     }
 
     private fun session() = EditSession(
-        target = v1Target(),
-        dataId = "app.yaml",
-        group = "G",
-        namespaceId = "public",
+        binding = EditBinding.of(
+            profileId = "p1",
+            identity = v1Target().context.identity,
+            namespaceId = "public",
+            dataId = "app.yaml",
+            group = "G"
+        ),
         baselineContent = "old",
         baselineMd5 = "m1",
         baselineType = "yaml",
         baselineAppName = null,
         baselineDesc = null,
         baselineConfigTags = null,
-        draftContent = "new"
+        draftContent = "new",
+        writeIntent = WriteIntent.Granted
     )
 
     private fun v1Target(): OperationTarget {

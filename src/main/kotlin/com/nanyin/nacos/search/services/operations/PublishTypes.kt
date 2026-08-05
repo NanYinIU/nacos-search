@@ -1,6 +1,9 @@
 package com.nanyin.nacos.search.services.operations
 
+import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.NamespaceInfo
 
 /**
  * The immutable command derived from preflight: replaces content,
@@ -45,16 +48,91 @@ sealed class PublishState {
 }
 
 /**
- * An edit session bound to its original access identity, namespace,
- * configuration coordinate, baseline content, baseline MD5, and known
- * metadata. The publish target can only be derived from this binding;
- * it never reads current UI selection.
+ * Whether an environment profile permits the plugin to publish ordinary
+ * configuration changes (ADR-0026, CONTEXT.md「写入开关」).
+ *
+ * This is the **one** implementation of that check. The edit action and the
+ * save path both consult it, so starting an edit and saving one cannot
+ * disagree: an edit that would fail at save time is refused before the user
+ * types anything.
+ */
+sealed interface WriteIntent {
+    /** The selected profile opted in to publishing. */
+    data object Granted : WriteIntent
+
+    /** Publishing is not permitted. [cause] is what the user would have to change. */
+    data class Withheld(val cause: Cause) : WriteIntent
+
+    enum class Cause {
+        /** No environment profile is selected for this project. */
+        NO_PROFILE_SELECTED,
+
+        /** A profile is selected and has not enabled publishing. */
+        NOT_OPTED_IN
+    }
+
+    companion object {
+        fun of(profile: EnvironmentProfile?): WriteIntent = when {
+            profile == null -> Withheld(Cause.NO_PROFILE_SELECTED)
+            !profile.writeIntent -> Withheld(Cause.NOT_OPTED_IN)
+            else -> Granted
+        }
+    }
+}
+
+/**
+ * What an edit session is bound to for its whole life (ADR-0027): the profile
+ * it was started under, the access identity that profile resolved to, the
+ * canonical namespace, and the configuration coordinate.
+ *
+ * It deliberately carries **no credential and no operation context**. Publishing
+ * derives its target from this binding and captures fresh operation credentials
+ * when it runs, so a draft can neither publish under a secret captured minutes
+ * ago nor be retargeted by whatever the tool window happens to show now.
+ */
+data class EditBinding(
+    val profileId: String,
+    val identity: AccessIdentity,
+    val namespaceId: String,
+    val dataId: String,
+    val group: String
+) {
+    val coordinate: ConfigurationCoordinate get() = ConfigurationCoordinate(dataId, group)
+
+    /** True when this binding names the configuration at [namespaceId]/[dataId]/[group]. */
+    fun names(namespaceId: String?, dataId: String?, group: String?): Boolean =
+        dataId != null && group != null &&
+            this.namespaceId == NamespaceInfo.canonicalId(namespaceId) &&
+            this.dataId == dataId &&
+            this.group == group
+
+    companion object {
+        fun of(
+            profileId: String,
+            identity: AccessIdentity,
+            namespaceId: String?,
+            dataId: String,
+            group: String
+        ): EditBinding = EditBinding(
+            profileId = profileId,
+            identity = identity,
+            namespaceId = NamespaceInfo.canonicalId(namespaceId),
+            dataId = dataId,
+            group = group
+        )
+    }
+}
+
+/**
+ * An in-memory draft of one configuration, bound to [binding] and to the
+ * baseline it was started from. It is held by a project-level service and never
+ * by a panel: a session that lives inside the tool-window content cannot block
+ * that content from being destroyed (ADR-0046).
+ *
+ * P0 provides no draft shelf — this is never persisted anywhere.
  */
 data class EditSession(
-    val target: OperationTarget,
-    val dataId: String,
-    val group: String,
-    val namespaceId: String,
+    val binding: EditBinding,
     val baselineContent: String,
     val baselineMd5: String?,
     val baselineType: String?,
@@ -62,17 +140,17 @@ data class EditSession(
     val baselineDesc: String?,
     val baselineConfigTags: String?,
     val draftContent: String,
-    /** Per-profile publish opt-in (ADR 0026). Must be true for any write. */
-    val writesEnabled: Boolean = false
+    /** Per-profile publish opt-in (ADR-0026), decided once when the edit started. */
+    val writeIntent: WriteIntent
 ) {
     val isDirty: Boolean get() = draftContent != baselineContent
 
     fun toCommand(remoteDetail: NacosConfiguration): PublishCommand = PublishCommand(
-        dataId = dataId,
-        group = group,
+        dataId = binding.dataId,
+        group = binding.group,
         content = draftContent,
         type = remoteDetail.type ?: baselineType ?: "text",
-        namespaceId = namespaceId,
+        namespaceId = binding.namespaceId,
         appName = remoteDetail.appName ?: baselineAppName,
         desc = remoteDetail.desc ?: baselineDesc,
         configTags = remoteDetail.configTags ?: baselineConfigTags,

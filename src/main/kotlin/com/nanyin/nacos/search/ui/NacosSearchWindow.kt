@@ -21,6 +21,10 @@ import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosSettingsListener
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosUpgradeSummary
+import com.nanyin.nacos.search.settings.OperationContextSnapshotCache
+import com.nanyin.nacos.search.settings.operationNamespaceIdFor
+import com.nanyin.nacos.search.services.operations.DraftGuard
+import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.psi.NacosKeyIndexService
 import com.intellij.openapi.components.service
 import com.intellij.openapi.application.ApplicationManager
@@ -58,6 +62,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
     private val projectSession = project.service<NacosProjectSession>()
     private val indexCoordinator = ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java)
+    /** The project's draft. The window asks it before any action that would destroy one. */
+    private val editSessions = project.service<EditSessionService>()
 
     // UI Components
     private lateinit var namespacePanel: NamespacePanel
@@ -383,8 +389,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         val clearAction = {
             searchPanel.clearAllCriteria()
             // Preserve the detail panel when a cross-namespace navigation is
-            // in flight — navigateToConfig already showed the target config.
-            if (!hasPendingNav) {
+            // in flight — navigateToConfig already showed the target config —
+            // and when it is showing a dirty draft, which losing the namespace
+            // selection is no reason to throw away (ADR-0027).
+            if (!hasPendingNav && editSessions.guardClear() == DraftGuard.Proceed) {
                 configDetailPanel.clearConfiguration()
             }
             configListPanel.setConfigurations(emptyList())
@@ -507,7 +515,13 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         configListPanel.setConfigurations(configurations)
         // Populate group filter with unique groups from current results
         searchPanel.setAvailableGroups(configurations.map { it.group }.filter { it.isNotBlank() })
-        if (configurations.isEmpty() && pendingNavigationTarget == null) {
+        // An empty result list says nothing about the configuration being
+        // edited, so it never discards a draft — and it never prompts either:
+        // search is debounced, and a few keystrokes that match nothing must not
+        // raise a dialog mid-typing (ADR-0027).
+        if (configurations.isEmpty() && pendingNavigationTarget == null &&
+            editSessions.guardClear() == DraftGuard.Proceed
+        ) {
             configDetailPanel.clearConfiguration()
         }
 
@@ -527,12 +541,46 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         namespacePanel.isEnabled = !searching
     }
     
+    /**
+     * ADR-0027: selecting another configuration must not discard a dirty draft
+     * silently. The user cancels — draft and selection stay exactly as they
+     * were — or explicitly discards, and only then does the view retarget.
+     */
     private fun handleConfigurationSelected(config: NacosConfiguration?) {
+        if (!admitRetarget(retargetGuard(config), "config.detail.draft.discard.retarget")) return
         currentConfiguration = config
         if (config != null) {
             loadConfigurationDetail(config)
         } else {
             configDetailPanel.clearConfiguration()
+        }
+    }
+
+    /** What the project's draft says about retargeting the detail view to [config]. */
+    private fun retargetGuard(config: NacosConfiguration?): DraftGuard = editSessions.guardRetarget(
+        config?.let { project.operationNamespaceIdFor(it) },
+        config?.dataId,
+        config?.group
+    )
+
+    /**
+     * Whether the tool window may retarget its detail view, prompting when
+     * [guard] says a dirty draft is at stake. Returns false when the draft must
+     * be kept — either because the user cancelled, or because the target is the
+     * draft's own configuration and reloading it would discard the draft just
+     * as silently.
+     */
+    private fun admitRetarget(guard: DraftGuard, messageKey: String): Boolean = when (guard) {
+        DraftGuard.Proceed -> true
+        DraftGuard.AlreadyEditing -> false
+        is DraftGuard.ConfirmDiscard -> {
+            if (confirmDraftDiscard(project, guard.draft, messageKey)) {
+                editSessions.discardDraft()
+                true
+            } else {
+                configListPanel.restoreSelection(guard.draft.dataId, guard.draft.group)
+                false
+            }
         }
     }
     
@@ -576,6 +624,14 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      */
     fun navigateToConfig(config: com.nanyin.nacos.search.models.NacosConfiguration, lineIndex: Int) {
         ApplicationManager.getApplication().invokeLater {
+            val guard = retargetGuard(config)
+            if (guard == DraftGuard.AlreadyEditing) {
+                // Already showing this draft: land on the line without
+                // reloading the detail, which would discard the draft.
+                if (lineIndex >= 0) configDetailPanel.moveToLine(lineIndex)
+                return@invokeLater
+            }
+            if (!admitRetarget(guard, "config.detail.draft.discard.retarget")) return@invokeLater
             val targetNsId = normalizeNamespaceId(config.tenantId)
             val currentNsId = normalizeNamespaceId(currentNamespace?.namespaceId)
 
@@ -615,7 +671,13 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         }
     
     /**
-     * Refresh all data
+     * Refresh all data.
+     *
+     * A dirty draft is refreshed *around*, not through: namespaces and the
+     * result list reload, but the detail view keeps the draft. Asking for fresh
+     * data is not asking to throw an edit away, and reloading the detail would
+     * overwrite what the user typed (ADR-0027). Revert, beside Save, is the
+     * deliberate way to take the server's version.
      */
     fun refreshAll() {
         coroutineScope.launch {
@@ -626,7 +688,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 }
                 openSelectedNamespace()
                 currentConfiguration?.let { config ->
-                    loadConfigurationDetail(config)
+                    if (admitRetarget(retargetGuard(config), "config.detail.draft.discard.retarget")) {
+                        loadConfigurationDetail(config)
+                    }
                 }
             } catch (e: Exception) {
                 showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")

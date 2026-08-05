@@ -5,8 +5,13 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
+import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.services.operations.EditEnvironment
+import com.nanyin.nacos.search.services.operations.EditSessionService
+import com.nanyin.nacos.search.services.operations.OperationGateway
+import com.nanyin.nacos.search.services.operations.OperationTarget
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NacosSearchService
 import com.nanyin.nacos.search.settings.NacosSettings
@@ -36,7 +41,22 @@ import org.mockito.kotlin.whenever
 @TestApplication
 class UiButtonInteractionTest {
 
-    private val mockProject: Project = mock()
+    /**
+     * The detail panel renders the project's draft, so a stand-in project has
+     * to supply one. This is a real [EditSessionService] over an environment
+     * that never resolves a profile: no edit can start, which is all these
+     * layout assertions need.
+     */
+    private val mockProject: Project = mock<Project>().also {
+        whenever(it.getService(EditSessionService::class.java)).thenReturn(
+            EditSessionService({ OperationGateway(emptyMap()) }, object : EditEnvironment {
+                override fun selectedProfile(): EnvironmentProfile? = null
+                override fun profile(profileId: String): EnvironmentProfile? = null
+                override suspend fun captureTarget(profileId: String, namespaceId: String) =
+                    Result.failure<OperationTarget>(IllegalStateException("no environment"))
+            })
+        )
+    }
 
     @Test
     fun searchPanelButtonsTriggerSearchAndClearCallbacks() {

@@ -17,7 +17,6 @@ import com.nanyin.nacos.search.services.operations.ConfigurationCoordinate
 import com.nanyin.nacos.search.services.operations.ConnectionDiagnostic
 import com.nanyin.nacos.search.services.operations.DiagnosticReport
 import com.nanyin.nacos.search.services.operations.DiagnosticSnapshot
-import com.nanyin.nacos.search.services.operations.EditSession
 import com.nanyin.nacos.search.services.operations.EphemeralV1Authenticator
 import com.nanyin.nacos.search.services.operations.HistoryDetail
 import com.nanyin.nacos.search.services.operations.HistoryPage
@@ -26,10 +25,7 @@ import com.nanyin.nacos.search.services.operations.NacosRequestExecutorProtocolT
 import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.services.operations.ObservationSequence
 import com.nanyin.nacos.search.services.operations.OperationGateway
-import com.nanyin.nacos.search.services.operations.OperationGatewayPublishGateway
 import com.nanyin.nacos.search.services.operations.OperationTarget
-import com.nanyin.nacos.search.services.operations.PublishController
-import com.nanyin.nacos.search.services.operations.PublishResult
 import com.nanyin.nacos.search.services.operations.SummaryPage
 import com.nanyin.nacos.search.services.operations.SummaryQuery
 import com.nanyin.nacos.search.services.operations.V1ProtocolAdapter
@@ -439,13 +435,6 @@ class NacosApiService(
         historyId: String
     ): Result<HistoryDetail> = withContext(Dispatchers.IO) {
         v1Gateway.readHistoryDetail(target, historyId, forceRefresh = true, useCache = false).map { it.value }
-    }
-
-    /**
-     * Controlled publish through [PublishController].
-     */
-    suspend fun controlledPublish(session: EditSession): PublishResult = withContext(Dispatchers.IO) {
-        PublishController(OperationGatewayPublishGateway(v1Gateway)).publish(session)
     }
 
     /**

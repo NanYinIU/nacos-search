@@ -4,25 +4,27 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 
 /**
  * Production [PublishGateway] that routes every preflight / write / read-back
- * through the generation-neutral [OperationGateway] using the edit session's
- * bound [OperationTarget] — never the live UI selection.
+ * through the generation-neutral [OperationGateway] using the target derived
+ * from the edit session's binding — never the live UI selection.
  */
 class OperationGatewayPublishGateway(
     private val gateway: OperationGateway
 ) : PublishGateway {
 
-    override suspend fun preflight(session: EditSession): Result<NacosConfiguration?> {
-        val coordinate = ConfigurationCoordinate(session.dataId, session.group)
+    override suspend fun preflight(
+        target: OperationTarget,
+        coordinate: ConfigurationCoordinate
+    ): Result<NacosConfiguration?> {
         return gateway.readDetail(
-            target = session.target,
+            target = target,
             coordinate = coordinate,
             forceRefresh = true,
             useCache = false
         ).map { it.value }
     }
 
-    override suspend fun write(session: EditSession, command: PublishCommand): Result<PublishOutcome> {
-        return gateway.publish(session.target, command).fold(
+    override suspend fun write(target: OperationTarget, command: PublishCommand): Result<PublishOutcome> {
+        return gateway.publish(target, command).fold(
             onSuccess = { Result.success(it) },
             onFailure = { error ->
                 when (error) {
@@ -40,10 +42,12 @@ class OperationGatewayPublishGateway(
      * observes updates the cache under that observation's sequence, so
      * verifying a publish cannot be undone by an older read.
      */
-    override suspend fun readBack(session: EditSession): Result<NacosConfiguration?> {
-        val coordinate = ConfigurationCoordinate(session.dataId, session.group)
+    override suspend fun readBack(
+        target: OperationTarget,
+        coordinate: ConfigurationCoordinate
+    ): Result<NacosConfiguration?> {
         return gateway.readDetail(
-            target = session.target,
+            target = target,
             coordinate = coordinate,
             forceRefresh = true,
             useCache = true

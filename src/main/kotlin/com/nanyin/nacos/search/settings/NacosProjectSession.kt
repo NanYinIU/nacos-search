@@ -8,6 +8,8 @@ import com.intellij.openapi.components.Storage
 import com.intellij.openapi.project.Project
 import com.intellij.util.xmlb.XmlSerializerUtil
 import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.ResolvedGenerationLocator
 import com.nanyin.nacos.search.services.captureAccessIdentity
@@ -106,6 +108,25 @@ internal fun Project.selectedNacosNamespaceId(
         return namespaceService.getCurrentNamespace()?.namespaceId ?: seeded
     }
     return namespaceService.getCurrentNamespace()?.namespaceId
+}
+
+/**
+ * The namespace an operation on [configuration] addresses: the configuration's
+ * own tenant when the response carried one, otherwise this project's session
+ * namespace.
+ *
+ * List responses omit the tenant, and assuming public while the tool window is
+ * browsing another namespace would address a different configuration. This is
+ * the one derivation — the edit session binds what it returns, and the tool
+ * window asks the same question when deciding whether a click retargets that
+ * binding, so the two cannot disagree.
+ */
+internal fun Project.operationNamespaceIdFor(configuration: NacosConfiguration): String {
+    configuration.tenantId?.takeIf { it.isNotBlank() }?.let { return it }
+    getService(NacosProjectSession::class.java)?.sessionState?.namespaceId
+        ?.takeIf { it.isNotBlank() }
+        ?.let { return it }
+    return NamespaceInfo.PUBLIC
 }
 
 /**
