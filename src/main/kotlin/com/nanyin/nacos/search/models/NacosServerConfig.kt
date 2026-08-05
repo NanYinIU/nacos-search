@@ -22,12 +22,19 @@ data class NacosServerConfig(
     var defaultGroup: String = "DEFAULT_GROUP",
     var connectionTimeoutMs: Int = 30000,
     var autoRefreshOnOpen: Boolean = true,
+    /**
+     * Dual-write preference field for the settings dialog. Runtime consumers
+     * must read [EnvironmentPreferences] by profile id (issue #101 / ADR-0042),
+     * not this field. [com.nanyin.nacos.search.settings.NacosSettings.applyServers]
+     * publishes this value into the preference record.
+     */
     var allowCrossNamespaceNavigation: Boolean = false,
     /**
-     * Per-environment preference: when true, the navigation detail prefetch
-     * loads configuration bodies for the project's declared configuration
-     * sources so gutter markers resolve without browsing. Preference-only —
-     * must not live on [EnvironmentProfile] (ADR-0042).
+     * Dual-write preference field for the settings dialog. When true, the
+     * navigation detail prefetch loads configuration bodies for the project's
+     * declared configuration sources so gutter markers resolve without browsing.
+     * Preference-only — must not live on [EnvironmentProfile] (ADR-0042).
+     * Runtime source of truth is [EnvironmentPreferences].
      */
     var navigationDetailPrefetchEnabled: Boolean = true,
     /** Explicit publish intent; defaults false for new/migrated environments. */

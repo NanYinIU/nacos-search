@@ -72,11 +72,13 @@ class NavigationDetailPrefetchServiceTest {
         settings = com.intellij.openapi.application.ApplicationManager.getApplication()
             .getService(NacosSettings::class.java)
         settings.resetToDefaults()
-        settings.getActiveServer().navigationDetailPrefetchEnabled = true
         // Align active server id with the identity profile so the toggle lookup
-        // by profileId sees the same entry.
-        settings.getActiveServer().id = identity.profileId
-        settings.activeServerId = identity.profileId
+        // by profileId sees the same entry. Publish preference record via applyServers.
+        val server = settings.getActiveServer().copy(
+            id = identity.profileId,
+            navigationDetailPrefetchEnabled = true
+        )
+        settings.applyServers(listOf(server), identity.profileId)
 
         project = mock()
         whenever(project.isDisposed).thenReturn(false)
@@ -167,7 +169,10 @@ class NavigationDetailPrefetchServiceTest {
 
     @Test
     fun `toggle off produces no detail requests`() = runBlocking {
-        settings.getActiveServer().navigationDetailPrefetchEnabled = false
+        val servers = settings.cloneServers().map {
+            it.copy(navigationDetailPrefetchEnabled = false)
+        }
+        settings.applyServers(servers, settings.activeServerId)
         val api = mock<NacosApiService>()
         val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
@@ -319,16 +324,17 @@ class NavigationDetailPrefetchServiceTest {
         val revisionBefore = profileBefore.profileRevision
         val accessBefore = profileBefore.accessRevision
 
-        settings.getActiveServer().navigationDetailPrefetchEnabled = false
         // Preference-only write path: applyServers with same connection fields.
         val servers = settings.cloneServers().map {
-            it.copy().apply { navigationDetailPrefetchEnabled = false }
+            it.copy(navigationDetailPrefetchEnabled = false)
         }
         settings.applyServers(servers, settings.activeServerId)
 
         val profileAfter = settings.getActiveProfile()!!
         assertEquals(revisionBefore, profileAfter.profileRevision)
         assertEquals(accessBefore, profileAfter.accessRevision)
+        assertFalse(settings.preferencesFor(settings.activeServerId).navigationDetailPrefetchEnabled)
+        // Dual-write surface stays aligned for the settings dialog.
         assertFalse(settings.getActiveServer().navigationDetailPrefetchEnabled)
     }
 }

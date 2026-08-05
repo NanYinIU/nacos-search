@@ -146,25 +146,29 @@ internal fun Project.allowCrossNamespaceNavigation(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
 ): Boolean {
     val profileId = selectedNacosProfileId(settings)
-    return settings.cloneServers().firstOrNull { it.id == profileId }?.allowCrossNamespaceNavigation
-        ?: settings.getActiveServer().allowCrossNamespaceNavigation
+    return settings.preferencesFor(profileId).allowCrossNamespaceNavigation
 }
 
 /**
  * Reads the navigation detail prefetch preference for this project's selected
  * environment at call time (ADR-0042): the toggle is not captured into the
  * operation context, so the prefetch observes cancellation / disable itself.
+ * Resolved from the profile-associated preference record (issue #101), not the
+ * legacy server entry.
  */
 internal fun Project.navigationDetailPrefetchEnabled(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
 ): Boolean {
     val profileId = selectedNacosProfileId(settings)
-    return settings.cloneServers().firstOrNull { it.id == profileId }?.navigationDetailPrefetchEnabled
-        ?: settings.getActiveServer().navigationDetailPrefetchEnabled
+    return settings.preferencesFor(profileId).navigationDetailPrefetchEnabled
 }
 
 internal fun NacosSettings.navigationDetailPrefetchEnabled(profileId: String? = null): Boolean {
     val id = profileId?.takeIf { it.isNotBlank() } ?: activeServerId
-    return cloneServers().firstOrNull { it.id == id }?.navigationDetailPrefetchEnabled
-        ?: getActiveServer().navigationDetailPrefetchEnabled
+    return preferencesFor(id).navigationDetailPrefetchEnabled
+}
+
+internal fun NacosSettings.allowCrossNamespaceNavigation(profileId: String? = null): Boolean {
+    val id = profileId?.takeIf { it.isNotBlank() } ?: activeServerId
+    return preferencesFor(id).allowCrossNamespaceNavigation
 }
