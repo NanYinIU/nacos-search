@@ -31,7 +31,6 @@ import com.intellij.ui.AnimatedIcon
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
-import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
@@ -39,12 +38,14 @@ import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.currentSessionEpoch
 import com.nanyin.nacos.search.services.operations.ObservedDetailRecorder
 import com.nanyin.nacos.search.services.operations.Observed
-import com.nanyin.nacos.search.services.operations.EditSession
-import com.nanyin.nacos.search.services.operations.OperationTarget
+import com.nanyin.nacos.search.services.operations.EditSessionService
+import com.nanyin.nacos.search.services.operations.EditStart
 import com.nanyin.nacos.search.services.operations.PublishState
+import com.nanyin.nacos.search.services.operations.WriteIntent
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
+import com.nanyin.nacos.search.settings.operationNamespaceIdFor
 import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.ActionEvent
@@ -114,28 +115,10 @@ class ConfigDetailPanel internal constructor(
         }
     }
 
-    /** Project-selected profile — not the app-wide Settings "active"/default. */
-    private fun selectedProfile(): EnvironmentProfile? {
-        val profileId = project.getService(NacosProjectSession::class.java)
-            ?.sessionState?.selectedProfileId
-            ?.takeIf { it.isNotBlank() }
-            ?: return null
-        return settings.getProfile(profileId)
-    }
+    /** Namespace for history and publish — the one derivation, shared with the window. */
+    private fun operationNamespaceId(config: NacosConfiguration): String =
+        project.operationNamespaceIdFor(config)
 
-    /**
-     * Namespace for history/publish. Prefer the config's tenant; when list APIs
-     * omit tenant, fall back to this project's session namespace — never assume
-     * public while the tool window is browsing another namespace.
-     */
-    private fun operationNamespaceId(config: NacosConfiguration): String {
-        config.tenantId?.takeIf { it.isNotBlank() }?.let { return it }
-        project.getService(NacosProjectSession::class.java)?.sessionState?.namespaceId
-            ?.takeIf { it.isNotBlank() }
-            ?.let { return it }
-        return "public"
-    }
-    
     // UI Components
     private lateinit var metadataPanel: JPanel
     private lateinit var contentPanel: JPanel
@@ -155,9 +138,14 @@ class ConfigDetailPanel internal constructor(
     private lateinit var formatTagLabel: JBLabel
     private lateinit var dirtyLabel: JBLabel
     private lateinit var freshnessLabel: JBLabel
-    /** Bound publish target captured when entering edit mode (never live UI). */
-    private var boundEditTarget: OperationTarget? = null
-    
+
+    /**
+     * The project's draft. The panel renders it and reports what the user
+     * types; it does not own it, because a session held inside the tool-window
+     * content could not block that content from being destroyed (ADR-0046).
+     */
+    private val editSessions = project.getService(EditSessionService::class.java)
+
     // Editor status bar components (UTF-8 · LF · pos · chars · md5)
     private lateinit var statusBar: JPanel
     private lateinit var statusEncodingLabel: JBLabel
@@ -209,9 +197,8 @@ class ConfigDetailPanel internal constructor(
     private var selectedCoordinate: PresentedCoordinate? = null
     private var pendingNavigation: PendingNavigation? = null
     private var isLoading = false
-    // Dirty-state tracking: original content snapshot for change detection
-    private var originalContent: String = ""
-    private var isDirty: Boolean = false
+    /** What the dirty indicators currently show, so they are only repainted on a change. */
+    private var renderedDirty = false
 
     /**
      * The one judgement of whether an asynchronous result may still update this
@@ -480,7 +467,8 @@ private fun setupEventHandlers() {
 
 
  /**
-  * Reverts unsaved edits by reloading the original content.
+  * Reverts unsaved edits by discarding the draft and reloading from the server.
+  * This is the user's explicit discard, so it needs no prompt.
   */
   private fun revertEdits() {
       currentConfiguration?.let { config ->
@@ -492,59 +480,55 @@ private fun setupEventHandlers() {
       }
   }
    /**
-    * Enters edit mode: makes the editor writable and hides the Edit button
-    * (the user exits via Save or Revert). Matches the design prototype which
-    * hides #editBtn while editing.
+    * Enters edit mode: asks the project's [EditSessionService] to start a
+    * session, and makes the editor writable only if it did. The write-intent
+    * check lives there and is the same one the save path consults, so an edit
+    * that could never be published is explained here instead of failing later.
     */
   private fun enterEditMode() {
-      val profile = selectedProfile()
-      if (profile == null || !profile.writeIntent) {
-          com.intellij.openapi.ui.Messages.showInfoMessage(
-              NacosSearchBundle.message("config.detail.publish.writes.disabled"),
-              NacosSearchBundle.message("config.detail.action.edit")
-          )
-          return
-      }
+      val config = currentConfiguration ?: return
+      val editor = this.editor ?: return
       coroutineScope.launch {
-          val context = selectedOperationContext()
-          if (context == null) {
-              withContext(Dispatchers.Main) {
-                  com.intellij.openapi.ui.Messages.showErrorDialog(
-                      NacosSearchBundle.message("error.connection.incomplete"),
-                      NacosSearchBundle.message("common.error")
-                  )
-              }
-              return@launch
-          }
-          val config = currentConfiguration ?: return@launch
-          val namespaceId = operationNamespaceId(config)
-          val targetResult = nacosApiService.resolveOperationTarget(context, namespaceId)
+          val start = editSessions.beginEdit(
+              configuration = config,
+              namespaceId = operationNamespaceId(config),
+              baselineContent = editor.document.text
+          )
           withContext(Dispatchers.Main) {
-              val target = targetResult.getOrElse {
-                  com.intellij.openapi.ui.Messages.showErrorDialog(
-                      it.message ?: NacosSearchBundle.message("common.error"),
+              when (start) {
+                  is EditStart.WritesWithheld -> com.intellij.openapi.ui.Messages.showInfoMessage(
+                      NacosSearchBundle.message(
+                          when (start.cause) {
+                              WriteIntent.Cause.NO_PROFILE_SELECTED -> "config.detail.publish.no.profile"
+                              WriteIntent.Cause.NOT_OPTED_IN -> "config.detail.publish.writes.disabled"
+                          }
+                      ),
+                      NacosSearchBundle.message("config.detail.action.edit")
+                  )
+                  is EditStart.Unavailable -> com.intellij.openapi.ui.Messages.showErrorDialog(
+                      start.error.message ?: NacosSearchBundle.message("error.connection.incomplete"),
                       NacosSearchBundle.message("common.error")
                   )
-                  return@withContext
-              }
-              boundEditTarget = target
-              editor?.let { ed ->
-                  ed.document.setReadOnly(false)
-                  // Swap the edit lifecycle: hide Edit, reveal Save/Revert (only shown while editing)
-                  editButton.isVisible = false
-                  revertButton.isVisible = true
-                  saveButton.isVisible = true
-                  checkDirtyState(ed.document.text)
+                  is EditStart.Started -> {
+                      editor.document.setReadOnly(false)
+                      // Swap the edit lifecycle: hide Edit, reveal Save/Revert (only shown while editing)
+                      editButton.isVisible = false
+                      revertButton.isVisible = true
+                      saveButton.isVisible = true
+                      checkDirtyState(editor.document.text)
+                  }
               }
           }
       }
   }
 
     /**
-     * Restores the read-only view mode: locks the editor and re-shows the Edit button.
+     * Restores the read-only view mode: locks the editor and re-shows the Edit
+     * button. The draft ends here — a caller that must not lose it asks
+     * [EditSessionService.guardRetarget] or `guardDestroy` first.
      */
     private fun exitEditMode() {
-        boundEditTarget = null
+        editSessions.discardDraft()
         editor?.document?.setReadOnly(true)
         // Restore view mode: re-show Edit and hide the Save/Revert commit buttons
         editButton.isVisible = true
@@ -554,12 +538,14 @@ private fun setupEventHandlers() {
     }
 
     /**
-     * Compares current editor content against the original snapshot and
-     * updates dirty state if changed.
+     * Reports what the user typed to the project's draft and renders whatever
+     * dirty state that produces. The panel keeps no baseline of its own: the
+     * session it is rendering is held outside the tool window (ADR-0046).
      */
     private fun checkDirtyState(currentText: String) {
-        val newDirty = currentText != originalContent
-        if (newDirty != isDirty) {
+        editSessions.updateDraft(currentText)
+        val newDirty = editSessions.isDirty()
+        if (newDirty != renderedDirty) {
             updateDirtyUI(newDirty)
         }
     }
@@ -569,7 +555,7 @@ private fun setupEventHandlers() {
      * the window so the list row dot can update.
      */
     private fun updateDirtyUI(dirty: Boolean) {
-        isDirty = dirty
+        renderedDirty = dirty
         dirtyLabel.isVisible = dirty
         saveButton.isEnabled = dirty
         revertButton.isEnabled = dirty
@@ -657,6 +643,10 @@ private fun setupEventHandlers() {
     }
 
     fun showConfiguration(configuration: NacosConfiguration, lineIndex: Int) {
+        // Retargeting the detail view ends any draft. Callers that must not
+        // lose one ask the project's guard before getting here — this panel is
+        // a renderer and does not decide whether a draft may be discarded.
+        editSessions.discardDraft()
         currentConfiguration = configuration
         selectedCoordinate = PresentedCoordinate.of(configuration)
         pendingNavigation = lineIndex.takeIf { it >= 0 }?.let {
@@ -903,13 +893,16 @@ private fun setupEventHandlers() {
             }
             sizeLabel.text = NacosSearchBundle.message("config.detail.loading.size")
             formatTagLabel.text = configuration.getConfigType().uppercase()
+            renderedDirty = false
             dirtyLabel.isVisible = false
             editButton.isEnabled = true
             updateActionsEnabled()
         }, ModalityState.defaultModalityState())
     }
     
+    /** Refresh and Revert: both replace the editor's content, so both end the draft. */
     private fun loadConfigurationContent(configuration: NacosConfiguration, forceRefresh: Boolean = false) {
+        editSessions.discardDraft()
         loadConfigurationContent(configuration, issue(), forceRefresh)
     }
 
@@ -1070,8 +1063,7 @@ private fun setupEventHandlers() {
                 // Start in read-only mode; the Edit button toggles to writable
                 document.setReadOnly(true)
 
-                // Track content changes for dirty-state detection
-                originalContent = content
+                // Report content changes to the project's draft, if one exists
                 document.addDocumentListener(object : com.intellij.openapi.editor.event.DocumentListener {
                     override fun documentChanged(event: com.intellij.openapi.editor.event.DocumentEvent) {
                         checkDirtyState(document.text)
@@ -1305,41 +1297,24 @@ private fun setupEventHandlers() {
     }
     
     /**
-     * Save (publish) through the controlled [PublishController] path using the
-     * edit session bound when entering edit mode.
+     * Save (publish) the draft the project holds. Everything about where it goes
+     * comes from the session's binding, so a selection change between starting
+     * the edit and pressing save cannot retarget the write (ADR-0027).
      */
     private fun saveConfiguration() {
-        val config = currentConfiguration ?: return
-        val textToSave = editor?.document?.text ?: config.content
-        if (textToSave == originalContent) return
-        val profile = selectedProfile()
-        if (profile == null || !profile.writeIntent) {
-            com.intellij.openapi.ui.Messages.showInfoMessage(
-                NacosSearchBundle.message("config.detail.publish.writes.disabled"),
-                NacosSearchBundle.message("config.detail.action.save.publish")
-            )
-            return
-        }
+        val session = editSessions.currentSession() ?: return
+        if (!session.isDirty) return
         coroutineScope.launch {
             try {
-                val target = boundEditTarget ?: run {
-                    val context = selectedOperationContext()
-                        ?: return@launch showSaveError(NacosSearchBundle.message("error.connection.incomplete"))
-                    val namespaceId = operationNamespaceId(config)
-                    nacosApiService.resolveOperationTarget(context, namespaceId).getOrElse {
-                        return@launch showSaveError(it.message ?: it.toString())
-                    }
-                }
-                val namespaceId = operationNamespaceId(config)
                 val confirm = withContext(Dispatchers.Main) {
                     com.intellij.openapi.ui.Messages.showYesNoDialog(
                         project,
                         NacosSearchBundle.message(
                             "config.detail.publish.confirm",
-                            config.dataId,
-                            config.group,
-                            namespaceId,
-                            target.context.endpoint.value
+                            session.dataId,
+                            session.group,
+                            session.namespaceId,
+                            session.binding.identity.canonicalEndpoint
                         ),
                         NacosSearchBundle.message("config.detail.action.save.publish"),
                         com.intellij.openapi.ui.Messages.getQuestionIcon()
@@ -1347,28 +1322,13 @@ private fun setupEventHandlers() {
                 }
                 if (confirm != com.intellij.openapi.ui.Messages.YES) return@launch
 
-                val session = EditSession(
-                    target = target,
-                    dataId = config.dataId,
-                    group = config.group,
-                    namespaceId = namespaceId,
-                    baselineContent = originalContent,
-                    baselineMd5 = config.md5,
-                    baselineType = config.type,
-                    baselineAppName = config.appName,
-                    baselineDesc = config.desc,
-                    baselineConfigTags = config.configTags,
-                    draftContent = textToSave,
-                    writesEnabled = profile.writeIntent
-                )
                 val presented = issue()
-                val publishResult = nacosApiService.controlledPublish(session)
+                val publishResult = editSessions.publish() ?: return@launch
                 withContext(Dispatchers.Main) {
                     if (!presentation.admitAndRecord(presented)) return@withContext
                     when (val state = publishResult.state) {
                         is PublishState.Verified -> {
                             val verified = publishResult.verifiedDetail
-                            originalContent = verified?.content ?: textToSave
                             if (verified != null) {
                                 currentConfiguration = verified
                             }
@@ -1376,7 +1336,7 @@ private fun setupEventHandlers() {
                             saveButton.isEnabled = false
                             revertButton.isEnabled = false
                             updateDirtyUI(false)
-                            updateStatusBar(originalContent)
+                            updateStatusBar(verified?.content ?: session.draftContent)
                             com.intellij.openapi.ui.Messages.showInfoMessage(
                                 NacosSearchBundle.message("message.configuration.saved"),
                                 NacosSearchBundle.message("common.success")
@@ -1472,9 +1432,6 @@ private fun setupEventHandlers() {
         }
     }
 
-    /** Whether the detail editor has unsaved edits (for retarget guards). */
-    fun isDirty(): Boolean = isDirty
-
     /**
      * Clear the current configuration display
      */
@@ -1487,7 +1444,7 @@ private fun setupEventHandlers() {
         // names a coordinate this panel does not present, and is discarded.
         currentConfiguration = null
         selectedCoordinate = null
-        boundEditTarget = null
+        editSessions.discardDraft()
         disposeEditorSafely()
         showEmptyState()
         editButton.isVisible = true
@@ -1497,6 +1454,7 @@ private fun setupEventHandlers() {
         revertButton.isEnabled = false
         revertButton.isVisible = false
         updateActionsEnabled()
+        renderedDirty = false
         dirtyLabel.isVisible = false
 
         // Reset status bar

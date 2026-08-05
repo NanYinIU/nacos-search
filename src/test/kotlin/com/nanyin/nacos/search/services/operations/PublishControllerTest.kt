@@ -21,9 +21,10 @@ class PublishControllerTest {
             preflightResult = Result.success(baseDetail())
         )
         val controller = PublishController(gateway)
-        val session = v1EditSession(draftContent = "new content").copy(writesEnabled = false)
+        val session = v1EditSession(draftContent = "new content")
+            .copy(writeIntent = WriteIntent.Withheld(WriteIntent.Cause.NOT_OPTED_IN))
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertInstanceOf<PublishState.ReadOnly>(result.state)
         assertTrue(result.isDirty)
@@ -36,7 +37,7 @@ class PublishControllerTest {
         ))
         val session = v1EditSession(draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertEquals(PublishState.TargetDeleted, result.state)
         assertTrue(result.isDirty)
@@ -52,7 +53,7 @@ class PublishControllerTest {
         ))
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertInstanceOf<PublishState.RemoteConflict>(result.state)
         assertEquals("changed by someone else", (result.state as PublishState.RemoteConflict).remoteContent)
@@ -68,7 +69,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertTrue(result.state is PublishState.RemoteConflict)
         assertTrue(result.isDirty)
@@ -86,7 +87,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertEquals(PublishState.Verified, result.state)
         assertTrue(!result.isDirty)
@@ -102,7 +103,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", baselineContent = "original", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertEquals(PublishState.Dirty, result.state)
         assertTrue(result.isDirty)
@@ -120,7 +121,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertInstanceOf<PublishState.RemoteConflict>(result.state)
         assertTrue(result.isDirty)
@@ -136,7 +137,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertEquals(PublishState.TargetDeleted, result.state)
         assertTrue(result.isDirty)
@@ -152,7 +153,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertEquals(PublishState.ServerStateUnknown, result.state)
         assertTrue(result.isDirty)
@@ -167,7 +168,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertEquals(PublishState.ServerStateUnknown, result.state)
         assertTrue(result.isDirty)
@@ -182,7 +183,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertEquals(PublishState.PermissionDenied, result.state)
         assertTrue(result.isDirty)
@@ -199,7 +200,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertInstanceOf<PublishState.ReadOnly>(result.state)
         assertTrue(result.isDirty)
@@ -226,7 +227,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertNotEquals(PublishState.Verified, result.state)
         assertTrue(result.isDirty)
@@ -251,7 +252,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertEquals(PublishState.Verified, result.state)
         assertTrue(!result.isDirty)
@@ -274,7 +275,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, v1Target())
 
         assertEquals(PublishState.Dirty, result.state)
         assertTrue(result.isDirty)
@@ -290,29 +291,41 @@ class PublishControllerTest {
         baselineMd5: String = "base-md5",
         baselineContent: String = "original",
         draftContent: String = "edited"
-    ): EditSession {
+    ): EditSession = EditSession(
+        binding = EditBinding.of(
+            profileId = "p",
+            identity = v1Identity(),
+            namespaceId = "public",
+            dataId = "app.yaml",
+            group = "G"
+        ),
+        baselineContent = baselineContent, baselineMd5 = baselineMd5,
+        baselineType = "yaml", baselineAppName = null,
+        baselineDesc = null, baselineConfigTags = null,
+        draftContent = draftContent,
+        writeIntent = WriteIntent.Granted
+    )
+
+    private fun v1Identity() = AccessIdentity.ofProfile(
+        profileId = "p", accessRevision = 1,
+        canonicalEndpoint = "https://nacos.example",
+        resolvedGeneration = NacosApiGeneration.V1,
+        authMode = AuthMode.ANONYMOUS, principal = "<anonymous>"
+    )
+
+    /** The target a publish captures fresh from the session's binding. */
+    private fun v1Target(): OperationTarget {
         val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
-        val context = NacosOperationContext(
-            identity = AccessIdentity.ofProfile(
-                profileId = "p", accessRevision = 1,
-                canonicalEndpoint = endpoint.value,
-                resolvedGeneration = NacosApiGeneration.V1,
-                authMode = AuthMode.ANONYMOUS, principal = "<anonymous>"
+        return OperationTarget(
+            NacosOperationContext(
+                identity = v1Identity(),
+                endpoint = endpoint,
+                credential = CredentialSnapshot(""),
+                authMode = AuthMode.ANONYMOUS,
+                profileRevision = 1, accessRevision = 1,
+                resolvedGeneration = NacosApiGeneration.V1
             ),
-            endpoint = endpoint,
-            credential = CredentialSnapshot(""),
-            authMode = AuthMode.ANONYMOUS,
-            profileRevision = 1, accessRevision = 1,
-            resolvedGeneration = NacosApiGeneration.V1
-        )
-        return EditSession(
-            target = OperationTarget(context, "public"),
-            dataId = "app.yaml", group = "G", namespaceId = "public",
-            baselineContent = baselineContent, baselineMd5 = baselineMd5,
-            baselineType = "yaml", baselineAppName = null,
-            baselineDesc = null, baselineConfigTags = null,
-            draftContent = draftContent,
-            writesEnabled = true
+            "public"
         )
     }
 }
@@ -326,7 +339,18 @@ class ScriptedPublishGateway(
     val publishResult: Result<PublishOutcome> = Result.success(PublishOutcome.Written("true")),
     val readBackResult: Result<NacosConfiguration?> = Result.success(null)
 ) : PublishGateway {
-    override suspend fun preflight(session: EditSession): Result<NacosConfiguration?> = preflightResult
-    override suspend fun write(session: EditSession, command: PublishCommand): Result<PublishOutcome> = publishResult
-    override suspend fun readBack(session: EditSession): Result<NacosConfiguration?> = readBackResult
+    override suspend fun preflight(
+        target: OperationTarget,
+        coordinate: ConfigurationCoordinate
+    ): Result<NacosConfiguration?> = preflightResult
+
+    override suspend fun write(
+        target: OperationTarget,
+        command: PublishCommand
+    ): Result<PublishOutcome> = publishResult
+
+    override suspend fun readBack(
+        target: OperationTarget,
+        coordinate: ConfigurationCoordinate
+    ): Result<NacosConfiguration?> = readBackResult
 }

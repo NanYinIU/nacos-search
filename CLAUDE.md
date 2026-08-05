@@ -77,6 +77,7 @@ Services are IntelliJ application- or project-level components registered with `
 - `SearchService` — Local search over the `CacheService` store with regex, content preview, highlighting, and scoring.
 - `CacheService` — Persistent local cache. See **Cache persistence** below.
 - `NamespaceService` — Persists the selected namespace (`PersistentStateComponent`, stored in `nacos-namespace-service.xml`) and notifies `NamespaceChangeListener`s when the user switches namespaces.
+- `EditSessionService` — Project-level owner of the one configuration draft, and of publishing it. See **The edit session lives outside the tool window** below.
 - `LanguageService` — Runtime language switching support for the plugin UI.
 
 ### Cache persistence (two caches, two layers)
@@ -119,6 +120,21 @@ Consequences worth knowing:
 #### One key space per environment
 
 The resolved API generation is part of the access identity, so a caller that cannot name it addresses a key space of its own. For an `AUTO` profile the generation is not in the profile — it is resolved per operation — and the hot paths must not read a credential to find it (ADR-0039). `ResolvedGenerationLocator` supplies it from the two credential-free sources that already hold it (ADR-0053): the generation this project session resolved, then the persisted last-known value. `NacosSettings.captureAccessIdentity` and `Project.captureSelectedAccessIdentity` apply it, so search, the key-index warm, the detail panel, the clear gesture, and gutter markers all address what the gateway wrote. A locked `V1`/`V3` identity is returned untouched; with neither source the generation stays unknown and the read is a **miss** — do not write into that space to make it look otherwise.
+
+### The edit session lives outside the tool window
+
+Starting an edit creates a session held by `EditSessionService`, a **project-level** service in `services/operations/` (ADR-0046). It is not in the detail panel: ADR-0027 requires a dirty draft to block destroying the tool-window content, and a session that lives inside the thing it must block cannot block it. The panel renders the draft and reports what the user types; it holds no baseline, no dirty flag, and no publish target.
+
+`EditSession` binds an `EditBinding` — profile id, access identity, canonical namespace, data id, group — plus the baseline content, hash and known metadata. It carries **no `OperationTarget` and no credential**. Publishing captures a fresh operation target from `binding.profileId` and `binding.namespaceId` and refuses when that target no longer resolves to the bound access identity, so a selection change after starting a draft cannot retarget where it publishes, and a secret captured minutes ago cannot be reused. Nothing here is persisted: P0 has no draft shelf and never writes configuration content to disk.
+
+Two actions ask before destroying a draft, and each offers exactly two answers — cancel, or discard:
+
+- Selecting another configuration — `NacosSearchWindow.admitRetarget` consults `guardRetarget`, and on cancel `ConfigListPanel.restoreSelection` puts the highlight back **without** re-firing the selection handler.
+- Destroying the tool-window content — `NacosSearchToolWindowFactory` vetoes `contentRemoveQuery` via `guardDestroy`. The prompt lives in the factory because a component being disposed cannot veto its own disposal.
+
+`DraftGuard` is a closed set of three: `Proceed`, `AlreadyEditing` (the action names the draft's own configuration, so it must neither prompt nor reload), and `ConfirmDiscard`. Asking never mutates — only `discardDraft()` throws work away. Environment switch, namespace switch, write-intent off, profile deletion and project close are **not** guarded yet (issue #77); they still discard as they did before.
+
+`WriteIntent.of(profile)` is the one implementation of the ADR-0026 publish opt-in. The edit action consults it (`beginEdit` refuses with `EditStart.WritesWithheld` rather than letting the user type), and the save path consults the same value bound on the session, so the two cannot disagree. Do not add a second write-intent check.
 
 ### `@NacosValue` Navigation & PSI Subsystem
 

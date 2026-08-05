@@ -42,45 +42,32 @@ class ReleaseGateSuiteTest {
 
     @Test
     fun `misdirected write is blocked by edit session binding`() {
-        val session = EditSession(
-            target = lockedTarget(NacosApiGeneration.V1),
-            dataId = "app.yaml", group = "G", namespaceId = "public",
-            baselineContent = "original", baselineMd5 = "md5",
-            baselineType = "yaml", baselineAppName = null,
-            baselineDesc = null, baselineConfigTags = null,
-            draftContent = "edited",
-            writesEnabled = true
-        )
+        val target = lockedTarget(NacosApiGeneration.V1)
+        val session = v1EditSession(target)
         assertEquals("app.yaml", session.dataId)
         assertEquals("G", session.group)
         assertEquals("public", session.namespaceId)
+        assertEquals(target.context.identity, session.binding.identity)
     }
 
     @Test
     fun `write replay is blocked by single-write state machine`() = runBlocking {
         val publishCount = intArrayOf(0)
         val gateway = object : PublishGateway {
-            override suspend fun preflight(session: EditSession) = Result.success(
-                NacosConfiguration("app.yaml", "G", "public", "original", "yaml", "md5")
-            )
-            override suspend fun write(session: EditSession, command: PublishCommand): Result<PublishOutcome> {
+            override suspend fun preflight(target: OperationTarget, coordinate: ConfigurationCoordinate) =
+                Result.success(NacosConfiguration("app.yaml", "G", "public", "original", "yaml", "md5"))
+            override suspend fun write(target: OperationTarget, command: PublishCommand): Result<PublishOutcome> {
                 publishCount[0]++
                 return Result.failure(RemoteOperationError.Connection(RuntimeException("disconnected")))
             }
-            override suspend fun readBack(session: EditSession) = Result.success<NacosConfiguration?>(null)
+            override suspend fun readBack(target: OperationTarget, coordinate: ConfigurationCoordinate) =
+                Result.success<NacosConfiguration?>(null)
         }
         val controller = PublishController(gateway)
-        val session = EditSession(
-            target = lockedTarget(NacosApiGeneration.V1),
-            dataId = "app.yaml", group = "G", namespaceId = "public",
-            baselineContent = "original", baselineMd5 = "md5",
-            baselineType = "yaml", baselineAppName = null,
-            baselineDesc = null, baselineConfigTags = null,
-            draftContent = "edited",
-            writesEnabled = true
-        )
+        val target = lockedTarget(NacosApiGeneration.V1)
+        val session = v1EditSession(target)
 
-        val result = controller.publish(session)
+        val result = controller.publish(session, target)
 
         assertEquals(PublishState.ServerStateUnknown, result.state)
         assertEquals(1, publishCount[0])
@@ -186,17 +173,10 @@ class ReleaseGateSuiteTest {
                 )
             )
             val controller = PublishController(gateway)
-            val session = EditSession(
-                target = lockedTarget(NacosApiGeneration.V1),
-                dataId = "app.yaml", group = "G", namespaceId = "public",
-                baselineContent = "original", baselineMd5 = "md5",
-                baselineType = "yaml", baselineAppName = null,
-                baselineDesc = null, baselineConfigTags = null,
-                draftContent = "new content",
-                writesEnabled = true
-            )
+            val target = lockedTarget(NacosApiGeneration.V1)
+            val session = v1EditSession(target, draftContent = "new content")
 
-            val result = controller.publish(session)
+            val result = controller.publish(session, target)
 
             when (label) {
                 "command-result" -> assertEquals(PublishState.Verified, result.state)
@@ -227,6 +207,22 @@ class ReleaseGateSuiteTest {
         assertEquals(DatasetConfirmation.UNCONFIRMED, restored.confirmation)
         assertEquals(DatasetConfirmation.REFRESH_FAILED, failed.confirmation)
     }
+
+    /** A draft bound to [target]'s identity, as [EditSessionService] would create it. */
+    private fun v1EditSession(target: OperationTarget, draftContent: String = "edited") = EditSession(
+        binding = EditBinding.of(
+            profileId = "p",
+            identity = target.context.identity,
+            namespaceId = target.namespaceId,
+            dataId = "app.yaml",
+            group = "G"
+        ),
+        baselineContent = "original", baselineMd5 = "md5",
+        baselineType = "yaml", baselineAppName = null,
+        baselineDesc = null, baselineConfigTags = null,
+        draftContent = draftContent,
+        writeIntent = WriteIntent.Granted
+    )
 
     private fun lockedTarget(generation: NacosApiGeneration): OperationTarget {
         val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()

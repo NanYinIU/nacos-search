@@ -109,6 +109,27 @@ internal fun Project.selectedNacosNamespaceId(
 }
 
 /**
+ * The namespace an operation on [configuration] addresses: the configuration's
+ * own tenant when the response carried one, otherwise this project's session
+ * namespace.
+ *
+ * List responses omit the tenant, and assuming public while the tool window is
+ * browsing another namespace would address a different configuration. This is
+ * the one derivation — the edit session binds what it returns, and the tool
+ * window asks the same question when deciding whether a click retargets that
+ * binding, so the two cannot disagree.
+ */
+internal fun Project.operationNamespaceIdFor(
+    configuration: com.nanyin.nacos.search.models.NacosConfiguration
+): String {
+    configuration.tenantId?.takeIf { it.isNotBlank() }?.let { return it }
+    getService(NacosProjectSession::class.java)?.sessionState?.namespaceId
+        ?.takeIf { it.isNotBlank() }
+        ?.let { return it }
+    return com.nanyin.nacos.search.models.NamespaceInfo.PUBLIC
+}
+
+/**
  * The access identity this project's cache reads address. The resolved API
  * generation comes from this project's own session first (ADR-0004: sessions are
  * per-project), then from the persisted last-known value — never from a

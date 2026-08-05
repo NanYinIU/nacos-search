@@ -54,6 +54,9 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     private var currentSearchQuery: String = ""
     // Set of config keys that have unsaved edits (for the red dot indicator)
     private val dirtyConfigKeys: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    // True while [restoreSelection] moves the highlight back, so a cancelled
+    // action does not re-enter the selection handler it was cancelling.
+    private var isRestoringSelection = false
 
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
@@ -150,14 +153,14 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
                     if (idx >= 0 && idx < listModel.size()) {
                         val config = listModel.getElementAt(idx)
                         configList.selectedIndex = idx
-                        onConfigurationSelected?.invoke(config)
+                        if (!isRestoringSelection) onConfigurationSelected?.invoke(config)
                     }
                 }
             }
         })
 
         configList.addListSelectionListener { e ->
-            if (!e.valueIsAdjusting) {
+            if (!e.valueIsAdjusting && !isRestoringSelection) {
                 val idx = configList.selectedIndex
                 if (idx >= 0 && idx < listModel.size()) {
                     val config = listModel.getElementAt(idx)
@@ -203,6 +206,27 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         if (idx >= 0) {
             configList.selectedIndex = idx
             configList.ensureIndexIsVisible(idx)
+        }
+    }
+
+    /**
+     * Moves the highlight back to [dataId]/[group] without firing the selection
+     * callback. Used when the user cancels a guarded action: cancelling must
+     * leave both the draft and the current selection exactly as they were, and
+     * re-firing the handler would reload the very detail it just protected.
+     */
+    fun restoreSelection(dataId: String, group: String) {
+        val idx = configurations.indexOfFirst { it.dataId == dataId && it.group == group }
+        isRestoringSelection = true
+        try {
+            if (idx >= 0) {
+                configList.selectedIndex = idx
+                configList.ensureIndexIsVisible(idx)
+            } else {
+                configList.clearSelection()
+            }
+        } finally {
+            isRestoringSelection = false
         }
     }
 

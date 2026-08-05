@@ -24,6 +24,9 @@ import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.NacosUpgradeSummary
 import com.nanyin.nacos.search.settings.OperationContextSnapshotCache
+import com.nanyin.nacos.search.settings.operationNamespaceIdFor
+import com.nanyin.nacos.search.services.operations.DraftGuard
+import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.psi.NacosKeyIndexService
 import com.intellij.openapi.components.service
 import com.intellij.openapi.application.ApplicationManager
@@ -61,6 +64,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
     private val projectSession = project.service<NacosProjectSession>()
     private val indexCoordinator = ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java)
+    /** The project's draft. The window asks it before any action that would destroy one. */
+    private val editSessions = project.service<EditSessionService>()
 
     // UI Components
     private lateinit var namespacePanel: NamespacePanel
@@ -661,7 +666,13 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         namespacePanel.isEnabled = !searching
     }
     
+    /**
+     * ADR-0027: selecting another configuration must not discard a dirty draft
+     * silently. The user cancels — draft and selection stay exactly as they
+     * were — or explicitly discards, and only then does the view retarget.
+     */
     private fun handleConfigurationSelected(config: NacosConfiguration?) {
+        if (!admitRetarget(config, "config.detail.draft.discard.retarget")) return
         currentConfiguration = config
         if (config != null) {
             loadConfigurationDetail(config)
@@ -669,6 +680,31 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             configDetailPanel.clearConfiguration()
         }
     }
+
+    /**
+     * Whether the tool window may retarget its detail view to [config]. Returns
+     * false when the draft must be kept — either because the user cancelled, or
+     * because [config] is the draft's own configuration and reloading it would
+     * discard the draft just as silently.
+     */
+    private fun admitRetarget(config: NacosConfiguration?, messageKey: String): Boolean =
+        when (val guard = editSessions.guardRetarget(
+            config?.let { project.operationNamespaceIdFor(it) },
+            config?.dataId,
+            config?.group
+        )) {
+            DraftGuard.Proceed -> true
+            DraftGuard.AlreadyEditing -> false
+            is DraftGuard.ConfirmDiscard -> {
+                if (confirmDraftDiscard(project, guard.draft, messageKey)) {
+                    editSessions.discardDraft()
+                    true
+                } else {
+                    configListPanel.restoreSelection(guard.draft.dataId, guard.draft.group)
+                    false
+                }
+            }
+        }
     
     private fun handleRefreshRequested() {
         currentSearchRequest = (currentSearchRequest ?: NacosSearchService.SearchRequest(
@@ -728,6 +764,16 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      */
     fun navigateToConfig(config: com.nanyin.nacos.search.models.NacosConfiguration, lineIndex: Int) {
         ApplicationManager.getApplication().invokeLater {
+            if (editSessions.guardRetarget(
+                    project.operationNamespaceIdFor(config), config.dataId, config.group
+                ) == DraftGuard.AlreadyEditing
+            ) {
+                // Already showing this draft: land on the line without
+                // reloading the detail, which would discard the draft.
+                if (lineIndex >= 0) configDetailPanel.moveToLine(lineIndex)
+                return@invokeLater
+            }
+            if (!admitRetarget(config, "config.detail.draft.discard.retarget")) return@invokeLater
             val targetNsId = normalizeNamespaceId(config.tenantId)
             val currentNsId = normalizeNamespaceId(currentNamespace?.namespaceId)
 
