@@ -559,6 +559,9 @@ private fun setupEventHandlers() {
         dirtyLabel.isVisible = dirty
         saveButton.isEnabled = dirty
         revertButton.isEnabled = dirty
+        // Refresh is disabled while a draft is dirty, so its enablement has to
+        // be re-evaluated here rather than waiting for the toolbar's own pass.
+        updateActionsEnabled()
         // Title asterisk: append/remove '*' from dataId label text
         val config = currentConfiguration ?: return
         val baseId = config.dataId
@@ -1595,7 +1598,12 @@ private fun setupEventHandlers() {
             }
         }
         override fun update(e: AnActionEvent) {
-            e.presentation.isEnabled = currentConfiguration != null && !isLoading
+            // With a dirty draft, refreshing replaces the editor's content —
+            // which is exactly what Revert does, deliberately, right beside
+            // Save. Two buttons for one destructive act is how a draft gets
+            // thrown away by accident (ADR-0027), so only Revert offers it.
+            e.presentation.isEnabled = currentConfiguration != null && !isLoading &&
+                !editSessions.isDirty()
         }
     }
 

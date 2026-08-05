@@ -40,9 +40,11 @@ sealed interface DraftGuard {
     data object Proceed : DraftGuard
 
     /**
-     * The action names the configuration the draft is already bound to. There
-     * is nothing to prompt about and nothing to reload — reloading would
-     * discard the draft as silently as retargeting would.
+     * The view is already showing this draft — either because the action names
+     * the configuration it is bound to, or because the action is not about a
+     * configuration at all. There is nothing to prompt about and nothing to
+     * reload or clear: doing so would discard the draft as silently as
+     * retargeting would.
      */
     data object AlreadyEditing : DraftGuard
 
@@ -173,6 +175,23 @@ class EditSessionService internal constructor(
             return if (current.isDirty) DraftGuard.AlreadyEditing else DraftGuard.Proceed
         }
         return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
+    }
+
+    /**
+     * Whether the tool window may clear its detail view because it has nothing
+     * left to show — the result list came back empty, or no namespace is
+     * selected.
+     *
+     * This guard never prompts, and that is deliberate. An empty result list is
+     * not a statement about the configuration being edited, and search is
+     * debounced, so a few keystrokes that match nothing would put a modal
+     * dialog in front of the user mid-typing. A dirty draft simply survives:
+     * the view keeps showing it, and it stays publishable because its target
+     * comes from its binding rather than from whatever the list holds.
+     */
+    fun guardClear(): DraftGuard {
+        val current = currentSession() ?: return DraftGuard.Proceed
+        return if (current.isDirty) DraftGuard.AlreadyEditing else DraftGuard.Proceed
     }
 
     /** Whether closing or destroying the tool-window content may proceed. */

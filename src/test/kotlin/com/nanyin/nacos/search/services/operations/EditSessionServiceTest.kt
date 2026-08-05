@@ -229,6 +229,49 @@ class EditSessionServiceTest {
         assertEquals(DraftGuard.Proceed, service.guardRetarget("dev", "other.yaml", "G"))
     }
 
+    // ---- the view running out of things to show ----
+
+    @Test
+    fun `an empty result list keeps a dirty draft, and never asks`() = runBlocking {
+        val service = service()
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        // Not ConfirmDiscard: search is debounced, so keystrokes that match
+        // nothing must not raise a dialog. The draft simply survives.
+        assertEquals(DraftGuard.AlreadyEditing, service.guardClear())
+        assertTrue(service.isDirty())
+        assertEquals("edited", service.currentSession()?.draftContent)
+    }
+
+    @Test
+    fun `an empty result list clears the view when no draft is at stake`() = runBlocking {
+        val service = service()
+        assertEquals(DraftGuard.Proceed, service.guardClear())
+
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        assertEquals(DraftGuard.Proceed, service.guardClear())
+
+        service.updateDraft("edited")
+        service.discardDraft()
+        assertEquals(DraftGuard.Proceed, service.guardClear())
+    }
+
+    @Test
+    fun `refreshing the configuration being edited keeps the draft rather than reloading over it`() = runBlocking {
+        // "Refresh all" reloads the detail it is already showing, which is the
+        // draft's own configuration — the same question a re-selection asks.
+        val service = service()
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        assertEquals(DraftGuard.AlreadyEditing, service.guardRetarget("dev", "app.yaml", "G"))
+
+        // A clean draft has nothing to protect, so the refresh goes through.
+        service.updateDraft("original")
+        assertEquals(DraftGuard.Proceed, service.guardRetarget("dev", "app.yaml", "G"))
+    }
+
     // ---- closing or destroying the tool-window content ----
 
     @Test

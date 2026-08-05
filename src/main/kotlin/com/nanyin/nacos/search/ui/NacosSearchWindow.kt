@@ -457,8 +457,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         val clearAction = {
             searchPanel.clearAllCriteria()
             // Preserve the detail panel when a cross-namespace navigation is
-            // in flight — navigateToConfig already showed the target config.
-            if (!hasPendingNav) {
+            // in flight — navigateToConfig already showed the target config —
+            // and when it is showing a dirty draft, which losing the namespace
+            // selection is no reason to throw away (ADR-0027).
+            if (!hasPendingNav && editSessions.guardClear() == DraftGuard.Proceed) {
                 configDetailPanel.clearConfiguration()
             }
             configListPanel.setConfigurations(emptyList())
@@ -646,7 +648,13 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         configListPanel.setConfigurations(configurations)
         // Populate group filter with unique groups from current results
         searchPanel.setAvailableGroups(configurations.map { it.group }.filter { it.isNotBlank() })
-        if (configurations.isEmpty() && pendingNavigationTarget == null) {
+        // An empty result list says nothing about the configuration being
+        // edited, so it never discards a draft — and it never prompts either:
+        // search is debounced, and a few keystrokes that match nothing must not
+        // raise a dialog mid-typing (ADR-0027).
+        if (configurations.isEmpty() && pendingNavigationTarget == null &&
+            editSessions.guardClear() == DraftGuard.Proceed
+        ) {
             configDetailPanel.clearConfiguration()
         }
 
@@ -814,7 +822,13 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         }
     
     /**
-     * Refresh all data
+     * Refresh all data.
+     *
+     * A dirty draft is refreshed *around*, not through: namespaces and the
+     * result list reload, but the detail view keeps the draft. Asking for fresh
+     * data is not asking to throw an edit away, and reloading the detail would
+     * overwrite what the user typed (ADR-0027). Revert, beside Save, is the
+     * deliberate way to take the server's version.
      */
     fun refreshAll() {
         coroutineScope.launch {
@@ -825,7 +839,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 }
                 loadConfigurations()
                 currentConfiguration?.let { config ->
-                    loadConfigurationDetail(config)
+                    if (admitRetarget(retargetGuard(config), "config.detail.draft.discard.retarget")) {
+                        loadConfigurationDetail(config)
+                    }
                 }
             } catch (e: Exception) {
                 showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")

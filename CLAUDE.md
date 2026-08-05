@@ -132,7 +132,15 @@ Two actions ask before destroying a draft, and each offers exactly two answers �
 - Selecting another configuration — `NacosSearchWindow.admitRetarget` consults `guardRetarget`, and on cancel `ConfigListPanel.restoreSelection` puts the highlight back **without** re-firing the selection handler.
 - Destroying the tool-window content — `NacosSearchToolWindowFactory` vetoes `contentRemoveQuery` via `guardDestroy`. The prompt lives in the factory because a component being disposed cannot veto its own disposal.
 
-`DraftGuard` is a closed set of three: `Proceed`, `AlreadyEditing` (the action names the draft's own configuration, so it must neither prompt nor reload), and `ConfirmDiscard`. Asking never mutates — only `discardDraft()` throws work away. Environment switch, namespace switch, write-intent off, profile deletion and project close are **not** guarded yet (issue #77); they still discard as they did before.
+`DraftGuard` is a closed set of three: `Proceed`, `AlreadyEditing` (the view is already showing this draft, so the action must neither prompt nor reload/clear), and `ConfirmDiscard`. Asking never mutates — only `discardDraft()` throws work away. Environment switch, namespace switch, write-intent off, profile deletion and project close are **not** guarded yet (issue #77); they still discard as they did before.
+
+**Prompting is not the answer to every path that would destroy a draft.** Three of them keep the draft and work around it instead, because they are not gestures aimed at the edit:
+
+- **Refresh all** reloads namespaces and the result list but leaves the detail view alone (`refreshAll` runs the same `admitRetarget`, which answers `AlreadyEditing`). Asking for fresh data is not asking to discard an edit.
+- **An empty result list**, or losing the namespace selection, does not clear the detail view (`guardClear`, in `updateConfigurationList` and `clearSearchUi`). An empty *filter* says nothing about whether the edited configuration exists, and search is debounced — prompting would raise a dialog mid-keystroke. `guardClear` therefore never returns `ConfirmDiscard`.
+- **The detail toolbar's Refresh** is disabled while the draft is dirty. It would do exactly what Revert does, and two buttons for one destructive act is how work gets lost by accident.
+
+A draft that survives stays publishable: its target comes from its binding, not from the list.
 
 `WriteIntent.of(profile)` is the one implementation of the ADR-0026 publish opt-in. The edit action consults it (`beginEdit` refuses with `EditStart.WritesWithheld` rather than letting the user type), and the save path consults the same value bound on the session, so the two cannot disagree. Do not add a second write-intent check.
 
