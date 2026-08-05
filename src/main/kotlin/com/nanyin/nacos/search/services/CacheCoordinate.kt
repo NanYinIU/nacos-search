@@ -51,7 +51,7 @@ sealed interface CacheCoordinate {
 
     companion object {
         private fun ns(namespaceId: String): String =
-            namespaceId.takeIf { it.isNotBlank() && it != "public" } ?: "public"
+            com.nanyin.nacos.search.models.NamespaceInfo.canonicalId(namespaceId)
 
         // The one derivation of each storage key. Both the cache and the
         // snapshot it hands out look entries up by these, so a lookup and the

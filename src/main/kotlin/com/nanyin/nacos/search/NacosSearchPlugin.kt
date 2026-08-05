@@ -123,7 +123,7 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
             
             val result = apiService.listConfigurations(pageNo = 1, pageSize = 200, useCache = true)
             if (result.isSuccess) {
-                val response = result.getOrThrow()
+                val response = result.getOrThrow().value
                 logger.info("Successfully loaded metadata for ${response.pageItems.size}/${response.totalCount} configurations")
                // Warm the @NacosValue key index from persisted/opened configs so
                // code gutter markers appear without blocking the highlighter.

@@ -17,6 +17,7 @@ import com.nanyin.nacos.search.models.ConfigItem
 import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosSettings
@@ -188,6 +189,52 @@ class NacosSearchServiceTest {
     }
 
     @Test
+    fun `a published result reports the observation sequence its read took`() = runBlocking {
+        // The result list judges paintability by that sequence, so a search that
+        // reached the server has to carry it out of the service (ADR-0047).
+        val service = NacosSearchService()
+
+        service.performSearch(
+            NacosSearchService.SearchRequest(dataId = "app.yaml", group = "DEFAULT_GROUP"),
+            stubApi()
+        )
+
+        val state = service.searchState.value
+        assertTrue(state is NacosSearchService.SearchState.Success, "search did not succeed: $state")
+        assertEquals(1L, (state as NacosSearchService.SearchState.Success).observation)
+    }
+
+    @Test
+    fun `a result assembled from the namespace index observed nothing remotely`() = runBlocking {
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+        val context = settings.captureOperationContext().getOrThrow()
+        cache.replaceNamespaceIndex(
+            context.identity,
+            "",
+            listOf(NacosConfiguration("app.yaml", "DEFAULT_GROUP", "", "feature=true", "yaml")),
+            ttl = 600_000L
+        )
+
+        val service = NacosSearchService()
+        service.performSearch(
+            NacosSearchService.SearchRequest(
+                dataId = "*",
+                namespace = NamespaceInfo.createPublicNamespace(),
+                operationContext = context
+            ),
+            mock<NacosApiService>()
+        )
+
+        val state = service.searchState.value
+        assertTrue(state is NacosSearchService.SearchState.Success, "search did not succeed: $state")
+        assertEquals(
+            Observed.NO_OBSERVATION,
+            (state as NacosSearchService.SearchState.Success).observation
+        )
+    }
+
+    @Test
     fun `local index search reports cache age from the index entry timestamp`() = runBlocking {
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
@@ -274,7 +321,7 @@ class NacosSearchServiceTest {
                     anyOrNull(), any(), any(), any(),
                     any(), any(), any(), any(), any(), any(), anyOrNull()
                 )
-            ).thenReturn(Result.success(response))
+            ).thenReturn(Result.success(Observed(response, 1L)))
         }
         return api
     }

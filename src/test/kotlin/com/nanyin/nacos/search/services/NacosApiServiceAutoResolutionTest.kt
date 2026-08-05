@@ -92,7 +92,7 @@ class NacosApiServiceAutoResolutionTest {
     fun `AUTO reads a configuration list from a standard 3_2 server via V3`() = runBlocking {
         val result = apiService.listConfigurations("public", 1, 10)
         assertTrue(result.isSuccess, "list failed: ${result.exceptionOrNull()}")
-        val response = result.getOrThrow()
+        val response = result.getOrThrow().value
         assertEquals(1, response.totalCount)
         assertEquals("app.yaml", response.pageItems[0].dataId)
     }

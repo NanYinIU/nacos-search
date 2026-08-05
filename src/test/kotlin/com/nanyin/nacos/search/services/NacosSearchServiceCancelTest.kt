@@ -6,6 +6,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.nanyin.nacos.search.models.ConfigItem
 import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.CompletableDeferred
@@ -61,7 +62,7 @@ class NacosSearchServiceCancelTest {
                     any(), any(), any(), any(),
                     any(), any(), any(), any(), any(), any(), anyOrNull()
                 )
-            ).thenReturn(Result.success(response))
+            ).thenReturn(Result.success(Observed(response, 1L)))
         }
         return api
     }

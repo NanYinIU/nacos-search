@@ -66,6 +66,21 @@ data class NamespaceInfo(
     }
     
     companion object {
+        /** The one spelling of the public namespace. */
+        const val PUBLIC = "public"
+
+        /**
+         * The canonical namespace id: null, blank and the literal `public` all
+         * name the one public namespace (ADR-0015 / CONTEXT.md「Namespace 标识」).
+         *
+         * This is the single derivation. Cache keys, cache scopes and the
+         * presentation judgement all go through it, so a coordinate derived
+         * from a list row and one derived from a detail read cannot differ by
+         * spelling alone.
+         */
+        fun canonicalId(namespaceId: String?): String =
+            namespaceId?.takeIf { it.isNotBlank() && it != PUBLIC } ?: PUBLIC
+
         /**
          * 创建公共命名空间实例
          */

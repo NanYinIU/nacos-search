@@ -16,6 +16,7 @@ import com.nanyin.nacos.search.services.NamespaceIndexRequest
 import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
 import com.nanyin.nacos.search.services.requestSwitchedNamespaceIndex
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
+import com.nanyin.nacos.search.services.currentSessionEpoch
 import com.nanyin.nacos.search.settings.NacosConfigurable
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosSettingsListener
@@ -95,6 +96,15 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      * a newer capture for profile B after a rapid environment switch.
      */
     private val operationContextCache = OperationContextSnapshotCache()
+
+    /**
+     * The one judgement of whether a completed search may still update the
+     * result list (ADR-0047). A result list is not about a single
+     * configuration, so it carries no coordinate; the session epoch stands for
+     * the environment and namespace it was issued under, and the observation
+     * sequence orders two searches of the same selection.
+     */
+    private val listPresentation = PresentationGate({ project.currentSessionEpoch() })
 
     private fun selectedProfileId(): String {
         projectSession.healSelection(settings)
@@ -581,17 +591,17 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     }
                     is NacosSearchService.SearchState.Success -> {
                         SwingUtilities.invokeLater {
-                            // Drop results that were produced for a different environment
-                            // (e.g. an in-flight search that completes after switching servers).
-                            val requestServerId = state.request?.serverId.orEmpty()
-                            if (requestServerId.isNotEmpty() && requestServerId != selectedProfileId()) {
-                                return@invokeLater
-                            }
-                            val resultNamespaceId = state.request?.namespace?.namespaceId.orEmpty()
-                            val activeNamespaceId = currentNamespace?.namespaceId.orEmpty()
-                            if (resultNamespaceId != activeNamespaceId) {
-                                return@invokeLater
-                            }
+                            // The session epoch already advances on environment
+                            // and namespace changes, so one judgement drops a
+                            // result issued under a superseded selection and one
+                            // whose read started before the page now shown
+                            // (ADR-0047).
+                            val presented = PresentedResult(
+                                state.sessionEpoch,
+                                coordinate = null,
+                                observation = state.observation
+                            )
+                            if (!listPresentation.admitAndRecord(presented)) return@invokeLater
                             setSearching(false)
                             paginationPanel.setLoading(false)
                             configListPanel.setSearchQuery(searchPanel.getSearchQuery())

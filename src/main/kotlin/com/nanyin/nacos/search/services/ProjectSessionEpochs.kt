@@ -8,6 +8,20 @@ import com.nanyin.nacos.search.services.operations.GenerationSessionCapture
 import com.nanyin.nacos.search.services.operations.SessionGenerationState
 
 /**
+ * This project session's epoch right now, or 0 where no session exists (a
+ * disposed or headless project). Views capture it when an operation starts and
+ * compare it again when the result arrives, so a result issued under a
+ * superseded environment, namespace, or revision never paints (ADR-0010 /
+ * ADR-0047). Every view reads it here, so two views of the same project can
+ * never disagree about what the current epoch is.
+ */
+fun Project.currentSessionEpoch(): Long = try {
+    takeUnless { it.isDisposed }?.getService(ProjectSessionEpochs::class.java)?.currentEpoch() ?: 0L
+} catch (_: Exception) {
+    0L
+}
+
+/**
  * Project-scoped facade over [SessionEpochRegistry] and the in-memory resolved
  * API generation for this project session.
  *

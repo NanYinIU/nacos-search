@@ -336,15 +336,7 @@ class UiButtonInteractionTest {
             )
 
             runOnEdt {
-                setPrivateField(panel, "currentConfiguration", config)
-                setPrivateField(panel, "displayGeneration", 1L)
-                val updateMetadataMethod = ConfigDetailPanel::class.java.getDeclaredMethod(
-                    "updateMetadata",
-                    NacosConfiguration::class.java,
-                    Long::class.javaPrimitiveType
-                )
-                updateMetadataMethod.isAccessible = true
-                updateMetadataMethod.invoke(panel, config, 1L)
+                panel.showConfiguration(config)
                 panel.setSize(900, 260)
                 panel.doLayoutRecursively()
             }
@@ -415,12 +407,6 @@ class UiButtonInteractionTest {
         val field = target.javaClass.getDeclaredField(name)
         field.isAccessible = true
         return field.get(target) as T
-    }
-
-    private fun setPrivateField(target: Any, name: String, value: Any?) {
-        val field = target.javaClass.getDeclaredField(name)
-        field.isAccessible = true
-        field.set(target, value)
     }
 
     private fun pressEnter(field: JTextField) {

@@ -36,6 +36,7 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
+import com.nanyin.nacos.search.services.currentSessionEpoch
 import com.nanyin.nacos.search.services.operations.ObservedDetailRecorder
 import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.services.operations.EditSession
@@ -199,13 +200,30 @@ class ConfigDetailPanel internal constructor(
     
     // State
     private var currentConfiguration: NacosConfiguration? = null
+    /**
+     * The configuration coordinate the user selected, which is what an
+     * asynchronous result is judged against — not [currentConfiguration], which
+     * is replaced by each loaded detail and whose namespace a server may omit
+     * from the response body.
+     */
+    private var selectedCoordinate: PresentedCoordinate? = null
     private var pendingNavigation: PendingNavigation? = null
     private var isLoading = false
     // Dirty-state tracking: original content snapshot for change detection
     private var originalContent: String = ""
     private var isDirty: Boolean = false
-    private var displayGeneration: Long = 0
-    
+
+    /**
+     * The one judgement of whether an asynchronous result may still update this
+     * panel (ADR-0047). The panel keeps no counter of its own: what is selected
+     * is [selectedCoordinate] and the ordering between two remote reads is the
+     * observation sequence each of them took.
+     */
+    private val presentation = PresentationGate(
+        currentSessionEpoch = { project.currentSessionEpoch() },
+        currentCoordinate = { selectedCoordinate }
+    )
+
     // Coroutine scope for async operations
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentLoadingJob: Job? = null
@@ -639,12 +657,15 @@ private fun setupEventHandlers() {
     }
 
     fun showConfiguration(configuration: NacosConfiguration, lineIndex: Int) {
-        val generation = ++displayGeneration
         currentConfiguration = configuration
+        selectedCoordinate = PresentedCoordinate.of(configuration)
         pendingNavigation = lineIndex.takeIf { it >= 0 }?.let {
             PendingNavigation(configuration.getKey(), it)
         }
-        updateMetadata(configuration, generation)
+        // The cached content and the metadata this method paints observed
+        // nothing remotely, so they carry no observation sequence.
+        val fromCache = issue()
+        updateMetadata(configuration, fromCache)
         val accessIdentity = project.captureSelectedAccessIdentity(settings)
         val cachedState = cacheService.snapshot(accessIdentity).detail(
             configuration.tenantId,
@@ -654,7 +675,7 @@ private fun setupEventHandlers() {
         val freshness = cachedState?.freshness
         val cachedFirst = freshness != null && freshness != CacheService.DetailFreshness.FRESH
         if (cachedFirst) {
-            displayConfigurationContentSafely(configuration)
+            displayConfigurationContentSafely(configuration, fromCache)
             showCard("content")
         }
         if (freshness == CacheService.DetailFreshness.STALE) {
@@ -666,11 +687,24 @@ private fun setupEventHandlers() {
         }
         loadConfigurationContent(
             configuration,
-            generation,
+            fromCache,
             forceRefresh = freshness == CacheService.DetailFreshness.DEEP_STALE,
             keepCachedVisible = cachedFirst
         )
     }
+
+    /**
+     * What an operation starting now would present: this project session's
+     * epoch and the coordinate currently selected, with no observation until a
+     * read reports one. Callers capture this **before** the operation and
+     * re-offer it (with the read's sequence) when the result arrives.
+     *
+     * The coordinate is [selectedCoordinate] rather than any configuration
+     * object, because a loaded detail replaces [currentConfiguration] and a
+     * server may omit its namespace from the response body.
+     */
+    private fun issue(): PresentedResult =
+        PresentedResult(project.currentSessionEpoch(), selectedCoordinate)
 
     /**
      * Moves the caret to [lineIndex] (0-based) and scrolls it into view.
@@ -693,7 +727,11 @@ private fun setupEventHandlers() {
      * Clicking the icon opens "Find Usages" for that key, scanning the project
      * for `${key}` placeholders in @NacosValue / @Value annotations.
      */
-    private fun applyKeyGutterMarkers(configuration: NacosConfiguration, ed: EditorEx) {
+    private fun applyKeyGutterMarkers(
+        configuration: NacosConfiguration,
+        ed: EditorEx,
+        presented: PresentedResult
+    ) {
         val keys = ConfigKeyExtractor.extract(configuration)
         if (keys.isEmpty()) return
 
@@ -702,7 +740,6 @@ private fun setupEventHandlers() {
         // open once the IDE returns to smart mode (plan 9.4).
         if (com.intellij.openapi.project.DumbService.isDumb(project)) return
 
-        val generation = displayGeneration
         coroutineScope.launch(Dispatchers.Default) {
             val usedKeys = NacosConfigKeyReferenceSearcher.findUsedKeys(
                 project, keys.keys,
@@ -712,9 +749,7 @@ private fun setupEventHandlers() {
             if (usedKeys.isEmpty()) return@launch
 
             ApplicationManager.getApplication().invokeLater({
-                if (generation != displayGeneration || currentConfiguration?.getKey() != configuration.getKey()) {
-                    return@invokeLater
-                }
+                if (!presentation.admitAndRecord(presented)) return@invokeLater
                 if (editor !== ed || ed.isDisposed) return@invokeLater
 
                 val document = ed.document
@@ -851,11 +886,9 @@ private fun setupEventHandlers() {
     }
 
    
-    private fun updateMetadata(configuration: NacosConfiguration, generation: Long) {
+    private fun updateMetadata(configuration: NacosConfiguration, presented: PresentedResult) {
         ApplicationManager.getApplication().invokeLater({
-            if (generation != displayGeneration || currentConfiguration?.getKey() != configuration.getKey()) {
-                return@invokeLater
-            }
+            if (!presentation.admitAndRecord(presented)) return@invokeLater
             dataIdLabel.text = configuration.dataId
             val nsDisplay = configuration.tenantId?.takeIf { it.isNotBlank() } ?: "public"
             val typeDisplay = configuration.type ?: "text"
@@ -877,41 +910,45 @@ private fun setupEventHandlers() {
     }
     
     private fun loadConfigurationContent(configuration: NacosConfiguration, forceRefresh: Boolean = false) {
-        loadConfigurationContent(configuration, ++displayGeneration, forceRefresh)
+        loadConfigurationContent(configuration, issue(), forceRefresh)
     }
 
     private fun loadConfigurationContent(
         configuration: NacosConfiguration,
-        generation: Long,
+        issued: PresentedResult,
         forceRefresh: Boolean = false,
         keepCachedVisible: Boolean = false
     ) {
         if (isLoading) return
-        
+
         // Cancel previous loading operation
         currentLoadingJob?.cancel()
-        
+
         setLoadingState(true)
         if (!keepCachedVisible) showCard("loading")
-        
+
         currentLoadingJob = coroutineScope.launch {
             try {
                 val result = detailLoader.load(configuration, forceRefresh)
-                
+
                 // Check if operation was cancelled
                 if (!isActive) return@launch
-                if (generation != displayGeneration || currentConfiguration?.getKey() != configuration.getKey()) {
+
+                // The read reports the observation sequence it took, so this
+                // paint and the cache entry derived from the same read are
+                // ordered by one number (ADR-0047). A failed read reports none,
+                // so its error state is judged on epoch and coordinate alone.
+                val presented = issued.copy(
+                    observation = result.getOrNull()?.observation ?: Observed.NO_OBSERVATION
+                )
+                if (!presentation.admitAndRecord(presented)) {
                     setLoadingState(false)
                     return@launch
                 }
-                
+
                 result.onSuccess { observed ->
                     observed.value?.let { config ->
-                        if (generation != displayGeneration || currentConfiguration?.getKey() != configuration.getKey()) {
-                            setLoadingState(false)
-                            return@let
-                        }
-                        displayConfigurationContentSafely(config)
+                        displayConfigurationContentSafely(config, presented)
                         currentConfiguration = config
                         setLoadingState(false)
                         showCard("content")
@@ -954,7 +991,7 @@ private fun setupEventHandlers() {
                     }
                 }
             } catch (e: Exception) {
-                if (isActive) {
+                if (isActive && presentation.admitAndRecord(issued)) {
                     handleLoadFailure(
                         keepCachedVisible,
                         "Error loading configuration",
@@ -975,13 +1012,12 @@ private fun setupEventHandlers() {
         }
     }
     
-    private fun displayConfigurationContentSafely(configuration: NacosConfiguration) {
-        val generation = displayGeneration
-        val expectedKey = configuration.getKey()
+    private fun displayConfigurationContentSafely(
+        configuration: NacosConfiguration,
+        presented: PresentedResult
+    ) {
         ApplicationManager.getApplication().invokeLater({
-            if (generation != displayGeneration || currentConfiguration?.getKey() != expectedKey) {
-                return@invokeLater
-            }
+            if (!presentation.admitAndRecord(presented)) return@invokeLater
             // Dispose previous editor safely
             disposeEditorSafely()
             
@@ -995,19 +1031,18 @@ private fun setupEventHandlers() {
                 editorState.set(EditorState.NONE)
             }
 
-            if (generation != displayGeneration || currentConfiguration?.getKey() != expectedKey) {
-                return@invokeLater
-            }
-            
+            // The disposal wait above can span a selection or session change.
+            if (!presentation.admitAndRecord(presented)) return@invokeLater
+
             val content = configuration.content
             val fileType = determineFileType(configuration)
-            
+
             // Create new editor safely
             val newEditor = createEditorSafely(content, fileType)
            if (newEditor != null) {
               editor = newEditor
               updateEditorUI(newEditor)
-              applyKeyGutterMarkers(configuration, newEditor)
+              applyKeyGutterMarkers(configuration, newEditor, presented)
               consumePendingNavigation(configuration)
                editButton.isEnabled = true
                updateActionsEnabled()
@@ -1326,13 +1361,10 @@ private fun setupEventHandlers() {
                     draftContent = textToSave,
                     writesEnabled = profile.writeIntent
                 )
-                val expectedKey = config.getKey()
-                val expectedGeneration = displayGeneration
+                val presented = issue()
                 val publishResult = nacosApiService.controlledPublish(session)
                 withContext(Dispatchers.Main) {
-                    if (expectedGeneration != displayGeneration || currentConfiguration?.getKey() != expectedKey) {
-                        return@withContext
-                    }
+                    if (!presentation.admitAndRecord(presented)) return@withContext
                     when (val state = publishResult.state) {
                         is PublishState.Verified -> {
                             val verified = publishResult.verifiedDetail
@@ -1434,11 +1466,7 @@ private fun setupEventHandlers() {
                     configuration = config,
                     currentContent = currentText,
                     gateway = nacosApiService.operationGateway(),
-                    generationProvider = {
-                        project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)
-                            ?.currentEpoch()
-                            ?: displayGeneration
-                    }
+                    sessionEpochProvider = { project.currentSessionEpoch() }
                 ).show()
             }
         }
@@ -1453,10 +1481,12 @@ private fun setupEventHandlers() {
     fun clearConfiguration() {
         // Cancel any ongoing loading operation
         currentLoadingJob?.cancel()
-        displayGeneration++
         setLoadingState(false)
-        
+
+        // Nothing is selected any more, so every result still in flight now
+        // names a coordinate this panel does not present, and is discarded.
         currentConfiguration = null
+        selectedCoordinate = null
         boundEditTarget = null
         disposeEditorSafely()
         showEmptyState()
@@ -1558,7 +1588,7 @@ private fun setupEventHandlers() {
             
             // Update metadata with current configuration
             currentConfiguration?.let { config ->
-                updateMetadata(config, displayGeneration)
+                updateMetadata(config, issue())
             }
         }
     }
