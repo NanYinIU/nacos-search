@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.services.operations
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
 import com.nanyin.nacos.search.models.NacosApiGeneration
+import com.nanyin.nacos.search.services.AuthenticationSessionRegistry
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.settings.AuthMode
@@ -122,66 +123,73 @@ class V1ProtocolAdapterTest {
         // Drive the same evidence the production transport carries: a typed
         // Authentication error with a sanitized body (not a hand-built
         // ProtocolResponse the gateway used to empty out — issue #39).
+        // Login itself now crosses the same transport (issue #96).
         val http = SequencingHttpTransport(
+            { """{"accessToken":"stale","tokenTtl":18000}""" },
             { throw NacosRequestError.Authentication(403, """{"code":403,"message":"token is invalid"}""") },
+            { """{"accessToken":"fresh","tokenTtl":18000}""" },
             { """{"totalCount":0,"pageNumber":1,"pagesAvailable":0,"pageItems":[]}""" }
         )
         val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
-        val authenticator = RecordingV1Authenticator(listOf("stale", "fresh"))
+        val sessions = AuthenticationSessionRegistry()
+        val target = passwordTarget()
 
-        val page = V1ProtocolAdapter(transport, authenticator)
-            .listSummaries(passwordTarget(), SummaryQuery())
+        val page = V1ProtocolAdapter(transport, sessions)
+            .listSummaries(target, SummaryQuery())
             .getOrThrow()
 
         assertEquals(0, page.totalCount)
-        assertEquals(2, http.calls)
-        assertEquals(1, authenticator.invalidations)
-        assertEquals(2, authenticator.requests)
+        assertEquals(4, http.calls)
+        assertEquals("fresh", sessions.completedToken(target.context.identity)?.value)
     }
 
     @Test
     fun `permission denial does not invalidate or replay a Nacos password read`() = runBlocking {
         val http = SequencingHttpTransport(
+            { """{"accessToken":"current","tokenTtl":18000}""" },
             { throw NacosRequestError.Authentication(403, """{"code":403,"message":"permission denied"}""") }
         )
         val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
-        val authenticator = RecordingV1Authenticator(listOf("current"))
+        val sessions = AuthenticationSessionRegistry()
+        val target = passwordTarget()
 
-        val error = V1ProtocolAdapter(transport, authenticator)
-            .listSummaries(passwordTarget(), SummaryQuery())
+        val error = V1ProtocolAdapter(transport, sessions)
+            .listSummaries(target, SummaryQuery())
             .exceptionOrNull()
 
         assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
-        assertEquals(1, http.calls)
-        assertEquals(0, authenticator.invalidations)
-        assertEquals(1, authenticator.requests)
+        assertEquals(2, http.calls)
+        assertEquals("current", sessions.completedToken(target.context.identity)?.value)
     }
 
     @Test
     fun `unmapped gateway token prose does not relogin or replay a Nacos password read`() = runBlocking {
-        val transport = QueuedTransport(ProtocolResponse(403, "upstream says token is invalid"))
-        val authenticator = RecordingV1Authenticator(listOf("current"))
+        val transport = QueuedTransport(
+            ProtocolResponse(200, """{"accessToken":"current","tokenTtl":18000}"""),
+            ProtocolResponse(403, "upstream says token is invalid")
+        )
+        val sessions = AuthenticationSessionRegistry()
+        val target = passwordTarget()
 
-        val error = V1ProtocolAdapter(transport, authenticator)
-            .listSummaries(passwordTarget(), SummaryQuery())
+        val error = V1ProtocolAdapter(transport, sessions)
+            .listSummaries(target, SummaryQuery())
             .exceptionOrNull()
 
         assertInstanceOf(RemoteOperationError.Authentication::class.java, error)
-        assertEquals(1, transport.requests.size)
-        assertEquals(0, authenticator.invalidations)
-        assertEquals(1, authenticator.requests)
+        assertEquals(2, transport.requests.size)
+        assertEquals(1, transport.requests.count { it.path == "/nacos/v1/auth/login" })
+        assertEquals("current", sessions.completedToken(target.context.identity)?.value)
     }
 
     @Test
     fun `Basic and Bearer strategies use only their own headers and never replay`() = runBlocking {
-        val authenticator = RecordingV1Authenticator(listOf("must-not-be-used"))
         val basicTransport = QueuedTransport(ProtocolResponse(401, "not authorized"))
         val bearerTransport = QueuedTransport(ProtocolResponse(401, "not authorized"))
 
-        val basicError = V1ProtocolAdapter(basicTransport, authenticator)
+        val basicError = V1ProtocolAdapter(basicTransport)
             .listSummaries(httpBasicTarget(), SummaryQuery())
             .exceptionOrNull()
-        val bearerError = V1ProtocolAdapter(bearerTransport, authenticator)
+        val bearerError = V1ProtocolAdapter(bearerTransport)
             .listSummaries(bearerTarget(), SummaryQuery())
             .exceptionOrNull()
 
@@ -189,8 +197,8 @@ class V1ProtocolAdapterTest {
         assertInstanceOf(RemoteOperationError.Authentication::class.java, bearerError)
         assertEquals("Basic YWxpY2U6cEBzcw==", basicTransport.requests.single().headers["Authorization"])
         assertEquals("Bearer bearer-token", bearerTransport.requests.single().headers["Authorization"])
-        assertEquals(0, authenticator.requests)
-        assertEquals(0, authenticator.invalidations)
+        assertEquals(0, basicTransport.requests.count { it.path == "/nacos/v1/auth/login" })
+        assertEquals(0, bearerTransport.requests.count { it.path == "/nacos/v1/auth/login" })
     }
 
     private fun anonymousPublicTarget(namespaceId: String = "public"): OperationTarget {
@@ -286,21 +294,6 @@ class V1ProtocolAdapterTest {
         override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
             requests += request
             return queuedResponses.removeFirst()
-        }
-    }
-
-    private class RecordingV1Authenticator(tokens: List<String>) : V1Authenticator {
-        private val tokenSequence = ArrayDeque(tokens)
-        var requests = 0
-        var invalidations = 0
-
-        override suspend fun accessToken(context: NacosOperationContext): String? {
-            requests += 1
-            return tokenSequence.removeFirst()
-        }
-
-        override fun invalidate(context: NacosOperationContext) {
-            invalidations += 1
         }
     }
 

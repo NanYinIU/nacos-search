@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.services.operations
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
 import com.nanyin.nacos.search.models.NacosApiGeneration
+import com.nanyin.nacos.search.services.AuthenticationSessionRegistry
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.settings.AuthMode
@@ -12,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
 class V1PublishContractTest {
@@ -70,55 +72,62 @@ class V1PublishContractTest {
     @Test
     fun `V1 publish is never replayed after an invalid token response`() = runBlocking {
         // Production path: typed Authentication error with sanitized body (issue #39).
+        // Login crosses the same transport (issue #96).
         val http = SequencingHttpTransport(
+            { """{"accessToken":"stale-token","tokenTtl":18000}""" },
             { throw NacosRequestError.Authentication(403, """{"code":403,"message":"token is invalid"}""") },
             // A replaying adapter would consume this by POSTing the same content again.
             { "true" }
         )
         val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
-        val authenticator = TokenCachingV1Authenticator(listOf("stale-token", "fresh-token"))
+        val sessions = AuthenticationSessionRegistry()
 
-        val error = V1ProtocolAdapter(transport, authenticator)
+        val error = V1ProtocolAdapter(transport, sessions)
             .publish(passwordTarget(), publishCommand())
             .exceptionOrNull()
 
-        assertEquals(1, http.calls, "publish must reach the wire exactly once")
+        assertEquals(2, http.calls, "login once then publish must reach the wire exactly once")
         assertInstanceOf(RemoteOperationError.InvalidOrExpiredNacosPasswordToken::class.java, error)
+        assertNull(sessions.completedToken(passwordTarget().context.identity))
     }
 
     @Test
     fun `V1 publish invalidates the rejected token so the next attempt logs in again`() = runBlocking {
         val http = SequencingHttpTransport(
+            { """{"accessToken":"stale-token","tokenTtl":18000}""" },
             { throw NacosRequestError.Authentication(403, """{"code":403,"message":"token is invalid"}""") },
+            { """{"accessToken":"fresh-token","tokenTtl":18000}""" },
             { "true" }
         )
         val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
-        val authenticator = TokenCachingV1Authenticator(listOf("stale-token", "fresh-token"))
-        val adapter = V1ProtocolAdapter(transport, authenticator)
+        val sessions = AuthenticationSessionRegistry()
+        val adapter = V1ProtocolAdapter(transport, sessions)
         val target = passwordTarget()
 
         adapter.publish(target, publishCommand()).exceptionOrNull()
         adapter.publish(target, publishCommand()).getOrThrow()
 
-        assertEquals(1, authenticator.invalidations)
-        assertEquals(2, authenticator.logins, "a rejected token must not be reused by the next write")
-        assertEquals(2, http.calls)
+        assertEquals(4, http.calls, "a rejected token must not be reused by the next write")
+        assertEquals("fresh-token", sessions.completedToken(target.context.identity)?.value)
     }
 
     @Test
     fun `V1 publish keeps the token when the server denies permission`() = runBlocking {
         val http = SequencingHttpTransport(
+            { """{"accessToken":"valid-token","tokenTtl":18000}""" },
             { throw NacosRequestError.Authentication(403, """{"code":403,"message":"permission denied"}""") }
         )
         val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
-        val authenticator = TokenCachingV1Authenticator(listOf("valid-token"))
+        val sessions = AuthenticationSessionRegistry()
+        val target = passwordTarget()
 
-        val error = V1ProtocolAdapter(transport, authenticator)
-            .publish(passwordTarget(), publishCommand())
+        val error = V1ProtocolAdapter(transport, sessions)
+            .publish(target, publishCommand())
             .exceptionOrNull()
 
         assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
-        assertEquals(0, authenticator.invalidations, "a permission denial says nothing about the token")
+        assertEquals("valid-token", sessions.completedToken(target.context.identity)?.value,
+            "a permission denial says nothing about the token")
     }
 
     @Test
@@ -197,29 +206,6 @@ class V1PublishContractTest {
         override fun post(request: NacosRequestExecutor.TransportRequest): String {
             calls += 1
             return remaining.removeFirst().invoke()
-        }
-    }
-
-    /**
-     * Models the caching the real authenticator performs: a token is reused until
-     * something invalidates it. An adapter that fails to invalidate a rejected
-     * token therefore keeps presenting it, which is what these tests detect.
-     */
-    private class TokenCachingV1Authenticator(tokens: List<String>) : V1Authenticator {
-        private val tokenSequence = ArrayDeque(tokens)
-        private var cached: String? = null
-        var logins = 0
-        var invalidations = 0
-
-        override suspend fun accessToken(context: NacosOperationContext): String? {
-            cached?.let { return it }
-            logins += 1
-            return tokenSequence.removeFirst().also { cached = it }
-        }
-
-        override fun invalidate(context: NacosOperationContext) {
-            invalidations += 1
-            cached = null
         }
     }
 }

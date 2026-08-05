@@ -85,18 +85,44 @@ class AuthenticationSessionRegistryTest {
         assertNull(registry.completedToken(key.identity))
     }
 
-    private fun executionKey(principal: String, accessRevision: Long, profileRevision: Long): AuthenticationExecutionKey =
+    @Test
+    fun `identities that differ in auth mode never share a completed token`() = runBlocking {
+        val registry = AuthenticationSessionRegistry()
+        val password = executionKey("alice", accessRevision = 2, profileRevision = 3, authMode = AuthMode.NACOS_PASSWORD)
+        val basic = executionKey("alice", accessRevision = 2, profileRevision = 3, authMode = AuthMode.HTTP_BASIC)
+        val logins = AtomicInteger()
+
+        registry.getOrLogin(password) { token(logins.incrementAndGet().toString()) }
+        registry.getOrLogin(basic) { token(logins.incrementAndGet().toString()) }
+
+        assertEquals(2, logins.get())
+        assertEquals("1", registry.completedToken(password.identity)?.value)
+        assertEquals("2", registry.completedToken(basic.identity)?.value)
+    }
+
+    private fun executionKey(
+        principal: String,
+        accessRevision: Long,
+        profileRevision: Long,
+        authMode: AuthMode = AuthMode.TOKEN,
+        generation: NacosApiGeneration = NacosApiGeneration.V1
+    ): AuthenticationExecutionKey =
         AuthenticationExecutionKey(
             identity = AccessIdentity.ofProfile(
                 profileId = "dev",
                 accessRevision = accessRevision,
                 canonicalEndpoint = "https://nacos.example",
-                resolvedGeneration = NacosApiGeneration.V1,
-                authMode = AuthMode.TOKEN,
+                resolvedGeneration = generation,
+                authMode = authMode,
                 principal = principal
             ),
             profileRevision = profileRevision,
-            strategy = V1AuthenticationStrategy.NACOS_PASSWORD
+            strategy = when (authMode) {
+                AuthMode.HTTP_BASIC, AuthMode.BASIC -> V1AuthenticationStrategy.HTTP_BASIC
+                AuthMode.BEARER_TOKEN -> V1AuthenticationStrategy.BEARER_TOKEN
+                AuthMode.ANONYMOUS -> V1AuthenticationStrategy.ANONYMOUS
+                else -> V1AuthenticationStrategy.NACOS_PASSWORD
+            }
         )
 
     private fun token(value: String) = AuthenticationToken(value, System.currentTimeMillis() + 60_000)

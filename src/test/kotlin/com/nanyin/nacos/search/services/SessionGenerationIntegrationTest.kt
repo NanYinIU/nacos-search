@@ -346,6 +346,9 @@ class SessionGenerationIntegrationTest {
      * attempt. Tracked identities are the assertion because that is exactly the
      * residue the registry keeps.
      *
+     * Diagnostics now build a throwaway [AuthenticationSessionRegistry] so the
+     * application registry stays untouched (issue #96).
+     *
      * The credential must be non-blank: `V1ProtocolAdapter.validate` rejects a
      * NACOS_PASSWORD target with an empty secret before authentication is ever
      * reached, which would make this pass no matter which authenticator is
@@ -356,7 +359,7 @@ class SessionGenerationIntegrationTest {
     fun `NACOS_PASSWORD diagnostics leave no state in the shared authentication registry`() = runBlocking {
         val authService = com.intellij.openapi.application.ApplicationManager.getApplication()
             .getService(NacosAuthService::class.java)
-        val before = authService.v1SessionIdentities()
+        val before = authService.sessionIdentities()
 
         val report = harness.apiService.diagnoseConnection(
             DiagnosticSnapshot(
@@ -371,7 +374,7 @@ class SessionGenerationIntegrationTest {
 
         assertEquals(
             before,
-            authService.v1SessionIdentities(),
+            authService.sessionIdentities(),
             "a diagnostic must leave no authentication state behind"
         )
         // It did reach V1 authentication rather than stopping earlier: the read

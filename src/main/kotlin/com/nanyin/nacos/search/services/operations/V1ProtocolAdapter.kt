@@ -9,6 +9,9 @@ import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosOperationContext
+import com.nanyin.nacos.search.services.AuthenticationExecutionKey
+import com.nanyin.nacos.search.services.AuthenticationSessionRegistry
+import com.nanyin.nacos.search.services.AuthenticationToken
 import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeout
@@ -106,41 +109,29 @@ sealed class RemoteOperationError(message: String, cause: Throwable? = null) : E
     class AmbiguousWriteResult(message: String = "Write result cannot be confirmed") : RemoteOperationError(message)
 }
 
-/** V1 obtains Nacos-password tokens from this application-memory boundary. */
-interface V1Authenticator {
-    suspend fun accessToken(context: NacosOperationContext): String?
-    fun invalidate(context: NacosOperationContext)
-}
-
-private object UnavailableV1Authenticator : V1Authenticator {
-    override suspend fun accessToken(context: NacosOperationContext): String? = null
-    override fun invalidate(context: NacosOperationContext) = Unit
-}
-
 /**
  * Owns every V1 wire decision for the read path: method, path,
  * query, public-namespace encoding, headers, parsing, and error mapping.
+ *
+ * Completed Nacos-password tokens live only in [sessions] (ADR-0012 /
+ * issue #96). This dialect supplies the login request and response shape
+ * over [transport]; it does not own a private completed-token store.
  */
 class V1ProtocolAdapter(
     private val transport: ProtocolTransport,
+    private val sessions: AuthenticationSessionRegistry = AuthenticationSessionRegistry(),
     private val gson: Gson = Gson()
 ) : ProtocolAdapter, HistoryCapability, NamespaceDiscoveryCapability {
-    private var authenticator: V1Authenticator = UnavailableV1Authenticator
     private var readBudgetMillis: Long = DEFAULT_READ_BUDGET_MILLIS
     private var clock: () -> Long = System::currentTimeMillis
 
-    constructor(transport: ProtocolTransport, authenticator: V1Authenticator) : this(transport) {
-        this.authenticator = authenticator
-    }
-
     internal constructor(
         transport: ProtocolTransport,
-        authenticator: V1Authenticator,
+        sessions: AuthenticationSessionRegistry,
         readBudgetMillis: Long,
         clock: () -> Long,
         gson: Gson
-    ) : this(transport, gson) {
-        this.authenticator = authenticator
+    ) : this(transport, sessions, gson) {
         this.readBudgetMillis = readBudgetMillis
         this.clock = clock
     }
@@ -268,7 +259,7 @@ class V1ProtocolAdapter(
         // credential the server has already refused.
         val response = executeWithinBudget(request, deadline)
         if (recoverableNacosPasswordTokenFailure(target, response) != null) {
-            authenticator.invalidate(target.context)
+            sessions.invalidate(target.context.identity)
         }
         when (val body = ensureSuccess(response).trim().lowercase()) {
             "true" -> PublishOutcome.Written(response.body)
@@ -286,7 +277,7 @@ class V1ProtocolAdapter(
             val deadline = clock() + readBudgetMillis
             val firstResponse = executeWithinBudget(build(authenticationFor(target, deadline)), deadline)
             if (recoverableNacosPasswordTokenFailure(target, firstResponse) != null) {
-                authenticator.invalidate(target.context)
+                sessions.invalidate(target.context.identity)
                 executeWithinBudget(build(authenticationFor(target, deadline)), deadline)
             } else {
                 firstResponse
@@ -509,8 +500,9 @@ class V1ProtocolAdapter(
         when (target.context.authenticationStrategy) {
             V1AuthenticationStrategy.ANONYMOUS -> RequestAuthentication()
             V1AuthenticationStrategy.NACOS_PASSWORD -> {
-                val token = withinBudget(deadline) { authenticator.accessToken(target.context) }
-                    ?: throw RemoteOperationError.Authentication(401)
+                val token = withinBudget(deadline) {
+                    sessions.getOrLogin(executionKey(target)) { performLogin(target) }?.value
+                } ?: throw RemoteOperationError.Authentication(401)
                 RequestAuthentication(query = listOf("accessToken" to token))
             }
             V1AuthenticationStrategy.HTTP_BASIC -> {
@@ -522,6 +514,51 @@ class V1ProtocolAdapter(
                 headers = mapOf("Authorization" to "Bearer ${target.context.credential.secret}")
             )
         }
+
+    private fun executionKey(target: OperationTarget): AuthenticationExecutionKey =
+        AuthenticationExecutionKey(
+            identity = target.context.identity,
+            profileRevision = target.context.profileRevision,
+            strategy = target.context.authenticationStrategy
+        )
+
+    /**
+     * Dialect-owned V1 login wire over the same [transport] as ordinary
+     * operations. Credentials stay on the request body only (ADR-0009 /
+     * ADR-0021 / issue #96).
+     */
+    private suspend fun performLogin(target: OperationTarget): AuthenticationToken? {
+        val username = target.context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty()
+        val password = target.context.credential.secret
+        if (username.isBlank() || password.isBlank()) return null
+        val formData =
+            "username=${URLEncoder.encode(username, StandardCharsets.UTF_8.name())}" +
+                "&password=${URLEncoder.encode(password, StandardCharsets.UTF_8.name())}"
+        val request = ProtocolRequest(
+            method = "POST",
+            endpoint = target.context.endpoint.value,
+            path = AUTH_LOGIN_PATH,
+            query = emptyList(),
+            headers = mapOf(
+                "Accept" to "application/json",
+                "Content-Type" to "application/x-www-form-urlencoded"
+            ),
+            body = formData
+        )
+        val response = transport.execute(request)
+        if (response.status !in 200..299) {
+            return null
+        }
+        val json = runCatching { gson.fromJson(response.body, com.google.gson.JsonObject::class.java) }.getOrNull()
+            ?: return null
+        val accessToken = json.get("accessToken")?.asString?.takeIf { it.isNotBlank() } ?: return null
+        val tokenTtl = json.get("tokenTtl")?.asLong ?: DEFAULT_TOKEN_TTL_SECONDS
+        val now = clock()
+        return AuthenticationToken(
+            value = accessToken,
+            expiresAtMillis = now + tokenTtl * 1000 - TOKEN_REFRESH_BUFFER_MILLIS
+        )
+    }
 
     private suspend fun executeWithinBudget(request: ProtocolRequest, deadline: Long): ProtocolResponse =
         withinBudget(deadline) { transport.execute(request) }
@@ -655,6 +692,9 @@ class V1ProtocolAdapter(
         const val CONFIGS_PATH = "/nacos/v1/cs/configs"
         const val NAMESPACES_PATH = "/nacos/v1/console/namespaces"
         const val HISTORY_PATH = "/nacos/v1/cs/history"
+        const val AUTH_LOGIN_PATH = "/nacos/v1/auth/login"
         const val DEFAULT_READ_BUDGET_MILLIS = 30_000L
+        const val DEFAULT_TOKEN_TTL_SECONDS = 18_000L
+        const val TOKEN_REFRESH_BUFFER_MILLIS = 5 * 60 * 1000L
     }
 }

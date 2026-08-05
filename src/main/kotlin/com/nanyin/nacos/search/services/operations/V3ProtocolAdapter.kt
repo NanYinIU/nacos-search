@@ -8,11 +8,13 @@ import com.google.gson.JsonParseException
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.services.AuthenticationExecutionKey
+import com.nanyin.nacos.search.services.AuthenticationSessionRegistry
+import com.nanyin.nacos.search.services.AuthenticationToken
 import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
 import kotlinx.coroutines.CancellationException
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.ConcurrentHashMap
 
 /** Optional capabilities a V3 adapter may declare for the current identity. */
 enum class V3Capability {
@@ -29,13 +31,16 @@ enum class V3Capability {
  *
  * Upper layers must not branch on API generation. All V3-specific wire
  * shape lives here and behind the [ProtocolAdapter] contract.
+ *
+ * Completed Nacos-password tokens live only in [sessions] (ADR-0012 /
+ * issue #96). This dialect supplies the login request and response shape;
+ * it does not own a private completed-token store.
  */
 class V3ProtocolAdapter(
     private val transport: ProtocolTransport,
+    private val sessions: AuthenticationSessionRegistry = AuthenticationSessionRegistry(),
     private val gson: Gson = Gson()
 ) : ProtocolAdapter, HistoryCapability, NamespaceDiscoveryCapability {
-
-    private val tokenCache = ConcurrentHashMap<String, CachedAccessToken>()
 
     override suspend fun probe(target: OperationTarget): Result<Unit> = runCatching {
         validate(target)
@@ -310,7 +315,7 @@ class V3ProtocolAdapter(
             isInvalidOrExpiredToken(response)
 
     private fun invalidateAccessToken(target: OperationTarget) {
-        tokenCache.remove(tokenCacheKey(target))
+        sessions.invalidate(target.context.identity)
     }
 
     private fun applyAuth(request: ProtocolRequest, auth: RequestAuthentication): ProtocolRequest =
@@ -340,21 +345,26 @@ class V3ProtocolAdapter(
         )
     }
 
-    private fun tokenCacheKey(target: OperationTarget): String = listOf(
-        target.context.endpoint.value,
-        target.context.identity.principal,
-        target.context.accessRevision.toString()
-    ).joinToString("|")
+    private fun executionKey(target: OperationTarget): AuthenticationExecutionKey =
+        AuthenticationExecutionKey(
+            identity = target.context.identity,
+            profileRevision = target.context.profileRevision,
+            strategy = target.context.authenticationStrategy
+        )
 
     private suspend fun loginAccessToken(target: OperationTarget, forceRefresh: Boolean): String? {
-        val cacheKey = tokenCacheKey(target)
-        if (!forceRefresh) {
-            tokenCache[cacheKey]?.takeIf { it.expiresAtEpochMs > System.currentTimeMillis() }?.let {
-                return it.accessToken
-            }
-        } else {
-            tokenCache.remove(cacheKey)
+        val key = executionKey(target)
+        if (forceRefresh) {
+            sessions.invalidate(key.identity)
         }
+        return sessions.getOrLogin(key) { performLogin(target) }?.value
+    }
+
+    /**
+     * Dialect-owned V3 login wire. Credentials stay on the request body only —
+     * never in logs, equality, or the session key (ADR-0009).
+     */
+    private suspend fun performLogin(target: OperationTarget): AuthenticationToken? {
         val username = target.context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty()
         val password = target.context.credential.secret
         if (username.isBlank() || password.isBlank()) return null
@@ -382,12 +392,11 @@ class V3ProtocolAdapter(
         val accessToken = tokenObject.get("accessToken")?.asString?.takeIf { it.isNotBlank() }
             ?: throw RemoteOperationError.Protocol("V3 login response missing accessToken")
         val ttlSeconds = tokenObject.get("tokenTtl")?.asLong ?: DEFAULT_TOKEN_TTL_SECONDS
-        tokenCache[cacheKey] = CachedAccessToken(
-            accessToken = accessToken,
-            expiresAtEpochMs = System.currentTimeMillis() +
+        return AuthenticationToken(
+            value = accessToken,
+            expiresAtMillis = System.currentTimeMillis() +
                 ((ttlSeconds - TOKEN_EXPIRY_SKEW_SECONDS) * 1000L)
         )
-        return accessToken
     }
 
     private fun extractLoginTokenObject(body: String): JsonObject? {
@@ -660,11 +669,6 @@ class V3ProtocolAdapter(
     private data class RequestAuthentication(
         val query: List<Pair<String, String>> = emptyList(),
         val headers: Map<String, String> = emptyMap()
-    )
-
-    private data class CachedAccessToken(
-        val accessToken: String,
-        val expiresAtEpochMs: Long
     )
 
     private data class V3Envelope(
