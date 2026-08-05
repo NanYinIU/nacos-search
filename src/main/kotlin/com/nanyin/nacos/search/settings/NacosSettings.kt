@@ -9,6 +9,7 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.ProfileIntent
 
 /**
  * Persistent settings for Nacos plugin
@@ -331,57 +332,166 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             .filter { it.profileId.isNotBlank() }
             .associate { it.profileId to it.copyPreferences() }
 
-    fun applyServers(newServers: List<NacosServerConfig>, newActiveId: String) {
-        val previousIds = servers.map { it.id }.toSet()
-        val previousActiveId = activeServerId
-        val previousRevisions = profiles.associate { it.id to (it.profileRevision to it.accessRevision) }
-        val previousNamespaces = servers.associate { it.id to it.namespace }
-        val currentIds = newServers.map { it.id }.toSet()
-        // Entomb profiles that are about to disappear before publishing the new
-        // set, so late in-flight responses for the deleted identity cannot
-        // resurrect their cache, token, or session state (design §19.2).
-        (previousIds - currentIds).forEach { profileId ->
-            entombDeletedProfile(profileId)
-            // Slot removal is owned by the credential-slot seam and is
-            // idempotent — retrying after a partial failure is safe (#102).
-            DefaultCredentialSlotStore.removeAllForProfile(profileId)
-        }
-        servers = newServers.map { it.copy() }.toMutableList()
-        activeServerId = newActiveId
-        // Preference records are published from the same write: server-entry
-        // preference fields remain a dual-write input for the settings dialog
-        // until intents own them (issue #106), but runtime reads only the record.
-        publishEnvironmentPreferencesFromServers(newServers)
-        syncFromActiveServer()
-        persistCredentials(previousIds)
-        updateProfilesFromServers()
-        // Preference-only changes (e.g. navigationDetailPrefetchEnabled,
-        // allowCrossNamespaceNavigation, displayName) must not advance the
-        // session epoch (ADR-0042). Bump only when the active server set,
-        // connection-affecting revisions, or per-server namespace selection
-        // actually changed.
-        val epochRelevant = previousActiveId != activeServerId ||
-            previousIds != currentIds ||
-            profiles.any { profile ->
-                val prev = previousRevisions[profile.id]
-                prev == null ||
-                    prev.first != profile.profileRevision ||
-                    prev.second != profile.accessRevision
-            } ||
-            servers.any { server -> previousNamespaces[server.id] != server.namespace }
-        if (epochRelevant) {
-            com.nanyin.nacos.search.services.ProjectSessionEpochs.bumpAllOpenProjects()
-        }
+    /**
+     * Compatibility entry that converts the legacy server list into
+     * [ProfileIntent]s and publishes through [applyProfileIntents]. Prefer the
+     * intent API for new call sites; this bridge keeps the settings dialog and
+     * existing tests compiling until they edit intents directly (#47 / #106).
+     */
+    fun applyServers(newServers: List<NacosServerConfig>, newActiveId: String): ProfileStoreWriteOutcome {
+        val intents = newServers.map { ProfileIntent.fromServerConfig(it) }
+        return applyProfileIntents(intents, newActiveId, dualWriteServers = newServers)
     }
 
     /**
-     * Replaces preference records from the server-entry dual-write surface.
-     * Drops records for removed environments; does not touch profile revisions.
+     * Single write entry that turns profile intents into published environment
+     * profiles (ADR-0049 / issue #103). The store owns revision derivation and
+     * credential staging; this host applies the outcome, entombs removals, and
+     * dual-writes the legacy server list for the settings dialog.
      */
-    private fun publishEnvironmentPreferencesFromServers(newServers: List<NacosServerConfig>) {
-        environmentPreferences = newServers
-            .map { EnvironmentPreferences.fromLegacyServer(it) }
+    fun applyProfileIntents(
+        intents: List<ProfileIntent>,
+        newActiveId: String,
+        dualWriteServers: List<NacosServerConfig>? = null,
+        credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore
+    ): ProfileStoreWriteOutcome {
+        val previousIds = profiles.map { it.id }.filter { it.isNotBlank() }.toSet()
+            .ifEmpty { servers.map { it.id }.toSet() }
+        val previousActiveId = activeServerId
+        val previousNamespaces = servers.associate { it.id to it.namespace }
+        val previousPreferences = environmentPreferences.map { it.copyPreferences() }
+        // Defensive copies so the store never mutates live beans while deciding.
+        val previousProfiles = profiles.map { it.copy(cacheTombstones = it.cacheTombstones.toMutableList()) }
+
+        val store = EnvironmentProfileStore(credentialSlots)
+        val rawOutcome = store.applyIntents(
+            intents = intents,
+            activeProfileId = newActiveId,
+            previousProfiles = previousProfiles,
+            previousPreferences = previousPreferences,
+            previousActiveId = previousActiveId,
+            previousSuggestedNamespaces = previousNamespaces
+        )
+
+        // Honour the caller's requested active id when that profile published;
+        // the store already prefers it, but a blank previous selection must not
+        // hide a real switch the host asked for after a dual-write realign.
+        val resolvedActive = newActiveId.takeIf { id ->
+            id.isNotBlank() && rawOutcome.publishedProfiles.any { it.id == id }
+        } ?: rawOutcome.activeProfileId
+        val activeChanged = previousActiveId.isNotBlank() &&
+            resolvedActive.isNotBlank() &&
+            previousActiveId != resolvedActive
+        val outcome = if (activeChanged != rawOutcome.activeProfileIdChanged ||
+            resolvedActive != rawOutcome.activeProfileId
+        ) {
+            rawOutcome.copy(
+                activeProfileId = resolvedActive,
+                activeProfileIdChanged = activeChanged
+            )
+        } else {
+            rawOutcome
+        }
+
+        // Entomb and drop credential slots for removed profiles before the new
+        // set becomes visible, so late in-flight responses cannot resurrect
+        // cache, token, or session state (design §19.2 / ADR-0025).
+        outcome.removedProfileIds.forEach { profileId ->
+            entombDeletedProfile(profileId)
+            credentialSlots.removeAllForProfile(profileId)
+        }
+
+        profiles = outcome.publishedProfiles
+            .map { it.copy(cacheTombstones = it.cacheTombstones.toMutableList()) }
             .toMutableList()
+        environmentPreferences = outcome.publishedPreferences
+            .map { it.copyPreferences() }
+            .toMutableList()
+        activeServerId = outcome.activeProfileId.ifBlank { newActiveId }
+        migratedDefaultProfileId = activeServerId
+        migratedDefaultNamespaceId = outcome.suggestedNamespaces[activeServerId]
+            ?.ifBlank { "public" }
+            ?: "public"
+        profileMigrationCompleted = true
+        credentialSlotsPublished = true
+
+        // Dual-write the legacy server list so the settings dialog and flat
+        // mirrors keep working. Preference fields on servers are filled from
+        // the published records, not left as a second source of truth.
+        servers = (dualWriteServers ?: intentsToLegacyServers(intents, outcome))
+            .map { server ->
+                val prefs = outcome.publishedPreferences
+                    .firstOrNull { it.profileId == server.id }
+                    ?: EnvironmentPreferences.defaultsFor(server.id)
+                val ns = outcome.suggestedNamespaces[server.id] ?: server.namespace
+                server.copy(
+                    namespace = ns,
+                    allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
+                    navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled
+                )
+            }
+            .toMutableList()
+        // Preserve server order from the dual-write / intent order; profiles
+        // already follow intent order from the store.
+        if (servers.isEmpty() && profiles.isNotEmpty()) {
+            servers = profiles.map { profileToLegacyServer(it, outcome) }.toMutableList()
+        }
+
+        syncFromActiveServer()
+        persistCredentials(previousIds)
+
+        // Preference-only / display-only / pure-reorder writes must not advance
+        // the session epoch (ADR-0042). The store outcome is authoritative.
+        if (outcome.isOperationalChange()) {
+            com.nanyin.nacos.search.services.ProjectSessionEpochs.bumpAllOpenProjects()
+        }
+        return outcome
+    }
+
+    private fun intentsToLegacyServers(
+        intents: List<ProfileIntent>,
+        outcome: ProfileStoreWriteOutcome
+    ): List<NacosServerConfig> =
+        intents.map { intent ->
+            val id = intent.profileId
+            val prefs = outcome.publishedPreferences
+                .firstOrNull { it.profileId == id }
+                ?: intent.preferences
+            NacosServerConfig(
+                id = id,
+                displayName = intent.displayName,
+                serverUrl = intent.endpoint,
+                username = intent.principal,
+                password = intent.secret,
+                namespace = outcome.suggestedNamespaces[id] ?: intent.suggestedNamespace,
+                apiPolicy = intent.apiPolicy,
+                authMode = intent.authMode,
+                writeIntent = intent.writeIntent,
+                allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
+                navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled
+            )
+        }
+
+    private fun profileToLegacyServer(
+        profile: EnvironmentProfile,
+        outcome: ProfileStoreWriteOutcome
+    ): NacosServerConfig {
+        val prefs = outcome.publishedPreferences
+            .firstOrNull { it.profileId == profile.id }
+            ?: EnvironmentPreferences.defaultsFor(profile.id)
+        return NacosServerConfig(
+            id = profile.id,
+            displayName = profile.displayName,
+            serverUrl = profile.canonicalEndpoint,
+            username = profile.principal,
+            password = "",
+            namespace = outcome.suggestedNamespaces[profile.id] ?: "public",
+            apiPolicy = profile.apiPolicy,
+            authMode = profile.authMode,
+            writeIntent = profile.writeIntent,
+            allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
+            navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled
+        )
     }
 
     /**
@@ -461,13 +571,27 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             ?: activeServerId
     }
 
+    /**
+     * Immutable snapshot of a published environment profile. Callers must not
+     * mutate the returned instance and expect it to publish — only
+     * [applyProfileIntents] / [applyServers] write profiles.
+     */
     fun getProfile(profileId: String): EnvironmentProfile? {
         migrateLegacyProfiles()
         ensureProfilesForServers()
-        return profiles.firstOrNull { it.id == profileId }
+        val live = profiles.firstOrNull { it.id == profileId } ?: return null
+        return live.copy(cacheTombstones = live.cacheTombstones.toMutableList())
     }
 
+    /** Immutable snapshot of the active environment profile, if any. */
     fun getActiveProfile(): EnvironmentProfile? = getProfile(resolveDefaultProfileId())
+
+    /** Immutable snapshots of every published environment profile, in store order. */
+    fun publishedProfiles(): List<EnvironmentProfile> {
+        migrateLegacyProfiles()
+        ensureProfilesForServers()
+        return profiles.map { it.copy(cacheTombstones = it.cacheTombstones.toMutableList()) }
+    }
 
     /** Captures a complete immutable context before cache reads or network I/O. */
     fun captureOperationContext(profileId: String? = null): Result<NacosOperationContext> {
@@ -587,53 +711,13 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         }
     }
 
-    private fun updateProfilesFromServers() {
-        val existing = profiles.associateBy { it.id }
-        val slots = DefaultCredentialSlotStore
-        val stager = CredentialSlotStager(slots)
-        profiles = servers.mapNotNull { server ->
-            val migrated = EnvironmentProfile.fromLegacy(server)
-            val previous = existing[server.id]
-            // Compare against the durable published slot — not the in-memory
-            // server password map. After a failed stage the server list may
-            // already hold the new secret while the profile still names the
-            // old slot; using the slot is what lets a retry open a new revision
-            // instead of trying to overwrite the immutable previous one.
-            val publishedSecret = previous?.let { profile ->
-                slots.read(profile.id, profile.credentialSlotVersion).orEmpty()
-            }.orEmpty()
-            val credentialChanged = previous != null && publishedSecret != server.password
-            val credentialVersion = if (credentialChanged) previous!!.credentialSlotVersion + 1 else previous?.credentialSlotVersion ?: 1
-            val credentialSlotId = credentialSlotId(server.id, credentialVersion)
-            val updated = previous?.withUpdated(
-                canonicalEndpoint = migrated.canonicalEndpoint,
-                apiPolicy = migrated.apiPolicy,
-                authMode = migrated.authMode,
-                principal = migrated.principal,
-                writeIntent = server.writeIntent,
-                credentialSlotId = credentialSlotId,
-                credentialSlotVersion = credentialVersion
-            ) ?: migrated.copy(
-                credentialSlotId = credentialSlotId,
-                credentialSlotVersion = credentialVersion,
-                writeIntent = server.writeIntent
-            )
-            // Stage before publication. A failed stage must not make the pending
-            // revision visible — keep the previous published profile (ADR-0035).
-            when (stager.stage(updated, server.password)) {
-                is CredentialStageResult.Success -> updated.copy(displayName = server.displayName)
-                is CredentialStageResult.Failure -> previous?.copy(displayName = server.displayName)
-            }
-        }.toMutableList()
-        migratedDefaultProfileId = activeServerId
-        migratedDefaultNamespaceId = namespace.ifBlank { "public" }
-        profileMigrationCompleted = true
-        credentialSlotsPublished = true
-    }
-
     /**
      * Writes each server's password to [NacosCredentialStore] and removes
      * credentials for servers that no longer exist.
+     *
+     * Revision-pinned profile slots are owned by [EnvironmentProfileStore]
+     * via [CredentialSlotStore]; this only maintains the legacy server-id keys
+     * used by migration and the settings dual-write surface.
      */
     private fun persistCredentials(previousIds: Set<String>) {
         val currentIds = servers.map { it.id }.toSet()

@@ -1067,21 +1067,10 @@ class NacosConfigurable @JvmOverloads constructor(
         admitProfileDeletionGuards()
         admitEnvironmentRealignGuards()
 
-        // Decide connection-vs-preferences from the profile's access revision
-        // (endpoint, API policy, auth strategy, principal, secret). The old
-        // hand-built signature omitted password and API policy, so those
-        // changes incorrectly published preferences-only (issue #41). Never
-        // put the credential value into any comparison key.
-        val oldActiveId = settings.activeServerId
-        val oldAccessRevision = settings.getActiveProfile()?.accessRevision
-        // Namespace is not part of the access revision (it is not an
-        // EnvironmentProfile field), but it still selects which dataset the tool
-        // window shows, so it must keep forcing a reload the way the old
-        // signature did. Connection timeout deliberately does not.
-        val oldNamespace = settings.getActiveServer().namespace
-
-        // Apply draft to settings
-        settings.applyServers(draftServers, draftActiveId)
+        // Publish through the profile-intent store. The write outcome is the
+        // sole classification for connection-vs-preferences notifications —
+        // do not re-compare signatures, passwords, or list positions (#103).
+        val outcome = settings.applyServers(draftServers, draftActiveId)
 
         // Keep the current project's tool-window selection on the same profile
         // as the blue-dot so Settings and the search panel stay aligned.
@@ -1098,15 +1087,13 @@ class NacosConfigurable @JvmOverloads constructor(
         val selectedLanguage = languageComboBox.selectedItem as LanguageService.SupportedLanguage
         languageService.setLanguage(selectedLanguage.code)
 
-        val connectionChanged = oldActiveId != settings.activeServerId ||
-            settings.getActiveProfile()?.accessRevision != oldAccessRevision ||
-            settings.getActiveServer().namespace != oldNamespace
-
         val publisher = ApplicationManager.getApplication().messageBus
             .syncPublisher(NacosSettingsListener.TOPIC)
-        if (connectionChanged) {
+        if (outcome.isOperationalChange()) {
             publisher.settingsChanged()
         } else {
+            // Preferences, display-only, pure reorder, or no-op after Apply:
+            // never treat as connection-level (ADR-0042 / #103).
             publisher.preferencesChanged()
         }
     }
