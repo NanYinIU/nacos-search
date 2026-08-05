@@ -1,0 +1,33 @@
+src/main/kotlin/com/nanyin/nacos/search/models/AccessIdentity.kt
+  s_cfe8150c4651fb::t_d5169eb240f1d4 6-15
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_cfe8150c4651fb::t_b230974776f7e0 255-256,261-262,264-268,271
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_cfe8150c4651fb::t_f3965889b035bb 585-598
+  s_cfe8150c4651fb::t_a151fa8f13526a 181-185
+src/main/kotlin/com/nanyin/nacos/search/services/ResolvedGenerationLocator.kt
+  s_cfe8150c4651fb::t_e4d3b907979955 67-69
+  s_cfe8150c4651fb::t_f0f2ef1ea71bf9 4,15,45-49,51,53,66,76-78,80-81,83-88,90-91,93-95,99-129,144,153
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProvider.kt
+  s_cfe8150c4651fb::t_6f088114dd2010 195-201,208
+docs/adr/0053-resolve-the-api-generation-on-cache-hot-paths.md
+  s_cfe8150c4651fb::t_a8657643f10d23 5,7
+src/main/kotlin/com/nanyin/nacos/search/services/LastKnownGenerationStore.kt
+  s_cfe8150c4651fb::t_44b01cb0695baa 9,15-19,37,40-43,47-48,52-53,57,73,78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "6b595f9d76231d63b9da9dcf4139c4fcc0b1defe",
+  "prompts": {},
+  "sessions": {
+    "s_cfe8150c4651fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8ce0044d-4c0c-4ebb-bbfb-18ce078076c5",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
