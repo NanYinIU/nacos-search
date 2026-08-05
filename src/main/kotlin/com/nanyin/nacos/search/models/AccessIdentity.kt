@@ -3,7 +3,16 @@ package com.nanyin.nacos.search.models
 import com.nanyin.nacos.search.settings.AuthMode
 
 /** The protocol generation that was resolved before an operation started. */
-enum class NacosApiGeneration { UNKNOWN, V1, V3 }
+enum class NacosApiGeneration {
+    UNKNOWN, V1, V3;
+
+    /**
+     * Whether this names a concrete protocol. [UNKNOWN] is the absence of an
+     * answer, not a third protocol: it dispatches nothing and addresses a cache
+     * key space that only an unresolved AUTO profile ever reads.
+     */
+    fun isResolved(): Boolean = this == V1 || this == V3
+}
 
 /**
  * Identifies the user/environment context that a cache entry belongs to.

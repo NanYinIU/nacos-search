@@ -9,6 +9,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.util.xmlb.XmlSerializerUtil
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.services.NamespaceService
+import com.nanyin.nacos.search.services.ResolvedGenerationLocator
 import com.nanyin.nacos.search.services.captureAccessIdentity
 
 /** Project-local state; profiles themselves remain application-wide. */
@@ -107,9 +108,18 @@ internal fun Project.selectedNacosNamespaceId(
     return namespaceService.getCurrentNamespace()?.namespaceId
 }
 
+/**
+ * The access identity this project's cache reads address. The resolved API
+ * generation comes from this project's own session first (ADR-0004: sessions are
+ * per-project), then from the persisted last-known value — never from a
+ * credential (issue #72).
+ */
 internal fun Project.captureSelectedAccessIdentity(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-): AccessIdentity = settings.captureAccessIdentity(selectedNacosProfileId(settings))
+): AccessIdentity = settings.captureAccessIdentity(
+    selectedNacosProfileId(settings),
+    ResolvedGenerationLocator.forProject(this)
+)
 
 internal fun Project.allowCrossNamespaceNavigation(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)

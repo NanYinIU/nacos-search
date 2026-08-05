@@ -16,8 +16,6 @@ import com.nanyin.nacos.search.services.CacheSnapshot
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NamespaceIndexRefreshService
-import com.nanyin.nacos.search.services.captureAccessIdentity
-import com.nanyin.nacos.search.services.operations.ObservedDetailRecorder
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.allowCrossNamespaceNavigation
 import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
@@ -160,7 +158,7 @@ class NacosValueLineMarkerProvider internal constructor(
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
             val profileId = project.selectedNacosProfileId(settings)
             val namespaceId = effectiveNamespaceId(project, codeContext)
-            val accessIdentity = settings.captureAccessIdentity(profileId)
+            val accessIdentity = project.captureSelectedAccessIdentity(settings)
             val operationContext = settings.captureOperationContext(profileId).getOrNull()
             val cached = runBlocking {
                 cacheService.getConfigDetail(
@@ -187,24 +185,19 @@ class NacosValueLineMarkerProvider internal constructor(
             }
             val config = observed?.value ?: return@executeOnPooledThread
 
-            // The gutter marker decides resolved vs. unresolved from the cache,
-            // so the fetched config has to be there under the identity *this*
-            // layer reads with. That is not always the identity the gateway
-            // wrote under: an AUTO profile resolves its generation per
-            // operation, while captureAccessIdentity leaves it UNKNOWN because
-            // the hot path may not touch PasswordSafe, and the generation is
-            // part of the cache key. Recording it carries the read's own
-            // observation sequence, so it can neither outrank a newer read nor
-            // restamp what the gateway already wrote (issue #65).
-            runBlocking {
-                ObservedDetailRecorder(cacheService).recordDetail(
-                    accessIdentity,
-                    namespaceId,
-                    config,
-                    settings.getCacheTtlMillis(),
-                    observed.observation
-                )
-            }
+            // Nothing is written back here. The read above already cached the
+            // configuration through the gateway, and this layer now addresses
+            // the same key space it wrote under, so a write of our own would be
+            // a plain duplicate — and one this layer is not entitled to make
+            // (ADR-0052). It used to be neither, only because an AUTO profile
+            // left the two spaces apart (issue #72).
+
+            // Re-derive the identity: on an AUTO profile that read may have been
+            // the first to resolve the generation for this session, so the
+            // identity captured before it can no longer name where the entry
+            // landed. Publishing the index under the stale one would build it
+            // for a key space nothing writes to (ADR-0053).
+            val resolvedIdentity = project.captureSelectedAccessIdentity(settings)
 
             // Rebuild the key index synchronously. We are on a pooled thread
             // (never the highlighter/dispatch thread), so a blocking rebuild is
@@ -212,7 +205,7 @@ class NacosValueLineMarkerProvider internal constructor(
             // config immediately.
             ApplicationManager.getApplication()
                 .getService(NavigationIndexRefreshService::class.java)
-                .refresh(accessIdentity, project)
+                .refresh(resolvedIdentity, project)
 
             val lineIndex = ConfigKeyExtractor.extract(config)[key]?.lineIndex ?: -1
             NacosConfigNavigator.navigate(project, config, lineIndex)
@@ -266,10 +259,13 @@ class NacosValueLineMarkerProvider internal constructor(
                 val application = ApplicationManager.getApplication()
                 val settings = application.getService(NacosSettings::class.java)
                 if (!settings.cacheEnabled) return
-                val profileId = project.selectedNacosProfileId(settings)
                 val namespaceId = effectiveNamespaceId(project, codeContext)
                 application.getService(NamespaceIndexRefreshService::class.java)
-                    .requestIfNeeded(settings.captureAccessIdentity(profileId), namespaceId.orEmpty(), project)
+                    .requestIfNeeded(
+                        project.captureSelectedAccessIdentity(settings),
+                        namespaceId.orEmpty(),
+                        project
+                    )
             } catch (_: Exception) {
                 // Gutter calculation is best-effort and must never fail PSI analysis.
             }

@@ -74,8 +74,15 @@ internal fun NacosSettings.captureNamespaceIndexRequest(
  * so this resolves the selected profile and maps it through
  * [OperationContextResolver.identityFromProfile], which never touches the
  * credential store. A missing/invalid profile yields a stable sentinel identity.
+ *
+ * An AUTO profile has no generation in the profile to map, so [locator] supplies
+ * the one the operation layer resolved — also without a credential — and the read
+ * addresses the same key space the gateway writes under (issue #72).
  */
-internal fun NacosSettings.captureAccessIdentity(profileId: String? = null): AccessIdentity {
+internal fun NacosSettings.captureAccessIdentity(
+    profileId: String? = null,
+    locator: ResolvedGenerationLocator = ResolvedGenerationLocator.forSelectedProfile()
+): AccessIdentity {
     val selectedProfileId = profileId?.trim()?.takeUnless { it.isNullOrBlank() } ?: activeServerId
     val profile = getProfile(selectedProfileId)
         ?: return AccessIdentity.ofProfile(
@@ -87,6 +94,7 @@ internal fun NacosSettings.captureAccessIdentity(profileId: String? = null): Acc
             principal = ""
         )
     return OperationContextResolver.identityFromProfile(profile)
+        .locatedUnder(locator, profile.profileRevision)
 }
 
 interface NamespaceIndexRequester {

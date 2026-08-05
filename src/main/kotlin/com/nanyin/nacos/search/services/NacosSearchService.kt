@@ -252,23 +252,23 @@ class NacosSearchService(
    }
 
     private fun captureSessionTicket(request: SearchRequest): OperationTicket? {
-        val epochs = project?.getService(ProjectSessionEpochs::class.java) ?: return null
+        val owningProject = project ?: return null
+        val epochs = owningProject.getService(ProjectSessionEpochs::class.java) ?: return null
         // Prefer the prepared context; fall back to credential-free identity
         // derivation so a missing snapshot never touches PasswordSafe on the
         // EDT (issue #53 / ADR-0039). When serverId is blank, use the project
         // session's selected profile rather than the app-wide activeServerId so
-        // multi-project sessions stay isolated.
+        // multi-project sessions stay isolated — and for the same reason the
+        // resolved generation comes from this project's session (ADR-0053).
         val profileId = request.serverId.takeIf { it.isNotBlank() }
-            ?: project?.let { proj ->
-                try {
-                    proj.getService(com.nanyin.nacos.search.settings.NacosProjectSession::class.java)
-                        ?.sessionState?.selectedProfileId?.takeIf { it.isNotBlank() }
-                } catch (_: Exception) {
-                    null
-                }
+            ?: try {
+                owningProject.getService(com.nanyin.nacos.search.settings.NacosProjectSession::class.java)
+                    ?.sessionState?.selectedProfileId?.takeIf { it.isNotBlank() }
+            } catch (_: Exception) {
+                null
             }
         val identity = request.operationContext?.identity
-            ?: settings.captureAccessIdentity(profileId)
+            ?: settings.captureAccessIdentity(profileId, ResolvedGenerationLocator.forProject(owningProject))
         return epochs.capture(identity)
     }
 

@@ -178,10 +178,11 @@ class NacosApiService(
 
     /**
      * Retrieves a specific configuration from Nacos, together with the
-     * observation sequence the read took (ADR-0047). Callers that derive a
-     * cache mutation from the result — a not-found deletion, a navigation
-     * fill-in write — must pass that same number, so the read and the write it
-     * produced are ordered as one observation.
+     * observation sequence the read took (ADR-0047). This read caches what it
+     * returned; a caller that derives a *further* cache mutation from it — the
+     * detail panel's authoritative not-found is the one that remains — must pass
+     * that same number, so the read and the write it produced are ordered as one
+     * observation.
      *
      * @param dataId Configuration data ID
      * @param group Configuration group
@@ -581,22 +582,20 @@ class NacosApiService(
         }
     }
 
-    /** Offline bootstrap helper: last successful AUTO resolution for this access key. */
-    fun lastKnownGeneration(context: NacosOperationContext): NacosApiGeneration? {
-        return try {
-            ApplicationManager.getApplication()
-                .getService(LastKnownGenerationStore::class.java)
-                ?.get(
-                    LastKnownGenerationStore.Key(
-                        profileId = context.identity.profileId,
-                        accessRevision = context.accessRevision,
-                        canonicalEndpoint = context.endpoint.value
-                    )
-                )
-        } catch (_: Exception) {
-            null
-        }
-    }
+    /**
+     * Offline bootstrap helper: last successful AUTO resolution for this access
+     * key. Goes through the same lookup the cache hot paths use (ADR-0053), so
+     * there is one owner of what counts as a match for an access key.
+     */
+    fun lastKnownGeneration(context: NacosOperationContext): NacosApiGeneration? =
+        persistedLastKnownGeneration(
+            ProfileAccessKeys(
+                profileId = context.identity.profileId,
+                profileRevision = context.profileRevision,
+                accessRevision = context.accessRevision,
+                canonicalEndpoint = context.endpoint.value
+            )
+        )
 
     private fun lockedContext(
         context: NacosOperationContext,
