@@ -5,6 +5,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosSettings
@@ -80,9 +81,10 @@ interface EditEnvironment {
  *
  * ADR-0046: a session that lives inside the tool-window content cannot block
  * that content from being destroyed, and ADR-0027 requires exactly that. So the
- * draft belongs to the project, panels only render it, and the two actions that
- * would destroy it — selecting another configuration, and destroying the
- * tool-window content — ask this service first.
+ * draft belongs to the project, panels only render it, and every action that
+ * would destroy it — selecting another configuration, switching environment or
+ * namespace, turning write intent off, deleting its profile, closing the
+ * project, and destroying the tool-window content — asks this service first.
  *
  * Publishing lives here too, because ADR-0027 derives the publish target solely
  * from the session's binding: changing the selection after starting a draft
@@ -201,6 +203,63 @@ class EditSessionService internal constructor(
     }
 
     /**
+     * Whether switching the project environment to [newProfileId] may proceed.
+     * Staying on the draft's own profile is not a switch. A dirty draft bound to
+     * a different profile would be orphaned, so the caller must prompt.
+     */
+    fun guardEnvironmentSwitch(newProfileId: String): DraftGuard {
+        val current = currentSession() ?: return DraftGuard.Proceed
+        if (current.binding.profileId == newProfileId) return DraftGuard.Proceed
+        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
+    }
+
+    /**
+     * Whether switching the selected namespace to [newNamespaceId] may proceed.
+     * [newNamespaceId] is compared canonically (ADR-0015). Staying on the
+     * draft's own namespace is not a switch.
+     */
+    fun guardNamespaceSwitch(newNamespaceId: String?): DraftGuard {
+        val current = currentSession() ?: return DraftGuard.Proceed
+        val canonical = NamespaceInfo.canonicalId(newNamespaceId)
+        if (current.binding.namespaceId == canonical) return DraftGuard.Proceed
+        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
+    }
+
+    /**
+     * Whether turning write intent off for [profileId] may proceed. Only the
+     * draft's own profile matters: withholding writes for an unrelated profile
+     * cannot orphan this draft. Turning writes off for the bound profile would
+     * leave a draft that can no longer be published (ADR-0026 / ADR-0027).
+     */
+    fun guardWriteIntentOff(profileId: String): DraftGuard {
+        val current = currentSession() ?: return DraftGuard.Proceed
+        if (current.binding.profileId != profileId) return DraftGuard.Proceed
+        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
+    }
+
+    /**
+     * Whether deleting the environment profile [profileId] may proceed. Only the
+     * draft's own profile matters: deleting an unrelated profile leaves the
+     * draft publishable. Deleting the bound profile would leave a draft that
+     * can no longer be published (ADR-0025 / ADR-0027).
+     */
+    fun guardProfileDeletion(profileId: String): DraftGuard {
+        val current = currentSession() ?: return DraftGuard.Proceed
+        if (current.binding.profileId != profileId) return DraftGuard.Proceed
+        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
+    }
+
+    /**
+     * Whether closing the project may proceed. Same shape as [guardDestroy]: a
+     * dirty draft is project-scoped (ADR-0046) and must not be dropped silently
+     * when the project that holds it goes away.
+     */
+    fun guardProjectClose(): DraftGuard {
+        val current = currentSession() ?: return DraftGuard.Proceed
+        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
+    }
+
+    /**
      * Publishes the held draft, or returns null when there is nothing to
      * publish. The target is captured fresh from the session's binding — never
      * from the current selection — and must still resolve to the access
@@ -211,10 +270,12 @@ class EditSessionService internal constructor(
      */
     suspend fun publish(): PublishResult? {
         val current = currentSession() ?: return null
-        // ADR-0026's opt-in is one the user can still revoke while a draft is
-        // open, and blocking that revocation is a later slice (#77). Until then
-        // the save path fails closed by re-running the same check against the
-        // profile the draft is bound to — the check, not a snapshot of it.
+        // ADR-0026's opt-in can still change underneath a draft (e.g. another
+        // settings surface, or a race with apply). The save path fails closed by
+        // re-running the same check against the profile the draft is bound to —
+        // the check, not a snapshot of it. Turning write intent off is itself
+        // guarded by [guardWriteIntentOff] so the user cannot silently orphan a
+        // dirty draft from Settings (issue #77).
         if (WriteIntent.of(environment.profile(current.binding.profileId)) !is WriteIntent.Granted) {
             return PublishResult(
                 PublishState.ReadOnly("Publishing is disabled for this environment"),

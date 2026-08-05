@@ -127,9 +127,9 @@ class EditSessionServiceTest {
 
     @Test
     fun `revoking write intent while a draft is open blocks the save path`() = runBlocking {
-        // ADR-0026's opt-in can be turned off in Settings while a draft is
-        // open. Blocking that gesture is a later slice, so until then the save
-        // path must fail closed rather than publish under a revoked opt-in.
+        // Turning write intent off is guarded at the Settings apply site
+        // (issue #77). The save path still fails closed if the opt-in is
+        // revoked underneath a draft by any other means.
         val adapter = RecordingAdapter()
         val environment = StubEditEnvironment()
         val service = service(environment, adapter)
@@ -294,6 +294,195 @@ class EditSessionServiceTest {
 
         service.discardDraft()
         assertEquals(DraftGuard.Proceed, service.guardDestroy())
+    }
+
+    // ---- switching environment (issue #77) ----
+
+    @Test
+    fun `without a dirty draft switching environment proceeds with no prompt`() = runBlocking {
+        val service = service()
+        assertEquals(DraftGuard.Proceed, service.guardEnvironmentSwitch("p2"))
+
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        assertEquals(DraftGuard.Proceed, service.guardEnvironmentSwitch("p2"))
+    }
+
+    @Test
+    fun `with a dirty draft switching environment asks before discarding`() = runBlocking {
+        val service = service()
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        val confirm = assertInstanceOf(
+            DraftGuard.ConfirmDiscard::class.java,
+            service.guardEnvironmentSwitch("p2")
+        )
+        assertEquals("p1", confirm.draft.profileId)
+        assertEquals("app.yaml", confirm.draft.dataId)
+
+        // Cancelling is not calling discardDraft.
+        assertTrue(service.isDirty())
+        assertEquals("edited", service.currentSession()?.draftContent)
+
+        service.discardDraft()
+        assertEquals(DraftGuard.Proceed, service.guardEnvironmentSwitch("p2"))
+    }
+
+    @Test
+    fun `staying on the draft's own environment is not a switch`() = runBlocking {
+        val service = service()
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        assertEquals(DraftGuard.Proceed, service.guardEnvironmentSwitch("p1"))
+        assertTrue(service.isDirty())
+    }
+
+    // ---- switching namespace (issue #77) ----
+
+    @Test
+    fun `without a dirty draft switching namespace proceeds with no prompt`() = runBlocking {
+        val service = service()
+        assertEquals(DraftGuard.Proceed, service.guardNamespaceSwitch("staging"))
+
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        assertEquals(DraftGuard.Proceed, service.guardNamespaceSwitch("staging"))
+    }
+
+    @Test
+    fun `with a dirty draft switching namespace asks before discarding`() = runBlocking {
+        val service = service()
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        val confirm = assertInstanceOf(
+            DraftGuard.ConfirmDiscard::class.java,
+            service.guardNamespaceSwitch("staging")
+        )
+        assertEquals("dev", confirm.draft.namespaceId)
+
+        service.discardDraft()
+        assertEquals(DraftGuard.Proceed, service.guardNamespaceSwitch("staging"))
+    }
+
+    @Test
+    fun `staying on the draft's own namespace is not a switch`() = runBlocking {
+        val service = service()
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        assertEquals(DraftGuard.Proceed, service.guardNamespaceSwitch("dev"))
+        // Canonical comparison: blank / public spell the same public namespace.
+        val publicService = service()
+        publicService.beginEdit(configuration(tenantId = ""), "", baselineContent = "original")
+        publicService.updateDraft("edited")
+        assertEquals(DraftGuard.Proceed, publicService.guardNamespaceSwitch("public"))
+        assertEquals(DraftGuard.Proceed, publicService.guardNamespaceSwitch(""))
+        assertEquals(DraftGuard.Proceed, publicService.guardNamespaceSwitch(null))
+    }
+
+    // ---- turning write intent off (issue #77) ----
+
+    @Test
+    fun `without a dirty draft turning write intent off proceeds with no prompt`() = runBlocking {
+        val service = service()
+        assertEquals(DraftGuard.Proceed, service.guardWriteIntentOff("p1"))
+
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        assertEquals(DraftGuard.Proceed, service.guardWriteIntentOff("p1"))
+    }
+
+    @Test
+    fun `with a dirty draft turning write intent off for its profile asks before discarding`() = runBlocking {
+        val service = service()
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        val confirm = assertInstanceOf(
+            DraftGuard.ConfirmDiscard::class.java,
+            service.guardWriteIntentOff("p1")
+        )
+        assertEquals("p1", confirm.draft.profileId)
+
+        service.discardDraft()
+        assertEquals(DraftGuard.Proceed, service.guardWriteIntentOff("p1"))
+    }
+
+    @Test
+    fun `turning write intent off for an unrelated profile does not ask`() = runBlocking {
+        val service = service()
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        assertEquals(DraftGuard.Proceed, service.guardWriteIntentOff("p-other"))
+        assertTrue(service.isDirty())
+    }
+
+    // ---- deleting the draft's environment profile (issue #77) ----
+
+    @Test
+    fun `without a dirty draft deleting a profile proceeds with no prompt`() = runBlocking {
+        val service = service()
+        assertEquals(DraftGuard.Proceed, service.guardProfileDeletion("p1"))
+
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        assertEquals(DraftGuard.Proceed, service.guardProfileDeletion("p1"))
+    }
+
+    @Test
+    fun `with a dirty draft deleting its profile asks before discarding`() = runBlocking {
+        val service = service()
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        val confirm = assertInstanceOf(
+            DraftGuard.ConfirmDiscard::class.java,
+            service.guardProfileDeletion("p1")
+        )
+        assertEquals("p1", confirm.draft.profileId)
+
+        service.discardDraft()
+        assertEquals(DraftGuard.Proceed, service.guardProfileDeletion("p1"))
+    }
+
+    @Test
+    fun `deleting an unrelated profile does not ask`() = runBlocking {
+        val service = service()
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        assertEquals(DraftGuard.Proceed, service.guardProfileDeletion("p-other"))
+        assertTrue(service.isDirty())
+    }
+
+    // ---- closing the project (issue #77) ----
+
+    @Test
+    fun `without a dirty draft closing the project proceeds with no prompt`() = runBlocking {
+        val service = service()
+        assertEquals(DraftGuard.Proceed, service.guardProjectClose())
+
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        assertEquals(DraftGuard.Proceed, service.guardProjectClose())
+    }
+
+    @Test
+    fun `with a dirty draft closing the project asks before discarding`() = runBlocking {
+        val service = service()
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        val confirm = assertInstanceOf(
+            DraftGuard.ConfirmDiscard::class.java,
+            service.guardProjectClose()
+        )
+        assertEquals("app.yaml", confirm.draft.dataId)
+
+        // Cancelling keeps the draft.
+        assertTrue(service.isDirty())
+
+        service.discardDraft()
+        assertEquals(DraftGuard.Proceed, service.guardProjectClose())
     }
 
     // ---- the publish target comes from the binding, never the live selection ----

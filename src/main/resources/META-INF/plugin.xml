@@ -101,6 +101,9 @@
         <!-- Project startup activity -->
         <postStartupActivity implementation="com.nanyin.nacos.search.NacosSearchPlugin"/>
 
+        <!-- ADR-0027: veto project close while a dirty configuration draft is held -->
+        <projectCloseHandler implementation="com.nanyin.nacos.search.ui.DirtyDraftProjectCloseHandler"/>
+
         <!-- @NacosValue navigation: reference contribution, line marker, reverse Find Usages -->
         <psi.referenceContributor
             language="JAVA"

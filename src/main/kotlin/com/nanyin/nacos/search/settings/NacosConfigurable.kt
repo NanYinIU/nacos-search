@@ -5,9 +5,14 @@ import com.nanyin.nacos.search.models.NacosApiPolicy
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.services.ProjectSessionEpochs
+import com.nanyin.nacos.search.services.operations.DraftGuard
+import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
+import com.nanyin.nacos.search.ui.confirmDraftDiscard
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.components.service
 import com.intellij.openapi.options.Configurable
+import com.intellij.openapi.options.ConfigurationException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
@@ -161,6 +166,63 @@ class NacosConfigurable @JvmOverloads constructor(
             ?: IdeFocusManager.getGlobalInstance().lastFocusedFrame?.project
             ?: ProjectManager.getInstance().openProjects.singleOrNull()
         return candidate?.takeUnless { it.isDisposed }
+    }
+
+    /**
+     * The project's [EditSessionService], when a project context is available.
+     * Settings opened without a project skip project-scoped draft guards.
+     */
+    private fun editSessions(): EditSessionService? =
+        contextProject()?.takeUnless { it.isDisposed }?.service()
+
+    /**
+     * ADR-0027 draft guard for profile deletion. Returns [DraftGuard.Proceed]
+     * when no project context holds a draft.
+     */
+    private fun guardProfileDeletion(profileId: String): DraftGuard =
+        editSessions()?.guardProfileDeletion(profileId) ?: DraftGuard.Proceed
+
+    /**
+     * Whether a guarded settings action may proceed. Asking never mutates —
+     * only an explicit discard does. Without a project there is nothing to
+     * discard, so ConfirmDiscard is treated as Proceed.
+     */
+    private fun admitDraftGuard(guard: DraftGuard, messageKey: String): Boolean {
+        val sessions = editSessions()
+        val project = contextProject()
+        if (sessions == null || project == null) return true
+        return when (guard) {
+            DraftGuard.Proceed, DraftGuard.AlreadyEditing -> true
+            is DraftGuard.ConfirmDiscard -> {
+                if (confirmDraftDiscard(project, guard.draft, messageKey)) {
+                    sessions.discardDraft()
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /**
+     * For every profile whose write intent is being turned off on this Apply,
+     * ask the project's edit session. Cancel aborts Apply via
+     * [ConfigurationException] so the settings draft stays open.
+     */
+    private fun admitWriteIntentOffGuards() {
+        val savedById = settings.cloneServers().associateBy { it.id }
+        for (draft in draftServers) {
+            val saved = savedById[draft.id] ?: continue
+            if (!saved.writeIntent || draft.writeIntent) continue
+            val guard = editSessions()?.guardWriteIntentOff(draft.id) ?: DraftGuard.Proceed
+            if (!admitDraftGuard(guard, "config.detail.draft.discard.write.intent")) {
+                // Abort Apply without a second modal: the discard prompt already
+                // collected the user's choice. Settings stay on the draft model.
+                throw ConfigurationException(
+                    NacosSearchBundle.message("config.detail.draft.discard.apply.aborted")
+                )
+            }
+        }
     }
 
     private fun selectedDraft(): NacosServerConfig? {
@@ -796,18 +858,26 @@ class NacosConfigurable @JvmOverloads constructor(
             NacosSearchBundle.message("settings.servers.delete"),
             Messages.getQuestionIcon()
         )
-        if (result == Messages.YES) {
-            val idx = draftServers.indexOf(current)
-            draftServers.removeAt(idx)
-            serverListModel.removeElementAt(idx)
-            if (draftActiveId == current.id) {
-                draftActiveId = draftServers.firstOrNull()?.id ?: ""
-            }
-            val newIdx = minOf(idx, draftServers.size - 1).coerceAtLeast(0)
-            serverList.selectedIndex = newIdx
-            refreshServerListDecorations()
-            updateApplyEnabledState()
+        if (result != Messages.YES) return
+        // ADR-0027: deleting the draft's environment profile would leave a
+        // draft that can no longer be published. Ask after the delete
+        // confirmation so cancel keeps both the profile and the edit — never
+        // discard the draft only to abort the delete.
+        if (!admitDraftGuard(
+                guardProfileDeletion(current.id),
+                "config.detail.draft.discard.profile.delete"
+            )
+        ) return
+        val idx = draftServers.indexOf(current)
+        draftServers.removeAt(idx)
+        serverListModel.removeElementAt(idx)
+        if (draftActiveId == current.id) {
+            draftActiveId = draftServers.firstOrNull()?.id ?: ""
         }
+        val newIdx = minOf(idx, draftServers.size - 1).coerceAtLeast(0)
+        serverList.selectedIndex = newIdx
+        refreshServerListDecorations()
+        updateApplyEnabledState()
     }
 
     private fun setActiveServer() {
@@ -931,6 +1001,11 @@ class NacosConfigurable @JvmOverloads constructor(
             if (idx >= 0) serverList.selectedIndex = idx
             throw java.lang.IllegalStateException("Invalid server URL")
         }
+
+        // ADR-0027: turning write intent off for a profile that holds a dirty
+        // draft would silently orphan work that can no longer be published.
+        // Guard before committing so cancel aborts Apply with the draft intact.
+        admitWriteIntentOffGuards()
 
         // Decide connection-vs-preferences from the profile's access revision
         // (endpoint, API policy, auth strategy, principal, secret). The old

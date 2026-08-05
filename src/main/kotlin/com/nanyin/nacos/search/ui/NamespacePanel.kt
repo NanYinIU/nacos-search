@@ -5,12 +5,15 @@ import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NacosLanguageListener
+import com.nanyin.nacos.search.services.operations.DraftGuard
+import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.ui.popup.JBPopupFactory
@@ -268,12 +271,35 @@ class NamespacePanel(
 
     private fun selectNamespace(namespace: NamespaceInfo, notify: Boolean) {
         val changed = currentNamespace?.namespaceId != namespace.namespaceId
+        // ADR-0027: a user-initiated namespace switch must not discard a dirty
+        // draft silently. Guard before mutating so cancel leaves selection and
+        // draft unchanged. Programmatic restores (notify=false) never prompt.
+        if (notify && changed && !admitNamespaceSwitch(namespace)) return
         currentNamespace = namespace
         renderButton(namespace)
         if (notify) {
             onNamespaceSelected(namespace)
         } else if (changed) {
             updateStatus(NacosSearchBundle.message("namespace.selected", namespace.namespaceName))
+        }
+    }
+
+    /**
+     * Whether switching to [namespace] may proceed. Consults the project's
+     * [EditSessionService] only — never re-derives dirtiness from a panel field.
+     */
+    private fun admitNamespaceSwitch(namespace: NamespaceInfo): Boolean {
+        val editSessions = project.service<EditSessionService>()
+        return when (val guard = editSessions.guardNamespaceSwitch(namespace.namespaceId)) {
+            DraftGuard.Proceed, DraftGuard.AlreadyEditing -> true
+            is DraftGuard.ConfirmDiscard -> {
+                if (confirmDraftDiscard(project, guard.draft, "config.detail.draft.discard.namespace")) {
+                    editSessions.discardDraft()
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 

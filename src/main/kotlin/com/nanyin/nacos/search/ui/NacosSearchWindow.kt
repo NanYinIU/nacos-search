@@ -21,7 +21,6 @@ import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosSettingsListener
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosUpgradeSummary
-import com.nanyin.nacos.search.settings.OperationContextSnapshotCache
 import com.nanyin.nacos.search.settings.operationNamespaceIdFor
 import com.nanyin.nacos.search.services.operations.DraftGuard
 import com.nanyin.nacos.search.services.operations.EditSessionService
