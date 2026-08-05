@@ -410,7 +410,17 @@ class UiButtonInteractionTest {
         var selected: NacosConfiguration? = null
 
         panel.onConfigurationSelected = { selected = it }
-        panel.render(ConfigListViewState.Results(listOf(config), statusLine = ""))
+        panel.render(
+            ConfigListViewState.Results(
+                listOf(config),
+                status = ListStatus.Dataset(
+                    com.nanyin.nacos.search.models.CacheConfidence.remoteConfirmed(
+                        now = 1L,
+                        completeness = com.nanyin.nacos.search.models.DatasetCompleteness.COMPLETE
+                    )
+                )
+            )
+        )
         waitForUi()
 
         runOnEdt {

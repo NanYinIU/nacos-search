@@ -1,6 +1,8 @@
 package com.nanyin.nacos.search.ui
 
+import com.nanyin.nacos.search.models.CacheConfidence
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.services.operations.SearchCoverage
 
 /**
  * Closed set of user-visible states for the configuration result list
@@ -10,6 +12,11 @@ import com.nanyin.nacos.search.models.NacosConfiguration
  * state later forces every renderer to handle it. Mapping from search and access
  * outcomes lives in [ConfigListPresentation], not in Swing.
  *
+ * User-visible wording is **not** stored as resolved strings. Status and failure
+ * titles are re-derived from structured inputs on every [ConfigListPanel.render]
+ * (including language change) so source/confirmation/age/completeness stay
+ * independent and localisable (ADR-0036).
+ *
  * - [Empty]: a successful response with zero matches (or no namespace yet).
  * - [Loading]: a search is in flight.
  * - [Results]: one or more configurations to show.
@@ -18,24 +25,56 @@ import com.nanyin.nacos.search.models.NacosConfiguration
  */
 sealed class ConfigListViewState {
     data class Empty(
-        val statusLine: String = ""
+        val status: ListStatus = ListStatus.defaultEmpty()
     ) : ConfigListViewState()
 
     data object Loading : ConfigListViewState()
 
     data class Results(
         val configurations: List<NacosConfiguration>,
-        val statusLine: String
+        val status: ListStatus.Dataset
     ) : ConfigListViewState()
 
     data class Blocked(
         val reason: BlockedReason,
-        val message: String
+        /** Optional technical detail; the title comes from [reason]. */
+        val detail: String? = null
     ) : ConfigListViewState()
 
+    /**
+     * @param titleKey optional bundle key for a failure title. Search failures
+     * use `config.list.failed`; non-search paths leave this null and show
+     * [detail] as the full message (no “Search failed” stamp).
+     * @param detail optional detail or full free-form message.
+     */
     data class Failed(
-        val message: String
+        val titleKey: String? = null,
+        val detail: String? = null
     ) : ConfigListViewState()
+}
+
+/**
+ * Status-line content held without resolving bundle strings, so language
+ * changes and independent dimension updates re-derive wording outside the
+ * panel's decision path.
+ */
+sealed class ListStatus {
+    /** Status line intentionally blank — the panel must not invent wording. */
+    data object Blank : ListStatus()
+
+    data class Bundle(
+        val key: String,
+        val params: List<Any> = emptyList()
+    ) : ListStatus()
+
+    data class Dataset(
+        val confidence: CacheConfidence,
+        val coverage: SearchCoverage? = null
+    ) : ListStatus()
+
+    companion object {
+        fun defaultEmpty(): ListStatus = Bundle("config.list.empty")
+    }
 }
 
 /**

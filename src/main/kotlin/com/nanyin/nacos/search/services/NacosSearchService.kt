@@ -387,7 +387,9 @@ class NacosSearchService(
                sessionAtStart == held.generation &&
                sessionTicket?.isCurrent() != false
            ) {
-               _searchState.value = SearchState.Error("搜索过程中发生错误: ${e.message}", e)
+               // Presentation owns the localised “Search failed” title; keep the
+               // payload as the throwable’s message so English UI is not bilingual.
+               _searchState.value = SearchState.Error(e.message ?: "Unknown search error", e)
            }
            logger.warn("Search error", e)
        }
@@ -706,7 +708,8 @@ class NacosSearchService(
             logger.info("Search completed: ${execution.configurations.size} configurations found (${execution.source})")
         } else {
             val error = result.exceptionOrNull() ?: Exception("Unknown search error")
-            _searchState.value = SearchState.Error("搜索失败: ${error.message}", error)
+            // Presentation owns the localised “Search failed” title (issue #79).
+            _searchState.value = SearchState.Error(error.message ?: "Unknown search error", error)
             logger.warn("Search failed", error)
         }
     }

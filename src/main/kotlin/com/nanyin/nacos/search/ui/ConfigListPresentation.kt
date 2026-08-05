@@ -12,105 +12,113 @@ import com.nanyin.nacos.search.settings.ConfigurationRequired
  * decision. Classification is typed — never by localised exception text —
  * so a permission problem cannot read as an empty namespace.
  *
- * Pure: no Swing, no services. The [message] resolver supplies localised labels
- * so tests drive every state without a platform fixture.
+ * Pure: no Swing, no services, no bundle resolution. Resolved wording is
+ * produced later by [ConfigListCopy] at render time (and on language change).
+ *
+ * [NacosSearchService.SearchState.Idle] is not a list-visible state of its own:
+ * it maps to [ConfigListViewState.Empty] so cancel / session abandon can leave
+ * the loading card only when the window also renders the presentation result.
  */
 object ConfigListPresentation {
 
-    fun fromSearchState(
-        state: NacosSearchService.SearchState,
-        message: (key: String, params: Array<out Any>) -> String
-    ): ConfigListViewState = when (state) {
-        is NacosSearchService.SearchState.Idle ->
-            ConfigListViewState.Empty()
+    /** Bundle key for a true search failure title — not used for load/nav errors. */
+    const val SEARCH_FAILED_TITLE_KEY = "config.list.failed"
 
-        is NacosSearchService.SearchState.Loading ->
-            ConfigListViewState.Loading
+    fun fromSearchState(state: NacosSearchService.SearchState): ConfigListViewState =
+        when (state) {
+            // Idle is not painted as a sixth list state; it is the absence of a
+            // search outcome. Callers that observe Idle should still render this
+            // Empty so a cancelled Loading card does not stick.
+            is NacosSearchService.SearchState.Idle ->
+                empty()
 
-        is NacosSearchService.SearchState.Success -> {
-            val statusLine = ConfigListStatusLine.derive(
-                confidence = state.confidence,
-                coverage = state.coverage,
-                message = message
-            )
-            if (state.configurations.isEmpty()) {
-                ConfigListViewState.Empty(statusLine = statusLine)
-            } else {
-                ConfigListViewState.Results(
-                    configurations = state.configurations,
-                    statusLine = statusLine
+            is NacosSearchService.SearchState.Loading ->
+                ConfigListViewState.Loading
+
+            is NacosSearchService.SearchState.Success -> {
+                val status = ListStatus.Dataset(
+                    confidence = state.confidence,
+                    coverage = state.coverage
                 )
+                if (state.configurations.isEmpty()) {
+                    ConfigListViewState.Empty(status = status)
+                } else {
+                    ConfigListViewState.Results(
+                        configurations = state.configurations,
+                        status = status
+                    )
+                }
             }
-        }
 
-        is NacosSearchService.SearchState.Error ->
-            fromFailure(state.throwable, state.message, message)
-    }
+            is NacosSearchService.SearchState.Error ->
+                fromFailure(
+                    error = state.throwable,
+                    fallbackMessage = state.message,
+                    titleKey = SEARCH_FAILED_TITLE_KEY
+                )
+        }
 
     /**
      * Classifies a typed failure into [ConfigListViewState.Blocked] or
      * [ConfigListViewState.Failed]. Blocked covers refused access and
      * configuration-required so neither reads as an empty namespace.
+     *
+     * @param titleKey when non-null (search path), Failed shows that bundle
+     * title plus a cleaned detail. When null (load/nav path), [fallbackMessage]
+     * is the full Failed body — never stamped with “Search failed”.
      */
     fun fromFailure(
         error: Throwable?,
         fallbackMessage: String,
-        message: (key: String, params: Array<out Any>) -> String
+        titleKey: String? = null
     ): ConfigListViewState {
         val root = unwrap(error)
         return when {
             root is ConfigurationRequired -> ConfigListViewState.Blocked(
                 reason = BlockedReason.CONFIGURATION_REQUIRED,
-                message = blockedMessage(
-                    BlockedReason.CONFIGURATION_REQUIRED,
-                    root.reasons.firstOrNull() ?: fallbackMessage,
-                    message
-                )
+                detail = root.reasons.firstOrNull()?.takeIf { it.isNotBlank() }
             )
             isRefusedAccess(root) -> ConfigListViewState.Blocked(
                 reason = BlockedReason.REFUSED_ACCESS,
-                message = blockedMessage(
-                    BlockedReason.REFUSED_ACCESS,
-                    root?.message ?: fallbackMessage,
-                    message
-                )
+                detail = root?.message?.takeIf { it.isNotBlank() }
             )
             else -> ConfigListViewState.Failed(
-                message = failedMessage(fallbackMessage, message)
+                titleKey = titleKey,
+                detail = failureDetail(root, fallbackMessage)
             )
         }
     }
 
     fun loading(): ConfigListViewState = ConfigListViewState.Loading
 
-    fun empty(statusLine: String = ""): ConfigListViewState =
-        ConfigListViewState.Empty(statusLine = statusLine)
+    fun empty(status: ListStatus = ListStatus.defaultEmpty()): ConfigListViewState =
+        ConfigListViewState.Empty(status = status)
 
-    private fun blockedMessage(
-        reason: BlockedReason,
-        detail: String,
-        message: (key: String, params: Array<out Any>) -> String
-    ): String {
-        val titleKey = when (reason) {
-            BlockedReason.REFUSED_ACCESS -> "config.list.blocked.access"
-            BlockedReason.CONFIGURATION_REQUIRED -> "config.list.blocked.configuration"
+    fun emptyWithBundleKey(key: String, vararg params: Any): ConfigListViewState =
+        ConfigListViewState.Empty(status = ListStatus.Bundle(key, params.toList()))
+
+    /**
+     * Detail text for a Failed state: prefer the unwrapped throwable message,
+     * fall back to [fallback], and strip legacy Chinese/English search prefixes
+     * so presentation can own a single localised title.
+     */
+    internal fun failureDetail(error: Throwable?, fallback: String): String {
+        val raw = when {
+            error != null && !error.message.isNullOrBlank() -> error.message!!.trim()
+            else -> fallback.trim()
         }
-        val title = message(titleKey, emptyArray())
-        val trimmed = detail.trim()
-        return if (trimmed.isEmpty() || trimmed == title) title else "$title: $trimmed"
+        return stripLegacySearchPrefix(raw)
     }
 
-    private fun failedMessage(
-        fallbackMessage: String,
-        message: (key: String, params: Array<out Any>) -> String
-    ): String {
-        val title = message("config.list.failed", emptyArray())
-        val trimmed = fallbackMessage.trim()
-        return when {
-            trimmed.isEmpty() -> title
-            trimmed.startsWith(title) -> trimmed
-            else -> "$title: $trimmed"
+    internal fun stripLegacySearchPrefix(text: String): String {
+        var result = text.trim()
+        for (prefix in LEGACY_SEARCH_FAILURE_PREFIXES) {
+            if (result.startsWith(prefix)) {
+                result = result.removePrefix(prefix).trim()
+                break
+            }
         }
+        return result
     }
 
     private fun isRefusedAccess(error: Throwable?): Boolean = when (error) {
@@ -122,16 +130,80 @@ object ConfigListPresentation {
     private fun unwrap(error: Throwable?): Throwable? {
         var current = error
         // Walk a short cause chain so a search-wrapper message does not hide a
-        // typed ConfigurationRequired or auth failure underneath.
+        // typed ConfigurationRequired or RemoteOperationError underneath. Stop
+        // at those types so a Connection(cause) is not reduced to its root
+        // RuntimeException for messaging or classification.
         var depth = 0
         while (current?.cause != null &&
             current !is ConfigurationRequired &&
-            !isRefusedAccess(current) &&
+            current !is RemoteOperationError &&
             depth < 4
         ) {
             current = current.cause
             depth++
         }
         return current
+    }
+
+    private val LEGACY_SEARCH_FAILURE_PREFIXES = listOf(
+        "搜索失败: ",
+        "搜索过程中发生错误: ",
+        "Search failed: ",
+        "Error during search: "
+    )
+}
+
+/**
+ * Resolves [ConfigListViewState] copy for display. Pure given a message
+ * resolver — panel and tests share one path (issue #79 review).
+ */
+object ConfigListCopy {
+
+    fun statusLine(
+        status: ListStatus,
+        message: (key: String, params: Array<out Any>) -> String
+    ): String = when (status) {
+        is ListStatus.Blank -> ""
+        is ListStatus.Bundle ->
+            if (status.params.isEmpty()) message(status.key, emptyArray())
+            else message(status.key, status.params.toTypedArray())
+        is ListStatus.Dataset ->
+            ConfigListStatusLine.derive(status.confidence, status.coverage, message)
+    }
+
+    fun blockedTitle(
+        reason: BlockedReason,
+        message: (key: String, params: Array<out Any>) -> String
+    ): String = when (reason) {
+        BlockedReason.REFUSED_ACCESS ->
+            message("config.list.blocked.access", emptyArray())
+        BlockedReason.CONFIGURATION_REQUIRED ->
+            message("config.list.blocked.configuration", emptyArray())
+    }
+
+    fun blockedBody(
+        state: ConfigListViewState.Blocked,
+        message: (key: String, params: Array<out Any>) -> String
+    ): String {
+        val title = blockedTitle(state.reason, message)
+        val detail = state.detail?.trim().orEmpty()
+        return if (detail.isEmpty() || detail == title) title else "$title: $detail"
+    }
+
+    fun failedBody(
+        state: ConfigListViewState.Failed,
+        message: (key: String, params: Array<out Any>) -> String
+    ): String {
+        val title = state.titleKey?.let { message(it, emptyArray()) }?.trim().orEmpty()
+        val detail = state.detail?.trim().orEmpty()
+        return when {
+            title.isNotEmpty() && detail.isNotEmpty() &&
+                (detail == title || detail.startsWith("$title:") || detail.startsWith("$title：")) ->
+                detail
+            title.isNotEmpty() && detail.isNotEmpty() -> "$title: $detail"
+            title.isNotEmpty() -> title
+            detail.isNotEmpty() -> detail
+            else -> message(ConfigListPresentation.SEARCH_FAILED_TITLE_KEY, emptyArray())
+        }
     }
 }

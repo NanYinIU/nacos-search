@@ -241,7 +241,9 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
 
     /**
      * Renders [state] with one exhaustive branch. The panel makes no decision
-     * about which state applies — that is [ConfigListPresentation]'s job.
+     * about which state applies — that is [ConfigListPresentation]'s job —
+     * and does not invent status wording; [ConfigListCopy] resolves structured
+     * status / failure inputs against the current bundle.
      */
     fun render(state: ConfigListViewState) {
         viewState = state
@@ -254,9 +256,8 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
                 emptyMessageLabel.text = NacosSearchBundle.message("config.list.empty")
                 emptyInstructionLabel.text = NacosSearchBundle.message("config.list.empty.instruction")
                 showCard(CARD_EMPTY)
-                statusLabel.text = state.statusLine.ifBlank {
-                    NacosSearchBundle.message("config.list.empty")
-                }
+                // Blank status is blank — never invent empty wording here.
+                statusLabel.text = ConfigListCopy.statusLine(state.status, bundleMessage)
             }
             is ConfigListViewState.Loading -> {
                 headerLabel.text = NacosSearchBundle.message("config.list.title")
@@ -270,14 +271,15 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
                 headerLabel.text =
                     "${NacosSearchBundle.message("config.list.title")}（${state.configurations.size}）"
                 showCard(CARD_RESULTS)
-                statusLabel.text = state.statusLine
+                statusLabel.text = ConfigListCopy.statusLine(state.status, bundleMessage)
             }
             is ConfigListViewState.Blocked -> {
                 configurations = emptyList()
                 updateList()
                 headerLabel.text = NacosSearchBundle.message("config.list.title")
+                val body = ConfigListCopy.blockedBody(state, bundleMessage)
                 blockedMessageLabel.icon = AllIcons.General.Warning
-                blockedMessageLabel.text = state.message
+                blockedMessageLabel.text = body
                 blockedInstructionLabel.text = when (state.reason) {
                     BlockedReason.REFUSED_ACCESS ->
                         NacosSearchBundle.message("config.list.blocked.access.instruction")
@@ -285,20 +287,26 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
                         NacosSearchBundle.message("config.list.blocked.configuration.instruction")
                 }
                 showCard(CARD_BLOCKED)
-                statusLabel.text = state.message
+                statusLabel.text = body
             }
             is ConfigListViewState.Failed -> {
                 configurations = emptyList()
                 updateList()
                 headerLabel.text = NacosSearchBundle.message("config.list.title")
+                val body = ConfigListCopy.failedBody(state, bundleMessage)
                 failedMessageLabel.icon = AllIcons.General.Error
-                failedMessageLabel.text = state.message
+                failedMessageLabel.text = body
                 failedInstructionLabel.text =
                     NacosSearchBundle.message("config.list.failed.instruction")
                 showCard(CARD_FAILED)
-                statusLabel.text = state.message
+                statusLabel.text = body
             }
         }
+    }
+
+    private val bundleMessage: (String, Array<out Any>) -> String = { key, params ->
+        if (params.isEmpty()) NacosSearchBundle.message(key)
+        else NacosSearchBundle.message(key, *params)
     }
 
     /**
@@ -354,13 +362,10 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     }
 
     override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
+        // Track selection only. Clearing/reloading the list is owned by
+        // NacosSearchWindow (clearSearchUi / openNamespace) so held viewState
+        // and the model cannot diverge across language re-renders.
         currentNamespace = newNamespace
-        // Clear the list immediately for feedback; NacosSearchWindow owns reloading configs
-        // for the newly selected namespace (avoids a duplicate/duplicate-origin reload).
-        SwingUtilities.invokeLater {
-            configurations = emptyList()
-            listModel.clear()
-        }
     }
 
     // ------------------------------------------------------------------

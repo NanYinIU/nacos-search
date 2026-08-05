@@ -438,11 +438,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      */
     private fun hasNamespaceToSearch(): Boolean {
         if (searchController.sessionContext().namespace != null) return true
-        // No namespace yet is empty, not a failed search.
+        // No namespace yet is empty, not a failed search. Hold the bundle key so
+        // language change re-localises without the panel inventing wording.
         configListPanel.render(
-            ConfigListPresentation.empty(
-                statusLine = NacosSearchBundle.message("namespace.select.first")
-            )
+            ConfigListPresentation.emptyWithBundleKey("namespace.select.first")
         )
         return false
     }
@@ -466,7 +465,11 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 when (state) {
                     is NacosSearchService.SearchState.Idle -> {
                         SwingUtilities.invokeLater {
+                            // Idle is cancel / session abandon, not a sixth list
+                            // state. Always re-render so a Loading card cannot stick.
                             setSearching(false)
+                            paginationPanel.setLoading(false)
+                            configListPanel.render(ConfigListPresentation.fromSearchState(state))
                         }
                     }
                     is NacosSearchService.SearchState.Loading -> {
@@ -487,9 +490,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                             setSearching(false)
                             paginationPanel.setLoading(false)
                             configListPanel.setSearchQuery(searchPanel.getSearchQuery())
-                            configListPanel.render(
-                                ConfigListPresentation.fromSearchState(state, bundleMessage)
-                            )
+                            configListPanel.render(ConfigListPresentation.fromSearchState(state))
                             onConfigurationListPresented(state.configurations)
                             paginationPanel.updatePagination(
                                 NacosSearchService.PaginationState(
@@ -505,9 +506,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                         SwingUtilities.invokeLater {
                             setSearching(false)
                             paginationPanel.setLoading(false)
-                            configListPanel.render(
-                                ConfigListPresentation.fromSearchState(state, bundleMessage)
-                            )
+                            configListPanel.render(ConfigListPresentation.fromSearchState(state))
                         }
                     }
                 }
@@ -625,20 +624,19 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     /**
      * Surfaces a typed or free-form failure through the list's closed state set.
      * Prefer [ConfigListPresentation.fromSearchState] when a [NacosSearchService.SearchState]
-     * is already available.
+     * is already available. Non-search paths pass no title key so the Failed
+     * card is not stamped “Search failed”.
      */
     private fun showError(message: String, error: Throwable? = null) {
         SwingUtilities.invokeLater {
             configListPanel.render(
-                ConfigListPresentation.fromFailure(error, message, bundleMessage)
+                ConfigListPresentation.fromFailure(
+                    error = error,
+                    fallbackMessage = message,
+                    titleKey = null
+                )
             )
         }
-    }
-
-    /** Bundle resolver shared with pure list presentation (issue #79). */
-    private val bundleMessage: (String, Array<out Any>) -> String = { key, params ->
-        if (params.isEmpty()) NacosSearchBundle.message(key)
-        else NacosSearchBundle.message(key, *params)
     }
     
     /**
