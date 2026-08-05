@@ -290,17 +290,12 @@ class NamespacePanel(
      */
     private fun admitNamespaceSwitch(namespace: NamespaceInfo): Boolean {
         val editSessions = project.service<EditSessionService>()
-        return when (val guard = editSessions.guardNamespaceSwitch(namespace.namespaceId)) {
-            DraftGuard.Proceed, DraftGuard.AlreadyEditing -> true
-            is DraftGuard.ConfirmDiscard -> {
-                if (confirmDraftDiscard(project, guard.draft, "config.detail.draft.discard.namespace")) {
-                    editSessions.discardDraft()
-                    true
-                } else {
-                    false
-                }
-            }
-        }
+        return admitDraftGuard(
+            project,
+            editSessions,
+            editSessions.guardNamespaceSwitch(namespace.namespaceId),
+            "config.detail.draft.discard.namespace"
+        )
     }
 
     private fun onNamespaceSelected(namespace: NamespaceInfo) {

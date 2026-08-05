@@ -14,6 +14,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -838,6 +839,239 @@ class EditSessionServiceTest {
         assertEquals(0, adapter.publishCalls)
     }
 
+    // ---- publish progress and aftermath (issue #80) ----
+
+    @Test
+    fun `publishing and verifying are each visible while they last`() = runBlocking {
+        val writeGate = CompletableDeferred<Unit>()
+        val verifyGate = CompletableDeferred<Unit>()
+        val adapter = PhaseGatedAdapter(writeGate, verifyGate)
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+        requireNotNull(service.requestPublish())
+
+        val confirm = async { service.confirmPublish() }
+        adapter.enteredPublish.await()
+        assertEquals(PublishState.Publishing, service.publishState.value)
+        assertEquals(DraftGuard.RefuseInFlight, service.guardDestroy())
+        assertEquals(DraftGuard.RefuseInFlight, service.guardRetarget("dev", "other.yaml", "G"))
+        writeGate.complete(Unit)
+
+        adapter.enteredVerify.await()
+        assertEquals(PublishState.Verifying, service.publishState.value)
+        assertEquals(DraftGuard.RefuseInFlight, service.guardProjectClose())
+        verifyGate.complete(Unit)
+
+        assertEquals(PublishState.Verified, requireNotNull(confirm.await()).state)
+        assertNull(service.currentSession())
+    }
+
+    @Test
+    fun `verified publish clears dirty and leaves nothing to guard`() = runBlocking {
+        val service = service()
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+        requireNotNull(service.requestPublish())
+
+        val result = requireNotNull(service.confirmPublish())
+
+        assertEquals(PublishState.Verified, result.state)
+        assertFalse(result.isDirty)
+        assertNull(service.currentSession())
+        assertEquals(DraftGuard.Proceed, service.guardDestroy())
+    }
+
+    @Test
+    fun `read-back equal to baseline returns dirty requiring a fresh preflight`() = runBlocking {
+        val adapter = RecordingAdapter(readBackContent = "original", readBackMd5 = "base-md5")
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+        requireNotNull(service.requestPublish())
+
+        val result = requireNotNull(service.confirmPublish())
+
+        assertEquals(PublishState.Dirty, result.state)
+        assertTrue(result.isDirty)
+        assertTrue(result.requiresFreshPreflight)
+        assertTrue(service.requiresFreshPreflight())
+        assertTrue(service.isDirty())
+        assertEquals("edited", service.currentSession()?.draftContent)
+        // A second confirm without a fresh request must not write again.
+        assertNull(service.confirmPublish())
+        assertEquals(1, adapter.publishCalls)
+    }
+
+    @Test
+    fun `preflight mismatch yields conflict and keeps the draft with no write`() = runBlocking {
+        val adapter = RecordingAdapter(remoteContent = "someone else", remoteMd5 = "other")
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        val result = requireNotNull(service.requestPublish())
+
+        assertInstanceOf(PublishState.RemoteConflict::class.java, result.state)
+        assertEquals(0, adapter.publishCalls)
+        assertTrue(service.isDirty())
+    }
+
+    @Test
+    fun `CAS rejection yields conflict and keeps the draft`() = runBlocking {
+        val adapter = RecordingAdapter(publishOutcome = PublishOutcome.CasConflict)
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+        requireNotNull(service.requestPublish())
+
+        val result = requireNotNull(service.confirmPublish())
+
+        assertInstanceOf(PublishState.RemoteConflict::class.java, result.state)
+        assertTrue(result.isDirty)
+        assertEquals("edited", service.currentSession()?.draftContent)
+    }
+
+    @Test
+    fun `third read-back value yields conflict and keeps the draft`() = runBlocking {
+        val adapter = RecordingAdapter(readBackContent = "third party", readBackMd5 = "third")
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+        requireNotNull(service.requestPublish())
+
+        val result = requireNotNull(service.confirmPublish())
+
+        assertInstanceOf(PublishState.RemoteConflict::class.java, result.state)
+        assertTrue(service.isDirty())
+    }
+
+    @Test
+    fun `transport failure after send enters server-state-unknown and demotes pre-write confirmation`() =
+        runBlocking {
+            val demoter = RecordingDemoter()
+            val adapter = RecordingAdapter(
+                publishFailure = RemoteOperationError.Connection(RuntimeException("disconnected"))
+            )
+            val service = service(StubEditEnvironment(), adapter, demoter)
+            service.beginEdit(configuration(), "dev", baselineContent = "original")
+            service.updateDraft("edited")
+            requireNotNull(service.requestPublish())
+
+            val result = requireNotNull(service.confirmPublish())
+
+            assertEquals(PublishState.ServerStateUnknown, result.state)
+            assertTrue(service.isServerStateUnknown())
+            assertEquals(
+                com.nanyin.nacos.search.models.DatasetConfirmation.UNCONFIRMED,
+                service.preWriteDetailConfirmation()
+            )
+            assertEquals(1, demoter.calls)
+            assertTrue(service.isDirty())
+            // Second publish is blocked; only reconciliation is retryable.
+            assertEquals(
+                PublishState.ServerStateUnknown,
+                requireNotNull(service.requestPublish()).state
+            )
+            assertEquals(1, adapter.publishCalls)
+            assertInstanceOf(
+                DraftGuard.RequireWarnedAbandon::class.java,
+                service.guardDestroy()
+            )
+            // Ordinary discard is refused while SSU.
+            service.discardDraft()
+            assertNotNull(service.currentSession())
+            assertTrue(service.isDirty())
+        }
+
+    @Test
+    fun `reconciliation is the only retryable network action in server-state-unknown`() = runBlocking {
+        val adapter = RecordingAdapter(
+            publishFailure = RemoteOperationError.Connection(RuntimeException("disconnected")),
+            readBackContent = "edited",
+            readBackMd5 = "published-md5"
+        )
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+        requireNotNull(service.requestPublish())
+        requireNotNull(service.confirmPublish())
+        assertTrue(service.isServerStateUnknown())
+
+        // Force the next readDetail (reconcile) to see the draft content.
+        adapter.publishFailure = null
+        adapter.forceReadBackToDraft = true
+
+        val result = requireNotNull(service.reconcilePublish())
+
+        assertEquals(PublishState.Verified, result.state)
+        assertFalse(service.isServerStateUnknown())
+        assertNull(service.currentSession())
+        // Still only the original ambiguous write — reconcile never publishes.
+        assertEquals(1, adapter.publishCalls)
+    }
+
+    @Test
+    fun `abandon after server-state-unknown drops the draft and never writes again`() = runBlocking {
+        val adapter = RecordingAdapter(
+            publishFailure = RemoteOperationError.Connection(RuntimeException("disconnected"))
+        )
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+        requireNotNull(service.requestPublish())
+        requireNotNull(service.confirmPublish())
+
+        assertTrue(service.abandonPublish())
+        assertNull(service.currentSession())
+        assertFalse(service.isServerStateUnknown())
+        assertEquals(1, adapter.publishCalls)
+        assertFalse(service.abandonPublish())
+    }
+
+    @Test
+    fun `operation-affecting profile change keeps the draft and requires a fresh preflight`() =
+        runBlocking {
+            val environment = StubEditEnvironment()
+            val service = service(environment)
+            service.beginEdit(configuration(), "dev", baselineContent = "original")
+            service.updateDraft("edited")
+            requireNotNull(service.requestPublish())
+            assertTrue(service.isAwaitingConfirmation())
+
+            // Timeout/proxy-style change: profile revision advances, identity stays.
+            environment.profileRevision = 2
+
+            val result = requireNotNull(service.confirmPublish())
+
+            assertEquals(PublishState.Dirty, result.state)
+            assertTrue(result.requiresFreshPreflight)
+            assertTrue(service.requiresFreshPreflight())
+            assertTrue(service.isDirty())
+            assertEquals("edited", service.currentSession()?.draftContent)
+            // A fresh requestPublish re-runs preflight and may park again.
+            val again = requireNotNull(service.requestPublish())
+            assertInstanceOf(PublishState.AwaitingConfirmation::class.java, again.state)
+        }
+
+    @Test
+    fun `resolved-generation change blocks publishing while draft text stays for copying`() =
+        runBlocking {
+            val adapter = RecordingAdapter()
+            val environment = StubEditEnvironment()
+            val service = service(environment, adapter)
+            service.beginEdit(configuration(), "dev", baselineContent = "original")
+            service.updateDraft("edited")
+
+            environment.resolvedGeneration = NacosApiGeneration.V3
+
+            val result = requireNotNull(service.requestPublish())
+
+            assertInstanceOf(PublishState.ReadOnly::class.java, result.state)
+            assertEquals(0, adapter.publishCalls)
+            assertEquals("edited", service.currentSession()?.draftContent)
+        }
+
     // ---- helpers ----
 
     private fun started(start: EditStart): EditSession =
@@ -845,8 +1079,9 @@ class EditSessionServiceTest {
 
     private fun service(
         environment: StubEditEnvironment = StubEditEnvironment(),
-        adapter: ProtocolAdapter = RecordingAdapter()
-    ) = EditSessionService({ gateway(adapter) }, environment)
+        adapter: ProtocolAdapter = RecordingAdapter(),
+        demoter: PreWriteDetailDemoter = NoOpPreWriteDetailDemoter
+    ) = EditSessionService({ gateway(adapter) }, environment, demoter)
 
     private fun gateway(adapter: ProtocolAdapter) =
         OperationGateway(mapOf(NacosApiGeneration.V1 to adapter))
@@ -867,6 +1102,19 @@ class EditSessionServiceTest {
         writeIntent = writeIntent
     )
 
+    private class RecordingDemoter : PreWriteDetailDemoter {
+        var calls = 0
+        override fun demote(
+            identity: AccessIdentity,
+            namespaceId: String,
+            dataId: String,
+            group: String
+        ): Boolean {
+            calls++
+            return true
+        }
+    }
+
     /**
      * The project selection an edit starts against. Capturing a target is the
      * one place a credential is read, and it happens per operation — the
@@ -877,7 +1125,9 @@ class EditSessionServiceTest {
         var selected: EnvironmentProfile? = profile(),
         var credential: String = "",
         private val captureFailure: Throwable? = null,
-        var accessRevision: Long = 1
+        var accessRevision: Long = 1,
+        var profileRevision: Long = 1,
+        var resolvedGeneration: NacosApiGeneration = NacosApiGeneration.V1
     ) : EditEnvironment {
         /** Every profile this environment knows, by id, as the settings store holds them. */
         val profiles = mutableMapOf("p1" to profile())
@@ -885,7 +1135,7 @@ class EditSessionServiceTest {
         /** (profileId, namespaceId) of every capture this environment served. */
         val captures = mutableListOf<Pair<String, String>>()
 
-        val identity: AccessIdentity get() = identityAt(accessRevision)
+        val identity: AccessIdentity get() = identityAt(accessRevision, resolvedGeneration)
 
         override fun selectedProfile(): EnvironmentProfile? = selected
 
@@ -899,22 +1149,25 @@ class EditSessionServiceTest {
 
         fun target(namespaceId: String = "dev"): OperationTarget = OperationTarget(
             NacosOperationContext(
-                identity = identityAt(accessRevision),
+                identity = identityAt(accessRevision, resolvedGeneration),
                 endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow(),
                 credential = CredentialSnapshot(credential),
                 authMode = AuthMode.ANONYMOUS,
-                profileRevision = 1,
+                profileRevision = profileRevision,
                 accessRevision = accessRevision,
-                resolvedGeneration = NacosApiGeneration.V1
+                resolvedGeneration = resolvedGeneration
             ),
             namespaceId
         )
 
-        private fun identityAt(revision: Long) = AccessIdentity.ofProfile(
+        private fun identityAt(
+            revision: Long,
+            generation: NacosApiGeneration = NacosApiGeneration.V1
+        ) = AccessIdentity.ofProfile(
             profileId = "p1",
             accessRevision = revision,
             canonicalEndpoint = "https://nacos.example",
-            resolvedGeneration = NacosApiGeneration.V1,
+            resolvedGeneration = generation,
             authMode = AuthMode.ANONYMOUS,
             principal = "<anonymous>"
         )
@@ -923,7 +1176,12 @@ class EditSessionServiceTest {
     /** Serves the baseline on preflight and the command's content on read-back. */
     private open class RecordingAdapter(
         private val remoteContent: String = "original",
-        private val remoteMd5: String = "base-md5"
+        private val remoteMd5: String = "base-md5",
+        var publishOutcome: PublishOutcome = PublishOutcome.Written("true"),
+        var publishFailure: Throwable? = null,
+        private val readBackContent: String? = null,
+        private val readBackMd5: String? = null,
+        var forceReadBackToDraft: Boolean = false
     ) : ProtocolAdapter {
         var publishCalls = 0
         var lastPublishTarget: OperationTarget? = null
@@ -938,24 +1196,44 @@ class EditSessionServiceTest {
         override suspend fun readDetail(
             target: OperationTarget,
             coordinate: ConfigurationCoordinate
-        ): Result<NacosConfiguration?> = Result.success(
-            published?.let {
-                NacosConfiguration(
-                    dataId = it.dataId, group = it.group, tenantId = target.namespaceId,
-                    content = it.content, type = it.type, md5 = "published-md5"
+        ): Result<NacosConfiguration?> {
+            if (published != null || forceReadBackToDraft) {
+                val content = when {
+                    forceReadBackToDraft && published != null -> published!!.content
+                    forceReadBackToDraft -> "edited"
+                    readBackContent != null -> readBackContent
+                    published != null -> published!!.content
+                    else -> remoteContent
+                }
+                val md5 = when {
+                    readBackMd5 != null -> readBackMd5
+                    published != null -> "published-md5"
+                    else -> remoteMd5
+                }
+                val type = published?.type ?: "yaml"
+                return Result.success(
+                    NacosConfiguration(
+                        dataId = coordinate.dataId, group = coordinate.group,
+                        tenantId = target.namespaceId,
+                        content = content, type = type, md5 = md5
+                    )
                 )
-            } ?: NacosConfiguration(
-                dataId = coordinate.dataId, group = coordinate.group, tenantId = target.namespaceId,
-                content = remoteContent, type = "yaml", md5 = remoteMd5
+            }
+            return Result.success(
+                NacosConfiguration(
+                    dataId = coordinate.dataId, group = coordinate.group, tenantId = target.namespaceId,
+                    content = remoteContent, type = "yaml", md5 = remoteMd5
+                )
             )
-        )
+        }
 
         override suspend fun publish(target: OperationTarget, command: PublishCommand): Result<PublishOutcome> {
             publishCalls++
             lastPublishTarget = target
             lastPublishedCommand = command
+            publishFailure?.let { return Result.failure(it) }
             published = command
-            return Result.success(PublishOutcome.Written("true"))
+            return Result.success(publishOutcome)
         }
     }
 
@@ -976,6 +1254,32 @@ class EditSessionServiceTest {
             if (lastPublishedCommand == null && !enteredPreflight.isCompleted) {
                 enteredPreflight.complete(Unit)
                 release.await()
+            }
+            return super.readDetail(target, coordinate)
+        }
+    }
+
+    /** Gates the write and the post-write read-back separately for progress tests. */
+    private class PhaseGatedAdapter(
+        private val writeRelease: CompletableDeferred<Unit>,
+        private val verifyRelease: CompletableDeferred<Unit>
+    ) : RecordingAdapter() {
+        val enteredPublish = CompletableDeferred<Unit>()
+        val enteredVerify = CompletableDeferred<Unit>()
+
+        override suspend fun publish(target: OperationTarget, command: PublishCommand): Result<PublishOutcome> {
+            enteredPublish.complete(Unit)
+            writeRelease.await()
+            return super.publish(target, command)
+        }
+
+        override suspend fun readDetail(
+            target: OperationTarget,
+            coordinate: ConfigurationCoordinate
+        ): Result<NacosConfiguration?> {
+            if (lastPublishedCommand != null && !enteredVerify.isCompleted) {
+                enteredVerify.complete(Unit)
+                verifyRelease.await()
             }
             return super.readDetail(target, coordinate)
         }

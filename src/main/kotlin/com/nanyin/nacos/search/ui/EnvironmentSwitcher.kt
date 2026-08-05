@@ -142,7 +142,7 @@ class EnvironmentSwitcher(
         }
         // ADR-0027: switching environment must not discard a dirty draft silently.
         // Ask before mutating selection so cancel leaves env and draft unchanged.
-        if (!admitDraftGuard(
+        if (!admitEnvDraftGuard(
                 project.service<EditSessionService>().guardEnvironmentSwitch(entry.config.id),
                 "config.detail.draft.discard.environment"
             )
@@ -161,17 +161,8 @@ class EnvironmentSwitcher(
      * Whether a guarded action may proceed. [ConfirmDiscard] prompts with the
      * two ADR-0027 choices; asking never mutates — only an explicit discard does.
      */
-    private fun admitDraftGuard(guard: DraftGuard, messageKey: String): Boolean = when (guard) {
-        DraftGuard.Proceed, DraftGuard.AlreadyEditing -> true
-        is DraftGuard.ConfirmDiscard -> {
-            if (confirmDraftDiscard(project, guard.draft, messageKey)) {
-                project.service<EditSessionService>().discardDraft()
-                true
-            } else {
-                false
-            }
-        }
-    }
+    private fun admitEnvDraftGuard(guard: DraftGuard, messageKey: String): Boolean =
+        admitDraftGuard(project, project.service<EditSessionService>(), guard, messageKey)
 
     private fun openSettings() {
         ShowSettingsUtil.getInstance().editConfigurable(project, NacosConfigurable(project))
