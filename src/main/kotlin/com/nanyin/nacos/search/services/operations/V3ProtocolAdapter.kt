@@ -7,6 +7,7 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParseException
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
 import kotlinx.coroutines.CancellationException
 import java.net.URLEncoder
@@ -111,7 +112,7 @@ class V3ProtocolAdapter(
             command.appName?.let { add("appName" to it) }
             command.desc?.let { add("desc" to it) }
             command.configTags?.let { add("config_tags" to it) }
-            add("namespaceId" to command.namespaceId.trim().ifBlank { "public" })
+            add("namespaceId" to NamespaceInfo.canonicalId(command.namespaceId))
         }
         val formData = params.joinToString("&") { (k, v) ->
             "${URLEncoder.encode(k, "UTF-8")}=${URLEncoder.encode(v, "UTF-8")}"
@@ -219,7 +220,7 @@ class V3ProtocolAdapter(
             "appName" to query.appName,
             "config_tags" to query.configTags,
             "search" to query.search,
-            "namespaceId" to target.namespaceId.trim().ifBlank { "public" }
+            "namespaceId" to NamespaceInfo.canonicalId(target.namespaceId)
         ),
         headers = mapOf("Accept" to "application/json")
     )
@@ -234,7 +235,7 @@ class V3ProtocolAdapter(
         query = listOf(
             "dataId" to coordinate.dataId,
             "group" to coordinate.group,
-            "namespaceId" to target.namespaceId.trim().ifBlank { "public" }
+            "namespaceId" to NamespaceInfo.canonicalId(target.namespaceId)
         ),
         headers = mapOf("Accept" to "application/json")
     )
@@ -247,7 +248,7 @@ class V3ProtocolAdapter(
         query = listOf(
             "dataId" to query.coordinate.dataId,
             "group" to query.coordinate.group,
-            "namespaceId" to target.namespaceId.trim().ifBlank { "public" },
+            "namespaceId" to NamespaceInfo.canonicalId(target.namespaceId),
             "pageNo" to query.pageNo.toString(),
             "pageSize" to query.pageSize.toString()
         ),
@@ -483,7 +484,7 @@ class V3ProtocolAdapter(
             pageNumber = page.pageNumber,
             pagesAvailable = page.pagesAvailable,
             items = page.pageItems.map { item ->
-                ConfigurationSummary(item.dataId, item.group, normalizeTenant(item.tenant), item.content, item.type)
+                ConfigurationSummary(item.dataId, item.group, NamespaceInfo.canonicalTenantId(item.tenant), item.content, item.type)
             }
         )
     }
@@ -495,7 +496,7 @@ class V3ProtocolAdapter(
         return NacosConfiguration(
             dataId = detail.dataId,
             group = detail.group,
-            tenantId = normalizeTenant(detail.tenant),
+            tenantId = NamespaceInfo.canonicalTenantId(detail.tenant),
             content = detail.content ?: "",
             type = detail.type,
             md5 = detail.md5
@@ -517,7 +518,7 @@ class V3ProtocolAdapter(
                     id = item.id ?: "",
                     dataId = item.dataId,
                     group = item.group,
-                    tenantId = normalizeTenant(item.tenant),
+                    tenantId = NamespaceInfo.canonicalTenantId(item.tenant),
                     type = item.type,
                     md5 = item.md5,
                     lastModified = HistoryTimestamps.resolveMillis(
@@ -543,7 +544,7 @@ class V3ProtocolAdapter(
             id = detail.id,
             dataId = detail.dataId,
             group = detail.group,
-            tenantId = normalizeTenant(detail.tenant),
+            tenantId = NamespaceInfo.canonicalTenantId(detail.tenant),
             content = detail.content ?: "",
             type = detail.type,
             md5 = detail.md5,
@@ -572,13 +573,20 @@ class V3ProtocolAdapter(
         return items.mapNotNull { element ->
             if (!element.isJsonObject) return@mapNotNull null
             val obj = element.asJsonObject
-            val namespaceId = firstPresent(
-                obj.get("namespace")?.asString,
-                obj.get("namespaceShowName")?.asString,
-                obj.get("namespaceName")?.asString
-            ) ?: return@mapNotNull null
-            // V3 public namespace commonly uses empty string as id.
-            val normalizedId = namespaceId.trim().ifBlank { "public" }
+            // Prefer the namespace id field even when blank — blank/public spellings
+            // collapse via canonicalId. Fall back to show-name only when the id
+            // field is absent, never when it is an empty public Namespace.
+            val namespaceField = obj.get("namespace")
+                ?.takeIf { it.isJsonPrimitive && !it.isJsonNull }
+                ?.asString
+            val namespaceId = namespaceField
+                ?: firstPresent(
+                    obj.get("namespaceId")?.asString,
+                    obj.get("namespaceShowName")?.asString,
+                    obj.get("namespaceName")?.asString
+                )
+                ?: return@mapNotNull null
+            val normalizedId = NamespaceInfo.canonicalId(namespaceId)
             DiscoveredNamespace(
                 namespaceId = normalizedId,
                 displayName = firstPresent(
@@ -648,9 +656,6 @@ class V3ProtocolAdapter(
             }
         }
     }
-
-    private fun normalizeTenant(tenant: String?): String? =
-        tenant?.trim()?.takeUnless { it.isEmpty() || it == "public" }
 
     private data class RequestAuthentication(
         val query: List<Pair<String, String>> = emptyList(),
