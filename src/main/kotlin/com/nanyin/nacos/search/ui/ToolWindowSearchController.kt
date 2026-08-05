@@ -29,6 +29,18 @@ class ToolWindowSearchController(
     private val selectedProfileId: () -> String,
     private val captureOperationContext: suspend (String) -> NacosOperationContext?
 ) {
+    /** What became of an attempt to hand the service a session. */
+    enum class Adoption {
+        /** A different environment or namespace is now the search target. */
+        ADOPTED,
+
+        /** The same target, re-prepared: what is on screen still applies. */
+        UNCHANGED,
+
+        /** A newer adoption or a moved selection won; this one installed nothing. */
+        DISCARDED
+    }
+
     /**
      * Orders concurrent adoptions. Switching environments quickly starts a
      * second capture before the first returns; without this an older capture
@@ -39,27 +51,30 @@ class ToolWindowSearchController(
 
     /**
      * Gives the search service the environment to search under: the selected
-     * profile, [namespace], and a freshly captured operation context. Returns
-     * true when the service adopted a different target from the one it held.
+     * profile, [namespace], and a freshly captured operation context.
      *
      * A capture that finishes after a newer one started, or after the selection
-     * has moved to another profile, is discarded rather than adopted.
+     * has moved to another profile, is [Adoption.DISCARDED] rather than adopted.
      */
-    suspend fun adoptSession(namespace: NamespaceInfo?): Boolean {
+    suspend fun adoptSession(namespace: NamespaceInfo?): Adoption {
         val adoption = adoptions.incrementAndGet()
         val profileId = selectedProfileId()
         val context = captureOperationContext(profileId)
-        if (adoption != adoptions.get()) return false
-        if (profileId != selectedProfileId()) return false
-        return searchService.adoptSession(SearchSessionContext(profileId, namespace, context))
+        if (adoption != adoptions.get()) return Adoption.DISCARDED
+        if (profileId != selectedProfileId()) return Adoption.DISCARDED
+        val changed = searchService.adoptSession(SearchSessionContext(profileId, namespace, context))
+        return if (changed) Adoption.ADOPTED else Adoption.UNCHANGED
     }
 
     /**
      * Adopts [namespace] and shows its first page. Used when the user picks a
      * namespace and when a reload follows an environment or settings change.
+     *
+     * A discarded adoption loads nothing: the session it would have searched
+     * under is not the one held, so the adoption that beat it owns the reload.
      */
     suspend fun openNamespace(namespace: NamespaceInfo?) {
-        adoptSession(namespace)
+        if (adoptSession(namespace) == Adoption.DISCARDED) return
         if (namespace != null) searchService.reload()
     }
 
@@ -85,9 +100,6 @@ class ToolWindowSearchController(
 
     /** Re-runs the current search, bypassing the cache. */
     suspend fun refresh() = searchService.reload(forceRefresh = true)
-
-    /** Re-runs the current search, preferring cached pages. */
-    suspend fun reload() = searchService.reload()
 
     suspend fun nextPage() = searchService.nextPage()
 

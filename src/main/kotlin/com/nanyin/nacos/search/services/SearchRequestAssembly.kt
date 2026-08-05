@@ -16,6 +16,8 @@ package com.nanyin.nacos.search.services
  * Opting in is deliberate and greppable. It belongs to the service that holds
  * the session context — it is the only component that knows the environment a
  * request should name — and to the tests that assert what a request derives.
+ *
+ * Recorded as ADR-0054; the same instrument as [CacheWriteAccess] (ADR-0052).
  */
 @RequiresOptIn(
     level = RequiresOptIn.Level.ERROR,

@@ -27,6 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.awt.*
 import java.awt.event.ActionEvent
 import java.awt.event.ActionListener
@@ -185,9 +186,13 @@ class NamespacePanel(
         return try {
             val result = projectSession?.let { session ->
                 session.healSelection(settings)
-                namespaceService.loadNamespacesAsync(
+                // The capture reads PasswordSafe, and this panel's scope is the
+                // event dispatch thread — never capture a credential on it
+                // (ADR-0039).
+                val context = withContext(Dispatchers.IO) {
                     settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
-                )
+                }
+                namespaceService.loadNamespacesAsync(context)
             } ?: namespaceService.loadNamespacesAsync()
             val loaded = result.await()
             loaded.onSuccess { loadedNamespaces ->

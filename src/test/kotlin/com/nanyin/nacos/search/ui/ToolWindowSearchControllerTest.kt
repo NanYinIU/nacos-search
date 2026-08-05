@@ -154,9 +154,35 @@ class ToolWindowSearchControllerTest {
 
         val adopted = controller.adoptSession(namespace("ns-a"))
 
-        assertFalse(adopted, "a capture for the environment the user left must not be adopted")
+        assertEquals(
+            ToolWindowSearchController.Adoption.DISCARDED,
+            adopted,
+            "a capture for the environment the user left must not be adopted"
+        )
         assertEquals("", service.sessionContext().profileId)
         assertNull(service.sessionContext().namespace)
+    }
+
+    @Test
+    fun `a discarded adoption loads nothing`() = runBlocking {
+        // The adoption that beat it owns the reload; loading here would search
+        // the session that adoption installed while believing it opened another.
+        val api = RecordingApi()
+        val service = NacosSearchService(apiProvider = { api.service })
+        var selected = settings.activeServerId
+        val controller = ToolWindowSearchController(
+            searchService = service,
+            selectedProfileId = { selected },
+            captureOperationContext = { profileId ->
+                selected = "another-environment"
+                capturedContextFor(profileId)
+            }
+        )
+
+        controller.openNamespace(namespace("ns-a"))
+
+        assertTrue(api.calls.isEmpty(), "a discarded adoption must not search: ${api.calls}")
+        assertEquals(NacosSearchService.SearchState.Idle, service.searchState.value)
     }
 
     @Test
@@ -184,7 +210,11 @@ class ToolWindowSearchControllerTest {
         controller.adoptSession(namespace("ns-b"))
         releaseFirstCapture.complete(Unit)
 
-        assertFalse(slow.await(), "the older capture must not install itself")
+        assertEquals(
+            ToolWindowSearchController.Adoption.DISCARDED,
+            slow.await(),
+            "the older capture must not install itself"
+        )
         assertEquals("ns-b", service.sessionContext().namespaceId)
         scope.cancel()
     }

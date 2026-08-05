@@ -343,6 +343,28 @@ class NacosSearchServiceTest {
     }
 
     @Test
+    fun `a namespace switch drops the type-ahead search typed before it`() = runBlocking {
+        // Type-ahead is debounced, so the switch lands while the search is still
+        // waiting to run. It must not go on to search — and certainly not
+        // publish — under the namespace the user moved to.
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val api = stubApi()
+        val service = NacosSearchService(apiProvider = { api })
+        service.adoptSession(sessionFor(settings, "ns-a"))
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+        service.searchAsYouType("app", scope)
+        service.adoptSession(sessionFor(settings, "ns-b"))
+        delay(600) // well past the 300ms debounce window
+
+        verify(api, never()).listConfigurations(
+            anyOrNull(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyOrNull()
+        )
+        assertEquals(NacosSearchService.SearchState.Idle, service.searchState.value)
+        scope.cancel()
+    }
+
+    @Test
     fun `re-preparing the same environment leaves the results standing`() = runBlocking {
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         val service = NacosSearchService(apiProvider = { stubApi() })

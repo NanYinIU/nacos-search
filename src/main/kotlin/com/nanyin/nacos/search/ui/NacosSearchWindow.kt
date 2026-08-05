@@ -308,33 +308,30 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun handleSettingsChanged() {
         // Switcher label reflects the new active environment immediately.
         SwingUtilities.invokeLater { environmentSwitcher.refresh() }
-        coroutineScope.launch {
-            // Leaving the environment drops the held session, which cancels the
-            // pending search and clears what it would have published.
-            searchController.leaveEnvironment()
-            nacosApiService.clearCache()
-            currentNamespace = null
-            currentConfiguration = null
-            clearSearchUi()
-
-           val namespaceResult = namespacePanel.refreshAndWait()
-            if (namespaceResult.isSuccess) {
-                currentNamespace = namespacePanel.getSelectedNamespace()
-                openSelectedNamespace()
-            }
-        }
+        // Settings may have changed the connection itself, so the API's own
+        // in-memory responses for the previous one cannot be reused.
+        coroutineScope.launch { restartUnderSelectedEnvironment(clearApiCache = true) }
     }
 
     private fun handleProjectEnvironmentSelectionChanged() {
-        coroutineScope.launch {
-            searchController.leaveEnvironment()
-            currentNamespace = null
-            currentConfiguration = null
-            clearSearchUi()
-            namespacePanel.refreshAndWait().onSuccess {
-                currentNamespace = namespacePanel.getSelectedNamespace()
-                openSelectedNamespace()
-            }
+        coroutineScope.launch { restartUnderSelectedEnvironment(clearApiCache = false) }
+    }
+
+    /**
+     * Abandons the current environment and opens the one now selected. Leaving
+     * drops the held session, which cancels the pending search and the results
+     * it would have published; the namespace list is then reloaded against the
+     * new environment and its selection opened.
+     */
+    private suspend fun restartUnderSelectedEnvironment(clearApiCache: Boolean) {
+        searchController.leaveEnvironment()
+        if (clearApiCache) nacosApiService.clearCache()
+        currentNamespace = null
+        currentConfiguration = null
+        clearSearchUi()
+        namespacePanel.refreshAndWait().onSuccess {
+            currentNamespace = namespacePanel.getSelectedNamespace()
+            openSelectedNamespace()
         }
     }
 
