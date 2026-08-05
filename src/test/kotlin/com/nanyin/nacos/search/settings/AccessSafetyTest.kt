@@ -8,6 +8,7 @@ import com.nanyin.nacos.search.models.NacosApiPolicy
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -97,11 +98,11 @@ class AccessSafetyTest {
 
     @Test
     fun `credential rotation stages its new slot before publishing the new access revision`() {
-        val credentials = InMemoryCredentialSlots()
+        val store = InMemoryCredentialSlotStore()
         val original = EnvironmentProfile.fromLegacy(
             NacosServerConfig(id = "dev", serverUrl = "https://nacos.example", username = "alice")
         )
-        credentials.put(original.credentialSlotId, "old-secret")
+        store.stage(original.id, original.credentialSlotVersion, "old-secret")
         val published = mutableListOf<EnvironmentProfile>()
 
         val nextVersion = original.credentialSlotVersion + 1
@@ -109,14 +110,34 @@ class AccessSafetyTest {
             credentialSlotId = credentialSlotId(original.id, nextVersion),
             credentialSlotVersion = nextVersion
         )
-        CredentialSlotStager(credentials).stage(updated, "new-secret")
+        val staged = CredentialSlotStager(store).stage(updated, "new-secret")
+        assertInstanceOf(CredentialStageResult.Success::class.java, staged)
 
-        assertEquals("new-secret", credentials[updated.credentialSlotId])
+        assertEquals("new-secret", store.read(updated.id, updated.credentialSlotVersion))
         assertEquals(original.accessRevision + 1, updated.accessRevision)
         published += updated
 
-        assertEquals("old-secret", credentials[original.credentialSlotId])
+        assertEquals("old-secret", store.read(original.id, original.credentialSlotVersion))
         assertEquals(updated, published.single())
+    }
+
+    @Test
+    fun `failed credential stage keeps the previous published profile revision invisible for the pending pair`() {
+        val store = InMemoryCredentialSlotStore(failWrites = true)
+        val original = EnvironmentProfile.fromLegacy(
+            NacosServerConfig(id = "dev", serverUrl = "https://nacos.example", username = "alice")
+        )
+        val nextVersion = original.credentialSlotVersion + 1
+        val pending = original.withUpdated(
+            credentialSlotId = credentialSlotId(original.id, nextVersion),
+            credentialSlotVersion = nextVersion
+        )
+
+        val result = CredentialSlotStager(store).stage(pending, "new-secret")
+
+        assertInstanceOf(CredentialStageResult.Failure::class.java, result)
+        assertNull(store.read(pending.id, pending.credentialSlotVersion))
+        // Callers must not add [pending] to the published set when stage fails.
     }
 
     @Test

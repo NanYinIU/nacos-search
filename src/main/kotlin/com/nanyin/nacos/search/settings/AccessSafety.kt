@@ -9,37 +9,8 @@ import com.nanyin.nacos.search.models.NacosApiPolicy
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 
-/** A narrow credential seam so migration remains deterministic and testable. */
-interface CredentialSlots {
-    operator fun get(slotId: String): String?
-    fun put(slotId: String, secret: String)
-}
-
-class InMemoryCredentialSlots : CredentialSlots {
-    private val values = mutableMapOf<String, String>()
-    override operator fun get(slotId: String): String? = values[slotId]
-    override fun put(slotId: String, secret: String) {
-        if (secret.isNotEmpty()) values[slotId] = secret
-    }
-}
-
-/**
- * Stages a replacement secret under the slot referenced by a pending profile
- * revision. Callers must do this before publishing the revision, so readers
- * see a complete old or complete new pair and never an unwritten slot.
- */
-class CredentialSlotStager(private val credentials: CredentialSlots) {
-    fun stage(profile: EnvironmentProfile, secret: String) {
-        credentials.put(profile.credentialSlotId, secret)
-    }
-}
-
-internal fun credentialSlotId(profileId: String, version: Long): String = "$profileId:v$version"
-
-internal object PasswordSafeCredentialSlots : CredentialSlots {
-    override operator fun get(slotId: String): String? = NacosCredentialStore.get(slotId)
-    override fun put(slotId: String, secret: String) = NacosCredentialStore.set(slotId, secret)
-}
+// Credential-slot storage lives in CredentialSlotStore.kt (issue #102).
+// Migration still accepts the narrow CredentialSlots compatibility surface.
 
 data class LegacyMigrationResult(
     val profiles: List<EnvironmentProfile>,
