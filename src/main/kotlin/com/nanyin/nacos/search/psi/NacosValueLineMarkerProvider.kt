@@ -192,13 +192,20 @@ class NacosValueLineMarkerProvider internal constructor(
             // (ADR-0052). It used to be neither, only because an AUTO profile
             // left the two spaces apart (issue #72).
 
+            // Re-derive the identity: on an AUTO profile that read may have been
+            // the first to resolve the generation for this session, so the
+            // identity captured before it can no longer name where the entry
+            // landed. Publishing the index under the stale one would build it
+            // for a key space nothing writes to (ADR-0053).
+            val resolvedIdentity = project.captureSelectedAccessIdentity(settings)
+
             // Rebuild the key index synchronously. We are on a pooled thread
             // (never the highlighter/dispatch thread), so a blocking rebuild is
             // safe and makes hasKey()/resolve() reflect the freshly cached
             // config immediately.
             ApplicationManager.getApplication()
                 .getService(NavigationIndexRefreshService::class.java)
-                .refresh(accessIdentity, project)
+                .refresh(resolvedIdentity, project)
 
             val lineIndex = ConfigKeyExtractor.extract(config)[key]?.lineIndex ?: -1
             NacosConfigNavigator.navigate(project, config, lineIndex)

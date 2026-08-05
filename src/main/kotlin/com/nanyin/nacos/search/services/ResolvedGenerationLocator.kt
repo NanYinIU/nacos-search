@@ -1,6 +1,7 @@
 package com.nanyin.nacos.search.services
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosApiGeneration
@@ -11,7 +12,7 @@ import com.nanyin.nacos.search.models.NacosApiGeneration
  * nothing else — reading a credential to derive them is what this whole path
  * exists to avoid.
  */
-data class ProfileAccessKeys(
+internal data class ProfileAccessKeys(
     val profileId: String,
     val profileRevision: Long,
     val accessRevision: Long,
@@ -41,13 +42,15 @@ data class ProfileAccessKeys(
  * unknown-generation space to make the read succeed would be publishing data no
  * successful detection ever confirmed.
  *
- * Locating a generation authorises nothing. It names a cache coordinate; formal
- * detection still runs before any remote operation, and a newly resolved
- * different generation switches identity and hides what this located.
+ * Locating a generation authorises nothing and confirms nothing. It names a
+ * cache coordinate; formal detection still runs before any remote operation,
+ * what may be *shown* from an unconfirmed entry remains ADR-0034's failure
+ * matrix, and a newly resolved different generation switches identity and hides
+ * what this located.
  */
-class ResolvedGenerationLocator(
+internal class ResolvedGenerationLocator(
     private val sessionResolved: (ProfileAccessKeys) -> NacosApiGeneration?,
-    private val lastKnown: (ProfileAccessKeys) -> NacosApiGeneration?
+    private val lastKnown: (ProfileAccessKeys) -> NacosApiGeneration? = ::persistedLastKnownGeneration
 ) {
     fun locate(keys: ProfileAccessKeys): NacosApiGeneration =
         sessionResolved(keys)?.takeIf { it.isResolved() }
@@ -60,57 +63,68 @@ class ResolvedGenerationLocator(
          * answers first. Project sessions are independent (ADR-0004), so another
          * project's resolution must never stand in for this one's.
          */
-        fun forProject(project: Project): ResolvedGenerationLocator = ResolvedGenerationLocator(
-            sessionResolved = { keys ->
-                runCatching {
-                    project.takeUnless { it.isDisposed }
-                        ?.getService(ProjectSessionEpochs::class.java)
-                        ?.resolvedGenerationIfCompatible(
-                            profileId = keys.profileId,
-                            profileRevision = keys.profileRevision,
-                            accessRevision = keys.accessRevision
-                        )
-                }.getOrNull()
-            },
-            lastKnown = ::persistedLastKnownGeneration
-        )
+        fun forProject(project: Project): ResolvedGenerationLocator =
+            askingSession { _ ->
+                project.takeUnless { it.isDisposed }?.getService(ProjectSessionEpochs::class.java)
+            }
 
         /**
          * For an application-level reader with no project of its own — startup
          * warm-up, local search, the API service's clear gesture. It asks the
          * session of whichever open project selected the profile, which is the
          * same lookup the operation layer uses to decide where to commit a
-         * resolution, so the two agree by construction.
+         * resolution. When no open project owns the profile the operation layer
+         * commits to a session of its own that nothing else can reach, and the
+         * persisted last-known value is what carries the answer here.
          */
-        fun forSelectedProfile(): ResolvedGenerationLocator = ResolvedGenerationLocator(
+        fun forSelectedProfile(): ResolvedGenerationLocator =
+            askingSession { keys -> ProjectSessionEpochs.findForProfile(keys.profileId) }
+
+        private fun askingSession(
+            epochsFor: (ProfileAccessKeys) -> ProjectSessionEpochs?
+        ): ResolvedGenerationLocator = ResolvedGenerationLocator(
             sessionResolved = { keys ->
-                runCatching {
-                    ProjectSessionEpochs.findForProfile(keys.profileId)
-                        ?.resolvedGenerationIfCompatible(
-                            profileId = keys.profileId,
-                            profileRevision = keys.profileRevision,
-                            accessRevision = keys.accessRevision
-                        )
-                }.getOrNull()
-            },
-            lastKnown = ::persistedLastKnownGeneration
-        )
-
-        private fun persistedLastKnownGeneration(keys: ProfileAccessKeys): NacosApiGeneration? = runCatching {
-            ApplicationManager.getApplication()
-                ?.getService(LastKnownGenerationStore::class.java)
-                ?.get(
-                    LastKnownGenerationStore.Key(
+                bestEffort {
+                    epochsFor(keys)?.resolvedGenerationIfCompatible(
                         profileId = keys.profileId,
-                        accessRevision = keys.accessRevision,
-                        canonicalEndpoint = keys.canonicalEndpoint
+                        profileRevision = keys.profileRevision,
+                        accessRevision = keys.accessRevision
                     )
-                )
-        }.getOrNull()
-
-        private fun NacosApiGeneration.isResolved(): Boolean =
-            this == NacosApiGeneration.V1 || this == NacosApiGeneration.V3
+                }
+            }
+        )
     }
+}
+
+/**
+ * The persisted last-known generation for [keys]. Sole reader of ADR-0034's
+ * three-part access key, so the offline-bootstrap path and the cache hot paths
+ * cannot disagree about which entry belongs to an identity.
+ */
+internal fun persistedLastKnownGeneration(keys: ProfileAccessKeys): NacosApiGeneration? = bestEffort {
+    ApplicationManager.getApplication()
+        ?.getService(LastKnownGenerationStore::class.java)
+        ?.get(
+            LastKnownGenerationStore.Key(
+                profileId = keys.profileId,
+                accessRevision = keys.accessRevision,
+                canonicalEndpoint = keys.canonicalEndpoint
+            )
+        )
+}
+
+/**
+ * Runs a lookup that must never fail a highlighter pass, without eating the
+ * platform's cancellation signal — these run on the EDT and the daemon, where
+ * swallowing [ProcessCanceledException] turns a cancelled pass into a wrong
+ * answer instead of no answer.
+ */
+private inline fun <T> bestEffort(lookup: () -> T?): T? = try {
+    lookup()
+} catch (cancelled: ProcessCanceledException) {
+    throw cancelled
+} catch (_: Exception) {
+    null
 }
 
 /**
@@ -127,7 +141,7 @@ internal fun AccessIdentity.locatedUnder(
     locator: ResolvedGenerationLocator,
     profileRevision: Long
 ): AccessIdentity {
-    if (resolvedGeneration != NacosApiGeneration.UNKNOWN) return this
+    if (resolvedGeneration.isResolved()) return this
     val located = locator.locate(
         ProfileAccessKeys(
             profileId = profileId,
@@ -136,5 +150,5 @@ internal fun AccessIdentity.locatedUnder(
             canonicalEndpoint = canonicalEndpoint
         )
     )
-    return if (located == NacosApiGeneration.UNKNOWN) this else copy(resolvedGeneration = located)
+    return if (located.isResolved()) copy(resolvedGeneration = located) else this
 }
