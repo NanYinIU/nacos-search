@@ -10,7 +10,6 @@ import com.intellij.ui.JBSplitter
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.util.ModalityUiUtil
 import com.intellij.util.ui.JBUI
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.nanyin.nacos.search.models.NacosConfiguration
@@ -36,6 +35,7 @@ import javax.swing.JComponent
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.ListSelectionModel
+import com.nanyin.nacos.search.invokeOnEdt
 
 /**
  * Read-only history browser for one configuration coordinate.
@@ -112,7 +112,7 @@ class HistoryBrowserDialog(
      * context, which the platform treats as NON_MODAL (blocked by this dialog).
      */
     private fun onDialogUi(gate: PresentationGate, action: () -> Unit) {
-        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.any()) {
+        invokeOnEdt(ModalityState.any()) {
             // Re-ask the judgement on the EDT: a session change can land between
             // the controller's IO checkpoint and this modal resume. This paint
             // carries no new observation, so it only re-tests epoch and

@@ -34,8 +34,7 @@ import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import javax.swing.event.ListSelectionListener
 import com.intellij.openapi.application.ModalityState
-import com.intellij.util.ModalityUiUtil
-
+import com.nanyin.nacos.search.invokeOnEdt
 /**
  * Master-detail settings configurable for multi-server management.
  *
@@ -573,7 +572,7 @@ class NacosConfigurable @JvmOverloads constructor(
         splitter.rightComponent = buildDetailPanel()
         splitter.resizeWeight = 0.0
         splitter.setDividerLocation(256)
-        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
+        invokeOnEdt(ModalityState.defaultModalityState()) {
             splitter.setDividerLocation(256)
         }
 
@@ -1170,7 +1169,7 @@ class NacosConfigurable @JvmOverloads constructor(
                     Result.failure(e)
                 }
 
-                ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
+                invokeOnEdt(ModalityState.defaultModalityState()) {
                     testConnectionButton.isEnabled = true
                     val report = outcome.getOrNull()
                     if (report != null) {

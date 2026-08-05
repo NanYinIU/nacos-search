@@ -5,9 +5,10 @@ import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * Issue #82: one marshalling idiom ([com.intellij.util.ModalityUiUtil.invokeLaterIfNeeded]
- * in production, [com.intellij.util.ui.UIUtil.invokeAndWaitIfNeeded] when a test must block)
- * replaces the four prior idioms and both hand-rolled dispatch-thread checks.
+ * Issue #82: one marshalling idiom ([com.nanyin.nacos.search.invokeOnEdt] in
+ * production, [com.intellij.util.ui.UIUtil.invokeAndWaitIfNeeded] when a test
+ * must block) replaces the four prior idioms and both hand-rolled
+ * dispatch-thread checks.
  */
 class EdtMarshallingIdiomTest {
 
@@ -20,22 +21,30 @@ class EdtMarshallingIdiomTest {
         val forbiddenStrings = listOf(
             "SwingUtilities.invokeLater",
             "SwingUtilities.invokeAndWait",
+            "SwingUtilities.isEventDispatchThread",
+            // The no-modality Application.invokeLater overload and the
+            // modality form must not appear outside the one helper.
             "ApplicationManager.getApplication().invokeLater",
             "ApplicationManager.getApplication().invokeAndWait",
-            "SwingUtilities.isEventDispatchThread",
+            "ModalityUiUtil",
+            "UIUtil.invokeLaterIfNeeded",
         )
         // Hand-rolled "if on EDT run else schedule". Bare asserts of thread
-        // identity are not this pattern.
+        // identity (e.g. off-EDT test preconditions) are not this pattern.
         val handRolledMarshall = Regex(
-            """if\s*\([^)]*isDispatchThread[^)]*\)\s*\{[^}]*\}\s*else\s*\{[^}]*(?:invokeLater|invokeAndWait)""",
-            RegexOption.DOT_MATCHES_ALL,
+            """if\s*\([\s\S]*?isDispatchThread[\s\S]*?\)\s*\{[\s\S]*?\}\s*else\s*\{[\s\S]*?(?:invokeLater|invokeAndWait|invokeOnEdt)""",
+        )
+
+        val allowlisted = setOf(
+            "EdtMarshallingIdiomTest.kt",
+            "invokeOnEdt.kt", // the one production idiom lives here
         )
 
         val violations = mutableListOf<String>()
         roots.forEach { root ->
             root.walkTopDown()
                 .filter { it.isFile && it.extension == "kt" }
-                .filter { it.name != "EdtMarshallingIdiomTest.kt" }
+                .filter { it.name !in allowlisted }
                 .forEach { file ->
                     val text = file.readText()
                     forbiddenStrings.forEach { pattern ->

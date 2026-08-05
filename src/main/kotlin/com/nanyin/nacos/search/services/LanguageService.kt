@@ -8,8 +8,7 @@ import com.nanyin.nacos.search.settings.NacosSettings
 import java.awt.GraphicsEnvironment
 import java.util.*
 import com.intellij.openapi.application.ModalityState
-import com.intellij.util.ModalityUiUtil
-
+import com.nanyin.nacos.search.invokeOnEdt
 /**
  * Service for managing language settings and localization
  */
@@ -82,7 +81,7 @@ class LanguageService {
             newLanguage.displayName
         )
 
-        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
+        invokeOnEdt(ModalityState.defaultModalityState()) {
             javax.swing.JOptionPane.showMessageDialog(
                 null,
                 message,
