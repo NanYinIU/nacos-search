@@ -125,6 +125,7 @@ class EditSessionService internal constructor(
      * callers need not.
      */
     private var pendingPublish: PreparedPublish? = null
+    private val discardListeners = CopyOnWriteArrayList<DraftDiscardListener>()
 
     /** The draft this project holds, or null when nothing is being edited. */
     fun currentSession(): EditSession? = synchronized(lock) { session }
@@ -137,6 +138,17 @@ class EditSessionService internal constructor(
      * without Swing so tests can assert the machine parked at confirmation.
      */
     fun isAwaitingConfirmation(): Boolean = synchronized(lock) { pendingPublish != null }
+
+    /**
+     * Registers [listener] for [discardDraft] notifications. Returns a handle
+     * that unregisters it — callers that own a [com.intellij.openapi.Disposable]
+     * should release the handle from that disposable so a disposed panel never
+     * hears about a later discard.
+     */
+    fun addDiscardListener(listener: DraftDiscardListener): AutoCloseable {
+        discardListeners.add(listener)
+        return AutoCloseable { discardListeners.remove(listener) }
+    }
 
     /**
      * Starts editing [configuration], binding the draft to the profile, access
@@ -197,9 +209,18 @@ class EditSessionService internal constructor(
      * was actually present, [DraftDiscardListener]s are notified so renderers
      * outside this service can leave edit mode.
      */
-    fun discardDraft() = synchronized(lock) {
-        session = null
-        pendingPublish = null
+    fun discardDraft() {
+        val dropped = synchronized(lock) {
+            val had = session != null
+            session = null
+            pendingPublish = null
+            had
+        }
+        if (dropped) {
+            for (listener in discardListeners) {
+                listener.onDraftDiscarded()
+            }
+        }
     }
 
     /**
@@ -239,6 +260,63 @@ class EditSessionService internal constructor(
     }
 
     /**
+     * Whether switching the project environment to [newProfileId] may proceed.
+     * Staying on the draft's own profile is not a switch. A dirty draft bound to
+     * a different profile would be orphaned, so the caller must prompt.
+     */
+    fun guardEnvironmentSwitch(newProfileId: String): DraftGuard {
+        val current = currentSession() ?: return DraftGuard.Proceed
+        if (current.binding.profileId == newProfileId) return DraftGuard.Proceed
+        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
+    }
+
+    /**
+     * Whether switching the selected namespace to [newNamespaceId] may proceed.
+     * [newNamespaceId] is compared canonically (ADR-0015). Staying on the
+     * draft's own namespace is not a switch.
+     */
+    fun guardNamespaceSwitch(newNamespaceId: String?): DraftGuard {
+        val current = currentSession() ?: return DraftGuard.Proceed
+        val canonical = NamespaceInfo.canonicalId(newNamespaceId)
+        if (current.binding.namespaceId == canonical) return DraftGuard.Proceed
+        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
+    }
+
+    /**
+     * Whether turning write intent off for [profileId] may proceed. Only the
+     * draft's own profile matters: withholding writes for an unrelated profile
+     * cannot orphan this draft. Turning writes off for the bound profile would
+     * leave a draft that can no longer be published (ADR-0026 / ADR-0027).
+     */
+    fun guardWriteIntentOff(profileId: String): DraftGuard {
+        val current = currentSession() ?: return DraftGuard.Proceed
+        if (current.binding.profileId != profileId) return DraftGuard.Proceed
+        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
+    }
+
+    /**
+     * Whether deleting the environment profile [profileId] may proceed. Only the
+     * draft's own profile matters: deleting an unrelated profile leaves the
+     * draft publishable. Deleting the bound profile would leave a draft that
+     * can no longer be published (ADR-0025 / ADR-0027).
+     */
+    fun guardProfileDeletion(profileId: String): DraftGuard {
+        val current = currentSession() ?: return DraftGuard.Proceed
+        if (current.binding.profileId != profileId) return DraftGuard.Proceed
+        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
+    }
+
+    /**
+     * Whether closing the project may proceed. Same shape as [guardDestroy]: a
+     * dirty draft is project-scoped (ADR-0046) and must not be dropped silently
+     * when the project that holds it goes away.
+     */
+    fun guardProjectClose(): DraftGuard {
+        val current = currentSession() ?: return DraftGuard.Proceed
+        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
+    }
+
+    /**
      * Runs preflight for the held draft and, on success, parks at
      * [PublishState.AwaitingConfirmation] carrying the diff and the named
      * target derived from the session binding (ADR-0027 / ADR-0028). Sends
@@ -253,10 +331,11 @@ class EditSessionService internal constructor(
         // A new request supersedes any previous unconfirmed preparation.
         synchronized(lock) { pendingPublish = null }
 
-        // ADR-0026's opt-in is one the user can still revoke while a draft is
-        // open, and blocking that revocation is a later slice (#77). Until then
-        // the save path fails closed by re-running the same check against the
-        // profile the draft is bound to — the check, not a snapshot of it.
+        // ADR-0026's opt-in can still change underneath a draft. Turning write
+        // intent off is itself guarded by [guardWriteIntentOff] so Settings
+        // cannot silently orphan a dirty draft (issue #77). The save path still
+        // fails closed by re-running the same check against the bound profile —
+        // the check, not a snapshot of it.
         val boundProfile = environment.profile(current.binding.profileId)
         if (WriteIntent.of(boundProfile) !is WriteIntent.Granted) {
             return PublishResult(
