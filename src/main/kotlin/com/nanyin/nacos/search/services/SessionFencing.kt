@@ -36,7 +36,12 @@ class SessionEpochRegistry {
  */
 class OperationTicket(
     private val projectId: String,
-    private val capturedEpoch: Long,
+    /**
+     * The epoch this operation started under. A caller that hands its result to
+     * a view passes this along so the view can make the same judgement after
+     * its own thread hop (ADR-0047).
+     */
+    val capturedEpoch: Long,
     private val registry: SessionEpochRegistry
 ) {
     fun isCurrent(): Boolean = registry.currentEpoch(projectId) == capturedEpoch

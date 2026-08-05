@@ -171,7 +171,7 @@ class NacosApiServiceTest {
         val result = apiService.listConfigurations("test-ns", 1, 10)
         assertTrue(result.isSuccess)
 
-        val response = result.getOrNull()
+        val response = result.getOrNull()?.value
         assertNotNull(response)
         assertEquals(1, response!!.totalCount)
         assertEquals(1, response.pageItems.size)

@@ -219,7 +219,12 @@ class NacosApiService(
     }
 
     /**
-     * Lists all configurations from Nacos
+     * Lists all configurations from Nacos, together with the observation
+     * sequence the read took (ADR-0047). A caller that paints the page orders
+     * it by that same number, so a late-arriving earlier read cannot replace a
+     * later one; a read served from cache observed nothing and reports
+     * [Observed.NO_OBSERVATION].
+     *
      * @param namespaceId Namespace ID (tenant), null for public namespace
      * @param pageNo Page number for pagination
      * @param pageSize Number of items per page
@@ -242,7 +247,7 @@ class NacosApiService(
         useCache: Boolean = true,
         forceRefresh: Boolean = false,
         operationContext: NacosOperationContext? = null
-    ): Result<ConfigListResponse> = withContext(Dispatchers.IO) {
+    ): Result<Observed<ConfigListResponse>> = withContext(Dispatchers.IO) {
         try {
             val context = operationContext ?: operationContextOrFailure() ?: return@withContext Result.failure(
                 ConfigurationRequired(listOf("Connection configuration is incomplete"))
@@ -255,7 +260,7 @@ class NacosApiService(
                 SummaryQuery(pageNo, pageSize, dataId, group, appName, configTags, searchMode),
                 forceRefresh = forceRefresh,
                 useCache = useCache
-            ).map { it.value.toConfigListResponse() }
+            ).map { Observed(it.value.toConfigListResponse(), it.observation) }
         } catch (e: Exception) {
             logger.warn("Error listing configurations", e)
             Result.failure(e)
@@ -309,7 +314,7 @@ class NacosApiService(
                     )
                 }
 
-                val response = result.getOrNull() ?: break
+                val response = result.getOrNull()?.value ?: break
                 expectedCount = response.totalCount
 
                 // Summaries only — empty content is intentional; the namespace

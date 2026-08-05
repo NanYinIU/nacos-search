@@ -35,7 +35,7 @@ class NacosApiServiceV1AnonymousTest {
             namespaceId = "team-manual",
             pageSize = 25,
             operationContext = context
-        ).getOrThrow()
+        ).getOrThrow().value
         val detail = api.getConfiguration(
             dataId = "app.yaml",
             group = "DEFAULT_GROUP",

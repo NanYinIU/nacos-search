@@ -9,6 +9,7 @@ import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.services.operations.SearchCoverage
 import com.nanyin.nacos.search.services.operations.contentSearchCapability
 import com.nanyin.nacos.search.services.operations.SearchCapability
@@ -163,7 +164,15 @@ class NacosSearchService(
             ),
             val coverage: SearchCoverage? = null,
             val fromCache: Boolean = false,
-            val request: SearchRequest? = null
+            /**
+             * The project session's epoch when this search started, and the
+             * observation sequence its read took. A view judges both before
+             * painting the page (ADR-0047). Both this service and the view read
+             * the epoch from the same project, so a search with no project
+             * session to fence against reports 0 to a view that reads 0 too.
+             */
+            val sessionEpoch: Long = 0L,
+            val observation: Long = Observed.NO_OBSERVATION
         ) : SearchState()
         data class Error(val message: String, val throwable: Throwable? = null) : SearchState()
     }
@@ -363,7 +372,8 @@ class NacosSearchService(
         }
 
         if (result.isSuccess) {
-            val response = result.getOrNull()!!
+            val observed = result.getOrNull()!!
+            val response = observed.value
             val configurations = response.pageItems.map {
                 it.toMetadataConfiguration(request.namespace?.namespaceId)
             }
@@ -374,7 +384,8 @@ class NacosSearchService(
                     configurations,
                     SearchSource.REMOTE,
                     confidenceFor(SearchSource.REMOTE, configurations.size, fetchedAtMillis = null),
-                    coverageFor(request, context, response.totalCount)
+                    coverageFor(request, context, response.totalCount),
+                    observed.observation
                 )
             )
         }
@@ -503,6 +514,7 @@ class NacosSearchService(
        // Drop results from superseded requests or obsolete session epochs.
        if (generation != requestGeneration.get()) return
        if (sessionTicket != null && !sessionTicket.isCurrent()) return
+       val sessionEpoch = sessionTicket?.capturedEpoch ?: 0L
        if (result.isSuccess) {
             val execution = result.getOrNull()!!
             _paginationState.value = PaginationState(
@@ -521,7 +533,8 @@ class NacosSearchService(
                 confidence = execution.confidence,
                 coverage = execution.coverage,
                 fromCache = execution.source != SearchSource.REMOTE,
-                request = request
+                sessionEpoch = sessionEpoch,
+                observation = execution.observation
             )
             logger.info("Search completed: ${execution.configurations.size} configurations found (${execution.source})")
         } else {
@@ -740,7 +753,13 @@ class NacosSearchService(
         val configurations: List<NacosConfiguration>,
         val source: SearchSource,
         val confidence: CacheConfidence,
-        val coverage: SearchCoverage? = null
+        val coverage: SearchCoverage? = null,
+        /**
+         * The observation sequence the read took, or [Observed.NO_OBSERVATION]
+         * when this page came from the cache or the namespace index — neither
+         * of which observed the server on this caller's behalf.
+         */
+        val observation: Long = Observed.NO_OBSERVATION
     )
 
     private fun ConfigItem.toMetadataConfiguration(

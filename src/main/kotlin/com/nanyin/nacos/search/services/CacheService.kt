@@ -659,9 +659,8 @@ class CacheService internal constructor(
 
     private fun isIdentityScopedKey(key: String): Boolean = key.startsWith("v2|")
 
-    private fun normalizeNamespace(namespaceId: String?): String {
-        return namespaceId?.takeIf { it.isNotBlank() && it != "public" } ?: "public"
-    }
+    private fun normalizeNamespace(namespaceId: String?): String =
+        com.nanyin.nacos.search.models.NamespaceInfo.canonicalId(namespaceId)
 
     data class CacheEntry<T>(
         val type: CacheEntryType,

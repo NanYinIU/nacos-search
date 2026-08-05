@@ -54,11 +54,21 @@ class HistoryBrowserDialog(
     private val configuration: NacosConfiguration,
     private val currentContent: String,
     private val gateway: OperationGateway,
-    private val generationProvider: () -> Long
+    private val sessionEpochProvider: () -> Long
 ) : DialogWrapper(project) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val controller = HistoryBrowserController(gateway, generationProvider)
+    private val coordinate = ConfigurationCoordinate(configuration.dataId, configuration.group)
+    private val presented = PresentedCoordinate.of(
+        target.namespaceId,
+        configuration.dataId,
+        configuration.group
+    )
+    // The revision list and the diff are painted from separate reads, so each
+    // is its own presentation slot with its own mark (ADR-0047).
+    private val listPresentation = PresentationGate(sessionEpochProvider) { presented }
+    private val diffPresentation = PresentationGate(sessionEpochProvider) { presented }
+    private val controller = HistoryBrowserController(gateway, listPresentation, diffPresentation)
     private val listModel = DefaultListModel<HistoryEntry>()
     private val list = JBList(listModel).apply {
         selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
@@ -79,7 +89,8 @@ class HistoryBrowserDialog(
     }
     private val statusLabel = JBLabel(NacosSearchBundle.message("history.loading"))
     private lateinit var diffPanel: DiffRequestPanel
-    private val expectedGeneration = generationProvider()
+    /** The session epoch this dialog opened under; every read it issues carries it. */
+    private val sessionEpoch = sessionEpochProvider()
     private var entries: List<HistoryEntry> = emptyList()
     private var selectionEpoch = 0L
 
@@ -100,11 +111,13 @@ class HistoryBrowserDialog(
      * [ModalityState.any] is required: IO-launched coroutines have no modality
      * context, which the platform treats as NON_MODAL (blocked by this dialog).
      */
-    private fun onDialogUi(action: () -> Unit) {
+    private fun onDialogUi(gate: PresentationGate, action: () -> Unit) {
         ApplicationManager.getApplication().invokeLater({
-            // Re-check generation on the EDT: a session change can land between
-            // the controller's IO checkpoint and this modal resume.
-            if (!isDisposed && generationProvider() == expectedGeneration) action()
+            // Re-ask the judgement on the EDT: a session change can land between
+            // the controller's IO checkpoint and this modal resume. This paint
+            // carries no new observation, so it only re-tests epoch and
+            // coordinate and leaves the controller's mark where it is.
+            if (!isDisposed && gate.admitAndRecord(PresentedResult(sessionEpoch, presented))) action()
         }, ModalityState.any())
     }
 
@@ -147,17 +160,13 @@ class HistoryBrowserDialog(
         listModel.clear()
         scope.launch {
             val outcome = try {
-                controller.loadPage(
-                    target,
-                    HistoryQuery(ConfigurationCoordinate(configuration.dataId, configuration.group)),
-                    expectedGeneration
-                )
+                controller.loadPage(target, HistoryQuery(coordinate), sessionEpoch)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
                 HistoryBrowserController.Outcome.Failed(error.message ?: error.toString())
             }
-            onDialogUi { applyOutcome(outcome) }
+            onDialogUi(listPresentation) { applyOutcome(outcome) }
         }
     }
 
@@ -217,8 +226,8 @@ class HistoryBrowserDialog(
     private fun loadHistoryVsCurrent(entry: HistoryEntry, epoch: Long) {
         HistoryDiffPresenter.showLoading(diffPanel, NacosSearchBundle.message("history.diff.loading"))
         scope.launch {
-            val detail = controller.loadDetail(target, entry.id, expectedGeneration).getOrElse { error ->
-                onDialogUi {
+            val detail = controller.loadDetail(target, coordinate, entry.id, sessionEpoch).getOrElse { error ->
+                onDialogUi(diffPresentation) {
                     if (epoch != selectionEpoch) return@onDialogUi
                     if (error is RemoteOperationError.Cancelled) {
                         HistoryDiffPresenter.showEmpty(diffPanel, NacosSearchBundle.message("history.stale"))
@@ -231,7 +240,7 @@ class HistoryBrowserDialog(
                 }
                 return@launch
             }
-            onDialogUi {
+            onDialogUi(diffPresentation) {
                 if (epoch != selectionEpoch) return@onDialogUi
                 HistoryDiffPresenter.showIn(
                     diffPanel,
@@ -244,8 +253,8 @@ class HistoryBrowserDialog(
     private fun loadHistoryVsHistory(left: HistoryEntry, right: HistoryEntry, epoch: Long) {
         HistoryDiffPresenter.showLoading(diffPanel, NacosSearchBundle.message("history.diff.loading"))
         scope.launch {
-            val leftDetail = controller.loadDetail(target, left.id, expectedGeneration).getOrElse {
-                onDialogUi {
+            val leftDetail = controller.loadDetail(target, coordinate, left.id, sessionEpoch).getOrElse {
+                onDialogUi(diffPresentation) {
                     if (epoch != selectionEpoch) return@onDialogUi
                     if (it is RemoteOperationError.Cancelled) {
                         HistoryDiffPresenter.showEmpty(diffPanel, NacosSearchBundle.message("history.stale"))
@@ -255,8 +264,8 @@ class HistoryBrowserDialog(
                 }
                 return@launch
             }
-            val rightDetail = controller.loadDetail(target, right.id, expectedGeneration).getOrElse {
-                onDialogUi {
+            val rightDetail = controller.loadDetail(target, coordinate, right.id, sessionEpoch).getOrElse {
+                onDialogUi(diffPresentation) {
                     if (epoch != selectionEpoch) return@onDialogUi
                     if (it is RemoteOperationError.Cancelled) {
                         HistoryDiffPresenter.showEmpty(diffPanel, NacosSearchBundle.message("history.stale"))
@@ -266,7 +275,7 @@ class HistoryBrowserDialog(
                 }
                 return@launch
             }
-            onDialogUi {
+            onDialogUi(diffPresentation) {
                 if (epoch != selectionEpoch) return@onDialogUi
                 HistoryDiffPresenter.showIn(
                     diffPanel,
