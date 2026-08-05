@@ -16,14 +16,11 @@ import com.nanyin.nacos.search.services.NamespaceIndexRequest
 import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
 import com.nanyin.nacos.search.services.requestSwitchedNamespaceIndex
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
-import com.nanyin.nacos.search.services.currentSessionEpoch
 import com.nanyin.nacos.search.settings.NacosConfigurable
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosSettingsListener
 import com.nanyin.nacos.search.settings.NacosProjectSession
-import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.NacosUpgradeSummary
-import com.nanyin.nacos.search.settings.OperationContextSnapshotCache
 import com.nanyin.nacos.search.psi.NacosKeyIndexService
 import com.intellij.openapi.components.service
 import com.intellij.openapi.application.ApplicationManager
@@ -79,60 +76,33 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private var currentConfiguration: NacosConfiguration? = null
     // Stashed (config, line) consumed after a namespace switch reloads the list.
     private var pendingNavigationTarget: Pair<NacosConfiguration, Int>? = null
-    private var currentSearchRequest: NacosSearchService.SearchRequest? = null
     private var isSearching = false
-    
+
     // Coroutine scope for async operations
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     /**
-     * EDT-safe cached operation context. [captureOperationContext] reads
-     * PasswordSafe, which asserts against slow operations on the EDT. Swing
-     * handlers consume this prepared immutable snapshot instead of capturing
-     * fresh on the EDT (design §11/§19.7). It is refreshed off-EDT whenever the
-     * selected profile, namespace, or settings change.
+     * The window's search orchestration. Handlers express intent through it and
+     * this class renders what [NacosSearchService] publishes — it assembles no
+     * search request, names no environment, and judges no result a second time.
      *
-     * Publishes are epoch-ordered: a late capture for profile A cannot overwrite
-     * a newer capture for profile B after a rapid environment switch.
+     * The capture handed in here is the one place a credential is read for
+     * search, and it runs on [Dispatchers.IO], never on the event dispatch
+     * thread (ADR-0039).
      */
-    private val operationContextCache = OperationContextSnapshotCache()
-
-    /**
-     * The one judgement of whether a completed search may still update the
-     * result list (ADR-0047). A result list is not about a single
-     * configuration, so it carries no coordinate; the session epoch stands for
-     * the environment and namespace it was issued under, and the observation
-     * sequence orders two searches of the same selection.
-     */
-    private val listPresentation = PresentationGate({ project.currentSessionEpoch() })
+    private val searchController = ToolWindowSearchController(
+        searchService = nacosSearchService,
+        selectedProfileId = ::selectedProfileId,
+        captureOperationContext = { profileId ->
+            withContext(Dispatchers.IO) { settings.captureOperationContext(profileId).getOrNull() }
+        }
+    )
 
     private fun selectedProfileId(): String {
         projectSession.healSelection(settings)
         return projectSession.sessionState.selectedProfileId.ifBlank { settings.resolveDefaultProfileId() }
     }
 
-    private fun selectedOperationContext(): NacosOperationContext? {
-        val profileId = selectedProfileId()
-        return operationContextCache.resolve(profileId, settings.getProfile(profileId))
-    }
-
-    private suspend fun refreshOperationContextSnapshot() {
-        val epoch = operationContextCache.beginRefresh()
-        val profileId = selectedProfileId()
-        val captured = withContext(Dispatchers.IO) {
-            settings.captureOperationContext(profileId).getOrNull()
-        }
-        // Re-read selection after IO so a switch during capture discards the result.
-        val stillSelected = selectedProfileId()
-        operationContextCache.publishIfCurrent(
-            epochAtStart = epoch,
-            capturedProfileId = profileId,
-            selectedProfileId = stillSelected,
-            selectedProfile = settings.getProfile(stillSelected),
-            context = captured
-        )
-    }
-    
     init {
         projectSession.healSelection(settings)
         NacosUpgradeSummary.showOnce(project, projectSession, settings)
@@ -140,7 +110,6 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         setupLayout()
         setupTitleActions()
         setupEventHandlers()
-        coroutineScope.launch { refreshOperationContextSnapshot() }
         loadInitialData()
     }
     
@@ -339,112 +308,77 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun handleSettingsChanged() {
         // Switcher label reflects the new active environment immediately.
         SwingUtilities.invokeLater { environmentSwitcher.refresh() }
-        // Invalidate immediately so in-flight handlers cannot reuse a stale
-        // prepared context while the off-EDT refresh is still running.
-        operationContextCache.invalidate()
         coroutineScope.launch {
-            refreshOperationContextSnapshot()
+            // Leaving the environment drops the held session, which cancels the
+            // pending search and clears what it would have published.
+            searchController.leaveEnvironment()
             nacosApiService.clearCache()
-            nacosSearchService.resetSearch()
             currentNamespace = null
             currentConfiguration = null
-            currentSearchRequest = null
-            SwingUtilities.invokeLater {
-                searchPanel.clearAllCriteria()
-                configDetailPanel.clearConfiguration()
-                configListPanel.setConfigurations(emptyList())
-                paginationPanel.reset()
-            }
+            clearSearchUi()
 
            val namespaceResult = namespacePanel.refreshAndWait()
             if (namespaceResult.isSuccess) {
                 currentNamespace = namespacePanel.getSelectedNamespace()
-                loadConfigurations()
+                openSelectedNamespace()
             }
         }
     }
 
     private fun handleProjectEnvironmentSelectionChanged() {
-        // Drop the previous environment's prepared context before the async
-        // refresh so a search scheduled mid-switch cannot pin the old server.
-        operationContextCache.invalidate()
         coroutineScope.launch {
-            refreshOperationContextSnapshot()
-            nacosSearchService.resetSearch()
+            searchController.leaveEnvironment()
             currentNamespace = null
             currentConfiguration = null
-            currentSearchRequest = null
-            SwingUtilities.invokeLater {
-                searchPanel.clearAllCriteria()
-                configDetailPanel.clearConfiguration()
-                configListPanel.setConfigurations(emptyList())
-                paginationPanel.reset()
-            }
+            clearSearchUi()
             namespacePanel.refreshAndWait().onSuccess {
                 currentNamespace = namespacePanel.getSelectedNamespace()
-                loadConfigurations()
+                openSelectedNamespace()
             }
         }
     }
-    
+
     private fun loadInitialData() {
         coroutineScope.launch {
             try {
                 // Load namespaces first
                 namespacePanel.refresh()
-                
+
                 // Get current namespace and load configurations when enabled for this server.
                 val currentNs = namespacePanel.getSelectedNamespace()
                 if (currentNs != null) {
                     currentNamespace = currentNs
-                    loadConfigurations()
+                    openSelectedNamespace()
                 }
             } catch (e: Exception) {
                 showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
             }
         }
     }
-    
+
     override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
         // Keep the window's notion of the active namespace in sync with the service so that
         // subsequent reloads target the correct namespace.
         currentNamespace = newNamespace
         currentConfiguration = null
-        currentSearchRequest = null
 
         clearSearchUi()
 
-        if (newNamespace != null) {
-            // Prefer cached list-page data when available — avoids a forced
-            // remote API call on every namespace switch. The user can still
-            // pull fresh data via the refresh button.
-            refreshOperationContextSnapshot()
-            val profileId = selectedProfileId()
-            val operationContext = selectedOperationContext()
-            val request = NacosSearchService.SearchRequest(
-                namespace = newNamespace,
-                pageNo = 1,
-                pageSize = paginationPanel.getCurrentPageSize(),
-                forceRefresh = false,
-                serverId = profileId,
-                operationContext = operationContext
-            )
-            currentSearchRequest = request
-            loadConfigurations()
+        if (newNamespace == null) return
 
-            // Preheat the full namespace index in the background so the first
-            // content/regex/wildcard search over this namespace is instant.
-            if (operationContext != null) {
-                preheatNamespaceIndex(
-                    settings.captureNamespaceIndexRequest(
-                        newNamespace.namespaceId,
-                        operationContext
-                    )
-                )
-            }
-        } else {
-            clearSearchUi()
-        }
+        // Prefer cached list-page data when available — avoids a forced remote
+        // API call on every namespace switch. The user can still pull fresh data
+        // via the refresh button.
+        searchController.openNamespace(newNamespace)
+
+        // Preheat the full namespace index in the background so the first
+        // content/regex/wildcard search over this namespace is instant. The
+        // context comes from the session the service just adopted, which was
+        // captured off the EDT.
+        val operationContext = searchController.sessionContext().operationContext ?: return
+        preheatNamespaceIndex(
+            settings.captureNamespaceIndexRequest(newNamespace.namespaceId, operationContext)
+        )
     }
 
     private fun clearSearchUi() {
@@ -468,110 +402,51 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
    
    private fun handleSearchRequested(criteria: SearchCriteria) {
-         val searchNameSpace = namespacePanel.getSelectedNamespace()
-         if (searchNameSpace == null) {
-             showError(NacosSearchBundle.message("namespace.select.first"))
-             return
-         }
-         
-         // Create enhanced SearchRequest for prefix asterisk fuzzy search.
-         // Uses the prepared operation context (refreshed off-EDT) — never
-         // capture credentials on the event dispatch thread (issue #53).
-         val searchRequest = NacosSearchService.SearchRequest(
-             dataId = (criteria.dataId.ifBlank { criteria.query }),
-             group = criteria.group,
-             query = criteria.query,
-             searchContent = criteria.searchContent,
-             caseSensitive = criteria.caseSensitive,
-             useRegex = criteria.useRegex,
-             namespace = searchNameSpace,
-             pageNo = 1,
-             pageSize = paginationPanel.getCurrentPageSize(),
-             serverId = selectedProfileId(),
-             operationContext = selectedOperationContext()
-         )
-         currentNamespace = searchNameSpace
-         currentSearchRequest = searchRequest
-         coroutineScope.launch {
-             nacosSearchService.performSearch(searchRequest, nacosApiService)
-         }
+         if (!hasNamespaceToSearch()) return
+         coroutineScope.launch { searchController.search(criteria) }
      }
-    
+
     private fun handleSearchCleared() {
-        loadConfigurations()
-        paginationPanel.reset()
-        nacosSearchService.resetSearch()
-        currentSearchRequest = null
+        coroutineScope.launch { searchController.clearCriteria() }
     }
-    
+
     private fun handleRealTimeSearch(query: String) {
         if (query.isBlank()) {
             handleSearchCleared()
             return
         }
-
-        currentNamespace = namespacePanel.getSelectedNamespace()
-        if (currentNamespace == null) {
-            showError(NacosSearchBundle.message("namespace.select.first"))
-            return
-        }
-
-        // useRegex routes the request through the local index so partial dataId/group values
-        // match (Nacos "accurate" mode only matches exact dataIds, which made typing a partial
-        // name return zero results).
-        val searchRequest = NacosSearchService.SearchRequest(
-            dataId = query,
-            query = query,
-            namespace = currentNamespace,
-            useRegex = true,
-            pageNo = 1,
-            pageSize = paginationPanel.getCurrentPageSize(),
-            serverId = selectedProfileId(),
-            operationContext = selectedOperationContext()
-        )
-       currentSearchRequest = searchRequest
+        if (!hasNamespaceToSearch()) return
 
         // Debounce so rapid typing only triggers one search after the user
-        // pauses. searchWithDebounce cancels the previous in-flight search and
-        // launches its own coroutine in this scope.
-        nacosSearchService.searchWithDebounce(searchRequest, nacosApiService, coroutineScope)
+        // pauses. The service cancels the previous in-flight search and launches
+        // its own coroutine in this scope.
+        searchController.searchAsYouType(query, coroutineScope)
+    }
+
+    /**
+     * Whether there is anything to search yet. Asked of the held session rather
+     * than of the namespace control, because the session is what a search
+     * actually targets — a selection the session has not adopted yet would
+     * otherwise search the previous namespace while naming the new one.
+     */
+    private fun hasNamespaceToSearch(): Boolean {
+        if (searchController.sessionContext().namespace != null) return true
+        showError(NacosSearchBundle.message("namespace.select.first"))
+        return false
     }
 
     private fun handlePreviousPage() {
-        coroutineScope.launch {
-            val currentRequest = NacosSearchService.SearchRequest(
-                 namespace = namespacePanel.getSelectedNamespace(),
-                 serverId = selectedProfileId(),
-                 operationContext = selectedOperationContext()
-             )
-            nacosSearchService.previousPage(currentSearchRequest ?: currentRequest, nacosApiService)
-        }
+        coroutineScope.launch { searchController.previousPage() }
     }
-    
+
     private fun handleNextPage() {
-        coroutineScope.launch {
-            val currentRequest = NacosSearchService.SearchRequest(
-                 namespace = namespacePanel.getSelectedNamespace(),
-                 serverId = selectedProfileId(),
-                 operationContext = selectedOperationContext()
-             )
-            nacosSearchService.nextPage(currentSearchRequest ?: currentRequest, nacosApiService)
-        }
+        coroutineScope.launch { searchController.nextPage() }
     }
-    
+
     private fun handlePageSizeChanged(pageSize: Int) {
-        coroutineScope.launch {
-            val currentRequest = NacosSearchService.SearchRequest(
-                 namespace = namespacePanel.getSelectedNamespace(),
-                 pageSize = pageSize,
-                 serverId = selectedProfileId(),
-                 operationContext = selectedOperationContext()
-             )
-            currentSearchRequest = (currentSearchRequest ?: currentRequest).copy(pageNo = 1, pageSize = pageSize)
-            nacosSearchService.changePageSize(currentSearchRequest ?: currentRequest, pageSize, nacosApiService)
-        }
+        coroutineScope.launch { searchController.changePageSize(pageSize) }
     }
-    
+
     private fun setupSearchServiceObservers() {
         // Observe search state changes
         coroutineScope.launch {
@@ -591,17 +466,11 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     }
                     is NacosSearchService.SearchState.Success -> {
                         SwingUtilities.invokeLater {
-                            // The session epoch already advances on environment
-                            // and namespace changes, so one judgement drops a
-                            // result issued under a superseded selection and one
-                            // whose read started before the page now shown
-                            // (ADR-0047).
-                            val presented = PresentedResult(
-                                state.sessionEpoch,
-                                coordinate = null,
-                                observation = state.observation
-                            )
-                            if (!listPresentation.admitAndRecord(presented)) return@invokeLater
+                            // Rendered as published. The service already dropped
+                            // results from superseded requests and from sessions
+                            // the user has switched away from, so judging them
+                            // again here would only be a second opinion about an
+                            // ordering that has already been decided.
                             setSearching(false)
                             paginationPanel.setLoading(false)
                             configListPanel.setSearchQuery(searchPanel.getSearchQuery())
@@ -671,42 +540,24 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     }
     
     private fun handleRefreshRequested() {
-        currentSearchRequest = (currentSearchRequest ?: NacosSearchService.SearchRequest(
-            namespace = namespacePanel.getSelectedNamespace(),
-            pageSize = paginationPanel.getCurrentPageSize(),
-            serverId = selectedProfileId(),
-            operationContext = selectedOperationContext()
-        )).copy(forceRefresh = true)
-        loadConfigurations()
+        coroutineScope.launch { searchController.refresh() }
     }
 
-    private fun loadConfigurations() {
+    /**
+     * Re-targets the search session at the selected namespace and shows its
+     * first page. With nothing selected there is no environment to search, so
+     * the session is dropped and the list emptied.
+     */
+    private suspend fun openSelectedNamespace() {
         val namespace = currentNamespace
         if (namespace == null) {
+            searchController.leaveEnvironment()
             configListPanel.setConfigurations(emptyList())
             return
         }
-        
-        coroutineScope.launch {
-            try {
-                val request = (currentSearchRequest ?: NacosSearchService.SearchRequest(
-                    namespace = namespace,
-                    pageNo = 1,
-                    pageSize = paginationPanel.getCurrentPageSize(),
-                    serverId = selectedProfileId(),
-                    operationContext = selectedOperationContext()
-                )).copy(namespace = namespace)
-                currentSearchRequest = request
-                nacosSearchService.performSearch(request, nacosApiService)
-                currentSearchRequest = request.copy(forceRefresh = false)
-                
-            } catch (e: Exception) {
-                showError(NacosSearchBundle.message("error.config.load.failed") + ": ${e.message}")
-                configListPanel.setConfigurations(emptyList())
-            }
-        }
+        searchController.openNamespace(namespace)
     }
-    
+
     private fun loadConfigurationDetail(config: NacosConfiguration) {
         configDetailPanel.showConfiguration(config)
     }
@@ -776,7 +627,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 if (namespaceResult.isSuccess) {
                     currentNamespace = namespacePanel.getSelectedNamespace()
                 }
-                loadConfigurations()
+                openSelectedNamespace()
                 currentConfiguration?.let { config ->
                     loadConfigurationDetail(config)
                 }

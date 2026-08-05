@@ -9,6 +9,7 @@ import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.models.SearchCriteria
 import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.services.operations.SearchCoverage
 import com.nanyin.nacos.search.services.operations.contentSearchCapability
@@ -26,25 +27,36 @@ import kotlin.coroutines.coroutineContext
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Service for handling real-time fuzzy search with pagination
+ * Service for handling real-time fuzzy search with pagination.
+ *
+ * It holds the session context every search targets (ADR-0046) and is given a
+ * new one through [adoptSession] when the project session changes. Callers
+ * express intent — [search], [searchAsYouType], [reload], [nextPage],
+ * [previousPage], [changePageSize] — and render what [searchState] publishes.
+ * Naming a target is this service's job, which is why assembling a
+ * [SearchRequest] requires [SearchRequestAssembly].
  */
 @Service(Service.Level.PROJECT)
+@OptIn(SearchRequestAssembly::class)
 class NacosSearchService(
     private val project: Project? = null,
-    private val indexRequester: NamespaceIndexRequester? = null
+    private val indexRequester: NamespaceIndexRequester? = null,
+    private val apiProvider: () -> NacosApiService = {
+        ApplicationManager.getApplication().getService(NacosApiService::class.java)
+    }
 ) {
     private val logger = thisLogger()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
     private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
-    
+
     // Search debouncer
     private var searchJob: Job? = null
     private val searchDelayMs = 300L
-    
+
     // Search state
     private val _searchState = MutableStateFlow<SearchState>(SearchState.Idle)
     val searchState: StateFlow<SearchState> = _searchState.asStateFlow()
-    
+
     // Pagination state , 缺少初始化
     private val _paginationState = MutableStateFlow(PaginationState())
     val paginationState: StateFlow<PaginationState> = _paginationState.asStateFlow()
@@ -55,9 +67,26 @@ class NacosSearchService(
    // older generations are silently dropped instead of overwriting current state.
    private val requestGeneration = AtomicLong(0)
 
+   /**
+    * The environment every search this service issues targets. Held, never
+    * captured here: [adoptSession] hands it in from off the event dispatch
+    * thread when the project session changes (ADR-0046).
+    */
+   @Volatile
+   private var session: SearchSessionContext = SearchSessionContext.NONE
+
+   /**
+    * Advances whenever [adoptSession] moves to a different target. A search
+    * that started under an older one keeps running against the environment it
+    * started with, and its result is dropped rather than attributed to the
+    * environment the user switched to.
+    */
+   private val sessionGeneration = AtomicLong(0)
+
     /**
      * Search request data class
      */
+    @SearchRequestAssembly
     data class SearchRequest(
         val dataId: String = "",
         val group: String = "",
@@ -73,9 +102,10 @@ class NacosSearchService(
         val pageSize: Int = 10,
         val serverId: String = "",
         /**
-         * Captured by the project UI (off the EDT) before any cache or transport
-         * operation. Search keeps using this environment even if the user switches
-         * profiles mid-flight (issue #53).
+         * Taken from the session context this service holds, which was captured
+         * off the EDT when the project session changed (ADR-0046). Search keeps
+         * using this environment even if the user switches profiles mid-flight
+         * (issue #53).
          */
         val operationContext: NacosOperationContext? = null
     ) {
@@ -166,10 +196,13 @@ class NacosSearchService(
             val fromCache: Boolean = false,
             /**
              * The project session's epoch when this search started, and the
-             * observation sequence its read took. A view judges both before
-             * painting the page (ADR-0047). Both this service and the view read
-             * the epoch from the same project, so a search with no project
-             * session to fence against reports 0 to a view that reads 0 too.
+             * observation sequence its read took (ADR-0047).
+             *
+             * Reported, not left for a view to act on: this state is published
+             * only for a search that was still current when it finished, so a
+             * view renders it rather than judging it a second time. What they
+             * describe is which session the page belongs to and which server
+             * read produced it.
              */
             val sessionEpoch: Long = 0L,
             val observation: Long = Observed.NO_OBSERVATION
@@ -203,8 +236,67 @@ class NacosSearchService(
     }
     
     /**
+     * Adopts [context] as the environment every subsequent search targets, and
+     * returns true when that is a different target from the one held.
+     *
+     * A different target abandons what was on screen: the pending search is
+     * cancelled and the published state returns to [SearchState.Idle], so a
+     * result for the previous environment cannot be left standing under the new
+     * one. The same target with a freshly captured operation context is not a
+     * change — it is the same environment re-prepared — so it replaces the held
+     * context without disturbing the current results.
+     */
+    @Synchronized
+    fun adoptSession(context: SearchSessionContext): Boolean {
+        val previous = session
+        session = context
+        if (previous.addressesSameTargetAs(context)) return false
+        sessionGeneration.incrementAndGet()
+        resetSearch()
+        return true
+    }
+
+    /** The session context searches currently target. */
+    fun sessionContext(): SearchSessionContext = session
+
+    /**
+     * Searches for [criteria] from the first page, under the held session.
+     */
+    suspend fun search(criteria: SearchCriteria) {
+        performSearch(requestFor(criteria), apiProvider())
+    }
+
+    /**
+     * Debounced type-ahead search for [query]. Routed through the local index so
+     * a partial data id or group matches — Nacos "accurate" mode only matches an
+     * exact data id, which made typing a partial name return nothing.
+     */
+    fun searchAsYouType(query: String, coroutineScope: CoroutineScope) {
+        val request = blankRequest().copy(dataId = query, query = query, useRegex = true)
+        searchWithDebounce(request, apiProvider(), coroutineScope)
+    }
+
+    /**
+     * Drops the criteria and shows the held namespace's first page again.
+     */
+    suspend fun clearCriteria() {
+        currentRequest = null
+        performSearch(blankRequest(), apiProvider())
+    }
+
+    /**
+     * Re-runs the current search under the held session, keeping the page and
+     * criteria. [forceRefresh] bypasses the cache for this run only.
+     */
+    suspend fun reload(forceRefresh: Boolean = false) {
+        val request = (currentRequest ?: blankRequest()).underSession().copy(forceRefresh = forceRefresh)
+        performSearch(request, apiProvider())
+    }
+
+    /**
      * Performs debounced search
      */
+   @SearchRequestAssembly
    fun searchWithDebounce(
        request: SearchRequest,
        nacosApiService: NacosApiService,
@@ -227,6 +319,7 @@ class NacosSearchService(
     /**
      * Performs immediate search without debouncing
      */
+   @SearchRequestAssembly
    suspend fun performSearch(
        request: SearchRequest,
        nacosApiService: NacosApiService
@@ -239,6 +332,9 @@ class NacosSearchService(
        val currentJob = coroutineContext[Job]
        searchJob?.takeIf { it != currentJob }?.cancel()
        val generation = requestGeneration.incrementAndGet()
+       // Taken when the search starts, so this search stays attributed to the
+       // environment that was current then even if the user switches away.
+       val sessionAtStart = sessionGeneration.get()
        val sessionTicket = captureSessionTicket(request)
        try {
            _searchState.value = SearchState.Loading
@@ -249,16 +345,46 @@ class NacosSearchService(
            } else {
                searchWithRemoteList(request, nacosApiService)
            }
-           publishIfCurrent(generation, result, request, sessionTicket)
+           publishIfCurrent(generation, sessionAtStart, result, request, sessionTicket)
        } catch (e: CancellationException) {
            throw e
        } catch (e: Exception) {
-           if (generation == requestGeneration.get() && sessionTicket?.isCurrent() != false) {
+           if (generation == requestGeneration.get() &&
+               sessionAtStart == sessionGeneration.get() &&
+               sessionTicket?.isCurrent() != false
+           ) {
                _searchState.value = SearchState.Error("搜索过程中发生错误: ${e.message}", e)
            }
            logger.warn("Search error", e)
        }
    }
+
+    /**
+     * A first-page request under the held session with no criteria — what a
+     * namespace's list shows before the user searches for anything.
+     */
+    private fun blankRequest(): SearchRequest =
+        SearchRequest(pageNo = 1, pageSize = _paginationState.value.pageSize).underSession()
+
+    private fun requestFor(criteria: SearchCriteria): SearchRequest = blankRequest().copy(
+        dataId = criteria.dataId.ifBlank { criteria.query },
+        group = criteria.group,
+        query = criteria.query,
+        searchContent = criteria.searchContent,
+        caseSensitive = criteria.caseSensitive,
+        useRegex = criteria.useRegex
+    )
+
+    /**
+     * Re-targets a request at the held session. Every intent goes through this,
+     * so criteria carried over from an earlier search can never keep pointing at
+     * the environment or namespace that search was issued under.
+     */
+    private fun SearchRequest.underSession(): SearchRequest = copy(
+        namespace = session.namespace,
+        serverId = session.profileId,
+        operationContext = session.operationContext
+    )
 
     private fun captureSessionTicket(request: SearchRequest): OperationTicket? {
         val owningProject = project ?: return null
@@ -507,12 +633,16 @@ class NacosSearchService(
 
    private fun publishIfCurrent(
        generation: Long,
+       sessionAtStart: Long,
        result: Result<SearchExecutionResult>,
        request: SearchRequest,
        sessionTicket: OperationTicket?
    ) {
-       // Drop results from superseded requests or obsolete session epochs.
+       // Drop results from superseded requests or obsolete session epochs. The
+       // session generation covers the same ground for a project that has no
+       // session epoch service to fence against — a headless one, or a test.
        if (generation != requestGeneration.get()) return
+       if (sessionAtStart != sessionGeneration.get()) return
        if (sessionTicket != null && !sessionTicket.isCurrent()) return
        val sessionEpoch = sessionTicket?.capturedEpoch ?: 0L
        if (result.isSuccess) {
@@ -621,45 +751,35 @@ class NacosSearchService(
     /**
      * Navigates to next page
      */
-    suspend fun nextPage(
-        currentRequest: SearchRequest,
-        nacosApiService: NacosApiService
-    ) {
-        val nextPageNo = _paginationState.value.nextPage()
-        val nextPageSize = _paginationState.value.pageSize
-        if (nextPageNo != null) {
-            val newRequest = (this.currentRequest ?: currentRequest).copy(pageNo = nextPageNo, pageSize = nextPageSize)
-            performSearch(newRequest, nacosApiService)
-        }
+    suspend fun nextPage() {
+        val nextPageNo = _paginationState.value.nextPage() ?: return
+        goToPage(nextPageNo, _paginationState.value.pageSize)
     }
-    
+
     /**
      * Navigates to previous page
      */
-    suspend fun previousPage(
-        currentRequest: SearchRequest,
-        nacosApiService: NacosApiService
-    ) {
-        val prevPageNo = _paginationState.value.previousPage()
-        val nextPageSize = _paginationState.value.pageSize
-        if (prevPageNo != null) {
-            val newRequest = (this.currentRequest ?: currentRequest).copy(pageNo = prevPageNo, pageSize = nextPageSize)
-            performSearch(newRequest, nacosApiService)
-        }
+    suspend fun previousPage() {
+        val prevPageNo = _paginationState.value.previousPage() ?: return
+        goToPage(prevPageNo, _paginationState.value.pageSize)
     }
-    
+
     /**
-     * Changes page size and resets to first page
+     * Changes page size and resets to first page. The new size is published
+     * before the search runs, so it survives a search that fails and is the size
+     * every later intent — including type-ahead — asks for.
      */
-    suspend fun changePageSize(
-        currentRequest: SearchRequest,
-        newPageSize: Int,
-        nacosApiService: NacosApiService
-    ) {
-        val newRequest = (this.currentRequest ?: currentRequest).copy(pageNo = 1, pageSize = newPageSize)
-        performSearch(newRequest, nacosApiService)
+    suspend fun changePageSize(newPageSize: Int) {
+        _paginationState.value = _paginationState.value.copy(currentPage = 1, pageSize = newPageSize)
+        goToPage(1, newPageSize)
     }
-    
+
+    private suspend fun goToPage(pageNo: Int, pageSize: Int) {
+        val request = (currentRequest ?: blankRequest()).underSession()
+            .copy(pageNo = pageNo, pageSize = pageSize)
+        performSearch(request, apiProvider())
+    }
+
     /**
      * Cancels current search
      */

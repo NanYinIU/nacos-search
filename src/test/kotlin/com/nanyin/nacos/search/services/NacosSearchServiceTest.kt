@@ -1,11 +1,16 @@
+@file:OptIn(SearchRequestAssembly::class)
+
 package com.nanyin.nacos.search.services
 
 import com.intellij.testFramework.junit5.TestApplication
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.mock
@@ -297,6 +302,97 @@ class NacosSearchServiceTest {
         assertEquals(context, request.operationContext)
         assertFalse(request.toString().contains("s3cret-one"))
     }
+
+    @Test
+    fun `a search started before a namespace switch keeps the namespace it started under`() = runBlocking {
+        // The search runs against the environment that was current when it
+        // started, and its result is dropped rather than attributed to the one
+        // the user switched to.
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val namespacesAsked = mutableListOf<String?>()
+        val api = mock<NacosApiService>()
+        whenever(
+            api.listConfigurations(
+                anyOrNull(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyOrNull()
+            )
+        ).thenAnswer { invocation ->
+            namespacesAsked += invocation.getArgument<String?>(0)
+            started.complete(Unit)
+            runBlocking { release.await() }
+            Observed(singlePageResponse(), 1L)
+        }
+
+        val service = NacosSearchService(apiProvider = { api })
+        service.adoptSession(sessionFor(settings, "ns-a"))
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        val search = scope.async { service.reload() }
+
+        withTimeout(2_000) { started.await() }
+        service.adoptSession(sessionFor(settings, "ns-b"))
+        release.complete(Unit)
+        search.await()
+
+        assertEquals(listOf<String?>("ns-a"), namespacesAsked)
+        assertFalse(
+            service.searchState.value is NacosSearchService.SearchState.Success,
+            "a result for the namespace the user left must not publish; was ${service.searchState.value}"
+        )
+        scope.cancel()
+    }
+
+    @Test
+    fun `re-preparing the same environment leaves the results standing`() = runBlocking {
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val service = NacosSearchService(apiProvider = { stubApi() })
+        service.adoptSession(sessionFor(settings, "ns-a"))
+        service.reload()
+        assertTrue(service.searchState.value is NacosSearchService.SearchState.Success)
+
+        // A freshly captured context for an unchanged profile is the same target,
+        // not a session change — the credential snapshot alone differs.
+        val adopted = service.adoptSession(sessionFor(settings, "ns-a"))
+
+        assertFalse(adopted, "re-preparing one environment is not a session change")
+        assertTrue(service.searchState.value is NacosSearchService.SearchState.Success)
+    }
+
+    @Test
+    fun `switching namespace abandons what the previous one published`() = runBlocking {
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val service = NacosSearchService(apiProvider = { stubApi() })
+        service.adoptSession(sessionFor(settings, "ns-a"))
+        service.reload()
+        assertTrue(service.searchState.value is NacosSearchService.SearchState.Success)
+
+        val adopted = service.adoptSession(sessionFor(settings, "ns-b"))
+
+        assertTrue(adopted)
+        assertEquals(NacosSearchService.SearchState.Idle, service.searchState.value)
+    }
+
+    private fun sessionFor(settings: NacosSettings, namespaceId: String) = SearchSessionContext(
+        profileId = settings.activeServerId,
+        namespace = NamespaceInfo(namespaceId = namespaceId, namespaceName = namespaceId),
+        operationContext = settings.captureOperationContext(settings.activeServerId).getOrThrow()
+    )
+
+    private fun singlePageResponse() = ConfigListResponse(
+        totalCount = 1,
+        pageNumber = 1,
+        pagesAvailable = 1,
+        pageItems = listOf(
+            ConfigItem(
+                id = "1",
+                dataId = "app.yaml",
+                group = "DEFAULT_GROUP",
+                content = "feature=true",
+                type = "yaml",
+                tenant = null
+            )
+        )
+    )
 
     private fun stubApi(): NacosApiService {
         val response = ConfigListResponse(

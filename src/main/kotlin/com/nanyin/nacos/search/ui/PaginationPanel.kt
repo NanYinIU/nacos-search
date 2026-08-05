@@ -144,8 +144,6 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, NacosLa
         }
     }
 
-    fun getCurrentPageSize(): Int = pageSizeComboBox.selectedItem as Int
-
     override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
         val totalCountNum = newNamespace?.configCount ?: 0
         val pageSize = 10
