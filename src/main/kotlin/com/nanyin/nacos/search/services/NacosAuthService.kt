@@ -3,7 +3,6 @@ package com.nanyin.nacos.search.services
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosOperationContext
-import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.intellij.openapi.application.ApplicationManager
@@ -63,17 +62,13 @@ class NacosAuthService {
     }
     
     /**
-     * 获取有效的accessToken
-     * @return 有效的accessToken，如果获取失败返回null
-     *
-     * Reads live settings coordinates (not a captured operation context). Prefer
-     * [getValidAccessToken] with a prepared [NacosOperationContext] for in-flight
-     * operations so credentials stay off the EDT and environment switches cannot
-     * retarget mid-request (issue #53).
+     * Acquires a token using live settings coordinates (not a captured
+     * operation context). Prefer dialect login over [ProtocolTransport] for
+     * in-flight operations (issue #96).
      */
     @Deprecated(
-        message = "Use getValidAccessToken(context) so credentials stay off the EDT and mid-flight switches cannot retarget the request (issue #53)",
-        replaceWith = ReplaceWith("getValidAccessToken(context)")
+        message = "Dialect login over ProtocolTransport owns Nacos-password sessions (issue #96)",
+        replaceWith = ReplaceWith("AuthenticationSessionRegistry")
     )
     suspend fun getValidAccessToken(): String? {
         return try {
@@ -86,21 +81,6 @@ class NacosAuthService {
             logger.warn("Failed to get valid access token", e)
             null
         }
-    }
-
-    /**
-     * Acquires a token using only an already-captured operation context. This
-     * deliberately avoids consulting mutable application settings while an
-     * operation is in flight.
-     */
-    internal suspend fun getValidAccessToken(context: NacosOperationContext): String? {
-        if (context.authenticationStrategy != V1AuthenticationStrategy.NACOS_PASSWORD) return null
-        val key = AuthenticationExecutionKey(
-            identity = context.identity,
-            profileRevision = context.profileRevision,
-            strategy = context.authenticationStrategy
-        )
-        return sessions.getOrLogin(key) { login(context)?.toAuthenticationToken() }?.value
     }
 
     /**
@@ -152,17 +132,11 @@ class NacosAuthService {
         return login(serverUrl, settings.username, settings.password)
     }
 
-    private suspend fun login(context: NacosOperationContext): TokenInfo? =
-        login(
-            serverUrl = context.endpoint.value,
-            username = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty(),
-            password = context.credential.secret
-        )
-
     /**
-     * Performs the V1 login wire call. Credentials are method parameters only —
-     * they never enter a data class, equality, logging, or a cache key (issue #53 /
-     * ADR-0009).
+     * Performs the V1 login wire call for the legacy settings-based path.
+     * Credentials are method parameters only — they never enter a data class,
+     * equality, logging, or a cache key (issue #53 / ADR-0009). Formal dialect
+     * login lives on ProtocolTransport (issue #96).
      */
     private suspend fun login(serverUrl: String, username: String, password: String): TokenInfo? {
         return withContext(Dispatchers.IO) {
@@ -189,8 +163,6 @@ class NacosAuthService {
                         request.write(postData)
                         request.readString(null)
                     }
-
-                logger.debug("Login response: $response")
 
                 val jsonResponse = gson.fromJson(response, JsonObject::class.java)
                 val accessToken = jsonResponse.get("accessToken")?.asString
@@ -333,9 +305,4 @@ class NacosAuthService {
     private fun buildLoginUrl(): String {
         return "${settings.serverUrl.trimEnd('/')}$LOGIN_ENDPOINT"
     }
-
-    private fun TokenInfo.toAuthenticationToken(): AuthenticationToken = AuthenticationToken(
-        value = accessToken,
-        expiresAtMillis = createTime + tokenTtl * 1000 - TOKEN_REFRESH_BUFFER_MINUTES * 60 * 1000
-    )
 }

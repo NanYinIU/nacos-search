@@ -73,9 +73,10 @@ class NacosApiService(
     private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
 
     /**
-     * The V1 and V3 adapters are shared by the [v1Gateway] and the
-     * [generationResolver] so AUTO resolution and formal operations use the
-     * same transport, auth boundary, and error mapping.
+     * The V1 and V3 adapters are shared by the [v1Gateway] so formal operations
+     * use one transport and the application authentication-session registry.
+     * AUTO detection uses a separate throwaway session registry (ADR-0034) so
+     * candidate-probe tokens never enter the application registry.
      */
     private val v1Adapter by lazy {
         V1ProtocolAdapter(
@@ -99,7 +100,14 @@ class NacosApiService(
         )
     }
     /** Resolves AUTO to a concrete generation by probing V3 first, then V1. */
-    private val generationResolver by lazy { GenerationResolver(v3Adapter, v1Adapter) }
+    private val generationResolver by lazy {
+        val transport = NacosRequestExecutorProtocolTransport(executor)
+        val probeSessions = AuthenticationSessionRegistry()
+        GenerationResolver(
+            v3Adapter = V3ProtocolAdapter(transport, probeSessions),
+            v1Adapter = V1ProtocolAdapter(transport, probeSessions)
+        )
+    }
 
     /**
      * Builds a throwaway adapter stack for one diagnostic run.

@@ -501,7 +501,7 @@ class V1ProtocolAdapter(
             V1AuthenticationStrategy.ANONYMOUS -> RequestAuthentication()
             V1AuthenticationStrategy.NACOS_PASSWORD -> {
                 val token = withinBudget(deadline) {
-                    sessions.getOrLogin(executionKey(target)) { performLogin(target) }?.value
+                    sessions.getOrLogin(AuthenticationExecutionKey(target.context)) { performLogin(target) }?.value
                 } ?: throw RemoteOperationError.Authentication(401)
                 RequestAuthentication(query = listOf("accessToken" to token))
             }
@@ -514,13 +514,6 @@ class V1ProtocolAdapter(
                 headers = mapOf("Authorization" to "Bearer ${target.context.credential.secret}")
             )
         }
-
-    private fun executionKey(target: OperationTarget): AuthenticationExecutionKey =
-        AuthenticationExecutionKey(
-            identity = target.context.identity,
-            profileRevision = target.context.profileRevision,
-            strategy = target.context.authenticationStrategy
-        )
 
     /**
      * Dialect-owned V1 login wire over the same [transport] as ordinary

@@ -346,11 +346,7 @@ class V3ProtocolAdapter(
     }
 
     private fun executionKey(target: OperationTarget): AuthenticationExecutionKey =
-        AuthenticationExecutionKey(
-            identity = target.context.identity,
-            profileRevision = target.context.profileRevision,
-            strategy = target.context.authenticationStrategy
-        )
+        AuthenticationExecutionKey(target.context)
 
     private suspend fun loginAccessToken(target: OperationTarget, forceRefresh: Boolean): String? {
         val key = executionKey(target)

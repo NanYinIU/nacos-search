@@ -2,6 +2,7 @@ package com.nanyin.nacos.search.services
 
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
+import com.nanyin.nacos.search.settings.NacosOperationContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
@@ -22,6 +23,13 @@ data class AuthenticationExecutionKey(
     val profileRevision: Long,
     val strategy: V1AuthenticationStrategy
 )
+
+fun AuthenticationExecutionKey(context: NacosOperationContext): AuthenticationExecutionKey =
+    AuthenticationExecutionKey(
+        identity = context.identity,
+        profileRevision = context.profileRevision,
+        strategy = context.authenticationStrategy
+    )
 
 class AuthenticationSessionRegistry(
     private val clock: () -> Long = System::currentTimeMillis
