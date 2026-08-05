@@ -66,8 +66,11 @@ class ReleaseGateSuiteTest {
         val controller = PublishController(gateway)
         val target = lockedTarget(NacosApiGeneration.V1)
         val session = v1EditSession(target)
+        val named = PublishNamedTarget.of(session.binding, profileDisplayName = "p")
 
-        val result = controller.publish(session, target)
+        val prepared = controller.prepare(session, target, named)
+        assertInstanceOf(PublishPrepareOutcome.Ready::class.java, prepared)
+        val result = controller.confirm((prepared as PublishPrepareOutcome.Ready).prepared)
 
         assertEquals(PublishState.ServerStateUnknown, result.state)
         assertEquals(1, publishCount[0])
@@ -175,8 +178,10 @@ class ReleaseGateSuiteTest {
             val controller = PublishController(gateway)
             val target = lockedTarget(NacosApiGeneration.V1)
             val session = v1EditSession(target, draftContent = "new content")
+            val named = PublishNamedTarget.of(session.binding, profileDisplayName = "p")
 
-            val result = controller.publish(session, target)
+            val prepared = controller.prepare(session, target, named) as PublishPrepareOutcome.Ready
+            val result = controller.confirm(prepared.prepared)
 
             when (label) {
                 "command-result" -> assertEquals(PublishState.Verified, result.state)

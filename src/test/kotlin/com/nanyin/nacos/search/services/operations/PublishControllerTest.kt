@@ -24,10 +24,11 @@ class PublishControllerTest {
         val session = v1EditSession(draftContent = "new content")
             .copy(writeIntent = WriteIntent.Withheld(WriteIntent.Cause.NOT_OPTED_IN))
 
-        val result = controller.publish(session, v1Target())
+        val outcome = controller.prepare(session, v1Target(), namedTarget())
 
-        assertInstanceOf<PublishState.ReadOnly>(result.state)
-        assertTrue(result.isDirty)
+        assertInstanceOf<PublishPrepareOutcome.Blocked>(outcome)
+        assertInstanceOf<PublishState.ReadOnly>(outcome.result.state)
+        assertTrue(outcome.result.isDirty)
     }
 
     @Test
@@ -37,10 +38,10 @@ class PublishControllerTest {
         ))
         val session = v1EditSession(draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val outcome = controller.prepare(session, v1Target(), namedTarget())
 
-        assertEquals(PublishState.TargetDeleted, result.state)
-        assertTrue(result.isDirty)
+        assertEquals(PublishState.TargetDeleted, outcome.result.state)
+        assertTrue(outcome.result.isDirty)
     }
 
     @Test
@@ -53,11 +54,31 @@ class PublishControllerTest {
         ))
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val outcome = controller.prepare(session, v1Target(), namedTarget())
 
-        assertInstanceOf<PublishState.RemoteConflict>(result.state)
-        assertEquals("changed by someone else", (result.state as PublishState.RemoteConflict).remoteContent)
-        assertTrue(result.isDirty)
+        assertInstanceOf<PublishState.RemoteConflict>(outcome.result.state)
+        assertEquals("changed by someone else", (outcome.result.state as PublishState.RemoteConflict).remoteContent)
+        assertTrue(outcome.result.isDirty)
+    }
+
+    @Test
+    fun `prepare parks at awaiting confirmation with the diff and named target`() = runBlocking {
+        val gateway = ScriptedPublishGateway(
+            preflightResult = Result.success(baseDetail()),
+            publishResult = Result.success(PublishOutcome.Written("true"))
+        )
+        val controller = PublishController(gateway)
+        val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
+        val named = namedTarget()
+
+        val outcome = controller.prepare(session, v1Target(), named)
+
+        val ready = assertInstanceOfAndGet<PublishPrepareOutcome.Ready>(outcome)
+        val awaiting = ready.awaiting
+        assertEquals("original", awaiting.diff.baselineContent)
+        assertEquals("new content", awaiting.diff.draftContent)
+        assertEquals(named, awaiting.namedTarget)
+        assertEquals(0, gateway.writeCalls)
     }
 
     @Test
@@ -69,7 +90,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val result = confirmAfterPrepare(controller, session)
 
         assertTrue(result.state is PublishState.RemoteConflict)
         assertTrue(result.isDirty)
@@ -87,10 +108,11 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val result = confirmAfterPrepare(controller, session)
 
         assertEquals(PublishState.Verified, result.state)
         assertTrue(!result.isDirty)
+        assertEquals(1, gateway.writeCalls)
     }
 
     @Test
@@ -103,7 +125,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", baselineContent = "original", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val result = confirmAfterPrepare(controller, session)
 
         assertEquals(PublishState.Dirty, result.state)
         assertTrue(result.isDirty)
@@ -121,7 +143,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val result = confirmAfterPrepare(controller, session)
 
         assertInstanceOf<PublishState.RemoteConflict>(result.state)
         assertTrue(result.isDirty)
@@ -137,7 +159,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val result = confirmAfterPrepare(controller, session)
 
         assertEquals(PublishState.TargetDeleted, result.state)
         assertTrue(result.isDirty)
@@ -153,7 +175,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val result = confirmAfterPrepare(controller, session)
 
         assertEquals(PublishState.ServerStateUnknown, result.state)
         assertTrue(result.isDirty)
@@ -168,7 +190,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val result = confirmAfterPrepare(controller, session)
 
         assertEquals(PublishState.ServerStateUnknown, result.state)
         assertTrue(result.isDirty)
@@ -183,7 +205,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val result = confirmAfterPrepare(controller, session)
 
         assertEquals(PublishState.PermissionDenied, result.state)
         assertTrue(result.isDirty)
@@ -200,10 +222,10 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val outcome = controller.prepare(session, v1Target(), namedTarget())
 
-        assertInstanceOf<PublishState.ReadOnly>(result.state)
-        assertTrue(result.isDirty)
+        assertInstanceOf<PublishState.ReadOnly>(outcome.result.state)
+        assertTrue(outcome.result.isDirty)
     }
 
     @Test
@@ -227,7 +249,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val result = confirmAfterPrepare(controller, session)
 
         assertNotEquals(PublishState.Verified, result.state)
         assertTrue(result.isDirty)
@@ -252,7 +274,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val result = confirmAfterPrepare(controller, session)
 
         assertEquals(PublishState.Verified, result.state)
         assertTrue(!result.isDirty)
@@ -275,7 +297,7 @@ class PublishControllerTest {
         val controller = PublishController(gateway)
         val session = v1EditSession(baselineMd5 = "base-md5", draftContent = "new content")
 
-        val result = controller.publish(session, v1Target())
+        val result = confirmAfterPrepare(controller, session)
 
         assertEquals(PublishState.Dirty, result.state)
         assertTrue(result.isDirty)
@@ -283,8 +305,27 @@ class PublishControllerTest {
 
     // ---- helpers ----
 
+    private suspend fun confirmAfterPrepare(
+        controller: PublishController,
+        session: EditSession
+    ): PublishResult {
+        val ready = assertInstanceOfAndGet<PublishPrepareOutcome.Ready>(
+            controller.prepare(session, v1Target(), namedTarget())
+        )
+        return controller.confirm(ready.prepared)
+    }
+
     private fun baseDetail() = NacosConfiguration(
         dataId = "app.yaml", group = "G", content = "original", md5 = "base-md5", type = "yaml"
+    )
+
+    private fun namedTarget() = PublishNamedTarget(
+        profileId = "p",
+        profileDisplayName = "p",
+        endpoint = "https://nacos.example",
+        namespaceId = "public",
+        dataId = "app.yaml",
+        group = "G"
     )
 
     private fun v1EditSession(
@@ -334,11 +375,17 @@ private inline fun <reified T> assertInstanceOf(value: Any?) {
     org.junit.jupiter.api.Assertions.assertInstanceOf(T::class.java, value)
 }
 
+private inline fun <reified T> assertInstanceOfAndGet(value: Any?): T {
+    return org.junit.jupiter.api.Assertions.assertInstanceOf(T::class.java, value)
+}
+
 class ScriptedPublishGateway(
     val preflightResult: Result<NacosConfiguration?> = Result.success(null),
     val publishResult: Result<PublishOutcome> = Result.success(PublishOutcome.Written("true")),
     val readBackResult: Result<NacosConfiguration?> = Result.success(null)
 ) : PublishGateway {
+    var writeCalls = 0
+
     override suspend fun preflight(
         target: OperationTarget,
         coordinate: ConfigurationCoordinate
@@ -347,7 +394,10 @@ class ScriptedPublishGateway(
     override suspend fun write(
         target: OperationTarget,
         command: PublishCommand
-    ): Result<PublishOutcome> = publishResult
+    ): Result<PublishOutcome> {
+        writeCalls++
+        return publishResult
+    }
 
     override suspend fun readBack(
         target: OperationTarget,

@@ -10,6 +10,40 @@ data class PublishResult(
 )
 
 /**
+ * Material held after a successful preflight, ready for one non-retried write
+ * when the user confirms. Carries the captured [target] (with its credential
+ * snapshot) and the command built from the preflight detail — neither is
+ * exposed on [PublishState.AwaitingConfirmation], which is what the UI sees.
+ */
+data class PreparedPublish(
+    val session: EditSession,
+    val target: OperationTarget,
+    val command: PublishCommand,
+    val preflightDetail: NacosConfiguration,
+    val namedTarget: PublishNamedTarget
+)
+
+/**
+ * Outcome of [PublishController.prepare]: either ready for confirmation, or a
+ * terminal failure that never reaches the write.
+ */
+sealed class PublishPrepareOutcome {
+    abstract val result: PublishResult
+
+    /** Preflight matched the baseline; confirmation may proceed. */
+    data class Ready(
+        val prepared: PreparedPublish,
+        val awaiting: PublishState.AwaitingConfirmation
+    ) : PublishPrepareOutcome() {
+        override val result: PublishResult
+            get() = PublishResult(awaiting, isDirty = prepared.session.isDirty)
+    }
+
+    /** Policy, preflight, or conflict blocked the publish; nothing is pending. */
+    data class Blocked(override val result: PublishResult) : PublishPrepareOutcome()
+}
+
+/**
  * The publish boundary. The controller does not know about adapters or
  * transports directly; it delegates to this interface so tests can script
  * outcomes and production wires it to the OperationGateway.
@@ -27,57 +61,76 @@ interface PublishGateway {
 /**
  * Orchestrates the controlled publish state machine outside Swing.
  *
- * The algorithm (design §16.3):
+ * The algorithm (design §16.3 / ADR-0028):
  * 1. Preflight: re-read detail; not-found → TARGET_DELETED.
  * 2. Compare baseline content/MD5; mismatch → REMOTE_CONFLICT.
  * 3. Generate PublishCommand preserving metadata.
  * 4. Encrypted config → READ_ONLY.
- * 5. Send one write; CAS rejection → REMOTE_CONFLICT.
- * 6. No transport or auth replay.
- * 7. Possible post-send failure → SERVER_STATE_UNKNOWN.
- * 8. Immediate read-back; only verified clears dirty.
+ * 5. Enter AWAITING_CONFIRMATION with the diff and named target — no write yet.
+ * 6. On explicit confirm: send one write; CAS rejection → REMOTE_CONFLICT.
+ * 7. No transport or auth replay.
+ * 8. Possible post-send failure → SERVER_STATE_UNKNOWN.
+ * 9. Immediate read-back; only verified clears dirty.
+ *
+ * Confirmation is a state plus a command, not a callback: [prepare] parks the
+ * machine at [PublishState.AwaitingConfirmation], and [confirm] / cancel (at
+ * the service) complete the ceremony.
  */
 class PublishController(private val gateway: PublishGateway) {
 
     /**
-     * Publishes [session]'s draft to [target]. The target is captured fresh
-     * from the session's binding by the caller and is never carried on the
-     * session itself, which holds no credential (ADR-0027).
+     * Runs preflight and builds the command. On success returns [PublishPrepareOutcome.Ready]
+     * carrying [PublishState.AwaitingConfirmation] — nothing has been written.
+     * The target is captured fresh from the session's binding by the caller and
+     * is never carried on the session itself (ADR-0027).
      */
-    suspend fun publish(session: EditSession, target: OperationTarget): PublishResult {
+    suspend fun prepare(
+        session: EditSession,
+        target: OperationTarget,
+        namedTarget: PublishNamedTarget
+    ): PublishPrepareOutcome {
         if (session.writeIntent !is WriteIntent.Granted) {
-            return PublishResult(
-                PublishState.ReadOnly("Publishing is disabled for this environment"),
-                isDirty = session.isDirty
+            return PublishPrepareOutcome.Blocked(
+                PublishResult(
+                    PublishState.ReadOnly("Publishing is disabled for this environment"),
+                    isDirty = session.isDirty
+                )
             )
         }
         val coordinate = session.binding.coordinate
         // Phase 1: Preflight
         val preflightResult = gateway.preflight(target, coordinate)
         if (preflightResult.isFailure) {
-            return when (val error = preflightResult.exceptionOrNull()!!) {
-                is RemoteOperationError.Authorization -> PublishResult(
-                    PublishState.PermissionDenied, isDirty = true
-                )
-                is RemoteOperationError.NotFound -> PublishResult(
-                    PublishState.TargetDeleted, isDirty = true
-                )
-                else -> PublishResult(
-                    PublishState.ServerStateUnknown, isDirty = true
-                )
-            }
+            val error = preflightResult.exceptionOrNull()!!
+            return PublishPrepareOutcome.Blocked(
+                when (error) {
+                    is RemoteOperationError.Authorization -> PublishResult(
+                        PublishState.PermissionDenied, isDirty = true
+                    )
+                    is RemoteOperationError.NotFound -> PublishResult(
+                        PublishState.TargetDeleted, isDirty = true
+                    )
+                    else -> PublishResult(
+                        PublishState.ServerStateUnknown, isDirty = true
+                    )
+                }
+            )
         }
 
         val remoteDetail = preflightResult.getOrNull()
         if (remoteDetail == null) {
-            return PublishResult(PublishState.TargetDeleted, isDirty = true)
+            return PublishPrepareOutcome.Blocked(
+                PublishResult(PublishState.TargetDeleted, isDirty = true)
+            )
         }
 
         // Encrypted config is read-only
         if (!remoteDetail.encryptedDataKey.isNullOrBlank()) {
-            return PublishResult(
-                PublishState.ReadOnly("Configuration is encrypted"),
-                isDirty = true
+            return PublishPrepareOutcome.Blocked(
+                PublishResult(
+                    PublishState.ReadOnly("Configuration is encrypted"),
+                    isDirty = true
+                )
             )
         }
 
@@ -86,14 +139,46 @@ class PublishController(private val gateway: PublishGateway) {
         val md5Changed = session.baselineMd5 != null && remoteDetail.md5 != null &&
             session.baselineMd5 != remoteDetail.md5
         if (contentChanged || md5Changed) {
-            return PublishResult(
-                PublishState.RemoteConflict(remoteDetail.content, remoteDetail.md5),
-                isDirty = true
+            return PublishPrepareOutcome.Blocked(
+                PublishResult(
+                    PublishState.RemoteConflict(remoteDetail.content, remoteDetail.md5),
+                    isDirty = true
+                )
             )
         }
 
         // Phase 3: Build command from preflight, preserving metadata
         val command = session.toCommand(remoteDetail)
+        val awaiting = PublishState.AwaitingConfirmation(
+            diff = PublishDiff(
+                baselineContent = session.baselineContent,
+                draftContent = session.draftContent
+            ),
+            namedTarget = namedTarget
+        )
+        return PublishPrepareOutcome.Ready(
+            prepared = PreparedPublish(
+                session = session,
+                target = target,
+                command = command,
+                preflightDetail = remoteDetail,
+                namedTarget = namedTarget
+            ),
+            awaiting = awaiting
+        )
+    }
+
+    /**
+     * Performs the single non-retried write and the immediate read-back for a
+     * previously [prepare]d publish. Must not be called without an explicit
+     * user confirmation of the awaiting state.
+     */
+    suspend fun confirm(prepared: PreparedPublish): PublishResult {
+        val session = prepared.session
+        val target = prepared.target
+        val command = prepared.command
+        val remoteDetail = prepared.preflightDetail
+        val coordinate = session.binding.coordinate
 
         // Phase 4: Send one write (no transport or auth replay)
         val writeResult = gateway.write(target, command)

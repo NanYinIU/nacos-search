@@ -1346,91 +1346,142 @@ private fun setupEventHandlers() {
     }
     
     /**
-     * Save (publish) the draft the project holds. Everything about where it goes
-     * comes from the session's binding, so a selection change between starting
-     * the edit and pressing save cannot retarget the write (ADR-0027).
+     * Save (publish) the draft the project holds. Preflight parks at
+     * awaiting-confirmation with the diff and the named target from the
+     * session binding; only an explicit confirm sends the write (ADR-0027 /
+     * ADR-0028). A selection change between starting the edit and pressing
+     * save cannot retarget where it publishes.
      */
     private fun saveConfiguration() {
         val session = editSessions.currentSession() ?: return
         if (!session.isDirty) return
         coroutineScope.launch {
             try {
-                val confirm = withContext(Dispatchers.Main) {
-                    com.intellij.openapi.ui.Messages.showYesNoDialog(
-                        project,
-                        NacosSearchBundle.message(
-                            "config.detail.publish.confirm",
-                            session.binding.dataId,
-                            session.binding.group,
-                            session.binding.namespaceId,
-                            session.binding.identity.canonicalEndpoint
-                        ),
-                        NacosSearchBundle.message("config.detail.action.save.publish"),
-                        com.intellij.openapi.ui.Messages.getQuestionIcon()
-                    )
-                }
-                if (confirm != com.intellij.openapi.ui.Messages.YES) return@launch
-
                 val presented = issue()
-                val publishResult = editSessions.publish() ?: return@launch
-                withContext(Dispatchers.Main) {
-                    if (!presentation.admitAndRecord(presented)) return@withContext
-                    when (val state = publishResult.state) {
-                        is PublishState.Verified -> {
-                            val verified = publishResult.verifiedDetail
-                            if (verified != null) {
-                                currentConfiguration = verified
-                            }
-                            exitEditMode()
-                            saveButton.isEnabled = false
-                            revertButton.isEnabled = false
-                            updateDirtyUI(false)
-                            updateStatusBar(verified?.content ?: session.draftContent)
-                            com.intellij.openapi.ui.Messages.showInfoMessage(
-                                NacosSearchBundle.message("message.configuration.saved"),
-                                NacosSearchBundle.message("common.success")
+                val prepareResult = editSessions.requestPublish() ?: return@launch
+                when (val state = prepareResult.state) {
+                    is PublishState.AwaitingConfirmation -> {
+                        val target = state.namedTarget
+                        val confirm = withContext(Dispatchers.Main) {
+                            com.intellij.openapi.ui.Messages.showYesNoDialog(
+                                project,
+                                NacosSearchBundle.message(
+                                    "config.detail.publish.confirm",
+                                    target.dataId,
+                                    target.group,
+                                    target.profileDisplayName,
+                                    target.namespaceId,
+                                    target.endpoint
+                                ),
+                                NacosSearchBundle.message("config.detail.action.save.publish"),
+                                com.intellij.openapi.ui.Messages.getQuestionIcon()
                             )
                         }
-                        is PublishState.RemoteConflict -> {
+                        if (confirm != com.intellij.openapi.ui.Messages.YES) {
+                            editSessions.cancelPublish()
+                            return@launch
+                        }
+                        // Null means pending was invalidated (keystroke, discard,
+                        // concurrent cancel) after the user said Yes — never silent.
+                        val publishResult = editSessions.confirmPublish()
+                        if (publishResult == null) {
+                            showSaveError(
+                                NacosSearchBundle.message("config.detail.publish.confirmation.expired")
+                            )
+                            return@launch
+                        }
+                        withContext(Dispatchers.Main) {
+                            if (!presentation.admitAndRecord(presented)) return@withContext
+                            presentPublishOutcome(publishResult, session.draftContent)
+                        }
+                    }
+                    is PublishState.Dirty -> {
+                        // Preflight completed after the draft was mutated or
+                        // discarded — preparation was not parked. Ask to save again.
+                        withContext(Dispatchers.Main) {
+                            if (!presentation.admitAndRecord(presented)) return@withContext
                             com.intellij.openapi.ui.Messages.showErrorDialog(
-                                NacosSearchBundle.message("config.detail.publish.conflict"),
+                                NacosSearchBundle.message("config.detail.publish.confirmation.expired"),
                                 NacosSearchBundle.message("common.error")
                             )
                         }
-                        is PublishState.TargetDeleted -> {
-                            com.intellij.openapi.ui.Messages.showErrorDialog(
-                                NacosSearchBundle.message("config.detail.publish.deleted"),
-                                NacosSearchBundle.message("common.error")
-                            )
-                        }
-                        is PublishState.PermissionDenied -> {
-                            com.intellij.openapi.ui.Messages.showErrorDialog(
-                                NacosSearchBundle.message("config.detail.publish.permission"),
-                                NacosSearchBundle.message("common.error")
-                            )
-                        }
-                        is PublishState.ServerStateUnknown -> {
-                            com.intellij.openapi.ui.Messages.showErrorDialog(
-                                NacosSearchBundle.message("config.detail.publish.unknown"),
-                                NacosSearchBundle.message("common.error")
-                            )
-                        }
-                        is PublishState.ReadOnly -> {
-                            com.intellij.openapi.ui.Messages.showErrorDialog(
-                                NacosSearchBundle.message("config.detail.publish.readonly", state.reason),
-                                NacosSearchBundle.message("common.error")
-                            )
-                        }
-                        else -> {
-                            com.intellij.openapi.ui.Messages.showErrorDialog(
-                                NacosSearchBundle.message("error.config.save.failed") + ": $state",
-                                NacosSearchBundle.message("common.error")
-                            )
+                    }
+                    else -> {
+                        withContext(Dispatchers.Main) {
+                            if (!presentation.admitAndRecord(presented)) return@withContext
+                            presentPublishOutcome(prepareResult, session.draftContent)
                         }
                     }
                 }
             } catch (e: Exception) {
                 showSaveError(e.message ?: e.toString())
+            }
+        }
+    }
+
+    private fun presentPublishOutcome(
+        publishResult: com.nanyin.nacos.search.services.operations.PublishResult,
+        draftContent: String
+    ) {
+        when (val state = publishResult.state) {
+            is PublishState.Verified -> {
+                val verified = publishResult.verifiedDetail
+                if (verified != null) {
+                    currentConfiguration = verified
+                }
+                exitEditMode()
+                saveButton.isEnabled = false
+                revertButton.isEnabled = false
+                updateDirtyUI(false)
+                updateStatusBar(verified?.content ?: draftContent)
+                com.intellij.openapi.ui.Messages.showInfoMessage(
+                    NacosSearchBundle.message("message.configuration.saved"),
+                    NacosSearchBundle.message("common.success")
+                )
+            }
+            is PublishState.RemoteConflict -> {
+                com.intellij.openapi.ui.Messages.showErrorDialog(
+                    NacosSearchBundle.message("config.detail.publish.conflict"),
+                    NacosSearchBundle.message("common.error")
+                )
+            }
+            is PublishState.TargetDeleted -> {
+                com.intellij.openapi.ui.Messages.showErrorDialog(
+                    NacosSearchBundle.message("config.detail.publish.deleted"),
+                    NacosSearchBundle.message("common.error")
+                )
+            }
+            is PublishState.PermissionDenied -> {
+                com.intellij.openapi.ui.Messages.showErrorDialog(
+                    NacosSearchBundle.message("config.detail.publish.permission"),
+                    NacosSearchBundle.message("common.error")
+                )
+            }
+            is PublishState.ServerStateUnknown -> {
+                com.intellij.openapi.ui.Messages.showErrorDialog(
+                    NacosSearchBundle.message("config.detail.publish.unknown"),
+                    NacosSearchBundle.message("common.error")
+                )
+            }
+            is PublishState.ReadOnly -> {
+                com.intellij.openapi.ui.Messages.showErrorDialog(
+                    NacosSearchBundle.message("config.detail.publish.readonly", state.reason),
+                    NacosSearchBundle.message("common.error")
+                )
+            }
+            is PublishState.Dirty -> {
+                // Confirm re-validation failed, or post-write read-back does not
+                // yet show the command — draft is retained; user must save again.
+                com.intellij.openapi.ui.Messages.showErrorDialog(
+                    NacosSearchBundle.message("config.detail.publish.not.verified"),
+                    NacosSearchBundle.message("common.error")
+                )
+            }
+            else -> {
+                com.intellij.openapi.ui.Messages.showErrorDialog(
+                    NacosSearchBundle.message("error.config.save.failed") + ": $state",
+                    NacosSearchBundle.message("common.error")
+                )
             }
         }
     }

@@ -118,7 +118,13 @@ class EditSessionService internal constructor(
 
     private val lock = Any()
     private var session: EditSession? = null
-    private val discardListeners = CopyOnWriteArrayList<DraftDiscardListener>()
+    /**
+     * Material from a successful [requestPublish] waiting for [confirmPublish]
+     * or [cancelPublish]. Cleared by confirm, cancel, discard, or a new request.
+     * Holds the credential-bearing target so the confirmation state exposed to
+     * callers need not.
+     */
+    private var pendingPublish: PreparedPublish? = null
 
     /** The draft this project holds, or null when nothing is being edited. */
     fun currentSession(): EditSession? = synchronized(lock) { session }
@@ -127,15 +133,10 @@ class EditSessionService internal constructor(
     fun isDirty(): Boolean = currentSession()?.isDirty == true
 
     /**
-     * Registers [listener] for [discardDraft] notifications. Returns a handle
-     * that unregisters it — callers that own a [com.intellij.openapi.Disposable]
-     * should release the handle from that disposable so a disposed panel never
-     * hears about a later discard.
+     * Whether a prepared publish is waiting for confirm or cancel. Observable
+     * without Swing so tests can assert the machine parked at confirmation.
      */
-    fun addDiscardListener(listener: DraftDiscardListener): AutoCloseable {
-        discardListeners.add(listener)
-        return AutoCloseable { discardListeners.remove(listener) }
-    }
+    fun isAwaitingConfirmation(): Boolean = synchronized(lock) { pendingPublish != null }
 
     /**
      * Starts editing [configuration], binding the draft to the profile, access
@@ -175,12 +176,18 @@ class EditSessionService internal constructor(
             draftContent = baselineContent,
             writeIntent = writeIntent
         )
-        synchronized(lock) { session = started }
+        synchronized(lock) {
+            session = started
+            pendingPublish = null
+        }
         return EditStart.Started(started)
     }
 
     /** Records what the user has typed. No-op when nothing is being edited. */
     fun updateDraft(content: String) = synchronized(lock) {
+        // A draft change after preflight invalidates what was shown for
+        // confirmation — the user must re-request so the diff matches the text.
+        pendingPublish = null
         session = session?.copy(draftContent = content)
     }
 
@@ -190,17 +197,9 @@ class EditSessionService internal constructor(
      * was actually present, [DraftDiscardListener]s are notified so renderers
      * outside this service can leave edit mode.
      */
-    fun discardDraft() {
-        val dropped = synchronized(lock) {
-            val had = session != null
-            session = null
-            had
-        }
-        if (dropped) {
-            for (listener in discardListeners) {
-                listener.onDraftDiscarded()
-            }
-        }
+    fun discardDraft() = synchronized(lock) {
+        session = null
+        pendingPublish = null
     }
 
     /**
@@ -240,80 +239,26 @@ class EditSessionService internal constructor(
     }
 
     /**
-     * Whether switching the project environment to [newProfileId] may proceed.
-     * Staying on the draft's own profile is not a switch. A dirty draft bound to
-     * a different profile would be orphaned, so the caller must prompt.
-     */
-    fun guardEnvironmentSwitch(newProfileId: String): DraftGuard {
-        val current = currentSession() ?: return DraftGuard.Proceed
-        if (current.binding.profileId == newProfileId) return DraftGuard.Proceed
-        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
-    }
-
-    /**
-     * Whether switching the selected namespace to [newNamespaceId] may proceed.
-     * [newNamespaceId] is compared canonically (ADR-0015). Staying on the
-     * draft's own namespace is not a switch.
-     */
-    fun guardNamespaceSwitch(newNamespaceId: String?): DraftGuard {
-        val current = currentSession() ?: return DraftGuard.Proceed
-        val canonical = NamespaceInfo.canonicalId(newNamespaceId)
-        if (current.binding.namespaceId == canonical) return DraftGuard.Proceed
-        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
-    }
-
-    /**
-     * Whether turning write intent off for [profileId] may proceed. Only the
-     * draft's own profile matters: withholding writes for an unrelated profile
-     * cannot orphan this draft. Turning writes off for the bound profile would
-     * leave a draft that can no longer be published (ADR-0026 / ADR-0027).
-     */
-    fun guardWriteIntentOff(profileId: String): DraftGuard {
-        val current = currentSession() ?: return DraftGuard.Proceed
-        if (current.binding.profileId != profileId) return DraftGuard.Proceed
-        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
-    }
-
-    /**
-     * Whether deleting the environment profile [profileId] may proceed. Only the
-     * draft's own profile matters: deleting an unrelated profile leaves the
-     * draft publishable. Deleting the bound profile would leave a draft that
-     * can no longer be published (ADR-0025 / ADR-0027).
-     */
-    fun guardProfileDeletion(profileId: String): DraftGuard {
-        val current = currentSession() ?: return DraftGuard.Proceed
-        if (current.binding.profileId != profileId) return DraftGuard.Proceed
-        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
-    }
-
-    /**
-     * Whether closing the project may proceed. Same shape as [guardDestroy]: a
-     * dirty draft is project-scoped (ADR-0046) and must not be dropped silently
-     * when the project that holds it goes away.
-     */
-    fun guardProjectClose(): DraftGuard {
-        val current = currentSession() ?: return DraftGuard.Proceed
-        return if (current.isDirty) DraftGuard.ConfirmDiscard(current.binding) else DraftGuard.Proceed
-    }
-
-    /**
-     * Publishes the held draft, or returns null when there is nothing to
-     * publish. The target is captured fresh from the session's binding — never
-     * from the current selection — and must still resolve to the access
-     * identity the draft was bound to; an identity that moved underneath it
-     * leaves the text available for copying but blocks the write (ADR-0027).
+     * Runs preflight for the held draft and, on success, parks at
+     * [PublishState.AwaitingConfirmation] carrying the diff and the named
+     * target derived from the session binding (ADR-0027 / ADR-0028). Sends
+     * nothing. Returns null when there is no draft.
      *
-     * Only a verified publish clears the draft (ADR-0028).
+     * The target is captured fresh from the session's binding — never from the
+     * current selection — and must still resolve to the access identity the
+     * draft was bound to.
      */
-    suspend fun publish(): PublishResult? {
+    suspend fun requestPublish(): PublishResult? {
         val current = currentSession() ?: return null
-        // ADR-0026's opt-in can still change underneath a draft (e.g. another
-        // settings surface, or a race with apply). The save path fails closed by
-        // re-running the same check against the profile the draft is bound to —
-        // the check, not a snapshot of it. Turning write intent off is itself
-        // guarded by [guardWriteIntentOff] so the user cannot silently orphan a
-        // dirty draft from Settings (issue #77).
-        if (WriteIntent.of(environment.profile(current.binding.profileId)) !is WriteIntent.Granted) {
+        // A new request supersedes any previous unconfirmed preparation.
+        synchronized(lock) { pendingPublish = null }
+
+        // ADR-0026's opt-in is one the user can still revoke while a draft is
+        // open, and blocking that revocation is a later slice (#77). Until then
+        // the save path fails closed by re-running the same check against the
+        // profile the draft is bound to — the check, not a snapshot of it.
+        val boundProfile = environment.profile(current.binding.profileId)
+        if (WriteIntent.of(boundProfile) !is WriteIntent.Granted) {
             return PublishResult(
                 PublishState.ReadOnly("Publishing is disabled for this environment"),
                 isDirty = current.isDirty
@@ -333,11 +278,84 @@ class EditSessionService internal constructor(
             )
         }
 
-        val result = PublishController(OperationGatewayPublishGateway(gateway())).publish(current, target)
+        val namedTarget = PublishNamedTarget.of(
+            binding = current.binding,
+            profileDisplayName = boundProfile?.displayName
+        )
+        val controller = PublishController(OperationGatewayPublishGateway(gateway()))
+        return when (val outcome = controller.prepare(current, target, namedTarget)) {
+            is PublishPrepareOutcome.Ready -> {
+                // Preflight suspended across the network. The live session may
+                // have been replaced by updateDraft / discardDraft / beginEdit
+                // while we were away — never reinstall a preparation whose
+                // frozen command no longer matches what the user holds.
+                synchronized(lock) {
+                    if (session !== outcome.prepared.session) {
+                        return PublishResult(
+                            PublishState.Dirty,
+                            isDirty = session?.isDirty == true
+                        )
+                    }
+                    pendingPublish = outcome.prepared
+                }
+                outcome.result
+            }
+            is PublishPrepareOutcome.Blocked -> outcome.result
+        }
+    }
+
+    /**
+     * Confirms a previously [requestPublish]ed preparation: one non-retried
+     * write and immediate read-back. Returns null when nothing is awaiting
+     * confirmation. Only a verified publish clears the draft (ADR-0028).
+     *
+     * Defense in depth: even after taking the pending preparation, the live
+     * session must still be the prepared instance (same object [updateDraft]
+     * replaces via [copy]) and its draft text must still equal the command —
+     * otherwise a keystroke between dialog and confirm would publish stale
+     * content.
+     */
+    suspend fun confirmPublish(): PublishResult? {
+        val prepared = synchronized(lock) {
+            val pending = pendingPublish ?: return null
+            // Drop pending either way so a second confirm cannot double-write.
+            pendingPublish = null
+            if (session !== pending.session ||
+                session?.draftContent != pending.command.content
+            ) {
+                return PublishResult(
+                    PublishState.Dirty,
+                    isDirty = session?.isDirty == true
+                )
+            }
+            pending
+        }
+
+        val result = PublishController(OperationGatewayPublishGateway(gateway())).confirm(prepared)
         if (result.state is PublishState.Verified) {
-            synchronized(lock) { if (session === current) session = null }
+            synchronized(lock) {
+                // Clear only when the held session is still the one we prepared
+                // against; a discarded-and-restarted draft must not be wiped.
+                if (session === prepared.session) session = null
+            }
         }
         return result
+    }
+
+    /**
+     * Cancels a previously [requestPublish]ed preparation. Sends nothing and
+     * keeps the draft dirty. Returns null when nothing is awaiting confirmation.
+     */
+    fun cancelPublish(): PublishResult? {
+        val cleared = synchronized(lock) {
+            val pending = pendingPublish
+            pendingPublish = null
+            pending
+        } ?: return null
+        return PublishResult(
+            state = PublishState.Dirty,
+            isDirty = cleared.session.isDirty
+        )
     }
 }
 

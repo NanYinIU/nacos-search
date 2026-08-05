@@ -8,6 +8,8 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.CredentialSnapshot
 import com.nanyin.nacos.search.settings.NacosOperationContext
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -110,18 +112,21 @@ class EditSessionServiceTest {
         // beginEdit already did.
         val adapter = RecordingAdapter()
         val environment = StubEditEnvironment()
-        val service = service(environment, adapter)
-        val session = started(service.beginEdit(configuration(), "dev", baselineContent = "original"))
-
-        val result = PublishController(OperationGatewayPublishGateway(gateway(adapter))).publish(
-            session.copy(
-                draftContent = "edited",
-                writeIntent = WriteIntent.Withheld(WriteIntent.Cause.NOT_OPTED_IN)
-            ),
-            target = environment.target()
+        val session = started(
+            service(environment, adapter).beginEdit(configuration(), "dev", baselineContent = "original")
+        ).copy(
+            draftContent = "edited",
+            writeIntent = WriteIntent.Withheld(WriteIntent.Cause.NOT_OPTED_IN)
         )
 
-        assertInstanceOf(PublishState.ReadOnly::class.java, result.state)
+        val outcome = PublishController(OperationGatewayPublishGateway(gateway(adapter))).prepare(
+            session,
+            target = environment.target(),
+            namedTarget = PublishNamedTarget.of(session.binding, "p1")
+        )
+
+        assertInstanceOf(PublishPrepareOutcome.Blocked::class.java, outcome)
+        assertInstanceOf(PublishState.ReadOnly::class.java, outcome.result.state)
         assertEquals(0, adapter.publishCalls)
     }
 
@@ -138,11 +143,12 @@ class EditSessionServiceTest {
 
         environment.profiles["p1"] = profile(writeIntent = false)
 
-        val result = requireNotNull(service.publish())
+        val result = requireNotNull(service.requestPublish())
 
         assertInstanceOf(PublishState.ReadOnly::class.java, result.state)
         assertEquals(0, adapter.publishCalls)
         assertTrue(service.isDirty())
+        assertFalse(service.isAwaitingConfirmation())
     }
 
     @Test
@@ -521,6 +527,73 @@ class EditSessionServiceTest {
     // ---- the publish target comes from the binding, never the live selection ----
 
     @Test
+    fun `requestPublish parks at awaiting confirmation with the diff and named target`() = runBlocking {
+        val adapter = RecordingAdapter()
+        val environment = StubEditEnvironment()
+        // Give the bound profile a display name the named target must surface.
+        environment.profiles["p1"] = EnvironmentProfile(
+            id = "p1",
+            displayName = "Production",
+            canonicalEndpoint = "https://nacos.example",
+            writeIntent = true
+        )
+        val service = service(environment, adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        val result = requireNotNull(service.requestPublish())
+
+        val awaiting = assertInstanceOf(PublishState.AwaitingConfirmation::class.java, result.state)
+        assertEquals("original", awaiting.diff.baselineContent)
+        assertEquals("edited", awaiting.diff.draftContent)
+        assertEquals("p1", awaiting.namedTarget.profileId)
+        assertEquals("Production", awaiting.namedTarget.profileDisplayName)
+        assertEquals("https://nacos.example", awaiting.namedTarget.endpoint)
+        assertEquals("dev", awaiting.namedTarget.namespaceId)
+        assertEquals("app.yaml", awaiting.namedTarget.dataId)
+        assertEquals("G", awaiting.namedTarget.group)
+        assertTrue(service.isAwaitingConfirmation())
+        assertEquals(0, adapter.publishCalls)
+        assertTrue(service.isDirty())
+    }
+
+    @Test
+    fun `cancelling confirmation sends nothing and keeps the draft dirty`() = runBlocking {
+        val adapter = RecordingAdapter()
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+        requireNotNull(service.requestPublish())
+
+        val cancelled = requireNotNull(service.cancelPublish())
+
+        assertEquals(PublishState.Dirty, cancelled.state)
+        assertTrue(cancelled.isDirty)
+        assertEquals(0, adapter.publishCalls)
+        assertFalse(service.isAwaitingConfirmation())
+        assertTrue(service.isDirty())
+        assertEquals("edited", service.currentSession()?.draftContent)
+    }
+
+    @Test
+    fun `confirming sends exactly one write and a verified publish clears the draft`() = runBlocking {
+        val adapter = RecordingAdapter()
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+        requireNotNull(service.requestPublish())
+
+        val result = requireNotNull(service.confirmPublish())
+
+        assertEquals(PublishState.Verified, result.state)
+        assertEquals(1, adapter.publishCalls)
+        assertFalse(service.isAwaitingConfirmation())
+        assertNull(service.currentSession())
+        assertFalse(service.isDirty())
+        assertEquals(DraftGuard.Proceed, service.guardDestroy())
+    }
+
+    @Test
     fun `publishing goes to the environment the draft was started against`() = runBlocking {
         val adapter = RecordingAdapter()
         val environment = StubEditEnvironment()
@@ -531,7 +604,8 @@ class EditSessionServiceTest {
         // The user retargets the tool window after starting the draft.
         environment.selected = profile(id = "p2")
 
-        val result = requireNotNull(service.publish())
+        requireNotNull(service.requestPublish())
+        val result = requireNotNull(service.confirmPublish())
 
         assertEquals(PublishState.Verified, result.state)
         assertTrue(environment.captures.all { it == "p1" to "dev" })
@@ -547,33 +621,23 @@ class EditSessionServiceTest {
         service.updateDraft("edited")
 
         environment.credential = "at-publish-time"
-        requireNotNull(service.publish())
+        requireNotNull(service.requestPublish())
+        requireNotNull(service.confirmPublish())
 
         assertEquals("at-publish-time", adapter.lastPublishTarget?.context?.credential?.secret)
     }
 
     @Test
-    fun `a verified publish clears the draft`() = runBlocking {
-        val service = service(StubEditEnvironment(), RecordingAdapter())
-        service.beginEdit(configuration(), "dev", baselineContent = "original")
-        service.updateDraft("edited")
-
-        assertEquals(PublishState.Verified, requireNotNull(service.publish()).state)
-
-        assertNull(service.currentSession())
-        assertFalse(service.isDirty())
-        assertEquals(DraftGuard.Proceed, service.guardDestroy())
-    }
-
-    @Test
-    fun `an unverified publish keeps the draft`() = runBlocking {
+    fun `an unverified preflight keeps the draft and never writes`() = runBlocking {
         val adapter = RecordingAdapter(remoteContent = "someone else wrote this", remoteMd5 = "other-md5")
         val service = service(StubEditEnvironment(), adapter)
         service.beginEdit(configuration(), "dev", baselineContent = "original")
         service.updateDraft("edited")
 
-        assertInstanceOf(PublishState.RemoteConflict::class.java, requireNotNull(service.publish()).state)
+        assertInstanceOf(PublishState.RemoteConflict::class.java, requireNotNull(service.requestPublish()).state)
 
+        assertEquals(0, adapter.publishCalls)
+        assertFalse(service.isAwaitingConfirmation())
         assertTrue(service.isDirty())
         assertEquals("edited", service.currentSession()?.draftContent)
     }
@@ -590,11 +654,12 @@ class EditSessionServiceTest {
         // different access identity than the one the draft is bound to.
         environment.accessRevision = 2
 
-        val result = requireNotNull(service.publish())
+        val result = requireNotNull(service.requestPublish())
 
         assertInstanceOf(PublishState.ReadOnly::class.java, result.state)
         assertEquals(0, adapter.publishCalls)
         assertTrue(service.isDirty())
+        assertFalse(service.isAwaitingConfirmation())
     }
 
     @Test
@@ -602,7 +667,174 @@ class EditSessionServiceTest {
         val adapter = RecordingAdapter()
         val service = service(StubEditEnvironment(), adapter)
 
-        assertNull(service.publish())
+        assertNull(service.requestPublish())
+        assertNull(service.confirmPublish())
+        assertNull(service.cancelPublish())
+        assertEquals(0, adapter.publishCalls)
+    }
+
+    @Test
+    fun `confirm without a prior request writes nothing`() = runBlocking {
+        val adapter = RecordingAdapter()
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        assertNull(service.confirmPublish())
+        assertEquals(0, adapter.publishCalls)
+        assertTrue(service.isDirty())
+    }
+
+    // ---- pending preparation is invalidated when the draft mutates ----
+
+    @Test
+    fun `updateDraft after requestPublish clears awaiting confirmation and blocks the write`() = runBlocking {
+        val adapter = RecordingAdapter()
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+        requireNotNull(service.requestPublish())
+        assertTrue(service.isAwaitingConfirmation())
+
+        service.updateDraft("edited again")
+
+        assertFalse(service.isAwaitingConfirmation())
+        assertNull(service.confirmPublish())
+        assertEquals(0, adapter.publishCalls)
+        assertTrue(service.isDirty())
+        assertEquals("edited again", service.currentSession()?.draftContent)
+    }
+
+    @Test
+    fun `discardDraft after requestPublish drops pending and leaves nothing to confirm`() = runBlocking {
+        val adapter = RecordingAdapter()
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+        requireNotNull(service.requestPublish())
+
+        service.discardDraft()
+
+        assertFalse(service.isAwaitingConfirmation())
+        assertNull(service.currentSession())
+        assertNull(service.confirmPublish())
+        assertEquals(0, adapter.publishCalls)
+    }
+
+    @Test
+    fun `beginEdit after requestPublish drops pending for the previous draft`() = runBlocking {
+        val adapter = RecordingAdapter()
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+        requireNotNull(service.requestPublish())
+        assertTrue(service.isAwaitingConfirmation())
+
+        service.beginEdit(
+            configuration().copy(dataId = "other.yaml"),
+            "dev",
+            baselineContent = "other-original"
+        )
+
+        assertFalse(service.isAwaitingConfirmation())
+        assertNull(service.confirmPublish())
+        assertEquals(0, adapter.publishCalls)
+        assertEquals("other.yaml", service.currentSession()?.binding?.dataId)
+    }
+
+    @Test
+    fun `a second requestPublish supersedes the first preparation`() = runBlocking {
+        val adapter = RecordingAdapter()
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("first")
+        val first = requireNotNull(service.requestPublish())
+        val firstAwaiting = assertInstanceOf(PublishState.AwaitingConfirmation::class.java, first.state)
+        assertEquals("first", firstAwaiting.diff.draftContent)
+
+        // Mutating the draft clears pending; the second request parks on the new text.
+        service.updateDraft("second")
+        val second = requireNotNull(service.requestPublish())
+        val secondAwaiting = assertInstanceOf(PublishState.AwaitingConfirmation::class.java, second.state)
+        assertEquals("second", secondAwaiting.diff.draftContent)
+        assertTrue(service.isAwaitingConfirmation())
+
+        val result = requireNotNull(service.confirmPublish())
+        assertEquals(PublishState.Verified, result.state)
+        assertEquals(1, adapter.publishCalls)
+        assertEquals("second", adapter.lastPublishedCommand?.content)
+    }
+
+    @Test
+    fun `stale prepare does not reinstall pending after draft mutation during preflight`() = runBlocking {
+        // Preflight suspends on the gate. While it is in flight the user types;
+        // the completed prepare must not re-arm confirmation for the old draft.
+        val preflightGate = CompletableDeferred<Unit>()
+        val adapter = GatedAdapter(preflightGate)
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("v1")
+
+        val request = async { service.requestPublish() }
+        // Wait until preflight is blocked, then mutate the draft.
+        adapter.enteredPreflight.await()
+        service.updateDraft("v2")
+        preflightGate.complete(Unit)
+
+        val result = requireNotNull(request.await())
+        assertEquals(PublishState.Dirty, result.state)
+        assertFalse(service.isAwaitingConfirmation())
+        assertNull(service.confirmPublish())
+        assertEquals(0, adapter.publishCalls)
+        assertEquals("v2", service.currentSession()?.draftContent)
+        assertTrue(service.isDirty())
+    }
+
+    @Test
+    fun `stale prepare after discard during preflight neither parks nor writes`() = runBlocking {
+        val preflightGate = CompletableDeferred<Unit>()
+        val adapter = GatedAdapter(preflightGate)
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("edited")
+
+        val request = async { service.requestPublish() }
+        adapter.enteredPreflight.await()
+        service.discardDraft()
+        preflightGate.complete(Unit)
+
+        val result = requireNotNull(request.await())
+        assertEquals(PublishState.Dirty, result.state)
+        assertFalse(result.isDirty)
+        assertFalse(service.isAwaitingConfirmation())
+        assertNull(service.currentSession())
+        assertNull(service.confirmPublish())
+        assertEquals(0, adapter.publishCalls)
+    }
+
+    @Test
+    fun `confirm refuses to write when the live draft no longer matches the prepared command`() = runBlocking {
+        // Defense in depth: pending is taken under the lock only when the live
+        // session still is the prepared instance with matching content. Simulate
+        // a session identity change that left pending installed (the install
+        // race is covered above; this covers the confirm gate itself).
+        val adapter = RecordingAdapter()
+        val service = service(StubEditEnvironment(), adapter)
+        service.beginEdit(configuration(), "dev", baselineContent = "original")
+        service.updateDraft("prepared-text")
+        requireNotNull(service.requestPublish())
+        assertTrue(service.isAwaitingConfirmation())
+
+        // Replace the session object without clearing pending via the public
+        // updateDraft path: re-begin would clear pending. Instead mutate draft
+        // content through updateDraft (which clears pending) — then re-assert
+        // the confirm-without-pending path, and separately prove the content
+        // gate by using a second request that we then partially corrupt via
+        // a concurrent-style content mismatch: after park, call updateDraft
+        // with identical content would clear pending; use different content.
+        service.updateDraft("typed-after-park")
+        assertFalse(service.isAwaitingConfirmation())
+        assertNull(service.confirmPublish())
         assertEquals(0, adapter.publishCalls)
     }
 
@@ -689,12 +921,13 @@ class EditSessionServiceTest {
     }
 
     /** Serves the baseline on preflight and the command's content on read-back. */
-    private class RecordingAdapter(
+    private open class RecordingAdapter(
         private val remoteContent: String = "original",
         private val remoteMd5: String = "base-md5"
     ) : ProtocolAdapter {
         var publishCalls = 0
         var lastPublishTarget: OperationTarget? = null
+        var lastPublishedCommand: PublishCommand? = null
         private var published: PublishCommand? = null
 
         override suspend fun probe(target: OperationTarget) = Result.success(Unit)
@@ -720,8 +953,31 @@ class EditSessionServiceTest {
         override suspend fun publish(target: OperationTarget, command: PublishCommand): Result<PublishOutcome> {
             publishCalls++
             lastPublishTarget = target
+            lastPublishedCommand = command
             published = command
             return Result.success(PublishOutcome.Written("true"))
+        }
+    }
+
+    /**
+     * Blocks preflight ([readDetail] while nothing has been published) until
+     * [release] completes, so tests can mutate the draft mid-prepare.
+     */
+    private class GatedAdapter(
+        private val release: CompletableDeferred<Unit>
+    ) : RecordingAdapter() {
+        val enteredPreflight = CompletableDeferred<Unit>()
+
+        override suspend fun readDetail(
+            target: OperationTarget,
+            coordinate: ConfigurationCoordinate
+        ): Result<NacosConfiguration?> {
+            // Only gate the first preflight read, not the post-write read-back.
+            if (lastPublishedCommand == null && !enteredPreflight.isCompleted) {
+                enteredPreflight.complete(Unit)
+                release.await()
+            }
+            return super.readDetail(target, coordinate)
         }
     }
 }

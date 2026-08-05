@@ -32,6 +32,49 @@ sealed class PublishOutcome {
     data object CasConflict : PublishOutcome()
 }
 
+/**
+ * Content side of the confirmation ceremony: the baseline that was verified
+ * against the server versus the draft that will replace it (ADR-0028).
+ */
+data class PublishDiff(
+    val baselineContent: String,
+    val draftContent: String
+)
+
+/**
+ * The destination a publish will write to, named from the edit session's
+ * binding — never from the live UI selection (ADR-0027).
+ *
+ * Carries the facts the confirmation UI must show: which environment, which
+ * endpoint, which namespace, and which configuration coordinate.
+ */
+data class PublishNamedTarget(
+    val profileId: String,
+    val profileDisplayName: String,
+    val endpoint: String,
+    val namespaceId: String,
+    val dataId: String,
+    val group: String
+) {
+    companion object {
+        /**
+         * Builds the named target from [binding] and the profile's display name.
+         * Falls back to the profile id when the display name is blank or the
+         * profile is gone — the binding remains the source of truth for every
+         * other field.
+         */
+        fun of(binding: EditBinding, profileDisplayName: String?): PublishNamedTarget =
+            PublishNamedTarget(
+                profileId = binding.profileId,
+                profileDisplayName = profileDisplayName?.takeIf { it.isNotBlank() } ?: binding.profileId,
+                endpoint = binding.identity.canonicalEndpoint,
+                namespaceId = binding.namespaceId,
+                dataId = binding.dataId,
+                group = binding.group
+            )
+    }
+}
+
 /** State of a controlled publishing session. */
 sealed class PublishState {
     data class ReadOnly(val reason: String) : PublishState()
@@ -39,7 +82,16 @@ sealed class PublishState {
     data object Preflight : PublishState()
     data object TargetDeleted : PublishState()
     data class RemoteConflict(val remoteContent: String, val remoteMd5: String?) : PublishState()
-    data object AwaitingConfirmation : PublishState()
+    /**
+     * Preflight succeeded and the command is ready; nothing has been sent.
+     * The caller must [EditSessionService.confirmPublish] or
+     * [EditSessionService.cancelPublish]. Carries the diff and the named
+     * target so the confirmation UI never re-derives them from selection.
+     */
+    data class AwaitingConfirmation(
+        val diff: PublishDiff,
+        val namedTarget: PublishNamedTarget
+    ) : PublishState()
     data object Publishing : PublishState()
     data object Verifying : PublishState()
     data object Verified : PublishState()
