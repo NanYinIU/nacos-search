@@ -11,6 +11,8 @@ import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.Messages
 import com.nanyin.nacos.search.services.NamespaceService
 import kotlinx.coroutines.runBlocking
+import com.intellij.openapi.application.ModalityState
+import com.intellij.util.ModalityUiUtil
 
 /**
  * Action to refresh the Nacos configuration cache
@@ -37,7 +39,7 @@ class RefreshCacheAction : AnAction(
                     val result = runBlocking { plugin.refreshCache(selectedNamespace.namespaceId) }
                     indicator.checkCanceled()
 
-                    ApplicationManager.getApplication().invokeLater {
+                    ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
                         if (result.isSuccess) {
                             Messages.showInfoMessage(
                                 project,
@@ -53,7 +55,7 @@ class RefreshCacheAction : AnAction(
                         }
                     }
                 } catch (e: Exception) {
-                    ApplicationManager.getApplication().invokeLater {
+                    ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
                         Messages.showErrorDialog(
                             project,
                             "Error refreshing cache: ${e.message}",

@@ -18,6 +18,8 @@ import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import javax.swing.plaf.basic.BasicButtonUI
 import javax.swing.plaf.basic.BasicTextFieldUI
+import com.intellij.openapi.application.ModalityState
+import com.intellij.util.ModalityUiUtil
 
 /**
  * Panel for search functionality
@@ -220,7 +222,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
     private fun updateSearchModeDisplay(searchText: String) {
         // This method can be used to show search mode hints
         // For now, we'll update the search field's tooltip
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             val tooltip = when {
                 searchText.isEmpty() -> NacosSearchBundle.message("search.placeholder")
                 searchText == "*" -> NacosSearchBundle.message("search.wildcard.tooltip")
@@ -334,7 +336,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
      * Called when the language is changed
      */
     override fun languageChanged() {
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             searchField.placeholder = NacosSearchBundle.message("search.placeholder")
             clearButton.toolTipText = NacosSearchBundle.message("search.clear.tooltip")
             revalidate()

@@ -6,6 +6,8 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.nanyin.nacos.search.psi.NacosKeyIndexService
 import com.nanyin.nacos.search.models.AccessIdentity
+import com.intellij.openapi.application.ModalityState
+import com.intellij.util.ModalityUiUtil
 
 /** Publishes cache changes to code navigation and requests a fresh gutter pass. */
 @Service(Service.Level.APP)
@@ -16,7 +18,7 @@ class NavigationIndexRefreshService {
             .getService(NacosKeyIndexService::class.java)
             .refreshIndex(cacheService.snapshot(identity))
 
-        ApplicationManager.getApplication().invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             val projects = if (project == null) {
                 com.intellij.openapi.project.ProjectManager.getInstance().openProjects.asList()
             } else {

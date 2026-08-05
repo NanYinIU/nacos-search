@@ -46,6 +46,8 @@ import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
 import javax.swing.*
+import com.intellij.openapi.application.ModalityState
+import com.intellij.util.ModalityUiUtil
 
 /**
 * Main window for Nacos Search plugin
@@ -306,13 +308,13 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      * re-evaluates resolvability with the new setting.
      */
     private fun handlePreferencesChanged() {
-        SwingUtilities.invokeLater { environmentSwitcher.refresh() }
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) { environmentSwitcher.refresh() }
         com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(project).restart()
     }
 
     private fun handleSettingsChanged() {
         // Switcher label reflects the new active environment immediately.
-        SwingUtilities.invokeLater { environmentSwitcher.refresh() }
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) { environmentSwitcher.refresh() }
         // Settings may have changed the connection itself, so the API's own
         // in-memory responses for the previous one cannot be reused.
         coroutineScope.launch { restartUnderSelectedEnvironment(clearApiCache = true) }
@@ -401,11 +403,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             paginationPanel.reset()
         }
 
-        if (SwingUtilities.isEventDispatchThread()) {
-            clearAction()
-        } else {
-            SwingUtilities.invokeLater(clearAction)
-        }
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState(), clearAction)
     }
    
    private fun handleSearchRequested(criteria: SearchCriteria) {
@@ -464,7 +462,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             nacosSearchService.searchState.collect { state ->
                 when (state) {
                     is NacosSearchService.SearchState.Idle -> {
-                        SwingUtilities.invokeLater {
+                        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
                             // Idle is cancel / session abandon, not a sixth list
                             // state. Always re-render so a Loading card cannot stick.
                             setSearching(false)
@@ -473,14 +471,14 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                         }
                     }
                     is NacosSearchService.SearchState.Loading -> {
-                        SwingUtilities.invokeLater {
+                        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
                             setSearching(true)
                             configListPanel.render(ConfigListPresentation.loading())
                             paginationPanel.setLoading(true)
                         }
                     }
                     is NacosSearchService.SearchState.Success -> {
-                        SwingUtilities.invokeLater {
+                        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
                             // Rendered as published. The service already dropped
                             // results from superseded requests and from sessions
                             // the user has switched away from, so judging them
@@ -503,7 +501,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                         }
                     }
                     is NacosSearchService.SearchState.Error -> {
-                        SwingUtilities.invokeLater {
+                        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
                             setSearching(false)
                             paginationPanel.setLoading(false)
                             configListPanel.render(ConfigListPresentation.fromSearchState(state))
@@ -634,7 +632,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      * card is not stamped “Search failed”.
      */
     private fun showError(message: String, error: Throwable? = null) {
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             configListPanel.render(
                 ConfigListPresentation.fromFailure(
                     error = error,
@@ -655,15 +653,15 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      * list finishes loading.
      */
     fun navigateToConfig(config: com.nanyin.nacos.search.models.NacosConfiguration, lineIndex: Int) {
-        ApplicationManager.getApplication().invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             val guard = retargetGuard(config)
             if (guard == DraftGuard.AlreadyEditing) {
                 // Already showing this draft: land on the line without
                 // reloading the detail, which would discard the draft.
                 if (lineIndex >= 0) configDetailPanel.moveToLine(lineIndex)
-                return@invokeLater
+                return@invokeLaterIfNeeded
             }
-            if (!admitRetarget(guard, "config.detail.draft.discard.retarget")) return@invokeLater
+            if (!admitRetarget(guard, "config.detail.draft.discard.retarget")) return@invokeLaterIfNeeded
             val targetNsId = normalizeNamespaceId(config.tenantId)
             val currentNsId = normalizeNamespaceId(currentNamespace?.namespaceId)
 

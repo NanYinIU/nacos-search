@@ -40,6 +40,8 @@ import java.awt.event.MouseEvent
 import javax.swing.*
 import javax.swing.event.DocumentEvent
 import javax.swing.plaf.basic.BasicButtonUI
+import com.intellij.openapi.application.ModalityState
+import com.intellij.util.ModalityUiUtil
 
 /**
  * Panel for namespace selection and management.
@@ -225,7 +227,7 @@ class NamespacePanel(
     }
 
     private fun updateNamespaceButton() {
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             // Restore this project's selection, otherwise keep the local
             // selection, otherwise default to the first. Never adopt another
             // project's app-wide NamespaceService state.
@@ -387,7 +389,7 @@ class NamespacePanel(
         })
 
         // Defer focusing the search field so the popup is on screen first.
-        SwingUtilities.invokeLater { searchField.requestFocusInWindow() }
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) { searchField.requestFocusInWindow() }
 
         val popup = JBPopupFactory.getInstance()
             .createComponentPopupBuilder(panel, searchField)
@@ -456,7 +458,7 @@ class NamespacePanel(
     }
 
     private fun setLoadingState(loading: Boolean) {
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             isLoading = loading
             loadingLabel.isVisible = loading
             refreshButton.isEnabled = !loading
@@ -469,7 +471,7 @@ class NamespacePanel(
     }
 
     private fun updateStatus(message: String) {
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             statusLabel.text = message
         }
     }
@@ -478,7 +480,7 @@ class NamespacePanel(
         if (GraphicsEnvironment.isHeadless() || ApplicationManager.getApplication().isUnitTestMode) {
             return
         }
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             JOptionPane.showMessageDialog(
                 this,
                 message,
@@ -592,7 +594,7 @@ class NamespacePanel(
      * Refresh all UI text elements
      */
     private fun refreshUIText() {
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             loadingLabel.text = NacosSearchBundle.message("namespace.loading.namespaces")
             updateStatusText()
             refreshButton.toolTipText = NacosSearchBundle.message("tooltip.namespace.refresh")
@@ -604,7 +606,7 @@ class NamespacePanel(
      * Update status text based on current state
      */
     private fun updateStatusText() {
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             when {
                 isLoading -> {
                     statusLabel.text = NacosSearchBundle.message("namespace.loading.namespaces")

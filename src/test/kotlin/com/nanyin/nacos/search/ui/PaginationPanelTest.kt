@@ -5,11 +5,11 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.ApplicationRule
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NacosSearchService
-import javax.swing.SwingUtilities
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import com.intellij.util.ui.UIUtil
 
 class PaginationPanelTest {
     @get:Rule
@@ -19,7 +19,7 @@ class PaginationPanelTest {
     fun `dispose unregisters pagination panel from namespace service`() {
        val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
         lateinit var panel: PaginationPanel
-        ApplicationManager.getApplication().invokeAndWait {
+        UIUtil.invokeAndWaitIfNeeded {
             panel = PaginationPanel()
         }
         assertTrue("panel should be registered as a listener", namespaceService.isRegisteredListener(panel))
@@ -38,7 +38,7 @@ class PaginationPanelTest {
         // mutation driven from there must marshal onto the EDT rather than touching
         // components directly.
         lateinit var panel: PaginationPanel
-        ApplicationManager.getApplication().invokeAndWait {
+        UIUtil.invokeAndWaitIfNeeded {
             panel = PaginationPanel()
         }
         val state = NacosSearchService.PaginationState(
@@ -49,7 +49,7 @@ class PaginationPanelTest {
         )
 
         // Called from a non-EDT thread, mirroring how onNamespaceChanged reaches it.
-        assert(!SwingUtilities.isEventDispatchThread())
+        assert(!ApplicationManager.getApplication().isDispatchThread)
         panel.updatePagination(state) // must not throw and must not mutate off-EDT
 
         Disposer.dispose(panel)

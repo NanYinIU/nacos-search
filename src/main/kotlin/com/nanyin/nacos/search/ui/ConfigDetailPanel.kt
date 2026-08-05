@@ -53,6 +53,7 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import javax.swing.*
 import kotlin.concurrent.withLock
+import com.intellij.util.ModalityUiUtil
 
 /**
  * Renders a closed [DetailViewState] set with one exhaustive branch and holds
@@ -229,9 +230,9 @@ class ConfigDetailPanel internal constructor(
         // When Settings (or any other site) discards the project draft, leave
         // edit mode without the panel itself owning that discard.
         discardListenerHandle = editSessions.addDiscardListener(DraftDiscardListener {
-            ApplicationManager.getApplication().invokeLater({
+            ModalityUiUtil.invokeLaterIfNeeded(ModalityState.any()) {
                 if (!project.isDisposed) applyViewModeUi()
-            }, ModalityState.any())
+            }
         })
         Disposer.register(this) {
             discardListenerHandle?.close()
@@ -591,9 +592,9 @@ private fun setupEventHandlers() {
         // Title asterisk: append/remove '*' from dataId label text
         val config = currentConfiguration ?: return
         val baseId = config.dataId
-        ApplicationManager.getApplication().invokeLater({
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             dataIdLabel.text = if (dirty && !baseId.endsWith("*")) "$baseId *" else baseId
-        }, ModalityState.defaultModalityState())
+        }
         // Notify window for list-row dot update
         onDirtyStateChanged?.invoke(config, dirty)
     }
@@ -727,7 +728,7 @@ private fun setupEventHandlers() {
         val ed = editor ?: return
         val document = ed.document
         val targetLine = lineIndex.coerceIn(0, document.lineCount - 1)
-        ApplicationManager.getApplication().invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             val offset = document.getLineStartOffset(targetLine)
             ed.caretModel.moveToOffset(offset)
             ed.scrollingModel.scrollToCaret(com.intellij.openapi.editor.ScrollType.CENTER)
@@ -760,9 +761,9 @@ private fun setupEventHandlers() {
             )
             if (usedKeys.isEmpty()) return@launch
 
-            ApplicationManager.getApplication().invokeLater({
-                if (!presentation.admitAndRecord(presented)) return@invokeLater
-                if (editor !== ed || ed.isDisposed) return@invokeLater
+            ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
+                if (!presentation.admitAndRecord(presented)) return@invokeLaterIfNeeded
+                if (editor !== ed || ed.isDisposed) return@invokeLaterIfNeeded
 
                 val document = ed.document
                 val markup = ed.markupModel
@@ -779,7 +780,7 @@ private fun setupEventHandlers() {
                         )
                         highlighter.gutterIconRenderer = KeyGutterRenderer(loc.key, keyElement)
                     }
-            }, ModalityState.defaultModalityState())
+            }
         }
     }
 
@@ -899,8 +900,8 @@ private fun setupEventHandlers() {
 
    
     private fun updateMetadata(configuration: NacosConfiguration, presented: PresentedResult) {
-        ApplicationManager.getApplication().invokeLater({
-            if (!presentation.admitAndRecord(presented)) return@invokeLater
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
+            if (!presentation.admitAndRecord(presented)) return@invokeLaterIfNeeded
             dataIdLabel.text = configuration.dataId
             val nsDisplay = configuration.tenantId?.takeIf { it.isNotBlank() } ?: "public"
             val typeDisplay = configuration.type ?: "text"
@@ -919,7 +920,7 @@ private fun setupEventHandlers() {
             dirtyLabel.isVisible = false
             editButton.isEnabled = true
             updateActionsEnabled()
-        }, ModalityState.defaultModalityState())
+        }
     }
     
     /** Refresh and Revert: both replace the editor's content, so both end the draft. */
@@ -1025,8 +1026,8 @@ private fun setupEventHandlers() {
         configuration: NacosConfiguration,
         presented: PresentedResult
     ) {
-        ApplicationManager.getApplication().invokeLater({
-            if (!presentation.admitAndRecord(presented)) return@invokeLater
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
+            if (!presentation.admitAndRecord(presented)) return@invokeLaterIfNeeded
             // Dispose previous editor safely
             disposeEditorSafely()
             
@@ -1041,7 +1042,7 @@ private fun setupEventHandlers() {
             }
 
             // The disposal wait above can span a selection or session change.
-            if (!presentation.admitAndRecord(presented)) return@invokeLater
+            if (!presentation.admitAndRecord(presented)) return@invokeLaterIfNeeded
 
             val content = configuration.content
             val fileType = determineFileType(configuration)
@@ -1062,7 +1063,7 @@ private fun setupEventHandlers() {
                revertButton.isEnabled = false
                revertButton.isVisible = false
             }
-        }, ModalityState.defaultModalityState())
+        }
     }
     
     private fun createEditorSafely(content: String, fileType: FileType): EditorEx? {
@@ -1184,7 +1185,7 @@ private fun setupEventHandlers() {
      * Updates the editor status bar with current content stats.
      */
     private fun updateStatusBar(content: String) {
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             val charCount = content.length
             val lineCount = if (content.isEmpty()) 1 else content.split("\n").size
             statusCharsLabel.text = NacosSearchBundle.message("config.detail.status.chars.format", charCount)
@@ -1210,10 +1211,10 @@ private fun setupEventHandlers() {
     }
     
     private fun setLoadingState(loading: Boolean) {
-        ApplicationManager.getApplication().invokeLater({
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             isLoading = loading
             updateActionsEnabled()
-        }, ModalityState.defaultModalityState())
+        }
     }
 
     /**
@@ -1230,18 +1231,14 @@ private fun setupEventHandlers() {
                 detailToolbar.updateActionsImmediately()
             }
         }
-        if (ApplicationManager.getApplication().isDispatchThread) {
-            run()
-        } else {
-            ApplicationManager.getApplication().invokeLater(run, ModalityState.defaultModalityState())
-        }
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState(), run)
     }
     
     private fun showCard(cardName: String) {
-        ApplicationManager.getApplication().invokeLater({
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             val cardLayout = contentPanel.layout as CardLayout
             cardLayout.show(contentPanel, cardName)
-        }, ModalityState.defaultModalityState())
+        }
     }
 
     private val bundleMessage: (String, Array<out Any>) -> String = { key, params ->
@@ -1288,7 +1285,7 @@ private fun setupEventHandlers() {
                 showCard("content")
                 val overlayText = DetailCopy.overlayMessage(state.overlay, bundleMessage)
                 if (overlayText != null) {
-                    ApplicationManager.getApplication().invokeLater {
+                    ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
                         freshnessLabel.text = overlayText
                         freshnessLabel.isVisible = true
                     }
@@ -1304,9 +1301,9 @@ private fun setupEventHandlers() {
                 if (state.dirty != renderedDirty) {
                     updateDirtyUI(state.dirty)
                 }
-                ApplicationManager.getApplication().invokeLater({
+                ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
                     sizeLabel.text = formatSize(state.configuration.content.length)
-                }, ModalityState.defaultModalityState())
+                }
                 updateStatusBar(state.configuration.content)
             }
             is DetailViewState.WriteIntentDisabled -> {
@@ -1380,14 +1377,14 @@ private fun setupEventHandlers() {
                     showCard("error")
                 }
                 val body = DetailCopy.failedBody(state, bundleMessage)
-                ApplicationManager.getApplication().invokeLater({
+                ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
                     JOptionPane.showMessageDialog(
                         this,
                         body,
                         NacosSearchBundle.message("common.error"),
                         JOptionPane.ERROR_MESSAGE
                     )
-                }, ModalityState.defaultModalityState())
+                }
             }
             is DetailViewState.Stale -> {
                 // A discarded late arrival must not change what is already shown.
@@ -1396,14 +1393,14 @@ private fun setupEventHandlers() {
     }
 
     private fun showFreshnessStatus(messageKey: String) {
-        ApplicationManager.getApplication().invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             freshnessLabel.text = NacosSearchBundle.message(messageKey)
             freshnessLabel.isVisible = true
         }
     }
 
     private fun hideFreshnessStatus() {
-        ApplicationManager.getApplication().invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             freshnessLabel.isVisible = false
         }
     }
@@ -1662,13 +1659,13 @@ private fun setupEventHandlers() {
         statusMd5Label.text = "—"
         statusPositionLabel.text = NacosSearchBundle.message("config.detail.status.position", 1, 1)
         
-        ApplicationManager.getApplication().invokeLater({
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             dataIdLabel.text = ""
             if (::inlineMetaLabel.isInitialized) {
                 inlineMetaLabel.text = ""
             }
             sizeLabel.text = ""
-        }, ModalityState.defaultModalityState())
+        }
     }
     
     /**
@@ -1737,7 +1734,7 @@ private fun setupEventHandlers() {
      * Refresh all UI text elements
      */
     private fun refreshUIText() {
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             // Update loading text
             loadingLabel.text = NacosSearchBundle.message("config.detail.loading")
             
@@ -1755,7 +1752,7 @@ private fun setupEventHandlers() {
      * Rebuild metadata panel with new language
      */
     private fun rebuildMetadataPanel() {
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             // Remove old metadata panel
             remove(metadataPanel)
             
@@ -1777,7 +1774,7 @@ private fun setupEventHandlers() {
      * Rebuild empty state panel with new language
      */
     private fun rebuildEmptyStatePanel() {
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             // Remove old empty state panel
             contentPanel.remove(emptyStatePanel)
             
@@ -1793,7 +1790,7 @@ private fun setupEventHandlers() {
      * Rebuild error panel with new language
      */
     private fun rebuildErrorPanel() {
-        SwingUtilities.invokeLater {
+        ModalityUiUtil.invokeLaterIfNeeded(ModalityState.defaultModalityState()) {
             // Remove old error panel
             contentPanel.remove(errorPanel)
             
