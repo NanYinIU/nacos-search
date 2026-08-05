@@ -5,7 +5,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.Service.Level
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.nanyin.nacos.search.settings.NacosSettings
-import com.nanyin.nacos.search.ui.LanguageRefreshUtil
+import java.awt.GraphicsEnvironment
 import java.util.*
 
 /**
@@ -77,14 +77,40 @@ class LanguageService {
                 e.printStackTrace()
             }
         }
-        
-        // Refresh UI components
+
+        // Refresh UI components. Each subscriber re-reads the bundle itself and
+        // owns the thread it touches Swing on.
         try {
-            LanguageRefreshUtil.refreshAllComponents(newLanguage)
-            LanguageRefreshUtil.showLanguageChangeNotification(newLanguage)
+            ApplicationManager.getApplication().messageBus
+                .syncPublisher(NacosLanguageListener.TOPIC)
+                .languageChanged()
+            showLanguageChangeNotification(newLanguage)
         } catch (e: Exception) {
             // Log error but don't fail the language change
             e.printStackTrace()
+        }
+    }
+
+    /**
+     * Show a notification about language change
+     */
+    private fun showLanguageChangeNotification(newLanguage: SupportedLanguage) {
+        if (GraphicsEnvironment.isHeadless()) {
+            return
+        }
+
+        val message = NacosSearchBundle.message(
+            "language.changed.notification",
+            newLanguage.displayName
+        )
+
+        ApplicationManager.getApplication().invokeLater {
+            javax.swing.JOptionPane.showMessageDialog(
+                null,
+                message,
+                NacosSearchBundle.message("language.changed.title"),
+                javax.swing.JOptionPane.INFORMATION_MESSAGE
+            )
         }
     }
     

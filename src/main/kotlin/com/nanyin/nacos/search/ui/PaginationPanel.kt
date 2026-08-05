@@ -1,7 +1,7 @@
 package com.nanyin.nacos.search.ui
 
 import com.nanyin.nacos.search.services.NacosSearchService
-import com.nanyin.nacos.search.services.LanguageService
+import com.nanyin.nacos.search.services.NacosLanguageListener
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
@@ -24,9 +24,8 @@ import javax.swing.plaf.basic.BasicButtonUI
  * total count on the left, and a narrow page-size combo on the right
  * (fixed width so BorderLayout.EAST does not stretch it).
  */
-class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, LanguageAwareComponent, Disposable {
+class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, NacosLanguageListener, Disposable {
     private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
-    private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
 
     private val previousButton = toolbarIconButton(AllIcons.Actions.Back, NacosSearchBundle.message("pagination.previous"))
     private val nextButton = toolbarIconButton(AllIcons.Actions.Forward, NacosSearchBundle.message("pagination.next"))
@@ -67,6 +66,8 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
         setupEventHandlers()
         border = JBUI.Borders.empty(2, 4)
         namespaceService.addNamespaceChangeListener(this)
+        ApplicationManager.getApplication().messageBus.connect(this)
+            .subscribe(NacosLanguageListener.TOPIC, this)
     }
 
     private fun setupLayout() {
@@ -157,12 +158,6 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
 
     fun getCurrentPageSize(): Int = pageSizeComboBox.selectedItem as Int
 
-    fun setPageSize(pageSize: Int) {
-        SwingUtilities.invokeLater {
-            pageSizeComboBox.selectedItem = pageSize
-        }
-    }
-
     override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
         val totalCountNum = newNamespace?.configCount ?: 0
         val pageSize = 10
@@ -179,13 +174,11 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, Languag
         namespaceService.removeNamespaceChangeListener(this)
     }
 
-    override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) {
+    override fun languageChanged() {
         refreshUIText()
         revalidate()
         repaint()
     }
-
-    override fun getLanguageService(): LanguageService = languageService
 
     private fun refreshUIText() {
         SwingUtilities.invokeLater {

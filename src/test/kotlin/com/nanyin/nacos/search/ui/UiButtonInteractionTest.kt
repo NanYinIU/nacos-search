@@ -42,12 +42,10 @@ class UiButtonInteractionTest {
     fun searchPanelButtonsTriggerSearchAndClearCallbacks() {
         val panel = SearchPanel(mockProject)
         val searchField = privateField<JTextField>(panel, "searchField")
-        val searchButton = privateField<JButton>(panel, "searchButton")
         val clearButton = privateField<JButton>(panel, "clearButton")
         val groupFilterButton = privateField<JButton>(panel, "groupFilterButton")
         val calls = mutableListOf<String>()
 
-        assertEquals(Dimension(28, 24), searchButton.preferredSize)
         assertEquals(Dimension(26, 26), clearButton.preferredSize)
         assertTrue(groupFilterButton.preferredSize.width >= groupFilterButton.minimumSize.width)
         assertTrue(groupFilterButton.preferredSize.width > 90)
@@ -57,12 +55,15 @@ class UiButtonInteractionTest {
 
         runOnEdt {
             searchField.text = "demo"
-            searchButton.doClick()
+            // Enter in the field is the only way to submit: the search button was
+            // never added to a layout, so no user could ever click it.
+            pressEnter(searchField)
             clearButton.doClick()
         }
 
         assertEquals(listOf("search:demo", "clear"), calls)
         assertEquals("", panel.getSearchQuery())
+        Disposer.dispose(panel)
     }
 
     @Test
@@ -114,7 +115,9 @@ class UiButtonInteractionTest {
         assertTrue(namespaceButton.preferredSize.width >= namespaceButton.minimumSize.width)
         assertTrue(namespaceButton.preferredSize.width <= namespaceButton.maximumSize.width)
         assertTrue(namespaceButton.maximumSize.width > 220)
-        namespacePanel.dispose()
+        Disposer.dispose(namespacePanel)
+        Disposer.dispose(panel)
+        Disposer.dispose(switcher)
     }
 
     @Test
@@ -183,7 +186,8 @@ class UiButtonInteractionTest {
         out.parentFile.mkdirs()
         ImageIO.write(image, "png", out)
 
-        namespacePanel.dispose()
+        Disposer.dispose(namespacePanel)
+        Disposer.dispose(searchPanel)
     }
 
     @Test
@@ -222,6 +226,7 @@ class UiButtonInteractionTest {
         assertTrue("previous" in calls)
         assertTrue("next" in calls)
         assertTrue("size:20" in calls)
+        Disposer.dispose(panel)
     }
 
    @Test
@@ -378,7 +383,7 @@ class UiButtonInteractionTest {
         }
 
         assertEquals(1, refreshCount)
-        panel.dispose()
+        Disposer.dispose(panel)
     }
 
     @Test
@@ -402,7 +407,7 @@ class UiButtonInteractionTest {
         waitForUi()
 
         assertEquals(config, selected)
-        panel.dispose()
+        Disposer.dispose(panel)
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -416,6 +421,21 @@ class UiButtonInteractionTest {
         val field = target.javaClass.getDeclaredField(name)
         field.isAccessible = true
         field.set(target, value)
+    }
+
+    private fun pressEnter(field: JTextField) {
+        field.keyListeners.forEach {
+            it.keyPressed(
+                java.awt.event.KeyEvent(
+                    field,
+                    java.awt.event.KeyEvent.KEY_PRESSED,
+                    0L,
+                    0,
+                    java.awt.event.KeyEvent.VK_ENTER,
+                    '\n'
+                )
+            )
+        }
     }
 
     private fun runOnEdt(action: () -> Unit) {

@@ -1,7 +1,7 @@
 package com.nanyin.nacos.search.ui
 
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
-import com.nanyin.nacos.search.services.LanguageService
+import com.nanyin.nacos.search.services.NacosLanguageListener
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
@@ -71,7 +71,7 @@ class ConfigDetailPanel internal constructor(
     private val detailLoader: ConfigurationDetailLoader,
     private val cacheService: CacheService,
     private val settings: NacosSettings
-) : JPanel(BorderLayout()), Disposable, LanguageAwareComponent {
+) : JPanel(BorderLayout()), Disposable, NacosLanguageListener {
     constructor(project: Project) : this(
         project,
         ConfigurationDetailLoader { configuration, forceRefresh ->
@@ -106,7 +106,6 @@ class ConfigDetailPanel internal constructor(
     }
 
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
-    private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
     private suspend fun selectedOperationContext() = withContext(Dispatchers.IO) {
         project.getService(NacosProjectSession::class.java)?.let { session ->
             // Do not heal: deleted explicit profiles must fail closed (ADR 0025).
@@ -224,6 +223,8 @@ class ConfigDetailPanel internal constructor(
             .subscribe(com.intellij.ide.ui.LafManagerListener.TOPIC, com.intellij.ide.ui.LafManagerListener {
                 editor?.let { applyThemeScheme(it) }
             })
+        ApplicationManager.getApplication().messageBus.connect(this)
+            .subscribe(NacosLanguageListener.TOPIC, this)
         showEmptyState()
     }
     
@@ -1447,11 +1448,6 @@ private fun setupEventHandlers() {
     /** Whether the detail editor has unsaved edits (for retarget guards). */
     fun isDirty(): Boolean = isDirty
 
-    // Legacy method for backward compatibility
-    private fun disposeEditor() {
-        disposeEditorSafely()
-    }
-    
     /**
      * Clear the current configuration display
      */
@@ -1519,34 +1515,24 @@ private fun setupEventHandlers() {
     /**
      * Called when the language is changed
      */
-    override fun onLanguageChanged(newLanguage: LanguageService.SupportedLanguage) {
+    override fun languageChanged() {
         // Refresh all UI text elements
         refreshUIText()
-        
+
         // Rebuild metadata panel with new language
         rebuildMetadataPanel()
-        
+
         // Rebuild empty state panel with new language
         rebuildEmptyStatePanel()
-        
+
         // Rebuild error panel with new language
         rebuildErrorPanel()
-        
-        // Update button tooltips
-        updateButtonTooltips()
-        
+
         // Revalidate and repaint the UI
         revalidate()
         repaint()
     }
-    
-    /**
-     * Get the current language service
-     */
-    override fun getLanguageService(): LanguageService {
-        return languageService
-    }
-    
+
     /**
      * Refresh all UI text elements
      */
@@ -1619,13 +1605,6 @@ private fun setupEventHandlers() {
         }
     }
     
-    /**
-     * Update button tooltips
-     */
-    private fun updateButtonTooltips() {
-        SwingUtilities.invokeLater {
-        }
-    }
     private inner class RefreshDetailAction :
         AnAction(NacosSearchBundle.message("config.detail.refresh"),
                  NacosSearchBundle.message("config.detail.refresh"),
