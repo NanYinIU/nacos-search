@@ -504,16 +504,20 @@ private fun setupEventHandlers() {
               baselineContent = editor.document.text
           )
           withContext(Dispatchers.Main) {
-              when (start) {
-                  is EditStart.Started -> {
+              // Always go through the closed set — even Started is a Body with
+              // editing=true so render owns the edit-mode chrome.
+              when (val state = DetailPresentation.fromEditStart(start)) {
+                  is DetailViewState.Body -> {
+                      // Keep the live editor; recreating it would drop undo/caret.
+                      currentConfiguration = state.configuration
                       editor.document.setReadOnly(false)
-                      // Swap the edit lifecycle: hide Edit, reveal Save/Revert (only shown while editing)
                       editButton.isVisible = false
                       revertButton.isVisible = true
                       saveButton.isVisible = true
+                      viewState = state
                       checkDirtyState(editor.document.text)
                   }
-                  else -> render(DetailPresentation.fromEditStart(start))
+                  else -> render(state)
               }
           }
       }
@@ -952,12 +956,7 @@ private fun setupEventHandlers() {
                         return@launch
                     }
                     setLoadingState(false)
-                    render(
-                        DetailPresentation.fromFailure(
-                            error = null,
-                            fallbackMessage = NacosSearchBundle.message("error.connection.incomplete")
-                        )
-                    )
+                    render(DetailViewState.ConfigurationRequired())
                     return@launch
                 }
                 val namespaceId = operationNamespaceId(configuration)
@@ -1274,9 +1273,19 @@ private fun setupEventHandlers() {
                 hideFreshnessStatus()
             }
             is DetailViewState.Body -> {
+                val sameEditor = editor != null &&
+                    currentConfiguration?.getKey() == state.configuration.getKey() &&
+                    state.editing
                 currentConfiguration = state.configuration
                 keptCachedBody = state
-                displayConfigurationContentSafely(state.configuration, issue())
+                val presented = PresentedResult(
+                    project.currentSessionEpoch(),
+                    selectedCoordinate,
+                    state.observation
+                )
+                if (!sameEditor) {
+                    displayConfigurationContentSafely(state.configuration, presented)
+                }
                 showCard("content")
                 val overlayText = DetailCopy.overlayMessage(state.overlay, bundleMessage)
                 if (overlayText != null) {
@@ -1582,9 +1591,12 @@ private fun setupEventHandlers() {
 
     private suspend fun showSaveError(message: String) {
         withContext(Dispatchers.Main) {
-            com.intellij.openapi.ui.Messages.showErrorDialog(
-                NacosSearchBundle.message("error.config.save.failed") + ": $message",
-                NacosSearchBundle.message("common.error")
+            render(
+                DetailViewState.Failed(
+                    titleKey = DetailPresentation.SAVE_FAILED_TITLE_KEY,
+                    detail = message,
+                    asErrorCard = false
+                )
             )
         }
     }
@@ -1595,11 +1607,7 @@ private fun setupEventHandlers() {
             val context = captureOperationContext()
             if (context == null) {
                 withContext(Dispatchers.Main) {
-                    render(
-                        DetailViewState.ConfigurationRequired(
-                            detail = NacosSearchBundle.message("error.connection.incomplete")
-                        )
-                    )
+                    render(DetailViewState.ConfigurationRequired())
                 }
                 return@launch
             }
@@ -1698,6 +1706,28 @@ private fun setupEventHandlers() {
 
         // Rebuild error panel with new language
         rebuildErrorPanel()
+
+        // Re-derive structured copy from the closed state (ADR-0036) without
+        // re-firing one-shot dialogs for Failed / Verified / Conflict.
+        when (val state = viewState) {
+            is DetailViewState.Body -> {
+                val overlayText = DetailCopy.overlayMessage(state.overlay, bundleMessage)
+                if (overlayText != null) {
+                    freshnessLabel.text = overlayText
+                    freshnessLabel.isVisible = true
+                }
+            }
+            is DetailViewState.Loading -> {
+                loadingLabel.text = NacosSearchBundle.message("config.detail.loading")
+            }
+            is DetailViewState.Publishing -> {
+                loadingLabel.text = NacosSearchBundle.message("config.detail.publish.publishing")
+            }
+            is DetailViewState.Verifying -> {
+                loadingLabel.text = NacosSearchBundle.message("config.detail.publish.verifying")
+            }
+            else -> Unit
+        }
 
         // Revalidate and repaint the UI
         revalidate()

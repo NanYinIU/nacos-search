@@ -54,7 +54,12 @@ sealed class DetailViewState {
         val confidence: CacheConfidence? = null,
         val overlay: DetailOverlay = DetailOverlay.None,
         val dirty: Boolean = false,
-        val editing: Boolean = false
+        val editing: Boolean = false,
+        /**
+         * Observation sequence of the read that produced this body, so an EDT
+         * re-paint raises the same mark the controller admitted (ADR-0047).
+         */
+        val observation: Long = com.nanyin.nacos.search.services.operations.Observed.NO_OBSERVATION
     ) : DetailViewState()
 
     data class WriteIntentDisabled(

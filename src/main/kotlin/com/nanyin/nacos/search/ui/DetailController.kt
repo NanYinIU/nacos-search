@@ -131,7 +131,8 @@ class DetailController(
                                 )
                         } else {
                             DetailPresentation.confidenceFromRemote(clock())
-                        }
+                        },
+                        observation = observed.observation
                     )
                     keepCachedVisible && cachedBody != null -> {
                         onAuthoritativeNotFound?.invoke(

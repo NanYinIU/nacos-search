@@ -8,6 +8,7 @@ import com.nanyin.nacos.search.models.DatasetConfirmation
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.operations.EditStart
+import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.services.operations.PublishResult
 import com.nanyin.nacos.search.services.operations.PublishState
 import com.nanyin.nacos.search.services.operations.RemoteOperationError
@@ -42,13 +43,15 @@ object DetailPresentation {
         confidence: CacheConfidence? = null,
         overlay: DetailOverlay = DetailOverlay.None,
         dirty: Boolean = false,
-        editing: Boolean = false
+        editing: Boolean = false,
+        observation: Long = Observed.NO_OBSERVATION
     ): DetailViewState.Body = DetailViewState.Body(
         configuration = configuration,
         confidence = confidence,
         overlay = overlay,
         dirty = dirty,
-        editing = editing
+        editing = editing,
+        observation = observation
     )
 
     /**
