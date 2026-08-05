@@ -1,0 +1,31 @@
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanel.kt
+  s_c31c349a162f0b::t_87c852b6c6c16b 562-564
+  s_c31c349a162f0b::t_319aa3f6fc6aef 1601-1606
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchWindow.kt
+  s_c31c349a162f0b::t_425f8e4dd15787 460-463
+  s_c31c349a162f0b::t_383f93c34111d4 825-831,842-844
+  s_c31c349a162f0b::t_20f1bec32a9142 651-657
+src/main/kotlin/com/nanyin/nacos/search/services/operations/EditSessionService.kt
+  s_c31c349a162f0b::t_e644f5dfad69f2 43-47
+  s_c31c349a162f0b::t_ed48cc1d40a912 180-196
+src/test/kotlin/com/nanyin/nacos/search/services/operations/EditSessionServiceTest.kt
+  s_c31c349a162f0b::t_da39a85944e5e2 232-274
+CLAUDE.md
+  s_c31c349a162f0b::t_1f7ac7712eba6e 135-143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ad294f39910cdcc93c8141f6af14c437317bdadd",
+  "prompts": {},
+  "sessions": {
+    "s_c31c349a162f0b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f937ebb2-63b4-4ec2-815e-adfc8bb6345a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
