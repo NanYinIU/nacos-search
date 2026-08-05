@@ -34,12 +34,17 @@ data class ProfileStoreWriteOutcome(
     val activeProfileIdChanged: Boolean = false,
     /**
      * Profiles whose pending publication was withheld because credential
-     * staging failed. The previous published pair remains active for each.
+     * staging failed. The previous published pair remains active for each
+     * Keep/Unchanged failure; failed Adds are absent from [publishedProfiles].
+     * Host dual-write and Apply UX must honor this set (ADR-0035).
      */
     val failedStageProfileIds: Set<String> = emptySet(),
     /** Immutable snapshots of the profiles that are now published, in intent order. */
     val publishedProfiles: List<EnvironmentProfile> = emptyList(),
-    /** Immutable preference records corresponding to the intent set. */
+    /**
+     * Immutable preference records for **successfully published** profiles only
+     * (or retained previous prefs when stage failed on Keep/Unchanged).
+     */
     val publishedPreferences: List<EnvironmentPreferences> = emptyList(),
     /** Active profile id after the write. */
     val activeProfileId: String = "",
@@ -77,4 +82,7 @@ data class ProfileStoreWriteOutcome(
             preferenceChangedIds.isEmpty() &&
             displayOnlyChangedIds.isEmpty() &&
             failedStageProfileIds.isEmpty()
+
+    /** True when at least one intent could not stage its credential slot. */
+    fun hasStageFailures(): Boolean = failedStageProfileIds.isNotEmpty()
 }

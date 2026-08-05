@@ -142,24 +142,34 @@ class AccessSafetyTest {
 
     @Test
     fun `missing current credential slot fails closed without falling back to a legacy secret`() {
+        val slots = InMemoryCredentialSlotStore()
         val settings = NacosSettings()
-        settings.applyServers(
-            listOf(
-                NacosServerConfig(
-                    id = "dev",
-                    serverUrl = "https://nacos.example",
-                    username = "alice",
-                    password = "old-secret"
+        // Publish through the injectable seam (no PasswordSafe dependency).
+        settings.applyProfileIntents(
+            intents = listOf(
+                com.nanyin.nacos.search.models.ProfileIntent(
+                    profileId = "dev",
+                    displayName = "Dev",
+                    endpoint = "https://nacos.example",
+                    authMode = AuthMode.NACOS_PASSWORD,
+                    principal = "alice",
+                    secret = "old-secret"
                 )
             ),
-            "dev"
+            newActiveId = "dev",
+            credentialSlots = slots
         )
         val profile = requireNotNull(settings.getActiveProfile())
+        // Dual-write still holds the secret; the revision-pinned platform slot
+        // does not. Capture must not fall back to the dual-write password
+        // (ADR-0035 / #102).
+        assertEquals("old-secret", settings.servers.single { it.id == "dev" }.password)
+        slots.remove(profile.id, profile.credentialSlotVersion)
         NacosCredentialStore.remove(profile.credentialSlotId)
 
         assertInstanceOf(
             ConfigurationRequired::class.java,
-            settings.captureOperationContext().exceptionOrNull()
+            settings.captureOperationContext("dev").exceptionOrNull()
         )
     }
 

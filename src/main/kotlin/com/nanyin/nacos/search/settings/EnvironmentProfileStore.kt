@@ -19,9 +19,14 @@ import com.nanyin.nacos.search.models.ProfileIntent
  * - display name, suggested namespace, preference records → neither
  * - reordering intents alone → neither and not operational
  *
+ * Preference / display / namespace classification is recorded only when that
+ * profile's stage succeeds (or, on Keep/Unchanged stage failure, the previous
+ * published prefs/namespace are retained and no change bits are set).
+ *
  * The store is pure with respect to settings persistence: it returns published
  * snapshots and a [ProfileStoreWriteOutcome]; the host ([NacosSettings]) is
- * responsible for replacing its lists and dual-writing the legacy server surface.
+ * responsible for replacing its lists and dual-writing the legacy server surface
+ * **only** for successfully published ids.
  */
 class EnvironmentProfileStore(
     private val credentialSlots: CredentialSlotStore
@@ -86,82 +91,115 @@ class EnvironmentProfileStore(
             val previous = previousById[id]
             val nextPrefs = intent.preferences.copyPreferences().also { it.profileId = id }
             val prevPrefs = previousPrefsById[id] ?: EnvironmentPreferences.defaultsFor(id)
-            if (!preferencesEqual(prevPrefs, nextPrefs)) {
-                preferenceChanged += id
-            }
-            publishedPrefs += nextPrefs
-
             val suggestedNs = intent.suggestedNamespace.trim().ifBlank { "public" }
-            suggestedNamespaces[id] = suggestedNs
-            // Namespace is only comparable for previously published profiles that
-            // already had a suggested namespace recorded by the host.
-            if (previous != null && previousSuggestedNamespaces.containsKey(id)) {
-                val previousNs = previousSuggestedNamespaces.getValue(id).trim().ifBlank { "public" }
-                if (previousNs != suggestedNs) {
-                    namespaceChanged += id
-                }
-            }
 
-            val decision = decidePublication(previous, intent)
-            when (decision) {
+            when (val decision = decidePublication(previous, intent)) {
                 is PublishDecision.Add -> {
                     when (stageNewProfile(id, decision.profile.credentialSlotVersion, intent.secret)) {
                         is CredentialStageResult.Success -> {
                             published += snapshot(decision.profile)
                             addedIds += id
-                            // First publication establishes both revisions at 1;
-                            // callers that care about membership see [addedIds].
+                            recordSuccessfulSideEffects(
+                                id = id,
+                                previous = null,
+                                previousDisplayName = null,
+                                nextDisplayName = intent.displayName,
+                                prevPrefs = prevPrefs,
+                                nextPrefs = nextPrefs,
+                                suggestedNs = suggestedNs,
+                                previousSuggestedNamespaces = previousSuggestedNamespaces,
+                                accessAdvanced = false,
+                                profileAdvanced = false,
+                                preferenceChanged = preferenceChanged,
+                                displayOnlyChanged = displayOnlyChanged,
+                                namespaceChanged = namespaceChanged,
+                                publishedPrefs = publishedPrefs,
+                                suggestedNamespaces = suggestedNamespaces
+                            )
                         }
                         is CredentialStageResult.Failure -> {
                             failedStage += id
-                            // Fail-closed: do not publish a profile whose required
-                            // slot never became durable.
+                            // Fail-closed: do not publish profile, prefs, or namespace.
                         }
                     }
                 }
                 is PublishDecision.Keep -> {
-                    // Restage under the current slot so retries stay aligned with
-                    // the published pair; same secret is idempotent success.
                     when (credentialSlots.stage(id, decision.profile.credentialSlotVersion, intent.secret)) {
                         is CredentialStageResult.Success -> {
                             val withDisplay = decision.profile.copy(displayName = intent.displayName)
-                            if (previous != null && previous.displayName != intent.displayName &&
-                                !decision.accessAdvanced && !decision.profileAdvanced
-                            ) {
-                                displayOnlyChanged += id
-                            }
                             published += snapshot(withDisplay)
                             if (decision.accessAdvanced) accessRevisionAdvanced += id
                             if (decision.profileAdvanced) profileRevisionAdvanced += id
+                            recordSuccessfulSideEffects(
+                                id = id,
+                                previous = previous,
+                                previousDisplayName = previous?.displayName,
+                                nextDisplayName = intent.displayName,
+                                prevPrefs = prevPrefs,
+                                nextPrefs = nextPrefs,
+                                suggestedNs = suggestedNs,
+                                previousSuggestedNamespaces = previousSuggestedNamespaces,
+                                accessAdvanced = decision.accessAdvanced,
+                                profileAdvanced = decision.profileAdvanced,
+                                preferenceChanged = preferenceChanged,
+                                displayOnlyChanged = displayOnlyChanged,
+                                namespaceChanged = namespaceChanged,
+                                publishedPrefs = publishedPrefs,
+                                suggestedNamespaces = suggestedNamespaces
+                            )
                         }
                         is CredentialStageResult.Failure -> {
                             failedStage += id
-                            // Keep the previous published pair visible.
-                            previous?.let { published += snapshot(it) }
+                            // Keep the previous published pair and its prefs/namespace.
+                            retainPreviousPublication(
+                                previous = previous,
+                                prevPrefs = prevPrefs,
+                                previousSuggestedNamespaces = previousSuggestedNamespaces,
+                                published = published,
+                                publishedPrefs = publishedPrefs,
+                                suggestedNamespaces = suggestedNamespaces
+                            )
                         }
                     }
                 }
                 is PublishDecision.Unchanged -> {
-                    val withDisplay = decision.profile.copy(displayName = intent.displayName)
-                    if (previous != null && previous.displayName != intent.displayName) {
-                        displayOnlyChanged += id
-                    }
-                    // Secret may still need an idempotent restage (empty anonymous
-                    // or same secret under the current slot).
                     when (credentialSlots.stage(id, decision.profile.credentialSlotVersion, intent.secret)) {
-                        is CredentialStageResult.Success -> published += snapshot(withDisplay)
+                        is CredentialStageResult.Success -> {
+                            val withDisplay = decision.profile.copy(displayName = intent.displayName)
+                            published += snapshot(withDisplay)
+                            recordSuccessfulSideEffects(
+                                id = id,
+                                previous = previous,
+                                previousDisplayName = previous?.displayName,
+                                nextDisplayName = intent.displayName,
+                                prevPrefs = prevPrefs,
+                                nextPrefs = nextPrefs,
+                                suggestedNs = suggestedNs,
+                                previousSuggestedNamespaces = previousSuggestedNamespaces,
+                                accessAdvanced = false,
+                                profileAdvanced = false,
+                                preferenceChanged = preferenceChanged,
+                                displayOnlyChanged = displayOnlyChanged,
+                                namespaceChanged = namespaceChanged,
+                                publishedPrefs = publishedPrefs,
+                                suggestedNamespaces = suggestedNamespaces
+                            )
+                        }
                         is CredentialStageResult.Failure -> {
                             failedStage += id
-                            previous?.let { published += snapshot(it) }
+                            retainPreviousPublication(
+                                previous = previous,
+                                prevPrefs = prevPrefs,
+                                previousSuggestedNamespaces = previousSuggestedNamespaces,
+                                published = published,
+                                publishedPrefs = publishedPrefs,
+                                suggestedNamespaces = suggestedNamespaces
+                            )
                         }
                     }
                 }
             }
         }
-
-        // Removed profiles: the host entombs and deletes slots. The store only
-        // classifies the removal so the outcome is complete.
-        removedIds.forEach { /* classified below */ }
 
         val resolvedActive = when {
             activeProfileId.isNotBlank() && published.any { it.id == activeProfileId } -> activeProfileId
@@ -201,8 +239,9 @@ class EnvironmentProfileStore(
      * Stage the first slot for a profile that is not currently published.
      * Orphan slots left after an incomplete deletion (or a throwaway settings
      * instance that staged into the shared store) must not block re-creation:
-     * when the first stage is refused as immutable, clear every slot for this
-     * id once and retry. A second failure stays fail-closed.
+     * when the first stage is refused as **immutable**, clear every slot for
+     * this id once and retry. Other failures (platform rejection, index write)
+     * stay fail-closed without reclaiming history.
      */
     private fun stageNewProfile(
         profileId: String,
@@ -212,12 +251,69 @@ class EnvironmentProfileStore(
         when (val first = credentialSlots.stage(profileId, accessRevision, secret)) {
             is CredentialStageResult.Success -> return first
             is CredentialStageResult.Failure -> {
+                if (!isImmutableSlotFailure(first)) return first
                 // Only reclaim orphans for a brand-new publication. Never call
                 // removeAllForProfile on an id that still has a published pair.
                 credentialSlots.removeAllForProfile(profileId)
                 return credentialSlots.stage(profileId, accessRevision, secret)
             }
         }
+    }
+
+    private fun isImmutableSlotFailure(failure: CredentialStageResult.Failure): Boolean =
+        failure.reason.contains("immutable", ignoreCase = true)
+
+    private fun recordSuccessfulSideEffects(
+        id: String,
+        previous: EnvironmentProfile?,
+        previousDisplayName: String?,
+        nextDisplayName: String,
+        prevPrefs: EnvironmentPreferences,
+        nextPrefs: EnvironmentPreferences,
+        suggestedNs: String,
+        previousSuggestedNamespaces: Map<String, String>,
+        accessAdvanced: Boolean,
+        profileAdvanced: Boolean,
+        preferenceChanged: MutableSet<String>,
+        displayOnlyChanged: MutableSet<String>,
+        namespaceChanged: MutableSet<String>,
+        publishedPrefs: MutableList<EnvironmentPreferences>,
+        suggestedNamespaces: MutableMap<String, String>
+    ) {
+        if (!preferencesEqual(prevPrefs, nextPrefs)) {
+            preferenceChanged += id
+        }
+        publishedPrefs += nextPrefs
+        suggestedNamespaces[id] = suggestedNs
+        if (previous != null && previousSuggestedNamespaces.containsKey(id)) {
+            val previousNs = previousSuggestedNamespaces.getValue(id).trim().ifBlank { "public" }
+            if (previousNs != suggestedNs) {
+                namespaceChanged += id
+            }
+        }
+        if (previous != null &&
+            previousDisplayName != nextDisplayName &&
+            !accessAdvanced &&
+            !profileAdvanced
+        ) {
+            displayOnlyChanged += id
+        }
+    }
+
+    private fun retainPreviousPublication(
+        previous: EnvironmentProfile?,
+        prevPrefs: EnvironmentPreferences,
+        previousSuggestedNamespaces: Map<String, String>,
+        published: MutableList<EnvironmentProfile>,
+        publishedPrefs: MutableList<EnvironmentPreferences>,
+        suggestedNamespaces: MutableMap<String, String>
+    ) {
+        if (previous == null) return
+        published += snapshot(previous)
+        publishedPrefs += prevPrefs.copyPreferences()
+        val previousNs = previousSuggestedNamespaces[previous.id]?.trim()?.ifBlank { "public" }
+            ?: "public"
+        suggestedNamespaces[previous.id] = previousNs
     }
 
     private fun decidePublication(

@@ -7,6 +7,7 @@ import com.nanyin.nacos.search.models.ProfileIntent
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -311,7 +312,76 @@ class EnvironmentProfileStoreTest {
         assertEquals(previous.accessRevision, visible.accessRevision)
         assertEquals(previous.credentialSlotVersion, visible.credentialSlotVersion)
         assertTrue(outcome.accessRevisionAdvancedIds.isEmpty())
+        assertTrue(outcome.preferenceChangedIds.isEmpty())
+        assertTrue(outcome.displayOnlyChangedIds.isEmpty())
+        // Preferences retained from previous publication, not the failed draft.
+        assertEquals(
+            seeded.publishedPreferences.single().allowCrossNamespaceNavigation,
+            outcome.publishedPreferences.single().allowCrossNamespaceNavigation
+        )
         assertNullRead(failing, "dev", previous.credentialSlotVersion + 1)
+    }
+
+    @Test
+    fun `failed stage does not classify preference or display changes as published`() {
+        val good = InMemoryCredentialSlotStore()
+        val goodStore = EnvironmentProfileStore(good)
+        val seeded = goodStore.applyIntents(
+            intents = listOf(intent(id = "dev", secret = "old", principal = "alice", displayName = "Old")),
+            activeProfileId = "dev",
+            previousProfiles = emptyList()
+        )
+        val previous = seeded.publishedProfiles.single()
+        val failing = InMemoryCredentialSlotStore(failWrites = true)
+        val store = EnvironmentProfileStore(failing)
+
+        val outcome = store.applyIntents(
+            intents = listOf(
+                intent(
+                    id = "dev",
+                    secret = "new",
+                    principal = "alice",
+                    displayName = "Renamed",
+                    preferences = EnvironmentPreferences(
+                        profileId = "dev",
+                        allowCrossNamespaceNavigation = true,
+                        navigationDetailPrefetchEnabled = false
+                    )
+                )
+            ),
+            activeProfileId = "dev",
+            previousProfiles = listOf(previous),
+            previousPreferences = seeded.publishedPreferences,
+            previousActiveId = "dev",
+            previousSuggestedNamespaces = mapOf("dev" to "public")
+        )
+
+        assertEquals(setOf("dev"), outcome.failedStageProfileIds)
+        assertTrue(outcome.preferenceChangedIds.isEmpty())
+        assertTrue(outcome.displayOnlyChangedIds.isEmpty())
+        assertEquals("Old", outcome.publishedProfiles.single().displayName)
+        assertFalse(outcome.publishedPreferences.single().allowCrossNamespaceNavigation)
+    }
+
+    @Test
+    fun `platform stage failure on add does not reclaim slots`() {
+        val slots = InMemoryCredentialSlotStore(failWrites = true)
+        // Seed an orphan under a different revision so reclaim would wipe it.
+        val seedable = InMemoryCredentialSlotStore()
+        seedable.stage("dev", 9L, "historical")
+        // Copy historical into failing store by staging is impossible; use a
+        // hybrid store that fails only non-immutable reasons is not available —
+        // instead assert failWrites path never calls remove (no removal obs).
+        val store = EnvironmentProfileStore(slots)
+        val outcome = store.applyIntents(
+            intents = listOf(intent(id = "dev", secret = "fresh", principal = "alice")),
+            activeProfileId = "dev",
+            previousProfiles = emptyList()
+        )
+        assertEquals(setOf("dev"), outcome.failedStageProfileIds)
+        assertTrue(outcome.publishedProfiles.isEmpty())
+        // failWrites is not an immutability refusal — no removeAllForProfile.
+        assertTrue(slots.removals.isEmpty())
     }
 
     @Test
@@ -410,6 +480,96 @@ class EnvironmentProfileStoreTest {
         // Read returns a snapshot — mutating it does not rewrite settings.
         profile.displayName = "hacked"
         assertEquals("Dev", settings.getProfile("dev")!!.displayName)
+    }
+
+    @Test
+    fun `host dual-write keeps published secret on stage failure and omits failed add`() {
+        val slots = InMemoryCredentialSlotStore()
+        val settings = NacosSettings()
+        settings.resetToDefaults()
+        settings.applyProfileIntents(
+            intents = listOf(intent(id = "dev", secret = "old", principal = "alice", displayName = "Dev")),
+            newActiveId = "dev",
+            credentialSlots = slots
+        )
+        val beforeRev = settings.getProfile("dev")!!.accessRevision
+        assertEquals("old", settings.servers.single { it.id == "dev" }.password)
+
+        val failing = InMemoryCredentialSlotStore(failWrites = true)
+        val outcome = settings.applyProfileIntents(
+            intents = listOf(
+                intent(id = "dev", secret = "new", principal = "alice", displayName = "Dev"),
+                intent(id = "fresh", secret = "x", principal = "bob", displayName = "Fresh")
+            ),
+            newActiveId = "dev",
+            credentialSlots = failing
+        )
+
+        assertEquals(setOf("dev", "fresh"), outcome.failedStageProfileIds)
+        // Failed Keep: still published at old revision; dual-write password stays old.
+        assertEquals(beforeRev, settings.getProfile("dev")!!.accessRevision)
+        assertEquals("old", settings.servers.single { it.id == "dev" }.password)
+        // Failed Add: no server/profile row left for "fresh".
+        assertTrue(settings.servers.none { it.id == "fresh" })
+        assertNull(settings.profiles.firstOrNull { it.id == "fresh" })
+        // Published slot pair unchanged under the good store (failing store has nothing).
+        assertEquals("old", slots.read("dev", 1L))
+    }
+
+    @Test
+    fun `host secret rotation success dual-writes the new secret after stage`() {
+        val slots = InMemoryCredentialSlotStore()
+        val settings = NacosSettings()
+        settings.resetToDefaults()
+        settings.applyProfileIntents(
+            intents = listOf(intent(id = "dev", secret = "old", principal = "alice")),
+            newActiveId = "dev",
+            credentialSlots = slots
+        )
+        val outcome = settings.applyProfileIntents(
+            intents = listOf(intent(id = "dev", secret = "rotated", principal = "alice")),
+            newActiveId = "dev",
+            credentialSlots = slots
+        )
+        assertTrue(outcome.accessRevisionAdvancedIds.contains("dev"))
+        assertEquals("rotated", settings.servers.single { it.id == "dev" }.password)
+        assertEquals("rotated", slots.read("dev", settings.getProfile("dev")!!.credentialSlotVersion))
+        assertEquals("old", slots.read("dev", 1L))
+    }
+
+    @Test
+    fun `timeout only dual-write fields do not advance profile revision through the store`() {
+        // ADR-0024 follow-up (#47/#106): connectionTimeoutMs rides the server
+        // dual-write only and is outside ProfileIntent revision classification.
+        val slots = InMemoryCredentialSlotStore()
+        val settings = NacosSettings()
+        settings.resetToDefaults()
+        fun server(timeoutMs: Int) = com.nanyin.nacos.search.models.NacosServerConfig(
+            id = "dev",
+            displayName = "Dev",
+            serverUrl = "https://nacos.example",
+            username = "alice",
+            password = "s1",
+            authMode = AuthMode.NACOS_PASSWORD,
+            connectionTimeoutMs = timeoutMs
+        )
+        settings.applyProfileIntents(
+            intents = listOf(intent(id = "dev", secret = "s1", principal = "alice", displayName = "Dev")),
+            newActiveId = "dev",
+            dualWriteServers = listOf(server(30_000)),
+            credentialSlots = slots
+        )
+        val before = settings.getProfile("dev")!!
+        val outcome = settings.applyProfileIntents(
+            intents = listOf(intent(id = "dev", secret = "s1", principal = "alice", displayName = "Dev")),
+            newActiveId = "dev",
+            dualWriteServers = listOf(server(60_000)),
+            credentialSlots = slots
+        )
+        assertEquals(before.profileRevision, settings.getProfile("dev")!!.profileRevision)
+        assertEquals(before.accessRevision, settings.getProfile("dev")!!.accessRevision)
+        assertFalse(outcome.isOperationalChange())
+        assertEquals(60_000, settings.servers.single { it.id == "dev" }.connectionTimeoutMs)
     }
 
     // ------------------------------------------------------------------
