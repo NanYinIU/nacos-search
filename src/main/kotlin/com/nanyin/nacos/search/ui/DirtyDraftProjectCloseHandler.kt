@@ -15,13 +15,21 @@ class DirtyDraftProjectCloseHandler : ProjectCloseHandler {
     override fun canClose(project: Project): Boolean {
         if (project.isDisposed) return true
         val editSessions = project.service<EditSessionService>()
-        val guard = editSessions.guardProjectClose()
-        if (guard !is DraftGuard.ConfirmDiscard) return true
-        return if (confirmDraftDiscard(project, guard.draft, "config.detail.draft.discard.project.close")) {
-            editSessions.discardDraft()
-            true
-        } else {
-            false
+        return when (val guard = editSessions.guardProjectClose()) {
+            DraftGuard.Proceed, DraftGuard.AlreadyEditing -> true
+            is DraftGuard.ConfirmDiscard -> {
+                if (confirmDraftDiscard(project, guard.draft, "config.detail.draft.discard.project.close")) {
+                    editSessions.discardDraft()
+                    true
+                } else {
+                    false
+                }
+            }
+            DraftGuard.RefuseInFlight -> {
+                explainPublishInFlight(project)
+                false
+            }
+            is DraftGuard.RequireWarnedAbandon -> confirmWarnedAbandon(project, editSessions, guard.draft)
         }
     }
 }

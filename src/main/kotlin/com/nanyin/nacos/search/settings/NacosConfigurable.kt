@@ -186,20 +186,18 @@ class NacosConfigurable @JvmOverloads constructor(
         sessions: EditSessionService?,
         guard: DraftGuard,
         messageKey: String
-    ): Boolean = when (guard) {
-        DraftGuard.Proceed, DraftGuard.AlreadyEditing -> true
-        is DraftGuard.ConfirmDiscard -> {
-            if (project == null || sessions == null) {
+    ): Boolean {
+        if (project == null || sessions == null) {
+            return when (guard) {
+                DraftGuard.Proceed, DraftGuard.AlreadyEditing -> true
                 // Cannot prompt or discard — refuse rather than proceed without
-                // honouring ConfirmDiscard (issue #77 review nit).
-                false
-            } else if (confirmDraftDiscard(project, guard.draft, messageKey)) {
-                sessions.discardDraft()
-                true
-            } else {
-                false
+                // honouring ConfirmDiscard / warned abandon (issue #77 review nit).
+                is DraftGuard.ConfirmDiscard,
+                DraftGuard.RefuseInFlight,
+                is DraftGuard.RequireWarnedAbandon -> false
             }
         }
+        return com.nanyin.nacos.search.ui.admitDraftGuard(project, sessions, guard, messageKey)
     }
 
     /**

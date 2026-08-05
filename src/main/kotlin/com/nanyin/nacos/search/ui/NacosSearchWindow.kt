@@ -586,6 +586,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      */
     private fun admitRetarget(guard: DraftGuard, messageKey: String): Boolean = when (guard) {
         DraftGuard.Proceed -> true
+        // Same configuration: keep the draft on screen; do not reload/clear it.
         DraftGuard.AlreadyEditing -> false
         is DraftGuard.ConfirmDiscard -> {
             if (confirmDraftDiscard(project, guard.draft, messageKey)) {
@@ -596,6 +597,11 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 false
             }
         }
+        DraftGuard.RefuseInFlight -> {
+            explainPublishInFlight(project)
+            false
+        }
+        is DraftGuard.RequireWarnedAbandon -> confirmWarnedAbandon(project, editSessions, guard.draft)
     }
     
     private fun handleRefreshRequested() {

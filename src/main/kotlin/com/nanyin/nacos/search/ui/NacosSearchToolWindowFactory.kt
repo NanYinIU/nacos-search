@@ -53,12 +53,25 @@ class NacosSearchToolWindowFactory : ToolWindowFactory {
         val listener = object : ContentManagerListener {
             override fun contentRemoveQuery(event: ContentManagerEvent) {
                 if (event.content !== content) return
-                val guard = project.service<EditSessionService>().guardDestroy()
-                if (guard !is DraftGuard.ConfirmDiscard) return
-                if (confirmDraftDiscard(project, guard.draft, "config.detail.draft.discard.close")) {
-                    project.service<EditSessionService>().discardDraft()
-                } else {
-                    event.consume()
+                val sessions = project.service<EditSessionService>()
+                when (val guard = sessions.guardDestroy()) {
+                    DraftGuard.Proceed, DraftGuard.AlreadyEditing -> return
+                    is DraftGuard.ConfirmDiscard -> {
+                        if (confirmDraftDiscard(project, guard.draft, "config.detail.draft.discard.close")) {
+                            sessions.discardDraft()
+                        } else {
+                            event.consume()
+                        }
+                    }
+                    DraftGuard.RefuseInFlight -> {
+                        explainPublishInFlight(project)
+                        event.consume()
+                    }
+                    is DraftGuard.RequireWarnedAbandon -> {
+                        if (!confirmWarnedAbandon(project, sessions, guard.draft)) {
+                            event.consume()
+                        }
+                    }
                 }
             }
         }

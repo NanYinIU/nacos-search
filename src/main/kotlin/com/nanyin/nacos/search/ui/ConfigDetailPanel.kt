@@ -571,6 +571,7 @@ private fun setupEventHandlers() {
         if (::saveButton.isInitialized) {
             saveButton.isVisible = false
             saveButton.isEnabled = false
+            saveButton.text = NacosSearchBundle.message("config.detail.action.save.publish")
         }
         if (::revertButton.isInitialized) {
             revertButton.isVisible = false
@@ -1355,6 +1356,18 @@ private fun setupEventHandlers() {
     private fun saveConfiguration() {
         val session = editSessions.currentSession() ?: return
         if (!session.isDirty) return
+        // Server-state-unknown: only reconcile (or abandon elsewhere), never a second write.
+        if (editSessions.isServerStateUnknown()) {
+            coroutineScope.launch {
+                val presented = issue()
+                val result = editSessions.reconcilePublish() ?: return@launch
+                withContext(Dispatchers.Main) {
+                    if (!presentation.admitAndRecord(presented)) return@withContext
+                    presentPublishOutcome(result, session.draftContent)
+                }
+            }
+            return
+        }
         coroutineScope.launch {
             try {
                 val presented = issue()
@@ -1381,9 +1394,39 @@ private fun setupEventHandlers() {
                             editSessions.cancelPublish()
                             return@launch
                         }
-                        // Null means pending was invalidated (keystroke, discard,
-                        // concurrent cancel) after the user said Yes — never silent.
-                        val publishResult = editSessions.confirmPublish()
+                        val progressJob = launch {
+                            editSessions.publishState.collect { phase ->
+                                withContext(Dispatchers.Main) {
+                                    when (phase) {
+                                        is PublishState.Publishing -> {
+                                            if (::loadingLabel.isInitialized) {
+                                                loadingLabel.text = NacosSearchBundle.message(
+                                                    "config.detail.publish.publishing"
+                                                )
+                                                loadingLabel.isVisible = true
+                                            }
+                                        }
+                                        is PublishState.Verifying -> {
+                                            if (::loadingLabel.isInitialized) {
+                                                loadingLabel.text = NacosSearchBundle.message(
+                                                    "config.detail.publish.verifying"
+                                                )
+                                                loadingLabel.isVisible = true
+                                            }
+                                        }
+                                        else -> Unit
+                                    }
+                                }
+                            }
+                        }
+                        val publishResult = try {
+                            editSessions.confirmPublish()
+                        } finally {
+                            progressJob.cancel()
+                            withContext(Dispatchers.Main) {
+                                if (::loadingLabel.isInitialized) loadingLabel.isVisible = false
+                            }
+                        }
                         if (publishResult == null) {
                             showSaveError(
                                 NacosSearchBundle.message("config.detail.publish.confirmation.expired")
@@ -1396,8 +1439,6 @@ private fun setupEventHandlers() {
                         }
                     }
                     is PublishState.Dirty -> {
-                        // Preflight completed after the draft was mutated or
-                        // discarded — preparation was not parked. Ask to save again.
                         withContext(Dispatchers.Main) {
                             if (!presentation.admitAndRecord(presented)) return@withContext
                             com.intellij.openapi.ui.Messages.showErrorDialog(
@@ -1440,6 +1481,7 @@ private fun setupEventHandlers() {
                 )
             }
             is PublishState.RemoteConflict -> {
+                openConflictDiff(state.remoteContent, draftContent)
                 com.intellij.openapi.ui.Messages.showErrorDialog(
                     NacosSearchBundle.message("config.detail.publish.conflict"),
                     NacosSearchBundle.message("common.error")
@@ -1458,6 +1500,11 @@ private fun setupEventHandlers() {
                 )
             }
             is PublishState.ServerStateUnknown -> {
+                // Keep the draft; save becomes reconcile on the next press.
+                if (::saveButton.isInitialized) {
+                    saveButton.text = NacosSearchBundle.message("config.detail.publish.reconcile")
+                    saveButton.isEnabled = true
+                }
                 com.intellij.openapi.ui.Messages.showErrorDialog(
                     NacosSearchBundle.message("config.detail.publish.unknown"),
                     NacosSearchBundle.message("common.error")
@@ -1470,8 +1517,6 @@ private fun setupEventHandlers() {
                 )
             }
             is PublishState.Dirty -> {
-                // Confirm re-validation failed, or post-write read-back does not
-                // yet show the command — draft is retained; user must save again.
                 com.intellij.openapi.ui.Messages.showErrorDialog(
                     NacosSearchBundle.message("config.detail.publish.not.verified"),
                     NacosSearchBundle.message("common.error")
@@ -1484,6 +1529,23 @@ private fun setupEventHandlers() {
                 )
             }
         }
+    }
+
+    private fun openConflictDiff(remoteContent: String, draftContent: String) {
+        val fileType = FileTypeManager.getInstance().getFileTypeByExtension("txt")
+        val leftDoc = com.intellij.openapi.editor.impl.DocumentImpl(remoteContent).apply { setReadOnly(true) }
+        val rightDoc = com.intellij.openapi.editor.impl.DocumentImpl(draftContent).apply { setReadOnly(true) }
+        val left = com.intellij.diff.contents.DocumentContentImpl(null, leftDoc, fileType)
+        val right = com.intellij.diff.contents.DocumentContentImpl(null, rightDoc, fileType)
+        val request = com.intellij.diff.requests.SimpleDiffRequest(
+            NacosSearchBundle.message("config.detail.publish.conflict"),
+            left,
+            right,
+            "Remote",
+            "Draft"
+        )
+        request.putUserData(com.intellij.diff.util.DiffUserDataKeys.FORCE_READ_ONLY, true)
+        com.intellij.diff.DiffManager.getInstance().showDiff(project, request)
     }
 
     private suspend fun showSaveError(message: String) {

@@ -6,7 +6,13 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 data class PublishResult(
     val state: PublishState,
     val isDirty: Boolean,
-    val verifiedDetail: NacosConfiguration? = null
+    val verifiedDetail: NacosConfiguration? = null,
+    /**
+     * True when the draft was retained and the next write must run a fresh
+     * preflight first — after a not-currently-visible read-back, or an
+     * operation-affecting profile change (ADR-0027 / ADR-0028).
+     */
+    val requiresFreshPreflight: Boolean = false
 )
 
 /**
@@ -171,9 +177,13 @@ class PublishController(private val gateway: PublishGateway) {
     /**
      * Performs the single non-retried write and the immediate read-back for a
      * previously [prepare]d publish. Must not be called without an explicit
-     * user confirmation of the awaiting state.
+     * user confirmation of the awaiting state. [onPhase] observes
+     * [PublishState.Publishing] then [PublishState.Verifying] while they last.
      */
-    suspend fun confirm(prepared: PreparedPublish): PublishResult {
+    suspend fun confirm(
+        prepared: PreparedPublish,
+        onPhase: (PublishState) -> Unit = {}
+    ): PublishResult {
         val session = prepared.session
         val target = prepared.target
         val command = prepared.command
@@ -181,6 +191,7 @@ class PublishController(private val gateway: PublishGateway) {
         val coordinate = session.binding.coordinate
 
         // Phase 4: Send one write (no transport or auth replay)
+        onPhase(PublishState.Publishing)
         val writeResult = gateway.write(target, command)
         if (writeResult.isFailure) {
             val error = writeResult.exceptionOrNull()!!
@@ -204,15 +215,20 @@ class PublishController(private val gateway: PublishGateway) {
             }
         }
 
-        // CAS conflict (V1 only)
+        // CAS conflict (V1 only) — re-read so the conflict diff shows the
+        // concurrent remote value, not the stale preflight baseline.
         if (writeResult.getOrNull() == PublishOutcome.CasConflict) {
+            onPhase(PublishState.Verifying)
+            val conflictRead = gateway.readBack(target, coordinate)
+            val remote = conflictRead.getOrNull() ?: remoteDetail
             return PublishResult(
-                PublishState.RemoteConflict(remoteDetail.content, remoteDetail.md5),
+                PublishState.RemoteConflict(remote.content, remote.md5),
                 isDirty = true
             )
         }
 
         // Phase 5: Immediate read-back using the original context
+        onPhase(PublishState.Verifying)
         val readBackResult = gateway.readBack(target, coordinate)
         if (readBackResult.isFailure) {
             return PublishResult(
@@ -224,7 +240,11 @@ class PublishController(private val gateway: PublishGateway) {
         return reconcile(session, command, remoteDetail, readBackDetail)
     }
 
-    private fun reconcile(
+    /**
+     * Compares a read-back to the command and preflight baseline. Used after
+     * the write and again by reconciliation after server-state-unknown.
+     */
+    fun reconcile(
         session: EditSession,
         command: PublishCommand,
         preflightDetail: NacosConfiguration,
@@ -251,7 +271,11 @@ class PublishController(private val gateway: PublishGateway) {
         // Does NOT prove the write never applied; retain draft and require new preflight.
         if (readBackDetail.content == session.baselineContent &&
             readBackDetail.md5 == session.baselineMd5) {
-            return PublishResult(PublishState.Dirty, isDirty = true)
+            return PublishResult(
+                PublishState.Dirty,
+                isDirty = true,
+                requiresFreshPreflight = true
+            )
         }
 
         // The read-back carries the command's content but is missing metadata the
@@ -259,7 +283,11 @@ class PublishController(private val gateway: PublishGateway) {
         // The write is only partially visible, so this is neither verified nor a
         // remote conflict; retain the draft and require a new preflight.
         if (readBackDetail.content == command.content && !metadataMatches(command, readBackDetail)) {
-            return PublishResult(PublishState.Dirty, isDirty = true)
+            return PublishResult(
+                PublishState.Dirty,
+                isDirty = true,
+                requiresFreshPreflight = true
+            )
         }
 
         // Third value: someone else wrote something different
