@@ -3,8 +3,6 @@ package com.nanyin.nacos.search.services
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosOperationContext
-import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
-import com.nanyin.nacos.search.services.operations.V1Authenticator
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.intellij.openapi.application.ApplicationManager
@@ -21,7 +19,7 @@ import java.util.concurrent.atomic.AtomicLong
  * Nacos认证服务，负责管理accessToken的获取、缓存和刷新
  */
 @Service(Service.Level.APP)
-class NacosAuthService : V1Authenticator {
+class NacosAuthService {
     private val logger = thisLogger()
     private val gson = Gson()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
@@ -29,7 +27,11 @@ class NacosAuthService : V1Authenticator {
     // Token缓存
     private val tokenCache = ConcurrentHashMap<String, TokenInfo>()
     private val lastTokenRefresh = AtomicLong(0)
-    private val v1Sessions = AuthenticationSessionRegistry()
+    /** Application-level Nacos-password sessions shared by V1 and V3 dialects. */
+    private val sessions = AuthenticationSessionRegistry()
+
+    /** The one completed-token registry both protocol dialects must use (issue #96). */
+    internal val authenticationSessions: AuthenticationSessionRegistry get() = sessions
     
     companion object {
         private const val LOGIN_ENDPOINT = "/nacos/v1/auth/login"
@@ -60,17 +62,13 @@ class NacosAuthService : V1Authenticator {
     }
     
     /**
-     * 获取有效的accessToken
-     * @return 有效的accessToken，如果获取失败返回null
-     *
-     * Reads live settings coordinates (not a captured operation context). Prefer
-     * [getValidAccessToken] with a prepared [NacosOperationContext] for in-flight
-     * operations so credentials stay off the EDT and environment switches cannot
-     * retarget mid-request (issue #53).
+     * Acquires a token using live settings coordinates (not a captured
+     * operation context). Prefer dialect login over [ProtocolTransport] for
+     * in-flight operations (issue #96).
      */
     @Deprecated(
-        message = "Use getValidAccessToken(context) so credentials stay off the EDT and mid-flight switches cannot retarget the request (issue #53)",
-        replaceWith = ReplaceWith("getValidAccessToken(context)")
+        message = "Dialect login over ProtocolTransport owns Nacos-password sessions (issue #96)",
+        replaceWith = ReplaceWith("AuthenticationSessionRegistry")
     )
     suspend fun getValidAccessToken(): String? {
         return try {
@@ -86,43 +84,11 @@ class NacosAuthService : V1Authenticator {
     }
 
     /**
-     * Acquires a token using only an already-captured operation context. This
-     * deliberately avoids consulting mutable application settings while an
-     * operation is in flight.
+     * Every identity holding authentication-session state. Read-only: what an
+     * operation leaves behind in the registry is otherwise invisible, and
+     * ADR-0022 makes "leaves nothing behind" a requirement diagnostics have to meet.
      */
-    internal suspend fun getValidAccessToken(context: NacosOperationContext): String? {
-        if (context.authenticationStrategy != V1AuthenticationStrategy.NACOS_PASSWORD) return null
-        val key = AuthenticationExecutionKey(
-            identity = context.identity,
-            profileRevision = context.profileRevision,
-            strategy = context.authenticationStrategy
-        )
-        return v1Sessions.getOrLogin(key) { login(context)?.toAuthenticationToken() }?.value
-    }
-
-    /**
-     * Logs in for [context] and returns the token WITHOUT recording it in the
-     * session registry or the legacy token cache.
-     *
-     * ADR-0022 requires connection diagnostics to run from unapplied settings on
-     * temporary authentication state and to leave the registry untouched. They
-     * still need a real token to exercise the V1 read path, so the login itself
-     * stays here — this service owns the `/nacos/v1/auth/login` wire format —
-     * while the caller owns the token's lifetime (see `EphemeralV1Authenticator`).
-     */
-    internal suspend fun loginWithoutRecording(context: NacosOperationContext): AuthenticationToken? {
-        if (context.authenticationStrategy != V1AuthenticationStrategy.NACOS_PASSWORD) return null
-        return login(context)?.toAuthenticationToken()
-    }
-
-    /**
-     * Every identity holding V1 session state. Read-only: what an operation
-     * leaves behind in the registry is otherwise invisible, and ADR-0022 makes
-     * "leaves nothing behind" a requirement diagnostics have to meet.
-     */
-    internal fun v1SessionIdentities(): Set<AccessIdentity> = v1Sessions.trackedIdentities()
-
-    override suspend fun accessToken(context: NacosOperationContext): String? = getValidAccessToken(context)
+    internal fun sessionIdentities(): Set<AccessIdentity> = sessions.trackedIdentities()
 
     private suspend fun getValidAccessToken(
         serverUrl: String,
@@ -166,17 +132,11 @@ class NacosAuthService : V1Authenticator {
         return login(serverUrl, settings.username, settings.password)
     }
 
-    private suspend fun login(context: NacosOperationContext): TokenInfo? =
-        login(
-            serverUrl = context.endpoint.value,
-            username = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty(),
-            password = context.credential.secret
-        )
-
     /**
-     * Performs the V1 login wire call. Credentials are method parameters only —
-     * they never enter a data class, equality, logging, or a cache key (issue #53 /
-     * ADR-0009).
+     * Performs the V1 login wire call for the legacy settings-based path.
+     * Credentials are method parameters only — they never enter a data class,
+     * equality, logging, or a cache key (issue #53 / ADR-0009). Formal dialect
+     * login lives on ProtocolTransport (issue #96).
      */
     private suspend fun login(serverUrl: String, username: String, password: String): TokenInfo? {
         return withContext(Dispatchers.IO) {
@@ -203,8 +163,6 @@ class NacosAuthService : V1Authenticator {
                         request.write(postData)
                         request.readString(null)
                     }
-
-                logger.debug("Login response: $response")
 
                 val jsonResponse = gson.fromJson(response, JsonObject::class.java)
                 val accessToken = jsonResponse.get("accessToken")?.asString
@@ -300,13 +258,11 @@ class NacosAuthService : V1Authenticator {
     }
 
     internal fun invalidateToken(context: NacosOperationContext) {
-        v1Sessions.invalidate(context.identity)
+        sessions.invalidate(context.identity)
         val principal = context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty()
         tokenCache.remove("${context.endpoint.value}_$principal")
         logger.info("Invalidated token for captured access context")
     }
-
-    override fun invalidate(context: NacosOperationContext) = invalidateToken(context)
 
     /**
      * 检查当前是否有有效的token
@@ -349,9 +305,4 @@ class NacosAuthService : V1Authenticator {
     private fun buildLoginUrl(): String {
         return "${settings.serverUrl.trimEnd('/')}$LOGIN_ENDPOINT"
     }
-
-    private fun TokenInfo.toAuthenticationToken(): AuthenticationToken = AuthenticationToken(
-        value = accessToken,
-        expiresAtMillis = createTime + tokenTtl * 1000 - TOKEN_REFRESH_BUFFER_MINUTES * 60 * 1000
-    )
 }

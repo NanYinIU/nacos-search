@@ -17,7 +17,6 @@ import com.nanyin.nacos.search.services.operations.ConfigurationCoordinate
 import com.nanyin.nacos.search.services.operations.ConnectionDiagnostic
 import com.nanyin.nacos.search.services.operations.DiagnosticReport
 import com.nanyin.nacos.search.services.operations.DiagnosticSnapshot
-import com.nanyin.nacos.search.services.operations.EphemeralV1Authenticator
 import com.nanyin.nacos.search.services.operations.HistoryDetail
 import com.nanyin.nacos.search.services.operations.HistoryPage
 import com.nanyin.nacos.search.services.operations.HistoryQuery
@@ -75,15 +74,22 @@ class NacosApiService(
     private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
 
     /**
-     * The V1 and V3 adapters are shared by the [v1Gateway] and the
-     * [generationResolver] so AUTO resolution and formal operations use the
-     * same transport, auth boundary, and error mapping.
+     * The V1 and V3 adapters are shared by the [v1Gateway] so formal operations
+     * use one transport and the application authentication-session registry.
+     * AUTO detection uses a separate throwaway session registry (ADR-0034) so
+     * candidate-probe tokens never enter the application registry.
      */
     private val v1Adapter by lazy {
-        V1ProtocolAdapter(NacosRequestExecutorProtocolTransport(executor), authService)
+        V1ProtocolAdapter(
+            NacosRequestExecutorProtocolTransport(executor),
+            authService.authenticationSessions
+        )
     }
     private val v3Adapter by lazy {
-        V3ProtocolAdapter(NacosRequestExecutorProtocolTransport(executor))
+        V3ProtocolAdapter(
+            NacosRequestExecutorProtocolTransport(executor),
+            authService.authenticationSessions
+        )
     }
     private val v1Gateway by lazy {
         v1GatewayOverride ?: OperationGateway(
@@ -95,7 +101,14 @@ class NacosApiService(
         )
     }
     /** Resolves AUTO to a concrete generation by probing V3 first, then V1. */
-    private val generationResolver by lazy { GenerationResolver(v3Adapter, v1Adapter) }
+    private val generationResolver by lazy {
+        val transport = NacosRequestExecutorProtocolTransport(executor)
+        val probeSessions = AuthenticationSessionRegistry()
+        GenerationResolver(
+            v3Adapter = V3ProtocolAdapter(transport, probeSessions),
+            v1Adapter = V1ProtocolAdapter(transport, probeSessions)
+        )
+    }
 
     /**
      * Graded capabilities of the dialect selected for [generation]. Null when
@@ -123,8 +136,9 @@ class NacosApiService(
      * stack here rather than sharing the formal one gets all four structurally —
      * this [OperationGateway] takes a no-op cache and an observation sequence of
      * its own rather than the process-wide one, a fresh [GenerationResolver]
-     * cannot join the formal probe flight, and [EphemeralV1Authenticator] holds
-     * any Nacos-password token in a field that dies with this object.
+     * cannot join the formal probe flight, and a throwaway
+     * [AuthenticationSessionRegistry] holds any Nacos-password token so the
+     * application registry stays untouched.
      *
      * Per call, not cached: a token acquired for one unapplied draft must never
      * serve the next one, because the user may have edited the credentials
@@ -132,11 +146,9 @@ class NacosApiService(
      */
     private fun newDiagnosticStack(): Pair<GenerationResolver, OperationGateway> {
         val transport = NacosRequestExecutorProtocolTransport(executor, RequestPolicy.DIAGNOSTIC)
-        val v1 = V1ProtocolAdapter(
-            transport,
-            EphemeralV1Authenticator(login = { context -> authService.loginWithoutRecording(context) })
-        )
-        val v3 = V3ProtocolAdapter(transport)
+        val sessions = AuthenticationSessionRegistry()
+        val v1 = V1ProtocolAdapter(transport, sessions)
+        val v3 = V3ProtocolAdapter(transport, sessions)
         return GenerationResolver(v3, v1) to OperationGateway(
             mapOf(
                 NacosApiGeneration.V1 to v1,
