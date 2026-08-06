@@ -1,0 +1,38 @@
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
+  h_231225c3625e99 86-87
+src/main/kotlin/com/nanyin/nacos/search/settings/AccessSafety.kt
+  h_231225c3625e99 11,13-16,23-38,40-55,57-62
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosProjectSession.kt
+  h_231225c3625e99 22-31,79-84,95-100
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosSettings.kt
+  h_231225c3625e99 15-20,29-32,42,44,46-59,62-63,75,80-81,86,96,102,110,113,119-127,141-145,148-155,158-174,176-181,184-190,194-196,198-211,213-241,243-265,268-325,328,331-333,336-343,347-348,373-377,379-390,428-431,433-444,496-505,512-514,564-571,574-577,715-718,720-728,732-733,743-744,755-756,758-766,776-778,781,865,873,879,884,891,893,907,909-912,914
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosUpgradeSummary.kt
+  h_231225c3625e99 7-10,13-28,30-42,46,49
+src/main/kotlin/com/nanyin/nacos/search/settings/SettingsMigration.kt
+  h_231225c3625e99 1-341
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProviderTest.kt
+  h_231225c3625e99 47,197
+src/test/kotlin/com/nanyin/nacos/search/services/NacosApiServiceAutoResolutionTest.kt
+  h_231225c3625e99 5,83-93
+src/test/kotlin/com/nanyin/nacos/search/services/NacosApiServiceTest.kt
+  h_231225c3625e99 8,148-153,158-180,240-245,268,297,360-361
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceTest.kt
+  h_231225c3625e99 26,43-44,47-57,151-162,303-323,334
+src/test/kotlin/com/nanyin/nacos/search/settings/AccessSafetyTest.kt
+  h_231225c3625e99 57-61
+src/test/kotlin/com/nanyin/nacos/search/settings/NacosSettingsTest.kt
+  h_231225c3625e99 69,79,84-87,330-341,348,416,432,440-442,452,481-482,493,506,531,546-547
+src/test/kotlin/com/nanyin/nacos/search/settings/SettingsMigrationTest.kt
+  h_231225c3625e99 1-320
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "07908091d6de92ccafff8fe8ca8b3105e1beb8c8",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
