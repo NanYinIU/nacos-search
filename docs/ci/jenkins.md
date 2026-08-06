@@ -28,9 +28,32 @@ path `/opt/jenkins/home/workspace/nacos-search` (never `$WORKSPACE` alone for
 | Test JVM | maxHeap 1024m via `gradle-caches/init.d/ci-heap.init.gradle` |
 | Gradle dist | Tencent mirror (pipeline `sed` before `./gradlew`) |
 | Cache | `/opt/jenkins/home/gradle-caches` (~5G after first warm) |
+| TestApplication dispose | Skipped on CI (`CI=true` / `JENKINS_URL`) — see below |
 
 Without swap, `:test` dies with **exit 137** (OOM) even at 2.5G. A 1.2G
 container OOMs the Gradle daemon during `compileKotlin`.
+
+### `@TestApplication` dispose timeout
+
+JUnit5 `@TestApplication` closes the shared IDE application with a **hard-coded
+20s** `timeoutRunBlocking` (10s of which can be `waitForAppLeakingThreads`).
+After a full ~900-test suite on this host the dispose step often exceeds that
+budget: every test method has already passed, then the engine reports
+
+```text
+JUnit Jupiter > executionError FAILED
+TimeoutCancellationException: Timed out waiting for 20000 ms
+  at TestApplicationResource.close
+```
+
+The unit-test container exports `CI=true` (and `JENKINS_URL`). `build.gradle.kts`
+then sets
+
+`intellij.testFramework.junit5.skip.test.application.dispose=true`
+
+— the same escape hatch JetBrains uses under Bazel. The Gradle test worker JVM
+exits after the suite; local runs without those env vars still dispose and run
+leak checks.
 
 Nacos containers need `--security-opt seccomp=unconfined` on this CentOS 7
 host — otherwise embedded Derby fails with `pwrite ... Operation not permitted`.

@@ -203,6 +203,22 @@ tasks {
             // local `check` only — not finalizedBy, so filtered smoke jobs stay lean).
             excludeEngines("junit-vintage")
         }
+        // @TestApplication.close() hard-codes timeoutRunBlocking(20s) around
+        // waitForAppLeakingThreads(10s) + disposeTestApplication on the EDT.
+        // On constrained CI hosts (Jenkins beijing: 1024m test heap, 2.5G
+        // container) that dispose regularly exceeds 20s after a full suite —
+        // all tests pass, then "JUnit Jupiter > executionError" fails with
+        // TimeoutCancellationException. JetBrains already skips dispose under
+        // Bazel for the same reason (JVM exits after the suite). Gate on CI /
+        // Jenkins so local runs still exercise dispose + leak checks.
+        val onCi = providers.environmentVariable("CI").orElse("")
+            .zip(providers.environmentVariable("JENKINS_URL").orElse("")) { ci, jenkins ->
+                ci.isNotBlank() || jenkins.isNotBlank()
+            }
+        systemProperty(
+            "intellij.testFramework.junit5.skip.test.application.dispose",
+            onCi.map { if (it) "true" else "false" }
+        )
         testLogging {
             events("passed", "skipped", "failed", "standardOut", "standardError")
             showExceptions = true
