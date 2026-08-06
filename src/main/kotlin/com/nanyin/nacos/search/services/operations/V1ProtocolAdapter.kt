@@ -347,7 +347,7 @@ class V1ProtocolAdapter(
             body = formData
         )
 
-        // Deliberately off the replaying [execute]: a rejected token cannot prove
+        // Deliberately off ProtocolCore.executeIdempotent: a rejected token cannot prove
         // the write never reached the configuration store, and ADR-0011 forbids
         // replaying a write on an authentication failure. The token is still
         // evicted, so the next attempt logs in again instead of presenting a

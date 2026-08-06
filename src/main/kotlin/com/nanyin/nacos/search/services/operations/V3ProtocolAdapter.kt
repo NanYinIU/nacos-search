@@ -12,6 +12,7 @@ import com.nanyin.nacos.search.services.AuthenticationExecutionKey
 import com.nanyin.nacos.search.services.AuthenticationSessionRegistry
 import com.nanyin.nacos.search.services.AuthenticationToken
 import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
+import kotlinx.coroutines.CancellationException
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
@@ -238,12 +239,14 @@ class V3ProtocolAdapter(
 
     private inline fun <T> parseV3(operation: String, block: () -> T): T = try {
         block()
+    } catch (error: CancellationException) {
+        throw error
     } catch (error: RemoteOperationError) {
         throw error
     } catch (error: JsonParseException) {
         throw RemoteOperationError.Protocol("Invalid V3 $operation response", error)
     } catch (error: Throwable) {
-        throw RemoteOperationError.Protocol("Invalid V3 $operation response", error)
+        throw RemoteOperationError.Connection(error)
     }
 
     // ---- request builders ----

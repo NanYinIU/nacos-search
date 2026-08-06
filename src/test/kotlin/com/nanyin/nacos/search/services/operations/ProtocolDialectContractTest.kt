@@ -535,6 +535,27 @@ internal abstract class ProtocolDialectContractTest {
     }
 
     @Test
+    fun `permission denial on history detail is not recovered and stays Authorization`() =
+        runBlocking {
+            val transport = ScriptedTransport(
+                ProtocolResponse(200, loginBody("current")),
+                permissionDeniedProbeResponse()
+            )
+            val sessions = AuthenticationSessionRegistry()
+            val target = passwordTarget()
+
+            val error = newAdapter(transport, sessions)
+                .readHistoryDetail(target, "123")
+                .exceptionOrNull()
+
+            assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
+            assertEquals(2, transport.requests.size, requestCountDiagnostic(transport))
+            assertEquals(historyDetailPath, transport.requests[1].path)
+            assertEquals("current", sessions.completedToken(target.context.identity)?.value)
+            assertNoSecrets(requestCountDiagnostic(transport))
+        }
+
+    @Test
     fun `permission denial on namespace discovery is not recovered and stays Authorization`() =
         runBlocking {
             val transport = ScriptedTransport(
@@ -624,12 +645,15 @@ internal abstract class ProtocolDialectContractTest {
     @Test
     fun `network failure on namespace discovery is Connection and is not retried by the core`() =
         runBlocking {
+            var calls = 0
             val transport = ProtocolTransport {
+                calls += 1
                 throw RemoteOperationError.Connection(RuntimeException("boom"))
             }
             val error = newAdapter(transport).discoverNamespaces(anonymousTarget()).exceptionOrNull()
 
             assertInstanceOf(RemoteOperationError.Connection::class.java, error)
+            assertEquals(1, calls)
         }
 
     @Test
