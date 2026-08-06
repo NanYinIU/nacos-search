@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.services.ProfileTombstoneRegistry
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -11,6 +12,13 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import javax.swing.JCheckBox
+
+/** Test-only: lift shared tombstones so fixtures can re-use stable profile ids. */
+internal fun clearProfileTombstones(profileIds: Iterable<String>) {
+    val registry = ApplicationManager.getApplication()
+        .getService(ProfileTombstoneRegistry::class.java) ?: return
+    profileIds.forEach { registry.clear(it) }
+}
 
 /**
  * Issue #101: per-environment preference records are the runtime source of
@@ -211,8 +219,14 @@ class EnvironmentPreferencesNotificationTest {
 
     @AfterEach
     fun tearDown() {
+        // applyServers entombs removed ids permanently (issue #105). Lift
+        // originals before restore so they can re-publish, then lift fixture
+        // ids entombed by the restore so the next setUp can reuse "dev".
+        val touched = (settings.servers.map { it.id } + originalServers.map { it.id }).toSet()
+        clearProfileTombstones(touched)
         settings.applyServers(originalServers.map { it.copy() }, originalActiveId)
         settings.environmentPreferences = originalPreferences.map { it.copyPreferences() }.toMutableList()
+        clearProfileTombstones(touched)
     }
 
     @Test

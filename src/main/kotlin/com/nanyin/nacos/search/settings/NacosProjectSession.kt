@@ -98,6 +98,20 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
             maxOf(sessionState.upgradeSummaryShownForSchemaVersion, schemaVersion)
         sessionState.upgradeSummaryShown = schemaVersion > 0
     }
+
+    /**
+     * Profile-deletion posture (ADR-0025 / design §13.6): keep the stale
+     * [NacosProjectSessionState.selectedProfileId] and force
+     * [NacosProjectSessionState.selectionWasExplicit] so [healSelection] will
+     * not silently retarget to another environment. Returns false when this
+     * session is not currently selecting [profileId].
+     */
+    fun markSelectedProfileUnavailable(profileId: String): Boolean {
+        val id = profileId.trim()
+        if (id.isBlank() || sessionState.selectedProfileId != id) return false
+        sessionState.selectionWasExplicit = true
+        return true
+    }
 }
 
 /**

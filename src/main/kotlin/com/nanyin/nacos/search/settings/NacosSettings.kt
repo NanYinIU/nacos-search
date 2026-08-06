@@ -482,7 +482,9 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     /**
      * Single write entry that turns profile intents into published environment
      * profiles (ADR-0049 / issue #103). The store owns revision derivation and
-     * credential staging; this host applies the outcome, entombs removals, and
+     * credential staging; this host runs the fail-closed
+     * [ProfileDeletionLifecycle] for every classified removal **before** the
+     * published set omits that environment (ADR-0025 / issue #105), then
      * dual-writes the legacy server list **only for successfully published
      * profiles** so stage failure cannot surface a new secret on the dual-write
      * surface (ADR-0035).
@@ -491,7 +493,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         intents: List<ProfileIntent>,
         newActiveId: String,
         dualWriteServers: List<NacosServerConfig>? = null,
-        credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore
+        credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore,
+        deletionLifecycle: ProfileDeletionLifecycle = defaultDeletionLifecycle(credentialSlots)
     ): ProfileStoreWriteOutcome {
         // If this instance was never loadState'd (unit tests constructing a bare
         // NacosSettings), promote to CURRENT before the store diffs so orphan
@@ -515,8 +518,15 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         val previousPreferences = environmentPreferences.map { it.copyPreferences() }
         // Defensive copies so the store never mutates live beans while deciding.
         val previousProfiles = profiles.map { it.copy(cacheTombstones = it.cacheTombstones.toMutableList()) }
+        val previousById = previousProfiles.associateBy { it.id }
+        val previousPrefsById = previousPreferences
+            .filter { it.profileId.isNotBlank() }
+            .associateBy { it.profileId }
 
-        val store = EnvironmentProfileStore(credentialSlots)
+        val store = EnvironmentProfileStore(
+            credentialSlots = credentialSlots,
+            isEntombed = deletionLifecycle::isEntombed
+        )
         val rawOutcome = store.applyIntents(
             intents = intents,
             activeProfileId = newActiveId,
@@ -526,33 +536,86 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             previousSuggestedNamespaces = previousNamespaces
         )
 
+        // Confirmed removals run the one deletion lifecycle at this write
+        // boundary. Tombstone first; on failure withhold that id from the
+        // published omission set (design §13.6 / issue #105).
+        val deletedIds = linkedSetOf<String>()
+        val withheldDeletions = linkedSetOf<String>()
+        for (profileId in rawOutcome.removedProfileIds) {
+            when (deletionLifecycle.delete(profileId)) {
+                is ProfileDeletionResult.Deleted -> deletedIds += profileId
+                is ProfileDeletionResult.TombstoneFailed -> withheldDeletions += profileId
+            }
+        }
+
+        val publishedById = rawOutcome.publishedProfiles
+            .associateBy { it.id }
+            .toMutableMap()
+        val publishedPreferencesById = rawOutcome.publishedPreferences
+            .associateBy { it.profileId }
+            .toMutableMap()
+        val suggestedNamespaces = rawOutcome.suggestedNamespaces.toMutableMap()
+        for (profileId in withheldDeletions) {
+            val previous = previousById[profileId] ?: continue
+            publishedById.putIfAbsent(
+                profileId,
+                previous.copy(cacheTombstones = previous.cacheTombstones.toMutableList())
+            )
+            publishedPreferencesById.putIfAbsent(
+                profileId,
+                (previousPrefsById[profileId] ?: EnvironmentPreferences.defaultsFor(profileId))
+                    .copyPreferences()
+            )
+            suggestedNamespaces.putIfAbsent(
+                profileId,
+                previousNamespaces[profileId]?.trim()?.ifBlank { "public" } ?: "public"
+            )
+        }
+        // Preserve previous list order for survivors + withheld; append genuine adds.
+        val orderedPublished = linkedSetOf<String>()
+        previousProfiles.map { it.id }.filter { it in publishedById }.forEach { orderedPublished += it }
+        rawOutcome.publishedProfiles.map { it.id }.filter { it !in orderedPublished }.forEach {
+            orderedPublished += it
+        }
+        val publishedProfiles = orderedPublished.mapNotNull { publishedById[it] }
+        val publishedPreferences = orderedPublished.mapNotNull { publishedPreferencesById[it] } +
+            publishedPreferencesById.values.filter { it.profileId !in orderedPublished }
+
+        // Residual cleanup for entombed ids already absent from the published
+        // set (prior apply entombed successfully but cleanup partially failed).
+        // Skip ids that just ran delete() on this write — retryCleanup is for
+        // a later Apply when removedProfileIds is empty (issue #105 AC7).
+        val publishedIdSet = publishedProfiles.map { it.id }.toSet()
+        for (entombedId in deletionLifecycle.entombedProfileIds()) {
+            if (entombedId !in publishedIdSet && entombedId !in deletedIds) {
+                deletionLifecycle.retryCleanup(entombedId)
+            }
+        }
+
         // Honour the caller's requested active id when that profile published;
         // the store already prefers it, but a blank previous selection must not
         // hide a real switch the host asked for after a dual-write realign.
+        // Withheld deletions re-enter the published set, so a requested active
+        // that was only "removed" on a failed tombstone stays eligible.
         val resolvedActive = newActiveId.takeIf { id ->
-            id.isNotBlank() && rawOutcome.publishedProfiles.any { it.id == id }
-        } ?: rawOutcome.activeProfileId
+            id.isNotBlank() && publishedProfiles.any { it.id == id }
+        } ?: when {
+            previousActiveId.isNotBlank() && publishedProfiles.any { it.id == previousActiveId } ->
+                previousActiveId
+            else -> publishedProfiles.firstOrNull()?.id.orEmpty()
+        }
         val activeChanged = previousActiveId.isNotBlank() &&
             resolvedActive.isNotBlank() &&
             previousActiveId != resolvedActive
-        val outcome = if (activeChanged != rawOutcome.activeProfileIdChanged ||
-            resolvedActive != rawOutcome.activeProfileId
-        ) {
-            rawOutcome.copy(
-                activeProfileId = resolvedActive,
-                activeProfileIdChanged = activeChanged
-            )
-        } else {
-            rawOutcome
-        }
-
-        // Entomb and drop credential slots for removed profiles before the new
-        // set becomes visible, so late in-flight responses cannot resurrect
-        // cache, token, or session state (design §19.2 / ADR-0025).
-        outcome.removedProfileIds.forEach { profileId ->
-            entombDeletedProfile(profileId)
-            credentialSlots.removeAllForProfile(profileId)
-        }
+        val outcome = rawOutcome.copy(
+            removedProfileIds = deletedIds.toSet(),
+            withheldDeletionProfileIds = withheldDeletions.toSet(),
+            publishedProfiles = publishedProfiles.toList(),
+            publishedPreferences = publishedPreferences.toList(),
+            suggestedNamespaces = suggestedNamespaces.toMap(),
+            activeProfileId = resolvedActive,
+            activeProfileIdChanged = activeChanged
+        )
 
         profiles = outcome.publishedProfiles
             .map { it.copy(cacheTombstones = it.cacheTombstones.toMutableList()) }
@@ -562,7 +625,9 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             .toMutableList()
         activeServerId = outcome.activeProfileId.ifBlank { newActiveId }
         // Seed is migration-owned. Only fill a blank/stale seed on Apply so a
-        // brand-new install gets a default without retargeting every Apply.
+        // brand-new install gets a default without retargeting every Apply
+        // (issue #104). When the deleted profile was the default, replace only
+        // that stale seed with the resolved surviving active (or blank).
         if (migratedDefaultProfileId.isBlank() ||
             profiles.none { it.id == migratedDefaultProfileId }
         ) {
@@ -583,6 +648,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         // Dual-write only published ids. Failed Adds are omitted. Failed Keeps
         // retain the previous server snapshot with the secret from the still-
         // published slot — never the draft password/endpoint (ADR-0035).
+        // Withheld deletions stay dual-written from their previous snapshot.
         val draftById = (dualWriteServers ?: intents.map { intentToDraftServer(it) })
             .associateBy { it.id }
         val failedIds = outcome.failedStageProfileIds
@@ -590,7 +656,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             dualWriteServerForPublished(
                 profile = profile,
                 outcome = outcome,
-                failed = profile.id in failedIds,
+                failed = profile.id in failedIds || profile.id in withheldDeletions,
                 draft = draftById[profile.id],
                 previousServer = previousServersById[profile.id],
                 credentialSlots = credentialSlots
@@ -602,6 +668,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
 
         // Preference-only / display-only / pure-reorder writes must not advance
         // the session epoch (ADR-0042). The store outcome is authoritative.
+        // Lifecycle already bumped referring sessions for deleted ids; this
+        // covers surviving-profile operational changes for every open project.
         if (outcome.isOperationalChange()) {
             com.nanyin.nacos.search.services.ProjectSessionEpochs.bumpAllOpenProjects()
         }
@@ -694,21 +762,145 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled
         )
 
-    /** Persists a deletion tombstone for a profile removed from the settings. */
-    private fun entombDeletedProfile(profileId: String) {
+/**
+     * Default production lifecycle used when the caller does not inject one.
+     * Live [NacosSettings] service instances write the shared tombstone registry
+     * and clean real app/project state; throwaway copies used in unit tests
+     * treat entomb as a local success so they never poison the suite registry
+     * (inject [ProfileDeletionLifecycle] explicitly to assert fail-closed
+     * behaviour).
+     */
+    private fun defaultDeletionLifecycle(
+        credentialSlots: CredentialSlotStore
+    ): ProfileDeletionLifecycle {
+        val writer = object : ProfileTombstoneWriter {
+            override fun tryEntomb(profileId: String): Boolean {
+                try {
+                    val app = ApplicationManager.getApplication() ?: return true
+                    // Throwaway NacosSettings() copies must not write the shared
+                    // registry. Treat as success so host unit tests that do not
+                    // inject a lifecycle still publish removals locally.
+                    if (app.getService(NacosSettings::class.java) !== this@NacosSettings) {
+                        return true
+                    }
+                    val registry = app.getService(
+                        com.nanyin.nacos.search.services.ProfileTombstoneRegistry::class.java
+                    ) ?: return false
+                    return registry.tryEntomb(profileId)
+                } catch (_: Exception) {
+                    // Live path is fail-closed: cannot prove durability.
+                    return isLiveApplicationSettings().not()
+                }
+            }
+
+            override fun isEntombed(profileId: String): Boolean {
+                // Throwaway copies must not consult the shared registry either:
+                // a live-settings deletion in another test would otherwise block
+                // credential staging / publication on pure unit tests that reuse
+                // common profile ids such as "dev".
+                if (!isLiveApplicationSettings()) return false
+                return isProfileEntombed(profileId)
+            }
+
+            override fun entombedProfileIds(): Set<String> {
+                if (!isLiveApplicationSettings()) return emptySet()
+                return try {
+                    ApplicationManager.getApplication()
+                        ?.getService(com.nanyin.nacos.search.services.ProfileTombstoneRegistry::class.java)
+                        ?.entombedProfileIds()
+                        .orEmpty()
+                } catch (_: Exception) {
+                    emptySet()
+                }
+            }
+        }
+        val cleanup = object : ProfileDeletionCleanup {
+            override fun markReferringSessionsUnavailable(profileId: String) {
+                markProjectSessionsProfileUnavailable(profileId)
+            }
+
+            override fun removeCredentialSlots(profileId: String) {
+                credentialSlots.removeAllForProfile(profileId)
+                // Legacy server-id key used by migration dual-write.
+                NacosCredentialStore.remove(profileId)
+            }
+
+            override fun invalidateAuthentication(profileId: String) {
+                try {
+                    ApplicationManager.getApplication()
+                        ?.getService(com.nanyin.nacos.search.services.NacosAuthService::class.java)
+                        ?.invalidateProfile(profileId)
+                } catch (_: Exception) {
+                    // Outside a live IDE the auth service may be unavailable.
+                }
+            }
+
+            override fun clearLastKnownGeneration(profileId: String) {
+                try {
+                    ApplicationManager.getApplication()
+                        ?.getService(com.nanyin.nacos.search.services.LastKnownGenerationStore::class.java)
+                        ?.clearProfile(profileId)
+                } catch (_: Exception) {
+                    // Same throwaway/headless bound as the tombstone writer.
+                }
+            }
+
+            override fun purgeCache(profileId: String) {
+                try {
+                    ApplicationManager.getApplication()
+                        ?.getService(com.nanyin.nacos.search.services.CacheService::class.java)
+                        ?.purgeProfile(profileId)
+                } catch (_: Exception) {
+                    // Cache purge is residual cleanup; the tombstone remains.
+                }
+            }
+        }
+        return ProfileDeletionLifecycle(writer, cleanup)
+    }
+
+    private fun isLiveApplicationSettings(): Boolean = try {
+        val app = ApplicationManager.getApplication() ?: return false
+        app.getService(NacosSettings::class.java) === this
+    } catch (_: Exception) {
+        false
+    }
+
+    /** True when the shared (or injected) tombstone registry holds [profileId]. */
+    private fun isProfileEntombed(profileId: String): Boolean {
+        val id = profileId.trim()
+        if (id.isBlank()) return false
+        return try {
+            ApplicationManager.getApplication()
+                ?.getService(com.nanyin.nacos.search.services.ProfileTombstoneRegistry::class.java)
+                ?.isEntombed(id) == true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Move open projects that still select [profileId] to the profile-unavailable
+     * state: keep the stale selection, force [NacosProjectSessionState.selectionWasExplicit]
+     * so [healSelection] cannot auto-retarget (ADR-0025), clear resolved
+     * generation, and advance the session epoch so in-flight work detaches.
+     */
+    private fun markProjectSessionsProfileUnavailable(profileId: String) {
+        val id = profileId.trim()
+        if (id.isBlank()) return
         try {
-            val app = ApplicationManager.getApplication() ?: return
-            // Only the live application settings component may write the shared
-            // tombstone registry. Throwaway NacosSettings() copies used in tests
-            // must not poison CacheService for the rest of the suite.
-            if (app.getService(NacosSettings::class.java) !== this) return
-            app.getService(com.nanyin.nacos.search.services.ProfileTombstoneRegistry::class.java)
-                ?.entomb(profileId, 0)
-            app.getService(com.nanyin.nacos.search.services.LastKnownGenerationStore::class.java)
-                ?.clearProfile(profileId)
-        } catch (e: Exception) {
-            // Settings can be applied outside a fully initialised application
-            // (e.g. tests); the tombstone is best-effort within a live IDE.
+            com.intellij.openapi.project.ProjectManager.getInstance().openProjects.forEach { project ->
+                if (project.isDisposed) return@forEach
+                val session = project.getService(NacosProjectSession::class.java) ?: return@forEach
+                if (!session.markSelectedProfileUnavailable(id)) return@forEach
+                project.getService(
+                    com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java
+                )?.let { epochs ->
+                    epochs.clearResolvedGeneration()
+                    epochs.bump()
+                }
+            }
+        } catch (_: Exception) {
+            // ProjectManager may be unavailable outside a live IDE.
         }
     }
 
@@ -772,6 +964,12 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             requested != null -> getProfile(requested)?.id
                 ?: return Result.failure(ConfigurationRequired(listOf("Select a Nacos environment profile")))
             else -> resolveDefaultProfileId()
+        }
+        // Tombstone is the absolute lifecycle guard: an entombed profile cannot
+        // produce a new operation context even if a row briefly reappears
+        // (ADR-0025 / issue #105). Pure read — no migration or staging (#104).
+        if (selectedProfileId.isNotBlank() && isProfileEntombed(selectedProfileId)) {
+            return Result.failure(ConfigurationRequired(listOf("Select a Nacos environment profile")))
         }
         val persistedProfile = getProfile(selectedProfileId)
             ?: return Result.failure(

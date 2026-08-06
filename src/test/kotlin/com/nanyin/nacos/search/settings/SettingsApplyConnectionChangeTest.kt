@@ -13,6 +13,8 @@ import javax.swing.JComboBox
 import javax.swing.JPasswordField
 import javax.swing.JTextField
 
+// clearProfileTombstones lives in EnvironmentPreferencesTest.kt (same package).
+
 /**
  * Settings-apply boundary: connection-changed vs preferences-only is decided
  * by the active profile's access revision (issue #41), not a hand-built
@@ -57,7 +59,13 @@ class SettingsApplyConnectionChangeTest {
 
     @AfterEach
     fun tearDown() {
+        // applyServers entombs removed ids permanently (issue #105). Lift
+        // originals before restore so they can re-publish, then lift fixture
+        // ids entombed by the restore so the next setUp can reuse "dev"/"prod".
+        val touched = (settings.servers.map { it.id } + originalServers.map { it.id }).toSet()
+        clearProfileTombstones(touched)
         settings.applyServers(originalServers.map { it.copy() }, originalActiveId)
+        clearProfileTombstones(touched)
     }
 
     @Test

@@ -39,6 +39,12 @@ data class ProfileStoreWriteOutcome(
      * Host dual-write and Apply UX must honor this set (ADR-0035).
      */
     val failedStageProfileIds: Set<String> = emptySet(),
+    /**
+     * Profiles the intents omitted but whose deletion was withheld because the
+     * profile-deletion tombstone could not be persisted (ADR-0025 / issue #105).
+     * They remain in [publishedProfiles]; callers must not treat them as removed.
+     */
+    val withheldDeletionProfileIds: Set<String> = emptySet(),
     /** Immutable snapshots of the profiles that are now published, in intent order. */
     val publishedProfiles: List<EnvironmentProfile> = emptyList(),
     /**
@@ -59,6 +65,11 @@ data class ProfileStoreWriteOutcome(
      * True when open projects must recapture sessions or treat connection
      * identity as changed. Preference/display-only edits and pure reorders
      * return false.
+     *
+     * Withheld deletions are **not** counted here: the published set did not
+     * omit those environments. Callers that need connection-level notification
+     * after a withheld deletion must also honour [hasWithheldDeletions] the
+     * same way they honour [hasStageFailures] (issue #105).
      */
     fun isOperationalChange(): Boolean =
         addedProfileIds.isNotEmpty() ||
@@ -74,15 +85,25 @@ data class ProfileStoreWriteOutcome(
      */
     fun isPreferencesOnlyChange(): Boolean =
         !isOperationalChange() &&
+            !hasStageFailures() &&
+            !hasWithheldDeletions() &&
             (preferenceChangedIds.isNotEmpty() || displayOnlyChangedIds.isNotEmpty())
 
-    /** True when nothing observable changed (including pure reorder). */
+    /**
+     * True when nothing observable changed (including pure reorder). Stage
+     * failures and withheld deletions are not no-ops — the user attempted a
+     * connection-level write that did not fully land.
+     */
     fun isNoOp(): Boolean =
         !isOperationalChange() &&
             preferenceChangedIds.isEmpty() &&
             displayOnlyChangedIds.isEmpty() &&
-            failedStageProfileIds.isEmpty()
+            failedStageProfileIds.isEmpty() &&
+            withheldDeletionProfileIds.isEmpty()
 
     /** True when at least one intent could not stage its credential slot. */
     fun hasStageFailures(): Boolean = failedStageProfileIds.isNotEmpty()
+
+    /** True when at least one intended deletion was withheld (tombstone failure). */
+    fun hasWithheldDeletions(): Boolean = withheldDeletionProfileIds.isNotEmpty()
 }

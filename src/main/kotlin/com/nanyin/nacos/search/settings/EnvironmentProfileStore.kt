@@ -27,9 +27,17 @@ import com.nanyin.nacos.search.models.ProfileIntent
  * snapshots and a [ProfileStoreWriteOutcome]; the host ([NacosSettings]) is
  * responsible for replacing its lists and dual-writing the legacy server surface
  * **only** for successfully published ids.
+ *
+ * Removals are **classified** here (ids present previously and absent from
+ * intents) but not executed: the host runs [ProfileDeletionLifecycle] at the
+ * write boundary so the tombstone lands before the published set omits the
+ * environment (ADR-0025 / issue #105). [isEntombed] refuses Add/Keep of a
+ * tombstoned id so credential staging and profile publication recheck the
+ * lifecycle guard (ADR-0035).
  */
 class EnvironmentProfileStore(
-    private val credentialSlots: CredentialSlotStore
+    private val credentialSlots: CredentialSlotStore,
+    private val isEntombed: (String) -> Boolean = { false }
 ) {
 
     /**
@@ -92,6 +100,23 @@ class EnvironmentProfileStore(
             val nextPrefs = intent.preferences.copyPreferences().also { it.profileId = id }
             val prevPrefs = previousPrefsById[id] ?: EnvironmentPreferences.defaultsFor(id)
             val suggestedNs = intent.suggestedNamespace.trim().ifBlank { "public" }
+
+            // Lifecycle guard (ADR-0035 / #105): a tombstoned id cannot stage a
+            // new credential or re-enter the published set under the same id.
+            if (isEntombed(id)) {
+                failedStage += id
+                if (previous != null) {
+                    retainPreviousPublication(
+                        previous = previous,
+                        prevPrefs = prevPrefs,
+                        previousSuggestedNamespaces = previousSuggestedNamespaces,
+                        published = published,
+                        publishedPrefs = publishedPrefs,
+                        suggestedNamespaces = suggestedNamespaces
+                    )
+                }
+                continue
+            }
 
             when (val decision = decidePublication(previous, intent)) {
                 is PublishDecision.Add -> {

@@ -265,6 +265,24 @@ class NacosAuthService {
     }
 
     /**
+     * Profile-deletion cleanup (ADR-0025 / issue #105). Drops every authentication
+     * session owned by [profileId] and clears the legacy endpoint+principal
+     * token cache entries that could still serve that profile's principals.
+     * Idempotent.
+     */
+    internal fun invalidateProfile(profileId: String) {
+        val id = profileId.trim()
+        if (id.isBlank()) return
+        val identities = sessions.trackedIdentities().filter { it.profileId == id }
+        sessions.invalidateProfile(id)
+        identities.forEach { identity ->
+            val principal = identity.principal.takeUnless { it == "<anonymous>" }.orEmpty()
+            tokenCache.remove("${identity.canonicalEndpoint}_$principal")
+        }
+        logger.info("Invalidated authentication sessions for deleted profile $id")
+    }
+
+    /**
      * 检查当前是否有有效的token
      */
     fun isTokenValid(): Boolean {

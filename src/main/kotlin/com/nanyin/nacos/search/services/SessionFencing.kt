@@ -129,8 +129,24 @@ class ProfileTombstoneRegistry(
     }
 
     fun entomb(profileId: String, @Suppress("UNUSED_PARAMETER") accessRevision: Long) {
-        tombstones[profileId] = Tombstone(profileId, clock())
-        state.profileIds.add(profileId)
+        tryEntomb(profileId)
+    }
+
+    /**
+     * Record a deletion marker for [profileId] in the in-process map and the
+     * [PersistentStateComponent] bean. Idempotent when already entombed.
+     *
+     * Returns false only for a blank id. Durability beyond the component bean
+     * is the platform's normal settings-save bound: this method does not fsync
+     * the XML and does not observe save failures. Hosts that cannot obtain this
+     * service at all must fail closed before unpublishing (issue #105 AC2).
+     */
+    fun tryEntomb(profileId: String): Boolean {
+        val id = profileId.trim()
+        if (id.isBlank()) return false
+        tombstones[id] = Tombstone(id, clock())
+        state.profileIds.add(id)
+        return true
     }
 
     /**
@@ -139,7 +155,14 @@ class ProfileTombstoneRegistry(
      * of access revision — a re-created profile must use a fresh id.
      */
     fun isEntombed(identity: AccessIdentity): Boolean =
-        tombstones.containsKey(identity.profileId)
+        isEntombed(identity.profileId)
+
+    /** Profile-id form of the lifecycle guard (no fabricated access identity). */
+    fun isEntombed(profileId: String): Boolean =
+        tombstones.containsKey(profileId.trim())
+
+    /** Every entombed profile id currently held by this registry. */
+    fun entombedProfileIds(): Set<String> = tombstones.keys.toSet()
 
     fun clear(profileId: String) {
         tombstones.remove(profileId)
