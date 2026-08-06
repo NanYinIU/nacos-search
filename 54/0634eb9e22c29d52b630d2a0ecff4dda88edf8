@@ -1,0 +1,44 @@
+src/main/kotlin/com/nanyin/nacos/search/services/AuthenticationSessionRegistry.kt
+  h_231225c3625e99 63-86
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  h_231225c3625e99 120-122,125,149-195
+src/main/kotlin/com/nanyin/nacos/search/services/NacosAuthService.kt
+  h_231225c3625e99 267-284
+src/main/kotlin/com/nanyin/nacos/search/services/SessionFencing.kt
+  h_231225c3625e99 132-149,158-165
+src/main/kotlin/com/nanyin/nacos/search/settings/EnvironmentProfileStore.kt
+  h_231225c3625e99 30-36,39-40,104-120
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosConfigurable.kt
+  h_231225c3625e99 1075-1097,1099,1103,1135-1140,1150-1152,1155-1163
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosProjectSession.kt
+  h_231225c3625e99 101-114
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosSettings.kt
+  h_231225c3625e99 485-487,496-497,521-524,526-529,539-594,598-599,601-606,610-618,651,659,671-672,766-889,891-903,968-969,971-973
+src/main/kotlin/com/nanyin/nacos/search/settings/ProfileDeletionLifecycle.kt
+  h_231225c3625e99 1-186
+src/main/kotlin/com/nanyin/nacos/search/settings/ProfileStoreWriteOutcome.kt
+  h_231225c3625e99 42-47,68-72,88-89,92-96,101-102,106-108
+src/main/resources/messages/NacosSearchBundle.properties
+  h_231225c3625e99 129
+src/main/resources/messages/NacosSearchBundle_zh_CN.properties
+  h_231225c3625e99 129
+src/test/kotlin/com/nanyin/nacos/search/services/AuthenticationSessionRegistryTest.kt
+  h_231225c3625e99 103-129
+src/test/kotlin/com/nanyin/nacos/search/settings/EnvironmentPreferencesTest.kt
+  h_231225c3625e99 7,16-22,222-226,229
+src/test/kotlin/com/nanyin/nacos/search/settings/ProfileDeletionLifecycleTest.kt
+  h_231225c3625e99 1-620
+src/test/kotlin/com/nanyin/nacos/search/settings/SettingsApplyConnectionChangeTest.kt
+  h_231225c3625e99 16-17,62-66,68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "540634eb9e22c29d52b630d2a0ecff4dda88edf8",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
