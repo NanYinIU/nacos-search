@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.3.7"
+version = "1.3.8"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -110,6 +110,11 @@ tasks {
         """.trimIndent())
 
        changeNotes.set("""
+            <h3>1.3.8</h3>
+            <ul>
+                <li><b>Access visibility</b>: cached configurations the server has refused to serve are now hidden and reappear automatically once access returns. An authentication refusal hides the whole environment; a configuration-read permission denial hides only the affected Namespace. Publish, Namespace-discovery, and history refusals never hide readable configuration data. Visibility blocks survive IDE restarts and are removed together with the cached data by <code>Tools &gt; Clear Cache</code>.</li>
+                <li><b>访问可见性</b>：当服务器拒绝提供数据后（认证失败或读取权限被收回），插件不再显示之前缓存的配置，访问恢复后会自动重新显示。认证失败会隐藏该环境下的全部配置；配置读取权限被拒只隐藏对应命名空间；发布、命名空间发现、历史记录等权限拒绝不会隐藏仍可读取的配置数据。可见性屏蔽在 IDE 重启后仍然生效，执行 <code>Tools &gt; Clear Cache</code> 清除缓存时随缓存数据一并移除。</li>
+            </ul>
             <h3>1.3.7</h3>
             <ul>
                 <li><b>Compatibility</b>: History Diff loading state uses the public MessageDiffRequest API instead of internal LoadingDiffRequest (Marketplace verifier).</li>

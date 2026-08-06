@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.ConfigItem
 import com.nanyin.nacos.search.models.ConfigListResponse
+import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.models.SearchCriteria
 import com.nanyin.nacos.search.services.NacosApiService
@@ -50,8 +51,22 @@ class ToolWindowSearchControllerTest {
     fun resetSharedSettingsToAnonymousDefaults() {
         settings = ApplicationManager.getApplication().getService(NacosSettings::class.java).apply {
             resetToDefaults()
-            authMode = AuthMode.ANONYMOUS
-            getActiveServer().authMode = AuthMode.ANONYMOUS
+            // captureOperationContext reads the *published* EnvironmentProfile
+            // (ADR-0049), so ANONYMOUS must be republished through the store
+            // write path; mutating the flat legacy mirror alone leaves the
+            // NACOS_PASSWORD default, which fails capture with empty credentials.
+            applyServers(
+                listOf(
+                    NacosServerConfig(
+                        id = "s_local",
+                        displayName = "Local",
+                        serverUrl = "https://nacos.example",
+                        authMode = AuthMode.ANONYMOUS,
+                        apiPolicy = com.nanyin.nacos.search.models.NacosApiPolicy.V1
+                    )
+                ),
+                "s_local"
+            )
         }
     }
 

@@ -1,5 +1,6 @@
 package com.nanyin.nacos.search.settings
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.NacosServerConfig
@@ -7,6 +8,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.awt.Component
 import java.awt.Container
@@ -21,6 +23,15 @@ import com.intellij.util.ui.UIUtil
 
 @TestApplication
 class NacosConfigurableInteractionTest {
+
+    @BeforeEach
+    fun resetDefaults() {
+        // The settings form seeds from the shared app-level NacosSettings, which
+        // other test classes leave in an ANONYMOUS-published state. Reset to the
+        // product defaults (NACOS_PASSWORD seed) so every UI test in this class
+        // sees the same deterministic seed regardless of test order.
+        ApplicationManager.getApplication().getService(NacosSettings::class.java).resetToDefaults()
+    }
 
     @Test
     fun serverToolbarButtonsUpdateDraftSelectionAndModifiedState() {

@@ -4,7 +4,7 @@ import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.services.operations.RemoteOperationError
 import com.nanyin.nacos.search.services.visibility.CompletedObservation
 import com.nanyin.nacos.search.services.visibility.ObservationOutcome
-import com.nanyin.nacos.search.services.visibility.VisibilityOperationClass
+import com.nanyin.nacos.search.services.operations.ProtocolCapability
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlin.coroutines.CoroutineContext
 
@@ -44,7 +44,7 @@ internal suspend fun reportVisibility(
         CompletedObservation(
             observation = observation,
             identity = identity,
-            operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+            operationClass = ProtocolCapability.CONFIGURATION_READ,
             namespaceId = namespaceId,
             outcome = error?.let { ObservationOutcome.RemoteFailure(it) } ?: ObservationOutcome.Success
         )

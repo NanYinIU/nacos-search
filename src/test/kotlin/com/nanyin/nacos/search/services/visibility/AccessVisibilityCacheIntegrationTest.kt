@@ -13,6 +13,7 @@ import com.nanyin.nacos.search.services.ProfileTombstoneRegistry
 import com.nanyin.nacos.search.services.operations.ProtocolCapability
 import com.nanyin.nacos.search.services.clearAll
 import com.nanyin.nacos.search.services.deleteDetailNotFound
+import com.nanyin.nacos.search.services.invalidateNamespace
 import com.nanyin.nacos.search.services.replaceNamespaceIndex
 import com.nanyin.nacos.search.services.writeDetail
 import com.nanyin.nacos.search.services.writeListPage
@@ -502,6 +503,170 @@ class AccessVisibilityCacheIntegrationTest {
         assertTrue(
             cache.configurationVisibility(identity, "team-a") is ConfigurationVisibility.Blocked
         )
+    }
+
+    // --- Release-gate lifecycle safety (issue #127) ---
+
+    @Test
+    fun `namespace invalidation keeps the block so a residual payload stays hidden across restart`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
+        val cache = CacheService(System::currentTimeMillis, ProfileTombstoneRegistry(), store, visibility)
+        cache.awaitLoadCompleted()
+        val identity = identity("dev")
+
+        cache.writeDetail(
+            identity, "team-a",
+            NacosConfiguration("secret.properties", "DEFAULT_GROUP", "team-a", "k=v", "properties")
+        )
+        visibility.reportCompleted(
+            CompletedObservation(
+                observation = 100,
+                identity = identity,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
+                namespaceId = "team-a",
+                outcome = ObservationOutcome.RemoteFailure(
+                    com.nanyin.nacos.search.services.operations.RemoteOperationError.Authorization(403)
+                )
+            )
+        )
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
+
+        // Invalidation drops the payloads; it must not drop the gate that hides them.
+        cache.invalidateNamespace(identity, "team-a")
+
+        assertNull(cache.getConfigDetail(identity, "team-a", "secret.properties", "DEFAULT_GROUP"))
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
+        assertTrue(store.loadVisibilityRecords().isNotEmpty())
+
+        // Simulate the partial-wipe case: a payload file invalidation should
+        // have removed lands back on the store before restart.
+        store.putDetail(
+            com.nanyin.nacos.search.services.CacheCoordinate.detailKey(
+                identity, "team-a", "secret.properties", "DEFAULT_GROUP"
+            ),
+            CacheService.CacheEntry(
+                CacheService.CacheEntryType.CONFIG_DETAIL,
+                NacosConfiguration("secret.properties", "DEFAULT_GROUP", "team-a", "k=v", "properties"),
+                createdAt = System.currentTimeMillis(),
+                ttlMs = 300_000L,
+                source = CacheService.CacheSource.REMOTE
+            )
+        )
+
+        // Restart over the same store: the surviving block hides the residual.
+        val rebuilt = CacheService(store)
+        rebuilt.awaitLoadCompleted()
+        assertTrue(rebuilt.accessVisibility().isConfigurationReadBlocked(identity, "team-a"))
+        assertNull(rebuilt.getConfigDetail(identity, "team-a", "secret.properties", "DEFAULT_GROUP"))
+
+        // Only a newer matching success reveals it again.
+        rebuilt.accessVisibility().reportCompleted(
+            CompletedObservation(
+                observation = 101,
+                identity = identity,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
+                namespaceId = "team-a",
+                outcome = ObservationOutcome.Success
+            )
+        )
+        assertEquals(
+            "k=v",
+            rebuilt.getConfigDetail(identity, "team-a", "secret.properties", "DEFAULT_GROUP")?.content
+        )
+    }
+
+    @Test
+    fun `partial visibility persistence failure keeps the block fail closed`() = runBlocking {
+        val store = FailingVisibilityPutStore(InMemoryCacheStore())
+        val visibility = AccessVisibility(store)
+        val cache = CacheService(System::currentTimeMillis, ProfileTombstoneRegistry(), store, visibility)
+        cache.awaitLoadCompleted()
+        val identity = identity("dev")
+
+        cache.writeDetail(
+            identity, "public",
+            NacosConfiguration("secret.properties", "DEFAULT_GROUP", "public", "k=v", "properties")
+        )
+
+        // The store refuses to persist the gate; the in-memory block must still apply.
+        val accepted = visibility.reportCompleted(
+            CompletedObservation(
+                observation = 100,
+                identity = identity,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
+                outcome = ObservationOutcome.RemoteFailure(
+                    com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
+                )
+            )
+        )
+        assertTrue(accepted, "block must apply in memory when persistence fails")
+        assertTrue(visibility.isIdentityAuthBlocked(identity))
+        assertNull(cache.getConfigDetail(identity, "public", "secret.properties", "DEFAULT_GROUP"))
+
+        // A newer matching success still clears the in-memory block.
+        visibility.reportCompleted(
+            CompletedObservation(
+                observation = 101,
+                identity = identity,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
+                outcome = ObservationOutcome.Success
+            )
+        )
+        assertFalse(visibility.isIdentityAuthBlocked(identity))
+        assertEquals(
+            "k=v",
+            cache.getConfigDetail(identity, "public", "secret.properties", "DEFAULT_GROUP")?.content
+        )
+    }
+
+    @Test
+    fun `profile deletion cannot reveal another profile's blocked payloads`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
+        val cache = CacheService(System::currentTimeMillis, ProfileTombstoneRegistry(), store, visibility)
+        cache.awaitLoadCompleted()
+        val blocked = identity("dev")
+        val sibling = identity("sibling", principal = "bob")
+
+        cache.writeDetail(
+            blocked, "public",
+            NacosConfiguration("secret.properties", "DEFAULT_GROUP", "public", "k=v", "properties")
+        )
+        visibility.reportCompleted(
+            CompletedObservation(
+                observation = 100,
+                identity = blocked,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
+                outcome = ObservationOutcome.RemoteFailure(
+                    com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
+                )
+            )
+        )
+
+        // Deleting a sibling profile leaves the blocked profile's gate intact.
+        cache.purgeProfile("sibling")
+        assertTrue(visibility.isIdentityAuthBlocked(blocked))
+        assertNull(cache.getConfigDetail(blocked, "public", "secret.properties", "DEFAULT_GROUP"))
+
+        // Deleting the blocked profile drops gate and payloads together, so a
+        // restart cannot reveal anything either.
+        cache.purgeProfile("dev")
+        assertFalse(visibility.isIdentityAuthBlocked(blocked))
+        assertTrue(store.loadVisibilityRecords().isEmpty())
+        assertNull(cache.getConfigDetail(blocked, "public", "secret.properties", "DEFAULT_GROUP"))
+        val rebuilt = CacheService(store)
+        rebuilt.awaitLoadCompleted()
+        assertNull(rebuilt.getConfigDetail(blocked, "public", "secret.properties", "DEFAULT_GROUP"))
+    }
+
+    /** Store whose visibility-record writes fail, simulating partial persistence failure. */
+    private class FailingVisibilityPutStore(
+        private val delegate: InMemoryCacheStore
+    ) : com.nanyin.nacos.search.services.CacheStore by delegate {
+        override suspend fun putVisibilityRecord(key: String, record: AccessVisibilityRecord) {
+            throw IllegalStateException("simulated partial persistence failure")
+        }
     }
 
     private fun identity(

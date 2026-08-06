@@ -37,11 +37,23 @@ class NacosSearchServiceCancelTest {
     @BeforeEach
     fun resetSharedSettingsToAnonymousDefaults() {
         // Product defaults are NACOS_PASSWORD; these mocked search paths still exercise
-        // anonymous credential-less stubs, so force ANONYMOUS after reset.
+        // anonymous credential-less stubs, so republish an ANONYMOUS profile through
+        // the store write path — captureOperationContext reads the published
+        // EnvironmentProfile (ADR-0049), not the flat legacy mirror.
         ApplicationManager.getApplication().getService(NacosSettings::class.java).apply {
             resetToDefaults()
-            authMode = AuthMode.ANONYMOUS
-            getActiveServer().authMode = AuthMode.ANONYMOUS
+            applyServers(
+                listOf(
+                    com.nanyin.nacos.search.models.NacosServerConfig(
+                        id = "s_local",
+                        displayName = "Local",
+                        serverUrl = "https://nacos.example",
+                        authMode = AuthMode.ANONYMOUS,
+                        apiPolicy = com.nanyin.nacos.search.models.NacosApiPolicy.V1
+                    )
+                ),
+                "s_local"
+            )
         }
     }
 
