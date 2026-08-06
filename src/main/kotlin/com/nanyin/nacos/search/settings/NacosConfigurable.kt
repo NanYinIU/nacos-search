@@ -1067,29 +1067,44 @@ class NacosConfigurable @JvmOverloads constructor(
         admitProfileDeletionGuards()
         admitEnvironmentRealignGuards()
 
-        // Decide connection-vs-preferences from the profile's access revision
-        // (endpoint, API policy, auth strategy, principal, secret). The old
-        // hand-built signature omitted password and API policy, so those
-        // changes incorrectly published preferences-only (issue #41). Never
-        // put the credential value into any comparison key.
-        val oldActiveId = settings.activeServerId
-        val oldAccessRevision = settings.getActiveProfile()?.accessRevision
-        // Namespace is not part of the access revision (it is not an
-        // EnvironmentProfile field), but it still selects which dataset the tool
-        // window shows, so it must keep forcing a reload the way the old
-        // signature did. Connection timeout deliberately does not.
-        val oldNamespace = settings.getActiveServer().namespace
+        // Publish through the profile-intent store. The write outcome is the
+        // sole classification for connection-vs-preferences notifications —
+        // do not re-compare signatures, passwords, or list positions (#103).
+        val outcome = settings.applyServers(draftServers, draftActiveId)
 
-        // Apply draft to settings
-        settings.applyServers(draftServers, draftActiveId)
+        // Stage failure: dual-write already kept the published pair. Resync the
+        // draft from published state and tell the user — never pretend a
+        // preferences-only success (ADR-0035 / #103 review).
+        if (outcome.hasStageFailures()) {
+            Messages.showErrorDialog(
+                NacosSearchBundle.message(
+                    "settings.credential.stage.failed",
+                    outcome.failedStageProfileIds.joinToString(", ")
+                ),
+                NacosSearchBundle.message("settings.invalid.title")
+            )
+            // Reload draft from what actually published so the form cannot keep
+            // showing the rejected secret/connection fields as applied.
+            initializeDraft()
+            serverListModel.clear()
+            draftServers.forEach { serverListModel.addElement(it) }
+            refreshServerListDecorations()
+            selectActiveServerInList()
+            loadDraftIntoForm()
+        }
 
         // Keep the current project's tool-window selection on the same profile
         // as the blue-dot so Settings and the search panel stay aligned.
+        // Skip realign when the requested active id failed to publish.
+        val publishedActive = settings.activeServerId
         contextProject()?.let { ctx ->
             val session = ctx.getService(NacosProjectSession::class.java) ?: return@let
             val namespace = session.sessionState.namespaceId.ifBlank { "public" }
-            if (session.sessionState.selectedProfileId != draftActiveId) {
-                session.select(draftActiveId, namespace)
+            if (session.sessionState.selectedProfileId != publishedActive &&
+                publishedActive.isNotBlank() &&
+                publishedActive !in outcome.failedStageProfileIds
+            ) {
+                session.select(publishedActive, namespace)
                 ctx.getService(ProjectSessionEpochs::class.java)?.bump()
             }
         }
@@ -1098,16 +1113,27 @@ class NacosConfigurable @JvmOverloads constructor(
         val selectedLanguage = languageComboBox.selectedItem as LanguageService.SupportedLanguage
         languageService.setLanguage(selectedLanguage.code)
 
-        val connectionChanged = oldActiveId != settings.activeServerId ||
-            settings.getActiveProfile()?.accessRevision != oldAccessRevision ||
-            settings.getActiveServer().namespace != oldNamespace
-
         val publisher = ApplicationManager.getApplication().messageBus
             .syncPublisher(NacosSettingsListener.TOPIC)
-        if (connectionChanged) {
-            publisher.settingsChanged()
-        } else {
-            publisher.preferencesChanged()
+        when {
+            outcome.isOperationalChange() || outcome.hasStageFailures() -> {
+                // Stage failures need connection-facing consumers to re-read the
+                // published pair, not a silent preferences-only path.
+                publisher.settingsChanged()
+            }
+            else -> {
+                // Preferences, display-only, pure reorder, or no-op after Apply:
+                // never treat as connection-level (ADR-0042 / #103).
+                publisher.preferencesChanged()
+            }
+        }
+
+        if (outcome.hasStageFailures() && !outcome.isOperationalChange()) {
+            // Mark Apply as failed when the user's change did not land and
+            // nothing else operational did — dialog stays open with resynced draft.
+            throw java.lang.IllegalStateException(
+                "Credential staging failed for: ${outcome.failedStageProfileIds.joinToString(", ")}"
+            )
         }
     }
 

@@ -61,6 +61,15 @@ data class EnvironmentProfile(
         }
     }
 
+    /**
+     * Legacy capture / test helper that bumps revisions for a field delta.
+     *
+     * **Not a publisher.** Environment profiles are published only by
+     * [com.nanyin.nacos.search.settings.EnvironmentProfileStore] from
+     * [ProfileIntent]s (ADR-0049 / issue #103). Do not use this to write the
+     * settings component's profile list — revision policy lives in the store
+     * and can drift if a second path invents its own definition of "changed."
+     */
     fun withUpdated(
         canonicalEndpoint: String = this.canonicalEndpoint,
         apiPolicy: NacosApiPolicy = this.apiPolicy,
