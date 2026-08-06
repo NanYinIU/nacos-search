@@ -318,6 +318,30 @@ NACOS_LIVE_V1_ENDPOINT=http://127.0.0.1:8848 \
 
 结论（本数据规模）：**命名空间切换在索引已缓存时接近零成本；环境切换不会串缓存，但新环境必须重新拉远程；coordinator 刷新始终打远程（`useCache=false`），与搜索热路径读缓存是两条线。**
 
+### 8.1 大数据量实测（1000+ × ~10k 行）
+
+种子：`perf-bulk-1` = **1205** 条，单文件 ≈**10 000** 行 / ≈**249 KB**（`scripts/seed-large-nacos.py`）。
+
+```bash
+python3 scripts/seed-large-nacos.py --count 1200 --lines 10000
+NACOS_LIVE_V1_ENDPOINT=http://127.0.0.1:8848 NACOS_LIVE_LARGE_NS=perf-bulk-1 \
+  ./gradlew test --tests "com.nanyin.nacos.search.services.operations.LiveLargeDataPerfTest"
+```
+
+| 场景 | 结果 |
+| --- | --- |
+| 冷索引 1205 条 summary | **7511 ms**（堆约 +738 MB，含测试 JVM 噪声） |
+| 暖索引读 / 切回同 ns | **0 ms** |
+| 冷拉 32 个大正文（并行） | **102 ms**，content≈7.6 MB |
+| 暖 detail 读 ×32 | **0 ms** |
+| `ConfigKeyExtractor` 单文件 ~10k 行 | **46 ms**，keys≈9997 |
+| env=B 冷索引同 ns | **4919 ms**（身份隔离，必须重拉） |
+| 切回 env=A | 暖 **0 ms**（index+detail 仍在） |
+
+要点：**条目数**打在索引分页上（pageSize=100 → ~13 次 list）；**行数/体积**打在 detail 与 key 提取上。全量拉 1200 个正文会到约 300 MB content，本 harness 只抽样 32 条测 body 路径。
+
+原始输出：`docs/research/2026-08-06-live-large-data-perf-results.txt`。
+
 ---
 
 *本文仅记录已核实的一手来源与仓库事实；标注 [推测] 的阈值在固化进 CI 前应用本机/CI 基线重新校准。*
