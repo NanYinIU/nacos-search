@@ -47,7 +47,8 @@ sealed class ClassifiedResponse {
  * transport dispatch, the single permitted authentication recovery for
  * idempotent exchanges, cancellation preservation, and the meaning of
  * [ClassifiedResponse]. Dialects supply request construction, login wire,
- * and response classification only.
+ * and response classification only. Used by generation probing (#97) and
+ * configuration browsing reads (#98).
  *
  * Transport-level retries remain inside [ProtocolTransport] (ADR-0021); this
  * budget is the outer deadline that login, those retries, and one auth

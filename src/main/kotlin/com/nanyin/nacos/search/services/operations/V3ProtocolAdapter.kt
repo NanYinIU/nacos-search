@@ -28,14 +28,16 @@ import java.nio.charset.StandardCharsets
  * issue #96). This dialect supplies the login request and response shape;
  * it does not own a private completed-token store.
  *
- * Generation probing runs through [ProtocolCore] (ADR-0048 / issue #97);
- * browsing and publish still use the adapter-local shell until later slices.
+ * Generation probing and configuration browsing (summary, detail, history,
+ * Namespace discovery) run through [ProtocolCore] (ADR-0048 / issues #97 /
+ * #98). Publish still uses the adapter-local non-replaying shell until #99.
  */
 class V3ProtocolAdapter(
     private val transport: ProtocolTransport,
     private val sessions: AuthenticationSessionRegistry = AuthenticationSessionRegistry(),
     private val gson: Gson = Gson()
 ) : ProtocolAdapter {
+    private var clock: () -> Long = System::currentTimeMillis
     private var core: ProtocolCore = ProtocolCore(transport, sessions)
 
     override val capabilities: ProtocolCapabilities = ProtocolCapabilities.V3
@@ -47,6 +49,7 @@ class V3ProtocolAdapter(
         clock: () -> Long,
         gson: Gson
     ) : this(transport, sessions, gson) {
+        this.clock = clock
         this.core = ProtocolCore(transport, sessions, budgetMillis, clock)
     }
 
@@ -80,45 +83,72 @@ class V3ProtocolAdapter(
         }
     }
 
+    /** Shared browsing classification: recover refused tokens once; map other HTTP failures. */
+    private fun classifyBrowsingResponse(
+        target: OperationTarget,
+        response: ProtocolResponse
+    ): ClassifiedResponse {
+        if (rejectedNacosPasswordToken(target, response)) {
+            return ClassifiedResponse.RecoverableTokenRefusal(response.status)
+        }
+        return when (response.status) {
+            in 200..299 -> ClassifiedResponse.Success(response)
+            else -> ClassifiedResponse.Failure(mapStatusFailure(response))
+        }
+    }
+
+    /**
+     * Detail treats some 404 envelopes as successful absence (null). Classification
+     * therefore admits 404 into [ClassifiedResponse.Success] for [unwrapEnvelopeOrNull].
+     */
+    private fun classifyDetailResponse(
+        target: OperationTarget,
+        response: ProtocolResponse
+    ): ClassifiedResponse {
+        if (rejectedNacosPasswordToken(target, response)) {
+            return ClassifiedResponse.RecoverableTokenRefusal(response.status)
+        }
+        return when (response.status) {
+            in 200..299, 404 -> ClassifiedResponse.Success(response)
+            else -> ClassifiedResponse.Failure(mapStatusFailure(response))
+        }
+    }
+
     override suspend fun listSummaries(
         target: OperationTarget,
         query: SummaryQuery
-    ): Result<SummaryPage> = runCatching {
+    ): Result<SummaryPage> {
         validate(target)
-        try {
-            val response = executeAuthenticated(target) { auth -> applyAuth(listRequest(target, query), auth) }
-            val data = unwrapEnvelope(response, "summary list")
-            parseSummaryPage(data)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: RemoteOperationError) {
-            throw error
-        } catch (error: JsonParseException) {
-            throw RemoteOperationError.Protocol("Invalid V3 summary response", error)
-        } catch (error: Throwable) {
-            throw RemoteOperationError.Connection(error)
-        }
+        return core.executeIdempotent(
+            target = target,
+            build = { auth -> applyAuth(listRequest(target, query), auth) },
+            classify = { classifyBrowsingResponse(target, it) },
+            parse = { response ->
+                parseV3("summary list") {
+                    parseSummaryPage(unwrapEnvelope(response, "summary list"))
+                }
+            },
+            login = { performLogin(it) }
+        )
     }
 
     override suspend fun readDetail(
         target: OperationTarget,
         coordinate: ConfigurationCoordinate
-    ): Result<NacosConfiguration?> = runCatching {
+    ): Result<NacosConfiguration?> {
         validate(target)
-        try {
-            val response = executeAuthenticated(target) { auth -> applyAuth(detailRequest(target, coordinate), auth) }
-            val data = unwrapEnvelopeOrNull(response, "detail")
-            if (data == null || data.isJsonNull) return@runCatching null
-            parseDetail(data)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: RemoteOperationError) {
-            throw error
-        } catch (error: JsonParseException) {
-            throw RemoteOperationError.Protocol("Invalid V3 detail response", error)
-        } catch (error: Throwable) {
-            throw RemoteOperationError.Connection(error)
-        }
+        return core.executeIdempotent(
+            target = target,
+            build = { auth -> applyAuth(detailRequest(target, coordinate), auth) },
+            classify = { classifyDetailResponse(target, it) },
+            parse = { response ->
+                parseV3("detail") {
+                    val data = unwrapEnvelopeOrNull(response, "detail")
+                    if (data == null || data.isJsonNull) null else parseDetail(data)
+                }
+            },
+            login = { performLogin(it) }
+        )
     }
 
     override suspend fun publish(
@@ -162,55 +192,61 @@ class V3ProtocolAdapter(
     }
 
     /** V3 declares the documented content-search capability. V1 does not. */
-    override suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage> = runCatching {
+    override suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage> {
         validate(target)
-        try {
-            val response = executeAuthenticated(target) { auth -> applyAuth(historyListRequest(target, query), auth) }
-            val data = unwrapEnvelope(response, "history list")
-            parseHistoryPage(data)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: RemoteOperationError) {
-            throw error
-        } catch (error: JsonParseException) {
-            throw RemoteOperationError.Protocol("Invalid V3 history list response", error)
-        } catch (error: Throwable) {
-            throw RemoteOperationError.Connection(error)
-        }
+        return core.executeIdempotent(
+            target = target,
+            build = { auth -> applyAuth(historyListRequest(target, query), auth) },
+            classify = { classifyBrowsingResponse(target, it) },
+            parse = { response ->
+                parseV3("history list") {
+                    parseHistoryPage(unwrapEnvelope(response, "history list"))
+                }
+            },
+            login = { performLogin(it) }
+        )
     }
 
-    override suspend fun readHistoryDetail(target: OperationTarget, historyId: String): Result<HistoryDetail> = runCatching {
+    override suspend fun readHistoryDetail(target: OperationTarget, historyId: String): Result<HistoryDetail> {
         validate(target)
-        try {
-            val response = executeAuthenticated(target) { auth -> applyAuth(historyDetailRequest(target, historyId), auth) }
-            val data = unwrapEnvelope(response, "history detail")
-            parseHistoryDetail(data)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: RemoteOperationError) {
-            throw error
-        } catch (error: JsonParseException) {
-            throw RemoteOperationError.Protocol("Invalid V3 history detail response", error)
-        } catch (error: Throwable) {
-            throw RemoteOperationError.Connection(error)
-        }
+        return core.executeIdempotent(
+            target = target,
+            build = { auth -> applyAuth(historyDetailRequest(target, historyId), auth) },
+            classify = { classifyBrowsingResponse(target, it) },
+            parse = { response ->
+                parseV3("history detail") {
+                    parseHistoryDetail(unwrapEnvelope(response, "history detail"))
+                }
+            },
+            login = { performLogin(it) }
+        )
     }
 
-    override suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> = runCatching {
+    override suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> {
         validate(target)
-        try {
-            val response = executeAuthenticated(target) { auth -> applyAuth(namespaceListRequest(target), auth) }
-            val data = unwrapEnvelopeElement(response, "namespace list")
-            parseNamespaceList(data)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: RemoteOperationError) {
-            throw error
-        } catch (error: JsonParseException) {
-            throw RemoteOperationError.Protocol("Invalid V3 namespace list response", error)
-        } catch (error: Throwable) {
-            throw RemoteOperationError.Connection(error)
-        }
+        return core.executeIdempotent(
+            target = target,
+            build = { auth -> applyAuth(namespaceListRequest(target), auth) },
+            classify = { classifyBrowsingResponse(target, it) },
+            parse = { response ->
+                parseV3("namespace list") {
+                    parseNamespaceList(unwrapEnvelopeElement(response, "namespace list"))
+                }
+            },
+            login = { performLogin(it) }
+        )
+    }
+
+    private inline fun <T> parseV3(operation: String, block: () -> T): T = try {
+        block()
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: RemoteOperationError) {
+        throw error
+    } catch (error: JsonParseException) {
+        throw RemoteOperationError.Protocol("Invalid V3 $operation response", error)
+    } catch (error: Throwable) {
+        throw RemoteOperationError.Connection(error)
     }
 
     // ---- request builders ----
@@ -289,31 +325,13 @@ class V3ProtocolAdapter(
     // ---- authentication ----
 
     /**
-     * Idempotent reads only. A NACOS_PASSWORD token that the server rejects is
-     * refreshed once and the request replayed (ADR-0011). Writes must use
-     * [executeOnce] instead — see the note there.
-     */
-    private suspend fun executeAuthenticated(
-        target: OperationTarget,
-        build: (RequestAuthentication) -> ProtocolRequest
-    ): ProtocolResponse {
-        val firstResponse = executeOnce(target, build)
-        if (rejectedNacosPasswordToken(target, firstResponse)) {
-            val refreshed = authenticationFor(target, forceRefresh = true)
-            return transport.execute(build(refreshed))
-        }
-        return firstResponse
-    }
-
-    /**
      * Sends the request exactly once, whatever the response says.
      *
-     * Writes go through here rather than [executeAuthenticated]: a rejected
-     * token cannot prove the first request never reached the configuration
-     * store, so replaying it risks applying the same write twice. ADR-0011
-     * forbids that, and V1 keeps its publish off the replaying `execute` for
-     * the same reason. The rejected token is still evicted so the next attempt
-     * logs in again instead of reusing a credential the server has refused.
+     * Writes go through here rather than [ProtocolCore.executeIdempotent]: a
+     * rejected token cannot prove the first request never reached the
+     * configuration store, so replaying it risks applying the same write twice.
+     * ADR-0011 forbids that. The rejected token is still evicted so the next
+     * attempt logs in again instead of reusing a credential the server has refused.
      */
     private suspend fun executeOnce(
         target: OperationTarget,
@@ -400,7 +418,7 @@ class V3ProtocolAdapter(
         val ttlSeconds = tokenObject.get("tokenTtl")?.asLong ?: DEFAULT_TOKEN_TTL_SECONDS
         return AuthenticationToken(
             value = accessToken,
-            expiresAtMillis = System.currentTimeMillis() +
+            expiresAtMillis = clock() +
                 ((ttlSeconds - TOKEN_EXPIRY_SKEW_SECONDS) * 1000L)
         )
     }
