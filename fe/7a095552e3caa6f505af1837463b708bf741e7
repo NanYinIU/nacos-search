@@ -1,0 +1,89 @@
+src/main/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibility.kt
+  s_634a5fff840e98::t_5d0adac1a2c852 153-171
+  s_32e334de7fa6c8::t_b08b1b39e95d0b 152
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/PsiNavigationVisibilityTransportIntegrationTest.kt
+  s_634a5fff840e98::t_c8f2198876ed66 1-283
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolver.kt
+  s_634a5fff840e98::t_685d102215a079 5
+  s_634a5fff840e98::t_8d0169abe969a2 65-70,76-92,116-118
+  s_634a5fff840e98::t_7456f0fca53669 141-144,160-165,167,171-173,178-188,196-197
+  s_634a5fff840e98::t_0e6ecfa7788b2e 206-209,219-221,223
+  s_634a5fff840e98::t_d7f0f2babcad28 168-170
+  s_634a5fff840e98::t_58de564f4ac7ed 198
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyIndexServiceTest.kt
+  s_634a5fff840e98::t_06c55eb6288dab 12
+  s_634a5fff840e98::t_255b03d079b2e5 283,320,337
+  s_634a5fff840e98::t_1776f9c05bc26b 8,10-11
+  s_634a5fff840e98::t_f0f58707c98d90 217-228,230-247,249-256,258-261,263-266,269-282,284-319,321-336,338-346
+  s_634a5fff840e98::t_182b60b9d5acaa 229
+  s_634a5fff840e98::t_caae565b552191 257
+  s_634a5fff840e98::t_ee7dae9705a172 262
+src/main/resources/messages/NacosSearchBundle.properties
+  s_634a5fff840e98::t_f146c967b40c62 243
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolverTest.kt
+  s_634a5fff840e98::t_936105e222219d 8-11
+  s_634a5fff840e98::t_8b5d32ed1545bd 477-577
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProviderTest.kt
+  s_634a5fff840e98::t_cb33761c05da5a 562
+  s_634a5fff840e98::t_5f33355dd4be63 32
+  s_634a5fff840e98::t_4f137294a20708 618-624
+  s_634a5fff840e98::t_518feb93308f06 570
+  s_634a5fff840e98::t_6401b8328e67ad 511-526,528,535-561,564-569,571-617,625-630,633-642
+  s_634a5fff840e98::t_1e7aa2ca3beb4a 31
+  s_634a5fff840e98::t_aaa7f5147e8ecc 529,531-534
+  s_634a5fff840e98::t_53b09b8c10754d 631
+  s_634a5fff840e98::t_a6a4987efaf782 632
+  s_634a5fff840e98::t_80733adb16c825 527
+  s_634a5fff840e98::t_f9e36a0791e5ef 530
+  s_634a5fff840e98::t_f4d33bfc8bf8ce 563
+docs/adr/0051-own-the-derived-key-index-lifecycle-outside-the-cache.md
+  s_634a5fff840e98::t_20399c0ad91dc7 9-10
+CLAUDE.md
+  s_634a5fff840e98::t_d5fb20622a10f9 109-110
+  s_634a5fff840e98::t_e11f7318229df4 158
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProvider.kt
+  s_634a5fff840e98::t_84a88329ff499d 76
+  s_634a5fff840e98::t_05c20caeeebcff 228-240
+src/main/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibilityModels.kt
+  s_634a5fff840e98::t_859bb8a4de3d41 182-184,186
+src/main/resources/messages/NacosSearchBundle_zh_CN.properties
+  s_634a5fff840e98::t_a99f59b46837cf 243
+src/test/kotlin/com/nanyin/nacos/search/services/TestDispatchers.kt
+  s_634a5fff840e98::t_0bc9bc35726f1d 1-2,8-28,52
+  s_634a5fff840e98::t_1c21d79434d282 3-7,29-51
+src/main/kotlin/com/nanyin/nacos/search/services/CacheSnapshot.kt
+  s_634a5fff840e98::t_6ea603b38914e2 45-55
+  s_634a5fff840e98::t_23a01c2c0fc6c7 31-33
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyIndexService.kt
+  s_634a5fff840e98::t_596ffa7e863d67 61-69,80-85
+  s_634a5fff840e98::t_f4c2966fafed2b 25-29
+src/main/kotlin/com/nanyin/nacos/search/psi/ConfigReferenceStatus.kt
+  s_634a5fff840e98::t_a0af7c2f421479 19-27
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_634a5fff840e98::t_abad2cebec35cc 10
+  s_634a5fff840e98::t_af1c75506b5a5e 197-203,209-214,219,225,233-240,245,250,258-259,265-266,268,272
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "fe7a095552e3caa6f505af1837463b708bf741e7",
+  "prompts": {},
+  "sessions": {
+    "s_32e334de7fa6c8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b1c016e-ae12-40bd-8ee5-e99b51c7b6a4",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_634a5fff840e98": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "03191a5f-4b32-459e-bfd5-ee4f9ba90746",
+        "model": "deepseek-v4-flash-0731"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
