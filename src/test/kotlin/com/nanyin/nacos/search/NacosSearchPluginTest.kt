@@ -3,6 +3,8 @@ package com.nanyin.nacos.search
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.services.network.NacosRequestError
+import com.nanyin.nacos.search.services.operations.RemoteOperationError
+import com.nanyin.nacos.search.settings.ConfigurationRequired
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -41,14 +43,19 @@ class NacosSearchPluginTest {
         val plugin = NacosSearchPlugin()
         try {
             val result = plugin.refreshCache("contract-test-ns")
-            // Without a real server, the refresh fails. The error must be
-            // classified through the coordinator's error model, not a raw
-            // network exception, proving the call went through the coordinator.
+            // Without a real server, the refresh fails. After issue #122 the
+            // coordinator preserves typed remote causes (e.g. Connection) rather
+            // than collapsing them to NacosRequestError — that is the contract.
+            // ConfigurationRequired / IllegalStateException remain valid when
+            // capture or Partial without a stopping cause fails closed.
             if (result.isFailure) {
                 val error = result.exceptionOrNull()
                 assertTrue(
-                    error is NacosRequestError || error is IllegalStateException,
-                    "Expected NacosRequestError or IllegalStateException, got: $error"
+                    error is RemoteOperationError ||
+                        error is NacosRequestError ||
+                        error is ConfigurationRequired ||
+                        error is IllegalStateException,
+                    "Expected typed coordinator/gateway failure, got: $error"
                 )
             }
         } finally {
