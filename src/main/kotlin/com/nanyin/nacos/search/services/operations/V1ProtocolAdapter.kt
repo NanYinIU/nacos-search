@@ -2,7 +2,6 @@ package com.nanyin.nacos.search.services.operations
 
 import com.google.gson.Gson
 import com.google.gson.JsonParseException
-import com.google.gson.reflect.TypeToken
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
