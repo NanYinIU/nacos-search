@@ -227,19 +227,22 @@ class NamespacePanel(
 
     private fun updateNamespaceButton() {
         invokeOnEdt(ModalityState.defaultModalityState()) {
-            // Restore this project's selection, otherwise keep the local
-            // selection, otherwise default to the first. Never adopt another
-            // project's app-wide NamespaceService state (issue #107).
+            // Restore this project's session Namespace. If discovery omitted it,
+            // keep the stored id on the button — never adopt namespaces.first()
+            // and overwrite the project session (issue #107).
             projectSession?.ensureInitialized(settings.migrationDefaults())
-            val projectSelection = projectSession?.sessionState?.namespaceId
-                ?.let { selectedId -> namespaces.find { it.namespaceId == selectedId } }
-            val toSelect: NamespaceInfo? = projectSelection ?: currentNamespace
+            val storedId = projectSession?.sessionState?.namespaceId?.takeIf { it.isNotBlank() }
+            val projectSelection = storedId?.let { id -> namespaces.find { it.namespaceId == id } }
+            val toSelect: NamespaceInfo? = projectSelection
+                ?: currentNamespace
+                ?: storedId?.let { NamespaceInfo(namespaceId = it, namespaceName = it) }
             if (toSelect != null) {
                 val matching = namespaces.find { it.namespaceId == toSelect.namespaceId }
                 if (matching != null) {
                     selectNamespace(matching, notify = currentNamespace == null)
-                } else if (namespaces.isNotEmpty()) {
-                    selectNamespace(namespaces.first(), notify = currentNamespace == null)
+                } else {
+                    currentNamespace = toSelect
+                    renderButton(toSelect)
                 }
             } else if (namespaces.isNotEmpty()) {
                 selectNamespace(namespaces.first(), notify = true)

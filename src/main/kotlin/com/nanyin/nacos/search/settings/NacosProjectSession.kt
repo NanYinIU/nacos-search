@@ -53,20 +53,16 @@ data class NacosProjectSessionState(
         sessionInitialized = true
     }
 
-    /** @deprecated Prefer [ensureInitialized]; kept for call-site migration. */
+    /** @see ensureInitialized */
     fun seedIfNew(defaults: LegacyMigrationResult) = ensureInitialized(defaults)
 
     /**
-     * Ensures the session is initialized, then leaves the selection alone.
-     * An initialized or explicit selection that points at a missing profile
-     * stays put (profile-unavailable) — never silently retargets (ADR-0025 / #107).
+     * Ensures the session is initialized. Never retargets a missing profile —
+     * leave the stale id for profile-unavailable (ADR-0025 / #107).
      */
+    @Suppress("UNUSED_PARAMETER")
     fun healSelection(defaults: LegacyMigrationResult, profileExists: (String) -> Boolean) {
         ensureInitialized(defaults)
-        // profileExists is retained so call sites keep the same signature; an
-        // initialized session must not adopt another profile when the selected
-        // one is missing.
-        if (selectedProfileId.isNotBlank() && profileExists(selectedProfileId)) return
     }
 
     fun select(profileId: String, namespace: String) {
@@ -80,7 +76,13 @@ data class NacosProjectSessionState(
 @Service(Service.Level.PROJECT)
 @State(
     name = "NacosProjectSession",
-    storages = [Storage(StoragePathMacros.WORKSPACE_FILE)]
+    storages = [
+        Storage(StoragePathMacros.WORKSPACE_FILE),
+        // Pre-#107 projects wrote `$PROJECT_CONFIG_DIR$/nacos-project-session.xml`.
+        // Keep it as a deprecated load source so upgrades adopt the selection
+        // once into workspace.xml instead of re-seeding from the app-wide default.
+        Storage(value = "nacos-project-session.xml", deprecated = true)
+    ]
 )
 class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
     var sessionState = NacosProjectSessionState()
