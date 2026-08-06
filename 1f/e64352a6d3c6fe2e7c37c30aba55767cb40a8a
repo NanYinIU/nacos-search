@@ -1,0 +1,33 @@
+src/main/kotlin/com/nanyin/nacos/search/services/CacheCoordinate.kt
+  s_36f6706875e447::t_336c2075686a9f 79-92
+src/main/kotlin/com/nanyin/nacos/search/services/CacheSnapshot.kt
+  s_36f6706875e447::t_8e47640479d948 28-31,45-49
+src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt
+  s_a0e1e83a08efc5::t_dcaefca11b60ab 565-569,603-604,656-659,676,966-969,971-975
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/NamespaceConfigReadPermissionTransportIntegrationTest.kt
+  s_a0e1e83a08efc5::t_97178173aab1f9 1-398
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "1fe64352a6d3c6fe2e7c37c30aba55767cb40a8a",
+  "prompts": {},
+  "sessions": {
+    "s_36f6706875e447": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4127616a-1472-4b6c-8786-3a77f2b1bdde",
+        "model": "deepseek-v4-flash:0731-cloud"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_a0e1e83a08efc5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "128c9563-4054-4202-a867-887f793607db",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
