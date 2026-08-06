@@ -57,8 +57,9 @@ data class ProfileIntent(
 ) {
     companion object {
         /**
-         * Compatibility bridge from the legacy server-entry dual-write surface
-         * until the settings dialog edits intents directly (later work under #47).
+         * Bridge from the settings dual-write draft row into a profile intent.
+         * The dialog holds dual-write rows that map 1:1 to intents (issue #106);
+         * revisions and credential-slot identity are never present on this type.
          */
         fun fromServerConfig(server: NacosServerConfig): ProfileIntent {
             val id = server.id.ifBlank { "default" }
