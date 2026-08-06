@@ -290,6 +290,33 @@ NACOS_LIVE_V1_ENDPOINT=http://localhost:8848 ./gradlew test --tests "com.nanyin.
 24. `src/main/kotlin/com/nanyin/nacos/search/psi/NacosPlaceholderIndex.kt`、`PerformanceBenchmarkTest.kt`  
 25. ADRs：`docs/adr/0016-*.md`、`0018-*.md`、`0021-*.md`、`0039-*.md`、`0041-*.md`、`0043-*.md`、`0051-*.md`  
 26. `src/main/resources/META-INF/plugin.xml` — 历史 change-notes（bound at 8；评估时需对照现行 ADR-0016）  
+27. `src/test/.../LiveCacheSwitchPerfTest.kt` — 真实 Nacos 上的环境/命名空间切换与缓存影响 harness（`NACOS_LIVE_V1_ENDPOINT`）  
+28. `docs/research/2026-08-06-live-cache-switch-perf-results.txt` — 一次实测 BENCH 输出  
+
+---
+
+## 八、实测快照（本机 cloud agent，2026-08-06）
+
+环境：Nacos `2.5.3` standalone（`ANONYMOUS`）于 `http://127.0.0.1:8848`；种子数据 public=80 / perf-dev=120 / perf-qa=120 / perf-prod=200。
+
+运行：
+
+```bash
+NACOS_LIVE_V1_ENDPOINT=http://127.0.0.1:8848 \
+  ./gradlew test --tests "com.nanyin.nacos.search.services.operations.LiveCacheSwitchPerfTest"
+```
+
+| 场景 | 结果 |
+| --- | --- |
+| 冷索引 env=A（public→prod） | 105 / 33 / 16 / 25 ms（首调含连接暖机） |
+| 暖缓存读 / 命名空间来回切换 | **0 ms**（内存命中；&lt;50ms 断言） |
+| 环境隔离 | env=B 对 A 的全部 index **miss**（`AccessIdentity.profileId` 分键） |
+| 冷索引 env=B（public / perf-dev） | 12 / 17 ms（同机第二环境仍走网络） |
+| 切回 env=A | 暖读 **0 ms**（A 缓存仍在） |
+| `NamespaceIndexCoordinator` MANUAL_REFRESH perf-qa | 14 ms |
+| 纯 HTTP 分页基线（对照） | public 29ms / prod 8ms |
+
+结论（本数据规模）：**命名空间切换在索引已缓存时接近零成本；环境切换不会串缓存，但新环境必须重新拉远程；coordinator 刷新始终打远程（`useCache=false`），与搜索热路径读缓存是两条线。**
 
 ---
 
