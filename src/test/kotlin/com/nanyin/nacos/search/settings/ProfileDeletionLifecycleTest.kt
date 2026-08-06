@@ -538,11 +538,13 @@ class ProfileDeletionLifecycleTest {
 
         // Non-explicit session pointing at a now-deleted profile — without
         // markSelectedProfileUnavailable, healSelection would retarget to "live".
-        val session = NacosProjectSessionState(
-            selectedProfileId = "deleted",
-            namespaceId = "public",
+        // Construct via no-arg + fields so the test stays stable across session
+        // schema field order (issue #104 upgraded the upgrade-summary fields).
+        val session = NacosProjectSessionState().apply {
+            selectedProfileId = "deleted"
+            namespaceId = "public"
             selectionWasExplicit = false
-        )
+        }
         // Simulate deletion cleanup forcing the unavailable posture.
         session.selectionWasExplicit = true
         session.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
