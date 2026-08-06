@@ -6,6 +6,7 @@ import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.diagnostic.thisLogger
 import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.services.visibility.AccessVisibilityRecord
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -55,6 +56,9 @@ internal class FileCacheStore(
         legacyKeysProperty = "nacos.cache.list.keys",
         legacyBlobPrefix = "nacos.cache.list."
     )
+    private val visibilityDir: Path = baseDir.resolve("visibility")
+    private val visibilityRecordType: Type =
+        object : TypeToken<VisibilityStoredRecord>() {}.type
     private val kinds = listOf(details, listPages)
 
     private val migrationMutex = Mutex()
@@ -71,6 +75,12 @@ internal class FileCacheStore(
             } catch (e: Exception) {
                 logger.warn("Failed to create cache storage directory ${kind.dir}", e)
             }
+        }
+        try {
+            Files.createDirectories(visibilityDir)
+            cleanupTempFiles(visibilityDir)
+        } catch (e: Exception) {
+            logger.warn("Failed to create visibility storage directory $visibilityDir", e)
         }
     }
 
@@ -91,6 +101,24 @@ internal class FileCacheStore(
 
     override suspend fun removeListPage(key: String) = remove(listPages, key)
 
+    override suspend fun loadVisibilityRecords(): Map<String, AccessVisibilityRecord> {
+        // Visibility records have no legacy schema; skip adoption so a visibility
+        // write during first-run adoption cannot race the payload migration.
+        return scanVisibility()
+    }
+
+    override suspend fun putVisibilityRecord(key: String, record: AccessVisibilityRecord) =
+        storeVisibility(key, record)
+
+    override suspend fun removeVisibilityRecord(key: String) = withContext(Dispatchers.IO) {
+        try {
+            Files.deleteIfExists(visibilityDir.resolve(fileName(key)))
+        } catch (e: Exception) {
+            logger.warn("Failed to remove visibility record: $key", e)
+        }
+        Unit
+    }
+
     override suspend fun clear() {
         // Held against the adoption pass: an adoption that has already passed the
         // `adopted` check would otherwise rewrite payloads after the wipe and
@@ -101,9 +129,64 @@ internal class FileCacheStore(
                     forgetLegacyRecords(kind)
                     deleteDirContents(kind.dir)
                 }
+                deleteDirContents(visibilityDir)
             }
             adopted = true
         }
+    }
+
+    private suspend fun scanVisibility(): Map<String, AccessVisibilityRecord> =
+        withContext(Dispatchers.IO) {
+            val loaded = mutableMapOf<String, AccessVisibilityRecord>()
+            try {
+                Files.newDirectoryStream(visibilityDir, "*$JSON_SUFFIX").use { stream ->
+                    stream.forEach { file ->
+                        val record = readVisibilityRecord(file)
+                        if (record == null) reclaim(file) else loaded[record.first] = record.second
+                    }
+                }
+            } catch (e: Exception) {
+                logger.warn("Failed to scan visibility directory: $visibilityDir", e)
+            }
+            loaded
+        }
+
+    private suspend fun storeVisibility(key: String, record: AccessVisibilityRecord) =
+        withContext(Dispatchers.IO) {
+            try {
+                writeVisibilityRecord(key, record)
+            } catch (e: Exception) {
+                logger.warn("Failed to persist visibility record: $key", e)
+                throw e
+            }
+        }
+
+    private fun writeVisibilityRecord(key: String, record: AccessVisibilityRecord) {
+        val target = visibilityDir.resolve(fileName(key))
+        val tmp = visibilityDir.resolve(fileName(key) + TMP_SUFFIX)
+        Files.writeString(
+            tmp,
+            gson.toJson(VisibilityStoredRecord(key, record), visibilityRecordType),
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING,
+            StandardOpenOption.WRITE
+        )
+        try {
+            Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    @Suppress("SENSELESS_COMPARISON")
+    private fun readVisibilityRecord(file: Path): Pair<String, AccessVisibilityRecord>? {
+        val json = readFile(file) ?: return null
+        val record = parse<VisibilityStoredRecord>(json, visibilityRecordType) ?: return null
+        val key = record.key ?: return null
+        val entry = record.entry ?: return null
+        if (entry.profileId == null || entry.capability == null) return null
+        if (entry.profileId.isBlank() || entry.capability.isBlank()) return null
+        return key to entry
     }
 
     private suspend fun <T> loadAll(kind: StoredKind<T>): Map<String, CacheService.CacheEntry<T>> {
@@ -309,6 +392,12 @@ internal class FileCacheStore(
     private data class StoredRecord<T>(
         val key: String?,
         val entry: CacheService.CacheEntry<T>?
+    )
+
+    /** Visibility block together with the key that names it — no CacheEntry wrapper. */
+    private data class VisibilityStoredRecord(
+        val key: String?,
+        val entry: AccessVisibilityRecord?
     )
 
     /** Everything that differs between the two kinds of record this store persists. */

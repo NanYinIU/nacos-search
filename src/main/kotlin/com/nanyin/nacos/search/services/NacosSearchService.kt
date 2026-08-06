@@ -10,9 +10,13 @@ import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.models.SearchCriteria
+import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.services.operations.Observed
+import com.nanyin.nacos.search.services.operations.RemoteOperationError
 import com.nanyin.nacos.search.services.operations.SearchCoverage
 import com.nanyin.nacos.search.services.operations.searchCoverageFromCapability
+import com.nanyin.nacos.search.services.visibility.AccessRefusalReason
+import com.nanyin.nacos.search.services.visibility.ConfigurationVisibility
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosOperationContext
@@ -558,6 +562,9 @@ class NacosSearchService(
         // Cooperative cancel must not become SearchState.Error or fall through
         // to stale cache (issue #122 review).
         rethrowIfCancellation(remoteError)
+        // A persisted identity-wide auth block outranks a later eligible transient
+        // failure: presentation stays access-refused, not refresh-failed (issue #123).
+        refusedAccessIfBlocked(context.identity)?.let { return Result.failure(it) }
         // ADR-0019 / issue #122: only eligible transient failures may surface
         // same-identity cache as REFRESH_FAILED. Refused access, configuration-
         // required, unsupported generation/capability, and cancellation return
@@ -589,6 +596,9 @@ class NacosSearchService(
             )
         }
 
+        // Cache miss under a concurrent block (or restored block with no eligible
+        // payload) must not look like an empty network failure.
+        refusedAccessIfBlocked(context.identity)?.let { return Result.failure(it) }
         return Result.failure(remoteError)
     }
 
@@ -640,6 +650,9 @@ class NacosSearchService(
                 if (stoppingCause != null) {
                     rethrowIfCancellation(stoppingCause)
                 }
+                // Identity-wide auth block: never surface retained index data and
+                // keep the structured refused-access outcome (issue #123).
+                refusedAccessIfBlocked(indexKey.identity)?.let { return Result.failure(it) }
                 val mayUseStale = stoppingCause == null ||
                     StaleSearchFallbackPolicy.allowsStaleCache(stoppingCause)
                 if (mayUseStale) {
@@ -656,6 +669,7 @@ class NacosSearchService(
                         val error = stoppingCause
                             ?: IllegalStateException("Namespace index load did not produce a complete dataset")
                         rethrowIfCancellation(error)
+                        refusedAccessIfBlocked(indexKey.identity)?.let { return Result.failure(it) }
                         return Result.failure(error)
                     }
                 } else {
@@ -941,6 +955,23 @@ class NacosSearchService(
             if (current is CancellationException) throw current
             current = current.cause
             depth++
+        }
+    }
+
+    /**
+     * When a restored or still-active identity-wide authentication block hides
+     * cache data, searches must present structured access-refused state rather
+     * than empty or refresh-failed results (issue #123).
+     */
+    private fun refusedAccessIfBlocked(identity: AccessIdentity): RemoteOperationError? {
+        return when (val decision = cacheService.configurationVisibility(identity)) {
+            is ConfigurationVisibility.Visible -> null
+            is ConfigurationVisibility.Blocked -> when (decision.reason) {
+                AccessRefusalReason.AUTHENTICATION ->
+                    RemoteOperationError.Authentication(401)
+                AccessRefusalReason.AUTHORIZATION ->
+                    RemoteOperationError.Authorization(403)
+            }
         }
     }
 

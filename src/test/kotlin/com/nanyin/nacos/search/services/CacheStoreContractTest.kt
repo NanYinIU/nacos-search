@@ -2,6 +2,8 @@ package com.nanyin.nacos.search.services
 
 import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.services.visibility.AccessRefusalReason
+import com.nanyin.nacos.search.services.visibility.AccessVisibilityRecord
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -16,6 +18,8 @@ import org.junit.jupiter.api.Test
  *
  * The store owns the key list as well as the payloads, so a stored entry is
  * always enumerable and a removed entry always disappears from both.
+ * Visibility records that gate those payloads share the same contract
+ * (issue #123).
  */
 internal abstract class CacheStoreContractTest {
 
@@ -36,6 +40,20 @@ internal abstract class CacheStoreContractTest {
         createdAt = 1_000L,
         ttlMs = 60_000L,
         source = CacheService.CacheSource.REMOTE
+    )
+
+    private fun visibilityRecord(profileId: String = "p") = AccessVisibilityRecord(
+        profileId = profileId,
+        accessRevision = 1,
+        canonicalEndpoint = "http://nacos",
+        resolvedGeneration = "V1",
+        authMode = "BASIC",
+        principal = "alice",
+        capability = AccessVisibilityRecord.IDENTITY_AUTH,
+        namespaceId = null,
+        refusalReason = AccessRefusalReason.AUTHENTICATION.name,
+        detail = "Authentication failed",
+        recordedAtMillis = 1_000L
     )
 
     @Test
@@ -94,5 +112,36 @@ internal abstract class CacheStoreContractTest {
         assertTrue(store.loadDetails().isEmpty())
         assertTrue(store.loadListPages().isEmpty())
         assertNull(store.loadDetail("d|1"))
+    }
+
+    @Test
+    fun `a stored visibility record is enumerable and removable`() = runBlocking {
+        val store = newStore()
+        val key = "vis|auth|v2|p|1|http://nacos|V1|BASIC|alice"
+        store.putVisibilityRecord(key, visibilityRecord())
+
+        assertEquals(
+            AccessRefusalReason.AUTHENTICATION.name,
+            store.loadVisibilityRecords()[key]?.refusalReason
+        )
+
+        store.removeVisibilityRecord(key)
+
+        assertTrue(store.loadVisibilityRecords().isEmpty())
+    }
+
+    @Test
+    fun `clearing drops visibility records together with payloads`() = runBlocking {
+        val store = newStore()
+        store.putDetail("d|1", detail("app.yaml", "k=v"))
+        store.putVisibilityRecord(
+            "vis|auth|v2|p|1|http://nacos|V1|BASIC|alice",
+            visibilityRecord()
+        )
+
+        store.clear()
+
+        assertTrue(store.loadDetails().isEmpty())
+        assertTrue(store.loadVisibilityRecords().isEmpty())
     }
 }

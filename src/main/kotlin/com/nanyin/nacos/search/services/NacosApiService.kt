@@ -93,11 +93,14 @@ class NacosApiService(
     }
     private val v1Gateway by lazy {
         v1GatewayOverride ?: OperationGateway(
-            mapOf(
+            adapters = mapOf(
                 NacosApiGeneration.V1 to v1Adapter,
                 NacosApiGeneration.V3 to v3Adapter
             ),
-            CacheServiceOperationCache(cacheService) { settings.getCacheTtlMillis() }
+            cache = CacheServiceOperationCache(cacheService) { settings.getCacheTtlMillis() },
+            // Production gateway reports every formal completion to the same
+            // visibility module the cache enforces on reads (issue #123).
+            visibility = cacheService.visibilityReporter()
         )
     }
     /** Resolves AUTO to a concrete generation by probing V3 first, then V1. */

@@ -13,8 +13,10 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class OperationGatewayTest {
@@ -124,6 +126,64 @@ class OperationGatewayTest {
         // A cache hit observed nothing, so a mutation derived from it can never
         // outrank a real observation — including the one that wrote this entry.
         assertEquals(Observed.NO_OBSERVATION, fromCache.observation)
+    }
+
+    @Test
+    fun `authentication failure is reported to access visibility`() = runBlocking {
+        val store = com.nanyin.nacos.search.services.InMemoryCacheStore()
+        val visibility = com.nanyin.nacos.search.services.visibility.AccessVisibility(store)
+        val adapter = object : ProtocolAdapter {
+            override suspend fun probe(target: OperationTarget): Result<Unit> = Result.success(Unit)
+            override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery): Result<SummaryPage> =
+                Result.failure(RemoteOperationError.Authentication(401))
+            override suspend fun readDetail(
+                target: OperationTarget,
+                coordinate: ConfigurationCoordinate
+            ): Result<NacosConfiguration?> =
+                Result.failure(RemoteOperationError.Authentication(401))
+            override suspend fun publish(target: OperationTarget, command: PublishCommand): Result<PublishOutcome> =
+                Result.failure(RemoteOperationError.Authentication(401))
+        }
+        val gateway = OperationGateway(
+            adapters = mapOf(NacosApiGeneration.V1 to adapter),
+            visibility = visibility
+        )
+        val target = anonymousTarget("dev", "https://dev.nacos.example", "public")
+
+        val result = gateway.listSummaries(target, SummaryQuery(pageSize = 1), forceRefresh = true)
+        assertTrue(result.isFailure)
+        assertTrue(visibility.isIdentityAuthBlocked(target.context.identity))
+    }
+
+    @Test
+    fun `matching success after reported auth failure clears the block`() = runBlocking {
+        val store = com.nanyin.nacos.search.services.InMemoryCacheStore()
+        val visibility = com.nanyin.nacos.search.services.visibility.AccessVisibility(store)
+        var fail = true
+        val adapter = object : ProtocolAdapter {
+            override suspend fun probe(target: OperationTarget): Result<Unit> = Result.success(Unit)
+            override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery): Result<SummaryPage> =
+                if (fail) Result.failure(RemoteOperationError.Authentication(401))
+                else Result.success(page("ok.properties"))
+            override suspend fun readDetail(
+                target: OperationTarget,
+                coordinate: ConfigurationCoordinate
+            ): Result<NacosConfiguration?> = Result.success(null)
+            override suspend fun publish(target: OperationTarget, command: PublishCommand): Result<PublishOutcome> =
+                Result.success(PublishOutcome.Written("true"))
+        }
+        val gateway = OperationGateway(
+            adapters = mapOf(NacosApiGeneration.V1 to adapter),
+            visibility = visibility
+        )
+        val target = anonymousTarget("dev", "https://dev.nacos.example", "public")
+
+        gateway.listSummaries(target, SummaryQuery(pageSize = 1), forceRefresh = true)
+        assertTrue(visibility.isIdentityAuthBlocked(target.context.identity))
+
+        fail = false
+        gateway.listSummaries(target, SummaryQuery(pageSize = 1), forceRefresh = true)
+        assertFalse(visibility.isIdentityAuthBlocked(target.context.identity))
     }
 
     private fun page(dataId: String) = SummaryPage(
