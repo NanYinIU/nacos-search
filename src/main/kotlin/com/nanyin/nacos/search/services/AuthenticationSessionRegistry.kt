@@ -60,6 +60,30 @@ class AuthenticationSessionRegistry(
         completedTokens.remove(identity)
     }
 
+    /**
+     * Drop every completed token and flight lock owned by [profileId], after
+     * bumping the invalidation epoch for every identity that held state for
+     * that profile. Epoch entries are **retained** so a late [getOrLogin] that
+     * captured epoch 0 cannot store a token after deletion cleanup
+     * (ADR-0025 / issue #105). Idempotent.
+     */
+    fun invalidateProfile(profileId: String) {
+        val id = profileId.trim()
+        if (id.isBlank()) return
+        val identities = (
+            completedTokens.keys +
+                flightLocks.keys.map { it.identity } +
+                invalidationEpochs.keys
+            ).filter { it.profileId == id }.toSet()
+        identities.forEach { identity ->
+            epochFor(identity).incrementAndGet()
+            completedTokens.remove(identity)
+        }
+        flightLocks.keys.filter { it.identity.profileId == id }.forEach { flightLocks.remove(it) }
+        // Keep invalidationEpochs: clearing them would reset the fence to 0 and
+        // let an in-flight login that sampled epoch 0 publish after deletion.
+    }
+
     fun completedToken(identity: AccessIdentity): AuthenticationToken? =
         completedTokens[identity]?.takeIf { it.isValid(clock()) }
 

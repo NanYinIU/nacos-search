@@ -117,9 +117,12 @@ class CacheService internal constructor(
     @CacheWriteAccess
     suspend fun applyMutation(mutation: CacheMutation, observation: Long): Boolean {
         // The tombstone is absolute and independent of ordering: no observation
-        // sequence, however recent, outranks it (ADR-0025).
+        // sequence, however recent, outranks it (ADR-0025). Fast path outside
+        // the lock; rechecked under [cacheMutex] so a concurrent entomb cannot
+        // race a late mutation past purge.
         entombedBy(mutation)?.let { if (tombstones.isEntombed(it)) return false }
         return cacheMutex.withLock {
+            entombedBy(mutation)?.let { if (tombstones.isEntombed(it)) return@withLock false }
             val scopeChain = scopeChain(mutation)
             if (!highWater.accepts(scopeChain, observation)) return@withLock false
             // Raise only once the mutation has actually landed: a store write
@@ -141,6 +144,53 @@ class CacheService internal constructor(
     fun snapshot(identity: AccessIdentity): CacheSnapshot {
         val state = publishedState
         return CacheSnapshot(state.version, currentTimeMillis(), identity, state.details, state.namespaceIndexes)
+    }
+
+    /**
+     * Profile-deletion cleanup (ADR-0025 / issue #105). Discards every
+     * identity-scoped entry whose storage key belongs to [profileId]. The
+     * tombstone already blocks re-population; this only removes residual data.
+     * Idempotent. Not a remote-observation write — it does not take a sequence
+     * and does not go through [applyMutation]. Serialized with mutations via
+     * [cacheMutex] so a late write cannot re-land under the same lock after
+     * the outer tombstone check but before residual removal.
+     */
+    fun purgeProfile(profileId: String) {
+        val id = profileId.trim()
+        if (id.isBlank()) return
+        // Storage keys are `v2|{profileId}|…` (see CacheCoordinate.identityPrefix).
+        val prefix = "v2|$id|"
+        // Deletion cleanup runs off the operation layer; take the write lock
+        // the same way mutations do. runBlocking is acceptable here: callers
+        // are settings Apply / residual drain, not the EDT paint path, and the
+        // lock holder never waits on the EDT.
+        val removed = kotlinx.coroutines.runBlocking {
+            cacheMutex.withLock {
+                val detailKeys = detailCache.keys.filter { it.startsWith(prefix) }
+                val listKeys = listPageCache.keys.filter { it.startsWith(prefix) }
+                val indexKeys = namespaceIndexCache.keys.filter { it.startsWith(prefix) }
+                if (detailKeys.isEmpty() && listKeys.isEmpty() && indexKeys.isEmpty()) {
+                    return@withLock emptyList<String>() to emptyList<String>()
+                }
+                discardGeneration.incrementAndGet()
+                detailKeys.forEach { detailCache.remove(it) }
+                listKeys.forEach { listPageCache.remove(it) }
+                indexKeys.forEach { key ->
+                    namespaceIndexCache.remove(key)
+                    namespaceIndexAuthority.remove(key)
+                }
+                publish()
+                detailKeys to listKeys
+            }
+        }
+        // Store reclamation outside the write lock so Apply never holds it for I/O.
+        removed.first.forEach { key ->
+            serviceScope.launch { runCatching { store.removeDetail(key) } }
+        }
+        removed.second.forEach { key ->
+            serviceScope.launch { runCatching { store.removeListPage(key) } }
+        }
+        logger.info("Purged cache entries for deleted profile $id")
     }
 
     /**

@@ -1072,19 +1072,35 @@ class NacosConfigurable @JvmOverloads constructor(
         // do not re-compare signatures, passwords, or list positions (#103).
         val outcome = settings.applyServers(draftServers, draftActiveId)
 
-        // Stage failure: dual-write already kept the published pair. Resync the
-        // draft from published state and tell the user — never pretend a
-        // preferences-only success (ADR-0035 / #103 review).
-        if (outcome.hasStageFailures()) {
+        // Stage / deletion withhold failures: dual-write already kept the
+        // published pair. Resync the draft from published state and tell the
+        // user — never pretend a preferences-only success (ADR-0035 / #103,
+        // ADR-0025 / #105).
+        if (outcome.hasStageFailures() || outcome.hasWithheldDeletions()) {
+            val messages = buildList {
+                if (outcome.hasStageFailures()) {
+                    add(
+                        NacosSearchBundle.message(
+                            "settings.credential.stage.failed",
+                            outcome.failedStageProfileIds.joinToString(", ")
+                        )
+                    )
+                }
+                if (outcome.hasWithheldDeletions()) {
+                    add(
+                        NacosSearchBundle.message(
+                            "settings.profile.deletion.withheld",
+                            outcome.withheldDeletionProfileIds.joinToString(", ")
+                        )
+                    )
+                }
+            }
             Messages.showErrorDialog(
-                NacosSearchBundle.message(
-                    "settings.credential.stage.failed",
-                    outcome.failedStageProfileIds.joinToString(", ")
-                ),
+                messages.joinToString("\n"),
                 NacosSearchBundle.message("settings.invalid.title")
             )
             // Reload draft from what actually published so the form cannot keep
-            // showing the rejected secret/connection fields as applied.
+            // showing a deleted environment as applied when it was withheld.
             initializeDraft()
             serverListModel.clear()
             draftServers.forEach { serverListModel.addElement(it) }
@@ -1116,9 +1132,12 @@ class NacosConfigurable @JvmOverloads constructor(
         val publisher = ApplicationManager.getApplication().messageBus
             .syncPublisher(NacosSettingsListener.TOPIC)
         when {
-            outcome.isOperationalChange() || outcome.hasStageFailures() -> {
-                // Stage failures need connection-facing consumers to re-read the
-                // published pair, not a silent preferences-only path.
+            outcome.isOperationalChange() ||
+                outcome.hasStageFailures() ||
+                outcome.hasWithheldDeletions() -> {
+                // Stage / deletion withhold failures need connection-facing
+                // consumers to re-read the published pair, not a silent
+                // preferences-only path.
                 publisher.settingsChanged()
             }
             else -> {
@@ -1128,12 +1147,20 @@ class NacosConfigurable @JvmOverloads constructor(
             }
         }
 
-        if (outcome.hasStageFailures() && !outcome.isOperationalChange()) {
+        if ((outcome.hasStageFailures() || outcome.hasWithheldDeletions()) &&
+            !outcome.isOperationalChange()
+        ) {
             // Mark Apply as failed when the user's change did not land and
             // nothing else operational did — dialog stays open with resynced draft.
-            throw java.lang.IllegalStateException(
-                "Credential staging failed for: ${outcome.failedStageProfileIds.joinToString(", ")}"
-            )
+            val failed = buildList {
+                if (outcome.hasStageFailures()) {
+                    add("Credential staging failed for: ${outcome.failedStageProfileIds.joinToString(", ")}")
+                }
+                if (outcome.hasWithheldDeletions()) {
+                    add("Profile deletion withheld for: ${outcome.withheldDeletionProfileIds.joinToString(", ")}")
+                }
+            }.joinToString("; ")
+            throw java.lang.IllegalStateException(failed)
         }
     }
 

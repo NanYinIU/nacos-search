@@ -100,6 +100,33 @@ class AuthenticationSessionRegistryTest {
         assertEquals("2", registry.completedToken(basic.identity)?.value)
     }
 
+    @Test
+    fun `invalidateProfile retains epoch fence so in-flight login cannot publish`() = runBlocking {
+        val registry = AuthenticationSessionRegistry()
+        val key = executionKey("alice", accessRevision = 2, profileRevision = 3)
+        val loginStarted = CompletableDeferred<Unit>()
+        val releaseLogin = CompletableDeferred<Unit>()
+
+        val flight = async {
+            registry.getOrLogin(key) {
+                loginStarted.complete(Unit)
+                releaseLogin.await()
+                token("after-delete")
+            }
+        }
+        loginStarted.await()
+        // Profile deletion cleanup: bump epochs and drop tokens/locks, but keep
+        // the epoch fence so the flight that sampled 0 cannot store.
+        registry.invalidateProfile("dev")
+        releaseLogin.complete(Unit)
+        flight.await()
+
+        assertNull(registry.completedToken(key.identity))
+        // A fresh login after invalidation must still work (new epoch sample).
+        val next = registry.getOrLogin(key) { token("fresh") }
+        assertEquals("fresh", next?.value)
+    }
+
     private fun executionKey(
         principal: String,
         accessRevision: Long,
