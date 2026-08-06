@@ -373,12 +373,15 @@ class CacheService internal constructor(
                 listPageCache.clear()
                 namespaceIndexCache.clear()
                 namespaceIndexAuthority.clear()
-                // Store clear reclaims payloads and visibility records together.
-                store.clear()
-                // Fence visibility high-water with the same clear observation so
-                // an older late auth failure cannot re-block after the user clear
-                // (ADR-0020 / issue #123 review). One locked path inside visibility.
+                // Fence visibility **before** the durable wipe. reportCompleted
+                // only holds the visibility mutex, not cacheMutex: if store.clear
+                // ran first, a concurrent acceptFailure could putVisibilityRecord
+                // after the wipe and leave an orphan that re-blocks on restart
+                // (issue #123 re-review). Fence first so lower-seq failures are
+                // rejected; store.clear then drops any put that finished fully
+                // before the fence.
                 visibility.onUserClear(observation)
+                store.clear()
                 logger.info("Cache cleared")
             }
         }

@@ -155,8 +155,11 @@ internal class AccessVisibility(
      * fence the visibility high-water with [observation] so an older late
      * auth failure cannot re-block after this clear (ADR-0020).
      *
-     * Call after [CacheStore.clear] has reclaimed store records (payloads and
-     * visibility files together). This is the only forget path for user clear.
+     * Call **before** [CacheStore.clear]: fencing first closes the race where a
+     * concurrent [reportCompleted] failure re-puts a visibility file after the
+     * wipe and before the fence (orphan re-block on restart). The subsequent
+     * store clear drops any put that completed fully before this fence.
+     * This is the only forget path for user clear.
      */
     suspend fun onUserClear(observation: Long) {
         mutex.withLock {

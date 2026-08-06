@@ -221,6 +221,53 @@ class AccessVisibilityCacheIntegrationTest {
         )
     }
 
+    /**
+     * Mirrors CacheMutation.Clear order (fence then store wipe). A lower-seq
+     * failure injected in the window after the fence and before/after the wipe
+     * must not leave an orphan visibility record that would re-block on restart
+     * (issue #123 re-review).
+     */
+    @Test
+    fun `fence-before-store-clear rejects lower-seq put leaving no orphan`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
+        val identity = identity("dev")
+        visibility.reportCompleted(
+            CompletedObservation(
+                observation = 1,
+                identity = identity,
+                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                outcome = ObservationOutcome.RemoteFailure(
+                    com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
+                )
+            )
+        )
+        assertTrue(store.loadVisibilityRecords().isNotEmpty())
+
+        // Production clear order: onUserClear first, then store.clear.
+        visibility.onUserClear(observation = 50)
+        val raced = visibility.reportCompleted(
+            CompletedObservation(
+                observation = 10,
+                identity = identity,
+                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                outcome = ObservationOutcome.RemoteFailure(
+                    com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
+                )
+            )
+        )
+        assertFalse(raced, "lower-seq failure after fence must be rejected")
+        store.clear()
+
+        assertFalse(visibility.isIdentityAuthBlocked(identity))
+        assertTrue(store.loadVisibilityRecords().isEmpty())
+
+        // Restart over the same store must not rehydrate a block.
+        val rebuilt = AccessVisibility(store)
+        rebuilt.hydrateFromStore()
+        assertFalse(rebuilt.isIdentityAuthBlocked(identity))
+    }
+
     @Test
     fun `cache rebuilt over same store restores block and first success clears it`() = runBlocking {
         val store = InMemoryCacheStore()
