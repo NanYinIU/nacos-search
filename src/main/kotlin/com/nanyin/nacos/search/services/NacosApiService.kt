@@ -35,6 +35,7 @@ import com.nanyin.nacos.search.services.operations.GenerationResolver
 import com.nanyin.nacos.search.services.operations.GenerationSessionCapture
 import com.nanyin.nacos.search.services.operations.SessionGenerationState
 import com.nanyin.nacos.search.services.operations.V3ProtocolAdapter
+import com.nanyin.nacos.search.services.visibility.NoOpVisibilityReporter
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
@@ -157,7 +158,11 @@ class NacosApiService(
                 NacosApiGeneration.V1 to v1,
                 NacosApiGeneration.V3 to v3
             ),
-            observationSequence = ObservationSequence()
+            observationSequence = ObservationSequence(),
+            // Isolated diagnostics never report into production visibility
+            // (issue #125 / ADR-0050): an explicit no-op reporter, so a
+            // diagnostic refusal can neither block nor unblock production data.
+            visibility = NoOpVisibilityReporter
         )
     }
 

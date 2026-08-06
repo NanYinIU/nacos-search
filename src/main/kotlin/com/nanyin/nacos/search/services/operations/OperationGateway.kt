@@ -14,7 +14,6 @@ import com.nanyin.nacos.search.services.network.RequestPolicy
 import com.nanyin.nacos.search.services.visibility.CompletedObservation
 import com.nanyin.nacos.search.services.visibility.NoOpVisibilityReporter
 import com.nanyin.nacos.search.services.visibility.ObservationOutcome
-import com.nanyin.nacos.search.services.visibility.VisibilityOperationClass
 import com.nanyin.nacos.search.services.visibility.VisibilityReporter
 
 /**
@@ -29,9 +28,11 @@ import com.nanyin.nacos.search.services.visibility.VisibilityReporter
  * observed nothing and returns [Observed.NO_OBSERVATION].
  *
  * Every completed formal remote operation is reported to [visibility] with its
- * start-time sequence and operation class — successes as well as typed
- * failures — so identity-wide authentication blocks can form and clear
- * (ADR-0050 / issue #123). Cache hits do not report and cannot clear a block.
+ * start-time sequence and its class from the protocol capability vocabulary
+ * ([ProtocolCapability]) — successes as well as typed failures — so
+ * identity-wide authentication blocks and capability-scoped authorization
+ * blocks can form and clear (ADR-0050 / issues #123–#125). Cache hits do not
+ * report and cannot clear a block.
  *
  * The gateway keeps no gates of its own: the cache-entry gate lives inside the
  * cache module, where its scope equals the mutation's coordinate by
@@ -48,7 +49,7 @@ class OperationGateway(
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
         val observation = observationSequence.next()
         val result = adapter.probe(target)
-        report(target, VisibilityOperationClass.AUTHENTICATED_CONTACT, observation, result)
+        report(target, ProtocolCapability.AUTHENTICATED_CONTACT, observation, result)
         return result
     }
 
@@ -67,7 +68,7 @@ class OperationGateway(
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
         val observation = observationSequence.next()
         val result = adapter.listSummaries(target, query)
-        report(target, VisibilityOperationClass.CONFIGURATION_READ, observation, result)
+        report(target, ProtocolCapability.CONFIGURATION_READ, observation, result)
         return result.map { page ->
             if (useCache) {
                 cache.putSummaries(target.context.identity, target.namespaceId, query.cacheKey(), page, observation)
@@ -90,7 +91,7 @@ class OperationGateway(
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
         val observation = observationSequence.next()
         val result = adapter.readDetail(target, coordinate)
-        report(target, VisibilityOperationClass.CONFIGURATION_READ, observation, result)
+        report(target, ProtocolCapability.CONFIGURATION_READ, observation, result)
         return result.map { detail ->
             if (useCache && detail != null) {
                 cache.putDetail(target.context.identity, target.namespaceId, detail, observation)
@@ -114,7 +115,7 @@ class OperationGateway(
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
-        if (adapter.capabilities.history == CapabilityCoverage.UNAVAILABLE) {
+        if (adapter.capabilities.coverageOf(ProtocolCapability.HISTORY) == CapabilityCoverage.UNAVAILABLE) {
             // Capability grade, not a remote observation — no visibility mutation.
             return Result.failure(
                 RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support configuration history")
@@ -122,7 +123,7 @@ class OperationGateway(
         }
         val observation = observationSequence.next()
         val result = adapter.listHistory(target, query)
-        report(target, VisibilityOperationClass.HISTORY, observation, result)
+        report(target, ProtocolCapability.HISTORY, observation, result)
         return result.map { page ->
             if (useCache) {
                 historyCache.putHistoryPage(
@@ -145,14 +146,14 @@ class OperationGateway(
             }
         }
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
-        if (adapter.capabilities.history == CapabilityCoverage.UNAVAILABLE) {
+        if (adapter.capabilities.coverageOf(ProtocolCapability.HISTORY) == CapabilityCoverage.UNAVAILABLE) {
             return Result.failure(
                 RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support configuration history")
             )
         }
         val observation = observationSequence.next()
         val result = adapter.readHistoryDetail(target, historyId)
-        report(target, VisibilityOperationClass.HISTORY, observation, result)
+        report(target, ProtocolCapability.HISTORY, observation, result)
         return result.map { detail ->
             if (useCache) {
                 historyCache.putHistoryDetail(
@@ -175,20 +176,20 @@ class OperationGateway(
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
         val observation = observationSequence.next()
         val result = adapter.publish(target, command)
-        report(target, VisibilityOperationClass.PUBLISH, observation, result)
+        report(target, ProtocolCapability.PUBLISH, observation, result)
         return result
     }
 
     suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> {
         val adapter = adapterFor(target) ?: return unsupportedGeneration(target)
-        if (adapter.capabilities.namespaceDiscovery == CapabilityCoverage.UNAVAILABLE) {
+        if (adapter.capabilities.coverageOf(ProtocolCapability.NAMESPACE_DISCOVERY) == CapabilityCoverage.UNAVAILABLE) {
             return Result.failure(
                 RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support namespace discovery")
             )
         }
         val observation = observationSequence.next()
         val result = adapter.discoverNamespaces(target)
-        report(target, VisibilityOperationClass.NAMESPACE_DISCOVERY, observation, result)
+        report(target, ProtocolCapability.NAMESPACE_DISCOVERY, observation, result)
         return result
     }
 
@@ -225,7 +226,7 @@ class OperationGateway(
      */
     suspend fun reportExternalObservation(
         target: OperationTarget,
-        operationClass: VisibilityOperationClass,
+        operationClass: ProtocolCapability,
         observation: Long,
         outcome: ObservationOutcome
     ): Boolean = visibility.reportCompleted(
@@ -249,7 +250,7 @@ class OperationGateway(
 
     private suspend fun <T> report(
         target: OperationTarget,
-        operationClass: VisibilityOperationClass,
+        operationClass: ProtocolCapability,
         observation: Long,
         result: Result<T>
     ) {

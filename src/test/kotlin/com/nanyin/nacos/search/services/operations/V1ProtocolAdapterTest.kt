@@ -175,7 +175,10 @@ class V1ProtocolAdapterTest {
             .listSummaries(target, SummaryQuery())
             .exceptionOrNull()
 
-        assertInstanceOf(RemoteOperationError.Authentication::class.java, error)
+        // Unrecognized prose on a 403 is Forbidden, not unauthenticated
+        // (issue #125): it must never form an identity-wide authentication
+        // block. Recovery behavior (no relogin, no replay) is unchanged.
+        assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
         assertEquals(2, transport.requests.size)
         assertEquals(1, transport.requests.count { it.path == "/nacos/v1/auth/login" })
         assertEquals("current", sessions.completedToken(target.context.identity)?.value)

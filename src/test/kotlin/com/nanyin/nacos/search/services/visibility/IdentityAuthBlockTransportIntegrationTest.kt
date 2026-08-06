@@ -17,6 +17,7 @@ import com.nanyin.nacos.search.services.NacosSearchService
 import com.nanyin.nacos.search.services.clearAll
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
+import com.nanyin.nacos.search.services.operations.ProtocolCapability
 import com.nanyin.nacos.search.services.operations.RemoteOperationError
 import com.nanyin.nacos.search.services.operations.SessionGenerationState
 import com.nanyin.nacos.search.services.writeListPage
@@ -215,7 +216,7 @@ class IdentityAuthBlockTransportIntegrationTest {
                 // Use the process sequence so this outranks any prior APP-session mark.
                 observation = com.nanyin.nacos.search.services.operations.ObservationSequence.process.next(),
                 identity = context.identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.Authentication(401))
             )
         )

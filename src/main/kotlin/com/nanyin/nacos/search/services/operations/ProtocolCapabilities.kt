@@ -1,6 +1,32 @@
 package com.nanyin.nacos.search.services.operations
 
 /**
+ * The operation axis shared by the protocol capability declaration and the
+ * access-visibility module (ADR-0050 / issue #48 / #125).
+ *
+ * One vocabulary, two judgments on the same axis: [ProtocolCapabilities]
+ * grades dialect *support* per capability, and the visibility module scopes
+ * *permission* per capability. There is deliberately no parallel
+ * visibility-only capability enumeration.
+ */
+enum class ProtocolCapability {
+    /** Configuration list, detail (and content-search) reads. */
+    CONFIGURATION_READ,
+
+    /** Publishing a configuration (write). */
+    PUBLISH,
+
+    /** Namespace discovery. */
+    NAMESPACE_DISCOVERY,
+
+    /** Configuration history browsing. */
+    HISTORY,
+
+    /** Formal generation / authentication contact that is not a data read. */
+    AUTHENTICATED_CONTACT
+}
+
+/**
  * Graded support a protocol dialect declares for an operation.
  *
  * Coverage limitations are distinct from [UNAVAILABLE], and neither is an
@@ -27,6 +53,23 @@ data class ProtocolCapabilities(
     val namespaceDiscovery: CapabilityCoverage,
     val history: CapabilityCoverage
 ) {
+    /**
+     * Support grade for one capability of the shared vocabulary. Core
+     * operations — configuration reads, publishing, and authenticated contact —
+     * are provided by every dialect and always register [COMPLETE]; only the
+     * optional capabilities declare a graded coverage.
+     *
+     * Support (here) and permission (visibility module) stay separate judgments
+     * on the same [ProtocolCapability] axis (issue #48 / #125).
+     */
+    fun coverageOf(capability: ProtocolCapability): CapabilityCoverage = when (capability) {
+        ProtocolCapability.NAMESPACE_DISCOVERY -> namespaceDiscovery
+        ProtocolCapability.HISTORY -> history
+        ProtocolCapability.CONFIGURATION_READ,
+        ProtocolCapability.PUBLISH,
+        ProtocolCapability.AUTHENTICATED_CONTACT -> CapabilityCoverage.COMPLETE
+    }
+
     companion object {
         /** No optional operations; used by stubs that only exercise core reads. */
         val NONE = ProtocolCapabilities(

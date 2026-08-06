@@ -230,7 +230,7 @@ class OperationGatewayTest {
             com.nanyin.nacos.search.services.visibility.CompletedObservation(
                 observation = ObservationSequence.process.next(),
                 identity = target.context.identity,
-                operationClass = com.nanyin.nacos.search.services.visibility.VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = com.nanyin.nacos.search.services.visibility.ObservationOutcome.RemoteFailure(
                     RemoteOperationError.Authentication(401)
                 )

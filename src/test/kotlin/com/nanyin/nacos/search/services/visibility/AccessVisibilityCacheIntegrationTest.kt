@@ -10,6 +10,7 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.InMemoryCacheStore
 import com.nanyin.nacos.search.services.ProfileTombstoneRegistry
+import com.nanyin.nacos.search.services.operations.ProtocolCapability
 import com.nanyin.nacos.search.services.clearAll
 import com.nanyin.nacos.search.services.deleteDetailNotFound
 import com.nanyin.nacos.search.services.replaceNamespaceIndex
@@ -63,7 +64,7 @@ class AccessVisibilityCacheIntegrationTest {
             CompletedObservation(
                 observation = 100,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = ObservationOutcome.RemoteFailure(
                     com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
                 )
@@ -104,7 +105,7 @@ class AccessVisibilityCacheIntegrationTest {
             CompletedObservation(
                 observation = 101,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = ObservationOutcome.Success
             )
         )
@@ -169,7 +170,7 @@ class AccessVisibilityCacheIntegrationTest {
             CompletedObservation(
                 observation = 1,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = ObservationOutcome.RemoteFailure(
                     com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
                 )
@@ -195,7 +196,7 @@ class AccessVisibilityCacheIntegrationTest {
             CompletedObservation(
                 observation = 1,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = ObservationOutcome.RemoteFailure(
                     com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
                 )
@@ -209,7 +210,7 @@ class AccessVisibilityCacheIntegrationTest {
             CompletedObservation(
                 observation = 10,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = ObservationOutcome.RemoteFailure(
                     com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
                 )
@@ -237,7 +238,7 @@ class AccessVisibilityCacheIntegrationTest {
             CompletedObservation(
                 observation = 1,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = ObservationOutcome.RemoteFailure(
                     com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
                 )
@@ -251,7 +252,7 @@ class AccessVisibilityCacheIntegrationTest {
             CompletedObservation(
                 observation = 10,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = ObservationOutcome.RemoteFailure(
                     com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
                 )
@@ -283,7 +284,7 @@ class AccessVisibilityCacheIntegrationTest {
             CompletedObservation(
                 observation = 50,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = ObservationOutcome.RemoteFailure(
                     com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
                 )
@@ -301,7 +302,7 @@ class AccessVisibilityCacheIntegrationTest {
             CompletedObservation(
                 observation = 1, // lower than previous process
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = ObservationOutcome.Success
             )
         )
@@ -361,7 +362,7 @@ class AccessVisibilityCacheIntegrationTest {
             CompletedObservation(
                 observation = 100,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 namespaceId = "team-a",
                 outcome = ObservationOutcome.RemoteFailure(
                     com.nanyin.nacos.search.services.operations.RemoteOperationError.Authorization(403)
@@ -411,7 +412,7 @@ class AccessVisibilityCacheIntegrationTest {
             CompletedObservation(
                 observation = 101,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 namespaceId = "team-a",
                 outcome = ObservationOutcome.Success
             )
@@ -451,7 +452,7 @@ class AccessVisibilityCacheIntegrationTest {
             CompletedObservation(
                 observation = com.nanyin.nacos.search.services.operations.ObservationSequence.process.next(),
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 namespaceId = "team-a",
                 outcome = ObservationOutcome.RemoteFailure(
                     com.nanyin.nacos.search.services.operations.RemoteOperationError.NotFound()
