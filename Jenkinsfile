@@ -97,6 +97,8 @@ EOF
                         -e GRADLE_USER_HOME=/gradle-home \
                         -e GRADLE_OPTS="${GRADLE_OPTS}" \
                         -e HOME=/gradle-home \
+                        -e CI=true \
+                        -e JENKINS_URL="${JENKINS_URL:-https://jenkins.gorsen.icu/}" \
                         -w /work \
                         "${BUILD_IMAGE}" \
                         bash -lc '

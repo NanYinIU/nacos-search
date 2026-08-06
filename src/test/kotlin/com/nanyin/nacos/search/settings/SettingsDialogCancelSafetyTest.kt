@@ -30,6 +30,7 @@ class SettingsDialogCancelSafetyTest {
     private lateinit var settings: NacosSettings
     private var originalServers: List<NacosServerConfig> = emptyList()
     private var originalActiveId: String = ""
+    private val openConfigurables = mutableListOf<NacosConfigurable>()
 
     @BeforeEach
     fun setUp() {
@@ -54,10 +55,19 @@ class SettingsDialogCancelSafetyTest {
 
     @AfterEach
     fun tearDown() {
+        openConfigurables.forEach { runCatching { it.disposeUIResources() } }
+        openConfigurables.clear()
         val touched = (settings.servers.map { it.id } + originalServers.map { it.id } + setOf("dev")).toSet()
         clearProfileTombstones(touched)
         settings.applyServers(originalServers.map { it.copy() }, originalActiveId)
         clearProfileTombstones(touched)
+    }
+
+    private fun openConfigurable(): NacosConfigurable {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        openConfigurables += configurable
+        return configurable
     }
 
     @Test
@@ -66,8 +76,7 @@ class SettingsDialogCancelSafetyTest {
         val accessBefore = settings.getActiveProfile()!!.accessRevision
         val profilesBefore = settings.publishedProfiles().map { it.id to it.accessRevision }
 
-        val configurable = NacosConfigurable()
-        configurable.createComponent()
+        val configurable = openConfigurable()
 
         assertEquals(activeBefore, settings.activeServerId)
         assertEquals(accessBefore, settings.getActiveProfile()!!.accessRevision)
@@ -80,8 +89,7 @@ class SettingsDialogCancelSafetyTest {
     @Test
     fun `edit then reset restores persisted draft without writing`() {
         val accessBefore = settings.getActiveProfile()!!.accessRevision
-        val configurable = NacosConfigurable()
-        configurable.createComponent()
+        val configurable = openConfigurable()
 
         // Edit through the public form surface.
         privateField<JTextField>(configurable, "displayNameField").text = "Dev (edited)"
@@ -105,10 +113,7 @@ class SettingsDialogCancelSafetyTest {
 
     @Test
     fun `reset to defaults stays in memory until apply`() {
-        val configurable = NacosConfigurable()
-        configurable.createComponent()
-
-        // Click the per-row Reset to Defaults control.
+        val configurable = openConfigurable()
         val component = configurable.createComponent()
         val resetButton = findButtonByAutomationId(component, "nacos.settings.server.resetDefaults")
         assertTrue(resetButton != null)
@@ -129,8 +134,7 @@ class SettingsDialogCancelSafetyTest {
 
     @Test
     fun `apply is the sole publish path for a password change`() {
-        val configurable = NacosConfigurable()
-        configurable.createComponent()
+        val configurable = openConfigurable()
         privateField<JPasswordField>(configurable, "passwordField").text = "rotated-secret"
         assertTrue(configurable.isModified())
         assertEquals(1L, settings.getActiveProfile()!!.accessRevision)
@@ -140,8 +144,7 @@ class SettingsDialogCancelSafetyTest {
         assertTrue(settings.getActiveProfile()!!.accessRevision > 1)
         // Draft reloads clean after a successful apply path that does not fail stage.
         // Re-open classification from a fresh draft.
-        val after = NacosConfigurable()
-        after.createComponent()
+        val after = openConfigurable()
         assertFalse(after.isModified())
     }
 
