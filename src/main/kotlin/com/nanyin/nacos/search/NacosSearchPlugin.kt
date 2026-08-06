@@ -224,10 +224,14 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
                     ApplicationManager.getApplication()
                         .getService(NavigationIndexRefreshService::class.java)
                         .refresh(indexRequest.key.identity, null)
+                    // Prefer the typed stopping cause (authn/authz/connection/…)
+                    // so Tools → refresh surfaces the same remote error search
+                    // does (issue #122), not only a generic partial-count message.
                     Result.failure(
-                        IllegalStateException(
-                            "Namespace refresh loaded ${outcome.loaded}/${outcome.expected} configurations"
-                        )
+                        outcome.stoppingCause
+                            ?: IllegalStateException(
+                                "Namespace refresh loaded ${outcome.loaded}/${outcome.expected} configurations"
+                            )
                     )
                 }
                 is IndexOutcome.Failed -> Result.failure(outcome.error)

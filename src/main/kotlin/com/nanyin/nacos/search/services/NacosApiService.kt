@@ -321,13 +321,22 @@ class NacosApiService(
                     // First page failure with nothing loaded → FAILED; a later
                     // page failure with some rows → PARTIAL (summary pagination
                     // incomplete). Detail failures cannot occur here.
+                    // Preserve the original typed cause so stale-fallback policy
+                    // and presentation see authentication/permission rather than
+                    // a generic connection failure (issue #122 / ADR-0019).
                     val completeness = if (allSummaries.isEmpty()) {
                         DatasetCompleteness.FAILED
                     } else {
                         DatasetCompleteness.PARTIAL
                     }
                     return Result.success(
-                        NamespaceLoadResult(completeness, expectedCount, allSummaries, emptyList())
+                        NamespaceLoadResult(
+                            completeness = completeness,
+                            expectedCount = expectedCount,
+                            configurations = allSummaries,
+                            failures = emptyList(),
+                            stoppingCause = result.exceptionOrNull()
+                        )
                     )
                 }
 
@@ -358,7 +367,15 @@ class NacosApiService(
                 expectedCount > 0 && allSummaries.size < expectedCount -> DatasetCompleteness.PARTIAL
                 else -> DatasetCompleteness.COMPLETE
             }
-            Result.success(NamespaceLoadResult(completeness, expectedCount, allSummaries, emptyList()))
+            Result.success(
+                NamespaceLoadResult(
+                    completeness = completeness,
+                    expectedCount = expectedCount,
+                    configurations = allSummaries,
+                    failures = emptyList(),
+                    stoppingCause = null
+                )
+            )
         } catch (e: Exception) {
             logger.warn("Error loading namespace", e)
             Result.failure(e)
