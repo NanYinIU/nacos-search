@@ -1,0 +1,20 @@
+Jenkinsfile
+  h_231225c3625e99 100-101
+build.gradle.kts
+  h_231225c3625e99 206-221
+docs/ci/jenkins.md
+  h_231225c3625e99 31,36-57
+src/test/kotlin/com/nanyin/nacos/search/settings/SettingsDialogCancelSafetyTest.kt
+  h_231225c3625e99 33,58-59,66-72,79,92,116,137,147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "49271663c87c33148af60128762e45788c306526",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
