@@ -6,14 +6,12 @@ import com.google.gson.reflect.TypeToken
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
-import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.services.AuthenticationExecutionKey
 import com.nanyin.nacos.search.services.AuthenticationSessionRegistry
 import com.nanyin.nacos.search.services.AuthenticationToken
 import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeout
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -136,8 +134,9 @@ sealed class RemoteOperationError(message: String, cause: Throwable? = null) : E
  * issue #96). This dialect supplies the login request and response shape
  * over [transport]; it does not own a private completed-token store.
  *
- * Generation probing runs through [ProtocolCore] (ADR-0048 / issue #97);
- * browsing and publish still use the adapter-local shell until later slices.
+ * Generation probing and configuration browsing (summary, detail, history,
+ * Namespace discovery) run through [ProtocolCore] (ADR-0048 / issues #97 /
+ * #98). Publish still uses the adapter-local non-replaying shell until #99.
  */
 class V1ProtocolAdapter(
     private val transport: ProtocolTransport,
@@ -162,31 +161,43 @@ class V1ProtocolAdapter(
         this.core = ProtocolCore(transport, sessions, readBudgetMillis, clock)
     }
 
-    override suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage> =
-        execute(target) { authentication ->
-            request(
-                target,
-                HISTORY_PATH,
-                listOf(
-                    "search" to "accurate",
-                    "dataId" to query.coordinate.dataId,
-                    "group" to query.coordinate.group,
-                    "pageNo" to query.pageNo.toString(),
-                    "pageSize" to query.pageSize.toString()
-                ),
-                authentication
-            )
-        }.mapCatching { response -> parseHistoryPage(ensureSuccess(response)) }
+    override suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage> {
+        validate(target)
+        return core.executeIdempotent(
+            target = target,
+            build = { auth ->
+                request(
+                    target,
+                    HISTORY_PATH,
+                    listOf(
+                        "search" to "accurate",
+                        "dataId" to query.coordinate.dataId,
+                        "group" to query.coordinate.group,
+                        "pageNo" to query.pageNo.toString(),
+                        "pageSize" to query.pageSize.toString()
+                    ),
+                    auth
+                )
+            },
+            classify = { classifyIdempotentResponse(target, it) },
+            parse = { parseHistoryPage(ensureSuccess(it)) },
+            login = { performLogin(it) }
+        )
+    }
 
-    override suspend fun readHistoryDetail(target: OperationTarget, historyId: String): Result<HistoryDetail> =
-        execute(target) { authentication ->
-            request(
-                target,
-                HISTORY_PATH,
-                listOf("nid" to historyId),
-                authentication
-            )
-        }.mapCatching { response -> parseHistoryDetail(ensureSuccess(response)) }
+    override suspend fun readHistoryDetail(target: OperationTarget, historyId: String): Result<HistoryDetail> {
+        validate(target)
+        return core.executeIdempotent(
+            target = target,
+            build = { auth ->
+                request(target, HISTORY_PATH, listOf("nid" to historyId), auth)
+            },
+            classify = { classifyIdempotentResponse(target, it) },
+            parse = { parseHistoryDetail(ensureSuccess(it)) },
+            login = { performLogin(it) }
+        )
+    }
+
     override suspend fun probe(target: OperationTarget): Result<Unit> {
         validate(target)
         return core.executeIdempotent(
@@ -214,50 +225,88 @@ class V1ProtocolAdapter(
         }
     }
 
-    override suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> =
-        execute(target) { authentication ->
-            request(target, NAMESPACES_PATH, authentication = authentication)
-        }.mapCatching { response ->
-            parseNamespaceList(ensureSuccess(response))
+    /**
+     * Detail treats HTTP 404 as a successful absence rather than [RemoteOperationError.NotFound],
+     * matching the pre-core V1 contract that returns null for a missing configuration.
+     */
+    private fun classifyDetailResponse(
+        target: OperationTarget,
+        response: ProtocolResponse
+    ): ClassifiedResponse {
+        recoverableNacosPasswordTokenFailure(target, response)?.let {
+            return ClassifiedResponse.RecoverableTokenRefusal(it.status)
         }
+        if (response.status == 404) return ClassifiedResponse.Success(response)
+        return try {
+            ensureSuccess(response)
+            ClassifiedResponse.Success(response)
+        } catch (error: RemoteOperationError) {
+            ClassifiedResponse.Failure(error)
+        }
+    }
 
-    override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery): Result<SummaryPage> =
-        execute(target) { authentication ->
-            request(
-                target,
-                CONFIGS_PATH,
-                listOf(
-                    "pageNo" to query.pageNo.toString(),
-                    "pageSize" to query.pageSize.toString(),
-                    "dataId" to query.dataId,
-                    "group" to query.group,
-                    "appName" to query.appName,
-                    "config_tags" to query.configTags,
-                    "search" to query.search
-                ),
-                authentication
-            )
-        }.mapCatching { response ->
-            parseSummaryPage(ensureSuccess(response))
-        }
+    override suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> {
+        validate(target)
+        return core.executeIdempotent(
+            target = target,
+            build = { auth -> request(target, NAMESPACES_PATH, authentication = auth) },
+            classify = { classifyIdempotentResponse(target, it) },
+            parse = { parseNamespaceList(ensureSuccess(it)) },
+            login = { performLogin(it) }
+        )
+    }
+
+    override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery): Result<SummaryPage> {
+        validate(target)
+        return core.executeIdempotent(
+            target = target,
+            build = { auth ->
+                request(
+                    target,
+                    CONFIGS_PATH,
+                    listOf(
+                        "pageNo" to query.pageNo.toString(),
+                        "pageSize" to query.pageSize.toString(),
+                        "dataId" to query.dataId,
+                        "group" to query.group,
+                        "appName" to query.appName,
+                        "config_tags" to query.configTags,
+                        "search" to query.search
+                    ),
+                    auth
+                )
+            },
+            classify = { classifyIdempotentResponse(target, it) },
+            parse = { parseSummaryPage(ensureSuccess(it)) },
+            login = { performLogin(it) }
+        )
+    }
 
     override suspend fun readDetail(
         target: OperationTarget,
         coordinate: ConfigurationCoordinate
-    ): Result<NacosConfiguration?> = execute(target) { authentication ->
-        request(
-            target,
-            CONFIGS_PATH,
-            listOf(
-                "dataId" to coordinate.dataId,
-                "group" to coordinate.group,
-                "show" to "all"
-            ),
-            authentication
+    ): Result<NacosConfiguration?> {
+        validate(target)
+        return core.executeIdempotent(
+            target = target,
+            build = { auth ->
+                request(
+                    target,
+                    CONFIGS_PATH,
+                    listOf(
+                        "dataId" to coordinate.dataId,
+                        "group" to coordinate.group,
+                        "show" to "all"
+                    ),
+                    auth
+                )
+            },
+            classify = { classifyDetailResponse(target, it) },
+            parse = { response ->
+                if (response.status == 404) null else parseDetail(ensureSuccess(response))
+            },
+            login = { performLogin(it) }
         )
-    }.mapCatching { response ->
-        if (response.status == 404) return@mapCatching null
-        parseDetail(ensureSuccess(response))
     }
 
     override suspend fun publish(
@@ -311,27 +360,6 @@ class V1ProtocolAdapter(
             "true" -> PublishOutcome.Written(response.body)
             "false" -> PublishOutcome.CasConflict
             else -> throw RemoteOperationError.Protocol("Unexpected V1 publish response: $body")
-        }
-    }
-
-    private suspend fun execute(
-        target: OperationTarget,
-        build: (RequestAuthentication) -> ProtocolRequest
-    ): Result<ProtocolResponse> = runCatching {
-        validate(target)
-        try {
-            val deadline = clock() + readBudgetMillis
-            val firstResponse = executeWithinBudget(build(authenticationFor(target, deadline)), deadline)
-            if (recoverableNacosPasswordTokenFailure(target, firstResponse) != null) {
-                sessions.invalidate(target.context.identity)
-                executeWithinBudget(build(authenticationFor(target, deadline)), deadline)
-            } else {
-                firstResponse
-            }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Throwable) {
-            throw mapFailure(error)
         }
     }
 
@@ -494,17 +522,6 @@ class V1ProtocolAdapter(
         throw RemoteOperationError.Protocol("Invalid V1 history detail response", error)
     } catch (error: Exception) {
         throw RemoteOperationError.Protocol("Invalid V1 history detail response", error)
-    }
-
-    private fun mapFailure(error: Throwable): RemoteOperationError = when (error) {
-        is RemoteOperationError -> error
-        is NacosRequestError.Authentication -> RemoteOperationError.Authentication(error.status)
-        is NacosRequestError.RateLimited -> RemoteOperationError.RateLimited()
-        is NacosRequestError.Client -> if (error.status == 404) RemoteOperationError.NotFound() else RemoteOperationError.Client(error.status)
-        is NacosRequestError.Server -> RemoteOperationError.Server(error.status)
-        is NacosRequestError.Protocol -> RemoteOperationError.Protocol(error.message ?: "Protocol failure", error)
-        is NacosRequestError -> RemoteOperationError.Connection(error)
-        else -> RemoteOperationError.Connection(error)
     }
 
     private fun parseNamespaceList(body: String): List<DiscoveredNamespace> = try {

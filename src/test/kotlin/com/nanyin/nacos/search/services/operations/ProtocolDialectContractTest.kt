@@ -21,15 +21,15 @@ import org.junit.jupiter.api.Test
  * Behaviour both protocol dialects must share at the generation-neutral
  * [ProtocolAdapter] seam over a scripted [ProtocolTransport]. Concrete suites
  * supply one dialect and its response envelopes. Execution behaviour for
- * probing (auth recovery, shared budget, cancellation, classified outcomes)
- * runs through [ProtocolCore] (issue #97).
+ * probing (issue #97) and configuration browsing (issue #98) — auth recovery,
+ * shared budget, cancellation, classified outcomes — runs through [ProtocolCore].
  *
  * Seams under test:
  * - [ProtocolAdapter] over scripted [ProtocolTransport] (request, outcome,
  *   request count — including login)
  * - [AuthenticationSessionRegistry] as the one completed-token store both
  *   dialects must use (issue #96)
- * - [ProtocolCore] execution rules for probe (issue #97)
+ * - [ProtocolCore] execution rules for probe and browsing reads (issues #97 / #98)
  *
  * Contract assertions cover the request that was built, the outcome returned,
  * and the transport request count. Failure diagnostics name only method/path/
@@ -487,6 +487,164 @@ internal abstract class ProtocolDialectContractTest {
                 org.junit.jupiter.api.Assertions.fail("expected CancellationException")
             } catch (error: kotlinx.coroutines.CancellationException) {
                 assertEquals("probe cancelled", error.message)
+            }
+        }
+
+    @Test
+    fun `NACOS_PASSWORD detail recovers once from a refused token with a fixed request sequence`() =
+        runBlocking {
+            val transport = ScriptedTransport(
+                ProtocolResponse(200, loginBody("stale")),
+                refusedTokenDetailResponse(),
+                ProtocolResponse(200, loginBody("fresh")),
+                ProtocolResponse(200, detailBody(null))
+            )
+            val sessions = AuthenticationSessionRegistry()
+
+            newAdapter(transport, sessions)
+                .readDetail(passwordTarget(), ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP"))
+                .getOrThrow()
+
+            assertEquals(4, transport.requests.size, requestCountDiagnostic(transport))
+            assertEquals(loginPath, transport.requests[0].path)
+            assertEquals(detailPath, transport.requests[1].path)
+            assertEquals(loginPath, transport.requests[2].path)
+            assertEquals(detailPath, transport.requests[3].path)
+            assertTrue(transport.requests[3].query.any { it == "accessToken" to "fresh" })
+            assertNoSecrets(requestCountDiagnostic(transport))
+        }
+
+    @Test
+    fun `permission denial on history list is not recovered and stays Authorization`() = runBlocking {
+        val transport = ScriptedTransport(
+            ProtocolResponse(200, loginBody("current")),
+            permissionDeniedProbeResponse()
+        )
+        val sessions = AuthenticationSessionRegistry()
+        val target = passwordTarget()
+
+        val error = newAdapter(transport, sessions)
+            .listHistory(target, HistoryQuery(ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP")))
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
+        assertEquals(2, transport.requests.size, requestCountDiagnostic(transport))
+        assertEquals(historyListPath, transport.requests[1].path)
+        assertEquals("current", sessions.completedToken(target.context.identity)?.value)
+        assertNoSecrets(requestCountDiagnostic(transport))
+    }
+
+    @Test
+    fun `permission denial on namespace discovery is not recovered and stays Authorization`() =
+        runBlocking {
+            val transport = ScriptedTransport(
+                ProtocolResponse(200, loginBody("current")),
+                permissionDeniedProbeResponse()
+            )
+            val sessions = AuthenticationSessionRegistry()
+            val target = passwordTarget()
+
+            val error = newAdapter(transport, sessions)
+                .discoverNamespaces(target)
+                .exceptionOrNull()
+
+            assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
+            assertEquals(2, transport.requests.size, requestCountDiagnostic(transport))
+            assertEquals(discoveryPath, transport.requests[1].path)
+            assertEquals("current", sessions.completedToken(target.context.identity)?.value)
+            assertNoSecrets(requestCountDiagnostic(transport))
+        }
+
+    @Test
+    fun `detail authentication recovery shares the original request budget`() = runBlocking {
+        val clock = java.util.concurrent.atomic.AtomicLong(0L)
+        val transport = object : ProtocolTransport {
+            val requests = mutableListOf<ProtocolRequest>()
+            private val script = ArrayDeque(
+                listOf(
+                    ProtocolResponse(200, loginBody("stale")),
+                    refusedTokenDetailResponse(),
+                    ProtocolResponse(200, loginBody("fresh")),
+                    ProtocolResponse(200, detailBody(null))
+                )
+            )
+
+            override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
+                requests += request
+                clock.addAndGet(400)
+                return script.removeFirst()
+            }
+        }
+        val error = newAdapter(
+            transport = transport,
+            budgetMillis = 1_000L,
+            clock = { clock.get() }
+        ).readDetail(passwordTarget(), ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP"))
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Protocol::class.java, error)
+        assertTrue(
+            error!!.message!!.contains("budget", ignoreCase = true),
+            "expected budget exhaustion, got: ${error.message}"
+        )
+        assertTrue(
+            transport.requests.size < 4,
+            "shared budget must stop detail recovery before a fourth request; ${transport.requests.size}"
+        )
+        assertNoSecrets(
+            transport.requests.joinToString(prefix = "requests=", separator = "; ") {
+                "${it.method} ${it.path} keys=${it.query.map { q -> q.first }}"
+            }
+        )
+    }
+
+    @Test
+    fun `authentication failure on detail is not recovered`() = runBlocking {
+        val transport = ScriptedTransport(authenticationFailureProbeResponse())
+
+        val error = newAdapter(transport)
+            .readDetail(anonymousTarget(), ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP"))
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Authentication::class.java, error)
+        assertEquals(1, transport.requests.size, requestCountDiagnostic(transport))
+    }
+
+    @Test
+    fun `protocol failure on summary is Protocol and is not retried`() = runBlocking {
+        val transport = ScriptedTransport(protocolFailureProbeResponse())
+        val error = newAdapter(transport)
+            .listSummaries(anonymousTarget(), SummaryQuery(pageSize = 1))
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Protocol::class.java, error)
+        assertEquals(1, transport.requests.size, requestCountDiagnostic(transport))
+    }
+
+    @Test
+    fun `network failure on namespace discovery is Connection and is not retried by the core`() =
+        runBlocking {
+            val transport = ProtocolTransport {
+                throw RemoteOperationError.Connection(RuntimeException("boom"))
+            }
+            val error = newAdapter(transport).discoverNamespaces(anonymousTarget()).exceptionOrNull()
+
+            assertInstanceOf(RemoteOperationError.Connection::class.java, error)
+        }
+
+    @Test
+    fun `cancellation during detail propagates and is not remapped to connection or protocol`() =
+        runBlocking {
+            val transport = ProtocolTransport {
+                throw kotlinx.coroutines.CancellationException("detail cancelled")
+            }
+            try {
+                newAdapter(transport)
+                    .readDetail(anonymousTarget(), ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP"))
+                    .getOrThrow()
+                org.junit.jupiter.api.Assertions.fail("expected CancellationException")
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                assertEquals("detail cancelled", error.message)
             }
         }
 
