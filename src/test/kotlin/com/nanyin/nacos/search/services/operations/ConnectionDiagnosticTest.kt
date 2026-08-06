@@ -148,6 +148,33 @@ class ConnectionDiagnosticTest {
     }
 
     @Test
+    fun `CancellationException from probe propagates and is not remapped to connection failure`() = runBlocking {
+        val v3 = object : ProtocolAdapter {
+            override val capabilities = ProtocolCapabilities.NONE
+            override suspend fun probe(target: OperationTarget): Result<Unit> {
+                throw kotlinx.coroutines.CancellationException("diagnostic cancelled")
+            }
+            override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery) =
+                Result.success(SummaryPage(0, 1, 0, emptyList()))
+            override suspend fun readDetail(target: OperationTarget, coordinate: ConfigurationCoordinate) =
+                Result.success(null)
+            override suspend fun publish(target: OperationTarget, command: PublishCommand) =
+                Result.success(PublishOutcome.Written("true"))
+        }
+        val diagnostic = ConnectionDiagnostic(
+            GenerationResolver(v3, StubAdapter(NacosApiGeneration.V1)),
+            OperationGateway(mapOf(NacosApiGeneration.V3 to v3))
+        )
+
+        try {
+            diagnostic.diagnose(validAnonymousSnapshot())
+            org.junit.jupiter.api.Assertions.fail("expected CancellationException")
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            assertEquals("diagnostic cancelled", error.message)
+        }
+    }
+
+    @Test
     fun `diagnostic never mutates shared state`() = runBlocking {
         val cache = InMemoryOperationCache()
         val v3 = StubAdapter(NacosApiGeneration.V3)

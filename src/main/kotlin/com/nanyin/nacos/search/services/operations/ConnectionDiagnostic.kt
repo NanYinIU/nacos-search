@@ -232,6 +232,8 @@ class ConnectionDiagnostic(
 
     private suspend fun <T> timed(stage: String, operation: suspend () -> Result<T>): Pair<Long, Result<T>> {
         val start = clock()
+        // CancellationException must propagate: a cancelled diagnostic is
+        // cancellation, not a connection/protocol failure (issue #97 / ADR-0021).
         val result = operation()
         val duration = clock() - start
         return duration to result
