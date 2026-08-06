@@ -223,6 +223,9 @@ class NamespaceIndexCoordinator internal constructor(
         // load starts — a load that started earlier must lose to one that
         // started later, even when it happens to finish afterwards. Whether it
         // still lands is the cache's decision, not this coordinator's.
+        //
+        // Access visibility (issue #123) is driven by per-page gateway reports
+        // inside loadNamespace → listSummaries, not by this index-write sequence.
         val observation = apiService.operationGateway().beginObservation()
         return try {
             // Mandatory operation context — every generation (V1, V3, AUTO)

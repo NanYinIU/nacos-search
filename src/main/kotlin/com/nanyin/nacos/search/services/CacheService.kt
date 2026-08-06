@@ -181,17 +181,25 @@ class CacheService internal constructor(
      */
     fun snapshot(identity: AccessIdentity): CacheSnapshot {
         val state = publishedState
-        val decision = visibility.configurationVisibility(identity)
-        val version = compositeSnapshotVersion(state.version, visibility.stateGeneration())
-        val details = if (decision is ConfigurationVisibility.Blocked) emptyMap() else state.details
-        val indexes = if (decision is ConfigurationVisibility.Blocked) emptyMap() else state.namespaceIndexes
+        val genBefore = visibility.stateGeneration()
+        val firstDecision = visibility.configurationVisibility(identity)
+        val candidateDetails =
+            if (firstDecision is ConfigurationVisibility.Blocked) emptyMap() else state.details
+        val candidateIndexes =
+            if (firstDecision is ConfigurationVisibility.Blocked) emptyMap() else state.namespaceIndexes
+        // Fail-closed re-check: a concurrent accepted block between the first
+        // sample and map selection must not publish Visible + payloads (issue
+        // #123 review / snapshot TOCTOU).
+        val finalDecision = visibility.configurationVisibility(identity)
+        val genAfter = visibility.stateGeneration()
+        val blocked = finalDecision is ConfigurationVisibility.Blocked
         return CacheSnapshot(
-            version = version,
+            version = compositeSnapshotVersion(state.version, maxOf(genBefore, genAfter)),
             asOfMillis = currentTimeMillis(),
             identity = identity,
-            details = details,
-            namespaceIndexes = indexes,
-            visibility = decision
+            details = if (blocked) emptyMap() else candidateDetails,
+            namespaceIndexes = if (blocked) emptyMap() else candidateIndexes,
+            visibility = finalDecision
         )
     }
 
@@ -367,7 +375,10 @@ class CacheService internal constructor(
                 namespaceIndexAuthority.clear()
                 // Store clear reclaims payloads and visibility records together.
                 store.clear()
-                visibility.forgetAllInMemory()
+                // Fence visibility high-water with the same clear observation so
+                // an older late auth failure cannot re-block after the user clear
+                // (ADR-0020 / issue #123 review). One locked path inside visibility.
+                visibility.onUserClear(observation)
                 logger.info("Cache cleared")
             }
         }

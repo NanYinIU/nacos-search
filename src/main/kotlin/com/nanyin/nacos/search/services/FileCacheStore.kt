@@ -110,11 +110,18 @@ internal class FileCacheStore(
     override suspend fun putVisibilityRecord(key: String, record: AccessVisibilityRecord) =
         storeVisibility(key, record)
 
+    /**
+     * Removes one visibility record. Unlike payload [remove], failures are
+     * rethrown so [com.nanyin.nacos.search.services.visibility.AccessVisibility]
+     * can fail closed: a matching success must not drop the in-memory block
+     * when the store record could not be deleted (issue #123 review).
+     */
     override suspend fun removeVisibilityRecord(key: String) = withContext(Dispatchers.IO) {
         try {
             Files.deleteIfExists(visibilityDir.resolve(fileName(key)))
         } catch (e: Exception) {
             logger.warn("Failed to remove visibility record: $key", e)
+            throw e
         }
         Unit
     }

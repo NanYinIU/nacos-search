@@ -106,7 +106,9 @@ class OperationGateway(
         forceRefresh: Boolean = false,
         useCache: Boolean = true
     ): Result<Observed<HistoryPage>> {
-        if (useCache && !forceRefresh) {
+        if (useCache && !forceRefresh && !visibility.isIdentityAuthBlocked(target.context.identity)) {
+            // Identity-wide auth block hides history cache hits the same way
+            // CacheService hides configuration payloads (issue #123).
             historyCache.getHistoryPage(target.context.identity, target.namespaceId, query.cacheKey())?.let {
                 return Result.success(Observed(it, Observed.NO_OBSERVATION))
             }
@@ -137,7 +139,7 @@ class OperationGateway(
         forceRefresh: Boolean = false,
         useCache: Boolean = true
     ): Result<Observed<HistoryDetail>> {
-        if (useCache && !forceRefresh) {
+        if (useCache && !forceRefresh && !visibility.isIdentityAuthBlocked(target.context.identity)) {
             historyCache.getHistoryDetail(target.context.identity, target.namespaceId, historyId)?.let {
                 return Result.success(Observed(it, Observed.NO_OBSERVATION))
             }
@@ -207,15 +209,19 @@ class OperationGateway(
      * [com.nanyin.nacos.search.services.CacheService.apply], which decides
      * whether the mutation still lands.
      *
-     * Callers that complete a multi-page index load must also
-     * [reportExternalObservation] so identity-wide authentication blocks form
-     * and clear through the same path as single-page gateway ops (issue #123).
+     * Visibility for multi-page index loads depends on **per-page** gateway
+     * reports from [listSummaries] (via [com.nanyin.nacos.search.services.NacosApiService.loadNamespace]);
+     * [beginObservation] is for the cache index write only. Prefer that path
+     * over a single aggregate report so each formal page still carries its own
+     * start-time sequence (issue #123).
      */
     fun beginObservation(): Long = observationSequence.next()
 
     /**
      * Reports a completed formal observation that this gateway did not dispatch
-     * itself (namespace-index orchestration). Same contract as internal reports.
+     * itself. Available for orchestration that batches outside per-page gateway
+     * calls; the production namespace-index path does not need it because each
+     * page already reports through [listSummaries].
      */
     suspend fun reportExternalObservation(
         target: OperationTarget,

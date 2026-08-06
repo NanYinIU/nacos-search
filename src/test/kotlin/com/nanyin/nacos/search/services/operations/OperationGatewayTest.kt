@@ -186,6 +186,67 @@ class OperationGatewayTest {
         assertFalse(visibility.isIdentityAuthBlocked(target.context.identity))
     }
 
+    @Test
+    fun `identity auth block hides history cache hits`() = runBlocking {
+        val store = com.nanyin.nacos.search.services.InMemoryCacheStore()
+        val visibility = com.nanyin.nacos.search.services.visibility.AccessVisibility(store)
+        val history = HistoryMemoryCache()
+        val adapter = object : ProtocolAdapter {
+            override val capabilities = ProtocolCapabilities.V1
+            override suspend fun probe(target: OperationTarget): Result<Unit> = Result.success(Unit)
+            override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery): Result<SummaryPage> =
+                Result.success(page("x"))
+            override suspend fun readDetail(
+                target: OperationTarget,
+                coordinate: ConfigurationCoordinate
+            ): Result<NacosConfiguration?> = Result.success(null)
+            override suspend fun publish(target: OperationTarget, command: PublishCommand): Result<PublishOutcome> =
+                Result.success(PublishOutcome.Written("true"))
+            override suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage> =
+                Result.success(
+                    HistoryPage(
+                        totalCount = 1,
+                        pageNumber = 1,
+                        pagesAvailable = 1,
+                        items = emptyList()
+                    )
+                )
+        }
+        val gateway = OperationGateway(
+            adapters = mapOf(NacosApiGeneration.V1 to adapter),
+            historyCache = history,
+            visibility = visibility
+        )
+        val target = anonymousTarget("dev", "https://dev.nacos.example", "public")
+        val query = HistoryQuery(coordinate = ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP"))
+
+        // Seed history cache via remote success.
+        val remote = gateway.listHistory(target, query, forceRefresh = true).getOrThrow()
+        assertNotEquals(Observed.NO_OBSERVATION, remote.observation)
+        val hit = gateway.listHistory(target, query, forceRefresh = false).getOrThrow()
+        assertEquals(Observed.NO_OBSERVATION, hit.observation)
+
+        visibility.reportCompleted(
+            com.nanyin.nacos.search.services.visibility.CompletedObservation(
+                observation = ObservationSequence.process.next(),
+                identity = target.context.identity,
+                operationClass = com.nanyin.nacos.search.services.visibility.VisibilityOperationClass.CONFIGURATION_READ,
+                outcome = com.nanyin.nacos.search.services.visibility.ObservationOutcome.RemoteFailure(
+                    RemoteOperationError.Authentication(401)
+                )
+            )
+        )
+        assertTrue(visibility.isIdentityAuthBlocked(target.context.identity))
+
+        // Under block, history cache hit must not be served (falls through to remote).
+        val underBlock = gateway.listHistory(target, query, forceRefresh = false).getOrThrow()
+        assertNotEquals(
+            Observed.NO_OBSERVATION,
+            underBlock.observation,
+            "blocked identity must not get a history cache hit"
+        )
+    }
+
     private fun page(dataId: String) = SummaryPage(
         1, 1, 1, listOf(ConfigurationSummary(dataId, "G", "public", "c", "yaml"))
     )

@@ -2,6 +2,7 @@ package com.nanyin.nacos.search.services.visibility
 
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosApiGeneration
+import com.nanyin.nacos.search.services.CacheStore
 import com.nanyin.nacos.search.services.InMemoryCacheStore
 import com.nanyin.nacos.search.services.operations.ObservationHighWater
 import com.nanyin.nacos.search.services.operations.RemoteOperationError
@@ -204,6 +205,59 @@ class AccessVisibilityTest {
         assertTrue(
             store.loadVisibilityRecords().keys.none { it.contains("|dev|") }
         )
+    }
+
+    @Test
+    fun `success without a prior block still returns true when observation is accepted`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val identity = identity("dev")
+
+        val accepted = visibility.reportCompleted(success(identity, observation = 1))
+
+        assertTrue(accepted)
+        assertFalse(visibility.isIdentityAuthBlocked(identity))
+    }
+
+    @Test
+    fun `failed store remove keeps the block fail closed`() = runBlocking {
+        val delegate = InMemoryCacheStore()
+        val store = object : CacheStore by delegate {
+            override suspend fun removeVisibilityRecord(key: String) {
+                throw java.io.IOException("disk full")
+            }
+        }
+        val visibility = AccessVisibility(store)
+        val identity = identity("dev")
+        visibility.reportCompleted(authFailure(identity, observation = 1))
+        assertTrue(visibility.isIdentityAuthBlocked(identity))
+
+        val cleared = visibility.reportCompleted(success(identity, observation = 2))
+
+        assertFalse(cleared)
+        assertTrue(visibility.isIdentityAuthBlocked(identity))
+    }
+
+    @Test
+    fun `user clear fences high-water so older late failure cannot re-block`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
+        val identity = identity("dev")
+        visibility.reportCompleted(authFailure(identity, observation = 1))
+        assertTrue(visibility.isIdentityAuthBlocked(identity))
+
+        // Clear at sequence 10 (store already wiped by cache clear in production).
+        store.clear()
+        visibility.onUserClear(observation = 10)
+        assertFalse(visibility.isIdentityAuthBlocked(identity))
+
+        // Auth failure that started before clear must not re-block.
+        val reblocked = visibility.reportCompleted(authFailure(identity, observation = 5))
+        assertFalse(reblocked)
+        assertFalse(visibility.isIdentityAuthBlocked(identity))
+
+        // A newer failure after clear still can block.
+        assertTrue(visibility.reportCompleted(authFailure(identity, observation = 11)))
+        assertTrue(visibility.isIdentityAuthBlocked(identity))
     }
 
     private fun identity(

@@ -184,6 +184,44 @@ class AccessVisibilityCacheIntegrationTest {
     }
 
     @Test
+    fun `late lower-sequence auth failure after clearAll cannot re-block`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
+        val cache = CacheService(System::currentTimeMillis, ProfileTombstoneRegistry(), store, visibility)
+        cache.awaitLoadCompleted()
+        val identity = identity("dev")
+        visibility.reportCompleted(
+            CompletedObservation(
+                observation = 1,
+                identity = identity,
+                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                outcome = ObservationOutcome.RemoteFailure(
+                    com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
+                )
+            )
+        )
+        // clearAll takes ObservationSequence.process.next(); capture a high bar by
+        // using a large explicit observation via a second clear path after seed.
+        cache.clearAll(observation = 50)
+
+        val reblocked = visibility.reportCompleted(
+            CompletedObservation(
+                observation = 10,
+                identity = identity,
+                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                outcome = ObservationOutcome.RemoteFailure(
+                    com.nanyin.nacos.search.services.operations.RemoteOperationError.Authentication(401)
+                )
+            )
+        )
+        assertFalse(reblocked)
+        assertFalse(visibility.isIdentityAuthBlocked(identity))
+        assertNull(
+            cache.getConfigDetail(identity, "public", "a.properties", "DEFAULT_GROUP")
+        )
+    }
+
+    @Test
     fun `cache rebuilt over same store restores block and first success clears it`() = runBlocking {
         val store = InMemoryCacheStore()
         val identity = identity("dev")

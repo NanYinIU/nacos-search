@@ -17,16 +17,24 @@ import java.util.concurrent.atomic.AtomicLong
  * [NoOpVisibilityReporter] so they never affect production visibility state
  * (issue #48 / ADR-0050).
  */
-fun interface VisibilityReporter {
+interface VisibilityReporter {
     /**
      * Single mutation entry point. Accepts the observation only when its
      * start-time sequence outranks every relevant high-water mark; raises the
      * mark only after the block or clear is durably applied (or applied
      * fail-closed in memory when a clear cannot yet drop the store record).
      *
-     * @return true when a visibility mutation was accepted and applied
+     * @return true when the observation was **accepted** (high-water raised
+     * and any applicable block/clear mutation applied). A success that only
+     * advances ordering with no prior block still returns true.
      */
     suspend fun reportCompleted(observation: CompletedObservation): Boolean
+
+    /**
+     * True when an identity-wide authentication block hides authenticated
+     * data surfaces for [identity] (configuration cache and history cache hits).
+     */
+    fun isIdentityAuthBlocked(identity: AccessIdentity): Boolean = false
 }
 
 /** Diagnostic / test reporter that never mutates visibility. */
@@ -90,7 +98,7 @@ internal class AccessVisibility(
         )
     }
 
-    fun isIdentityAuthBlocked(identity: AccessIdentity): Boolean =
+    override fun isIdentityAuthBlocked(identity: AccessIdentity): Boolean =
         configurationVisibility(identity) is ConfigurationVisibility.Blocked
 
     fun identityAuthBlock(identity: AccessIdentity): AccessVisibilityRecord? =
@@ -143,40 +151,38 @@ internal class AccessVisibility(
     }
 
     /**
-     * User clear of the whole cache: drop every visibility record together
-     * with the payloads the store is about to wipe. Called from the cache's
-     * clear mutation so the two cannot drift.
+     * User clear of the whole cache: drop every in-memory visibility block and
+     * fence the visibility high-water with [observation] so an older late
+     * auth failure cannot re-block after this clear (ADR-0020).
+     *
+     * Call after [CacheStore.clear] has reclaimed store records (payloads and
+     * visibility files together). This is the only forget path for user clear.
      */
-    suspend fun clearAllRecords() {
+    suspend fun onUserClear(observation: Long) {
         mutex.withLock {
             if (identityAuthBlocks.isNotEmpty()) {
                 identityAuthBlocks.clear()
                 generation.incrementAndGet()
             }
-            // Store clear is owned by CacheStore.clear(); only wipe memory here
-            // when the caller has already cleared or will clear the store.
-        }
-    }
-
-    /**
-     * Forget in-memory state after the store has already been cleared (e.g.
-     * [CacheStore.clear] reclaimed both payloads and visibility files).
-     */
-    fun forgetAllInMemory() {
-        if (identityAuthBlocks.isNotEmpty()) {
-            identityAuthBlocks.clear()
-            generation.incrementAndGet()
+            // Collapse every per-identity mark into the global clear mark so
+            // the gate map cannot grow for the life of the IDE and any
+            // observation at or below this clear is rejected for block and
+            // clear mutations (mirrors CacheService GLOBAL_SCOPE on clear).
+            if (observation > 0L) {
+                highWater.collapseTo(GLOBAL_CLEAR_SCOPE, observation)
+            }
         }
     }
 
     private suspend fun acceptSuccess(identity: AccessIdentity, observation: Long): Boolean {
-        val scope = listOf(VisibilityScopes.identityAuthScope(identity))
+        val scope = identityAuthScopeChain(identity)
         return mutex.withLock {
             if (!highWater.accepts(scope, observation)) return@withLock false
             val key = VisibilityScopes.identityAuthKey(identity)
             val hadBlock = identityAuthBlocks.containsKey(key)
             if (hadBlock) {
                 // Fail closed: only reveal after the store record is gone.
+                // removeVisibilityRecord must surface I/O failure (throw).
                 try {
                     store.removeVisibilityRecord(key)
                 } catch (e: Exception) {
@@ -189,7 +195,9 @@ internal class AccessVisibility(
             // Raise even when there was no block so an older late failure cannot
             // re-block after this newer success (ADR-0020).
             highWater.raise(scope.last(), observation)
-            hadBlock
+            // Observation was accepted (ordering advanced); true even if no block
+            // was present to clear.
+            true
         }
     }
 
@@ -199,7 +207,7 @@ internal class AccessVisibility(
         error: RemoteOperationError
     ): Boolean {
         val reason = identityAuthReason(error) ?: return false
-        val scope = listOf(VisibilityScopes.identityAuthScope(identity))
+        val scope = identityAuthScopeChain(identity)
         return mutex.withLock {
             if (!highWater.accepts(scope, observation)) return@withLock false
             val key = VisibilityScopes.identityAuthKey(identity)
@@ -227,5 +235,24 @@ internal class AccessVisibility(
         is RemoteOperationError.InvalidOrExpiredNacosPasswordToken -> AccessRefusalReason.AUTHENTICATION
         // Namespace / capability authorization blocks are #124–#125.
         else -> null
+    }
+
+    /**
+     * Scope chain for identity-wide auth mutations: global clear mark first,
+     * then the identity's own mark. A user clear raises only the global mark;
+     * an identity mutation raises only its own (last) mark.
+     */
+    private fun identityAuthScopeChain(identity: AccessIdentity): List<String> = listOf(
+        GLOBAL_CLEAR_SCOPE,
+        VisibilityScopes.identityAuthScope(identity)
+    )
+
+    companion object {
+        /**
+         * Broadest visibility scope: a user's cache clear collapses every
+         * per-identity mark into this one so late older failures cannot re-block
+         * after clear and the high-water map stays bounded.
+         */
+        const val GLOBAL_CLEAR_SCOPE = "vis|*"
     }
 }
