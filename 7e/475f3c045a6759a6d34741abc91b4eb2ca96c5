@@ -1,0 +1,14 @@
+src/test/kotlin/com/nanyin/nacos/search/settings/ProfileDeletionLifecycleTest.kt
+  h_231225c3625e99 541-545,547
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "7e475f3c045a6759a6d34741abc91b4eb2ca96c5",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
