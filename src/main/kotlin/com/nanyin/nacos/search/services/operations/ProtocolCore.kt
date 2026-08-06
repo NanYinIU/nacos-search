@@ -41,18 +41,18 @@ sealed class ClassifiedResponse {
 }
 
 /**
- * The one protocol execution shell (ADR-0048 / issue #97).
+ * The one protocol execution shell (ADR-0048 / issues #97–#100).
  *
  * Owns target-agnostic authentication application, the request budget,
  * transport dispatch, the single permitted authentication recovery for
- * idempotent exchanges, cancellation preservation, and the meaning of
- * [ClassifiedResponse]. Dialects supply request construction, login wire,
- * and response classification only. Used by generation probing (#97) and
- * configuration browsing reads (#98).
+ * idempotent exchanges, the non-replaying write path, cancellation
+ * preservation, and the meaning of [ClassifiedResponse]. Dialects supply
+ * request construction, login wire, and response classification only.
  *
  * Transport-level retries remain inside [ProtocolTransport] (ADR-0021); this
  * budget is the outer deadline that login, those retries, and one auth
- * replay must all share.
+ * replay must all share. Writes never replay and never open a fresh budget
+ * for login (ADR-0011 / ADR-0021 / issue #99).
  */
 class ProtocolCore(
     private val transport: ProtocolTransport,
@@ -77,6 +77,34 @@ class ProtocolCore(
     ): Result<T> {
         return try {
             Result.success(runIdempotent(target, build, classify, parse, login))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            Result.failure(error)
+        }
+    }
+
+    /**
+     * Runs one non-idempotent write under a single request budget.
+     *
+     * The configuration-write request crosses the transport at most once.
+     * A [ClassifiedResponse.RecoverableTokenRefusal] evicts the refused token
+     * for the complete access identity and surfaces
+     * [RemoteOperationError.InvalidOrExpiredNacosPasswordToken] without
+     * replaying the write (ADR-0011). Cancellation or an untyped failure after
+     * the write may have left the client becomes
+     * [RemoteOperationError.AmbiguousWriteResult] rather than an ordinary
+     * cancel or connection failure (ADR-0021).
+     */
+    suspend fun <T> executeOnce(
+        target: OperationTarget,
+        build: (RequestAuthentication) -> ProtocolRequest,
+        classify: (ProtocolResponse) -> ClassifiedResponse,
+        parse: (ProtocolResponse) -> T,
+        login: suspend (OperationTarget) -> AuthenticationToken?
+    ): Result<T> {
+        return try {
+            Result.success(runOnce(target, build, classify, parse, login))
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
@@ -115,6 +143,56 @@ class ProtocolCore(
         } catch (error: RemoteOperationError) {
             throw error
         } catch (error: Throwable) {
+            throw RemoteOperationError.Connection(error)
+        }
+    }
+
+    private suspend fun <T> runOnce(
+        target: OperationTarget,
+        build: (RequestAuthentication) -> ProtocolRequest,
+        classify: (ProtocolResponse) -> ClassifiedResponse,
+        parse: (ProtocolResponse) -> T,
+        login: suspend (OperationTarget) -> AuthenticationToken?
+    ): T {
+        val deadline = clock() + budgetMillis
+        var writeDispatched = false
+        try {
+            val request = build(authenticationFor(target, deadline, login))
+            writeDispatched = true
+            val response = dispatch(request, deadline)
+            return when (val classified = classify(response)) {
+                is ClassifiedResponse.Success -> parse(classified.response)
+                is ClassifiedResponse.Failure -> throw classified.error
+                is ClassifiedResponse.RecoverableTokenRefusal -> {
+                    requireNacosPassword(target)
+                    sessions.invalidate(target.context.identity)
+                    throw RemoteOperationError.InvalidOrExpiredNacosPasswordToken(classified.status)
+                }
+            }
+        } catch (error: CancellationException) {
+            if (writeDispatched) {
+                throw RemoteOperationError.AmbiguousWriteResult(
+                    "Write cancelled after the request may have left the client"
+                )
+            }
+            throw error
+        } catch (error: RemoteOperationError.Connection) {
+            // Connect/read timeout after dispatch cannot prove the write never
+            // reached the server (ADR-0021).
+            if (writeDispatched) {
+                throw RemoteOperationError.AmbiguousWriteResult(
+                    "Write result cannot be confirmed after the request may have left the client"
+                )
+            }
+            throw error
+        } catch (error: RemoteOperationError) {
+            throw error
+        } catch (error: Throwable) {
+            if (writeDispatched) {
+                throw RemoteOperationError.AmbiguousWriteResult(
+                    "Write result cannot be confirmed after the request may have left the client"
+                )
+            }
             throw RemoteOperationError.Connection(error)
         }
     }

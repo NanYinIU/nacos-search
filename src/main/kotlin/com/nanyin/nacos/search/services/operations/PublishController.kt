@@ -199,7 +199,8 @@ class PublishController(private val gateway: PublishGateway) {
                 is RemoteOperationError.Authorization -> PublishResult(
                     PublishState.PermissionDenied, isDirty = true
                 )
-                is RemoteOperationError.Cancelled -> PublishResult(
+                is RemoteOperationError.Cancelled,
+                is RemoteOperationError.AmbiguousWriteResult -> PublishResult(
                     PublishState.ServerStateUnknown, isDirty = true
                 )
                 // After a possible post-send failure, we cannot know if the

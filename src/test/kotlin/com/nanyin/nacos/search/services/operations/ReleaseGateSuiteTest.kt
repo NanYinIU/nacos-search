@@ -115,14 +115,14 @@ class ReleaseGateSuiteTest {
 
     @Test
     fun `V1 CAS conflict is surfaced and V3 never fabricates CAS`() = runBlocking {
-        // V1 maps a "false" publish body to CasConflict; V3 has no CAS wire and
-        // its publish outcome is never CasConflict.
+        // V1 maps a "false" publish body to WriteConflict (gateway → CasConflict);
+        // V3 has no CAS wire and its publish outcome is never CasConflict.
         val v1Fixture = QueuedTransport(ProtocolResponse(200, "false"))
-        val v1Outcome = V1ProtocolAdapter(v1Fixture).publish(
+        val v1Error = V1ProtocolAdapter(v1Fixture).publish(
             v1AnonymousTarget(),
-            PublishCommand("app.yaml", "G", "new", "yaml", "public", "base-md5")
-        ).getOrThrow()
-        assertEquals(PublishOutcome.CasConflict, v1Outcome)
+            PublishCommand("app.yaml", "G", "new", "yaml", "public", casMd5 = "base-md5")
+        ).exceptionOrNull()
+        assertInstanceOf(RemoteOperationError.WriteConflict::class.java, v1Error)
 
         val v3Fixture = QueuedTransport(ProtocolResponse(200, """{"code":0,"message":"success","data":true}"""))
         val v3Outcome = V3ProtocolAdapter(v3Fixture).publish(
@@ -130,6 +130,7 @@ class ReleaseGateSuiteTest {
             PublishCommand("app.yaml", "G", "new", "yaml", "public")
         ).getOrThrow()
         assertInstanceOf(PublishOutcome.Written::class.java, v3Outcome)
+        assert(v3Outcome != PublishOutcome.CasConflict)
     }
 
     private fun v1AnonymousTarget(namespaceId: String = "public"): OperationTarget {

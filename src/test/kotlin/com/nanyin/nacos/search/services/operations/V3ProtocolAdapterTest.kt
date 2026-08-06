@@ -325,7 +325,7 @@ class V3ProtocolAdapterTest {
         val writes = fixture.requests.filter { it.path == "/nacos/v3/admin/cs/config" }
         assertEquals(1, writes.size, "publish must reach the wire exactly once")
         assertEquals("POST", writes.single().method)
-        assertInstanceOf(RemoteOperationError.Authentication::class.java, error)
+        assertInstanceOf(RemoteOperationError.InvalidOrExpiredNacosPasswordToken::class.java, error)
     }
 
     @Test

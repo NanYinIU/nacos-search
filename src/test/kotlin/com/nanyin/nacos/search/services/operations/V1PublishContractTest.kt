@@ -41,7 +41,7 @@ class V1PublishContractTest {
     }
 
     @Test
-    fun `V1 CAS false response maps to CasConflict`() = runBlocking {
+    fun `V1 CAS false response maps to WriteConflict`() = runBlocking {
         val fixture = QueuedTransport(ProtocolResponse(200, "false"))
         val adapter = V1ProtocolAdapter(fixture)
         val command = PublishCommand(
@@ -49,9 +49,9 @@ class V1PublishContractTest {
             namespaceId = "public", casMd5 = "base-md5"
         )
 
-        val outcome = adapter.publish(anonymousV1Target(), command).getOrThrow()
+        val error = adapter.publish(anonymousV1Target(), command).exceptionOrNull()
 
-        assertEquals(PublishOutcome.CasConflict, outcome)
+        assertInstanceOf(RemoteOperationError.WriteConflict::class.java, error)
     }
 
     @Test

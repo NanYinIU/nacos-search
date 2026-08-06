@@ -6,13 +6,10 @@ import com.google.gson.reflect.TypeToken
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
-import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosOperationContext
-import com.nanyin.nacos.search.services.AuthenticationExecutionKey
 import com.nanyin.nacos.search.services.AuthenticationSessionRegistry
 import com.nanyin.nacos.search.services.AuthenticationToken
 import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
-import kotlinx.coroutines.withTimeout
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
@@ -127,16 +124,41 @@ sealed class RemoteOperationError(message: String, cause: Throwable? = null) : E
 }
 
 /**
- * Owns every V1 wire decision for the read path: method, path,
+ * Generation-neutral credential checks shared by both dialects. Each dialect
+ * still validates that the target's resolved generation matches its own.
+ */
+internal fun validateOperationAuthentication(target: OperationTarget, dialectLabel: String) {
+    when (target.context.authenticationStrategy) {
+        V1AuthenticationStrategy.ANONYMOUS -> require(
+            target.context.identity.principal == "<anonymous>" && target.context.credential.secret.isBlank()
+        ) {
+            throw RemoteOperationError.Unsupported("Anonymous target must not carry credentials")
+        }
+        V1AuthenticationStrategy.NACOS_PASSWORD,
+        V1AuthenticationStrategy.HTTP_BASIC -> require(
+            target.context.identity.principal != "<anonymous>" && target.context.credential.secret.isNotBlank()
+        ) {
+            throw RemoteOperationError.Unsupported(
+                "Password and principal are required for $dialectLabel authentication"
+            )
+        }
+        V1AuthenticationStrategy.BEARER_TOKEN -> require(target.context.credential.secret.isNotBlank()) {
+            throw RemoteOperationError.Unsupported("Bearer token is required for $dialectLabel authentication")
+        }
+    }
+}
+
+/**
+ * Owns every V1 wire decision for the read and write path: method, path,
  * query, public-namespace encoding, headers, parsing, and error mapping.
  *
  * Completed Nacos-password tokens live only in [sessions] (ADR-0012 /
  * issue #96). This dialect supplies the login request and response shape
  * over [transport]; it does not own a private completed-token store.
  *
- * Generation probing and configuration browsing (summary, detail, history,
- * Namespace discovery) run through [ProtocolCore] (ADR-0048 / issues #97 /
- * #98). Publish still uses the adapter-local non-replaying shell until #99.
+ * Probing, configuration browsing, and publishing all run through
+ * [ProtocolCore] (ADR-0048 / issues #97–#99). Publish uses
+ * [ProtocolCore.executeOnce] so a refused token is never replayed.
  */
 class V1ProtocolAdapter(
     private val transport: ProtocolTransport,
@@ -312,54 +334,62 @@ class V1ProtocolAdapter(
     override suspend fun publish(
         target: OperationTarget,
         command: PublishCommand
-    ): Result<PublishOutcome> = runCatching {
+    ): Result<PublishOutcome> {
         validate(target)
-        val deadline = clock() + readBudgetMillis
-        val auth = authenticationFor(target, deadline)
-        val headers = mapOf(
-            "Accept" to "application/json",
-            "Content-Type" to "application/x-www-form-urlencoded"
-        ) + auth.headers + listOfNotNull(
-            command.casMd5?.let { "casMd5" to it }
-        ).toMap()
-
-        val params = buildList {
-            add("dataId" to command.dataId)
-            add("group" to command.group)
-            add("content" to command.content)
-            add("type" to command.type)
-            command.appName?.let { add("appName" to it) }
-            command.desc?.let { add("desc" to it) }
-            command.configTags?.let { add("config_tags" to it) }
-            v1TenantQuery(command.namespaceId)?.let { add(it) }
-        }
-
-        val formData = params.joinToString("&") { (k, v) ->
-            "${java.net.URLEncoder.encode(k, "UTF-8")}=${java.net.URLEncoder.encode(v, "UTF-8")}"
-        }
-
-        val request = ProtocolRequest(
-            method = "POST",
-            endpoint = target.context.endpoint.value,
-            path = CONFIGS_PATH,
-            query = auth.query,
-            headers = headers,
-            body = formData
+        return core.executeOnce(
+            target = target,
+            build = { auth ->
+                val headers = mapOf(
+                    "Accept" to "application/json",
+                    "Content-Type" to "application/x-www-form-urlencoded"
+                ) + auth.headers + listOfNotNull(
+                    command.casMd5?.let { "casMd5" to it }
+                ).toMap()
+                val params = command.commonFormFields() + listOfNotNull(
+                    v1TenantQuery(command.namespaceId)
+                )
+                val formData = params.joinToString("&") { (k, v) ->
+                    "${URLEncoder.encode(k, StandardCharsets.UTF_8.name())}=" +
+                        URLEncoder.encode(v, StandardCharsets.UTF_8.name())
+                }
+                ProtocolRequest(
+                    method = "POST",
+                    endpoint = target.context.endpoint.value,
+                    path = CONFIGS_PATH,
+                    query = auth.query,
+                    headers = headers,
+                    body = formData
+                )
+            },
+            classify = { classifyPublishResponse(target, it) },
+            parse = { response ->
+                when (val body = response.body.trim().lowercase()) {
+                    "true" -> PublishOutcome.Written(response.body)
+                    "false" -> throw RemoteOperationError.WriteConflict()
+                    else -> throw RemoteOperationError.Protocol("Unexpected V1 publish response: $body")
+                }
+            },
+            login = { performLogin(it) }
         )
+    }
 
-        // Deliberately off ProtocolCore.executeIdempotent: a rejected token cannot prove
-        // the write never reached the configuration store, and ADR-0011 forbids
-        // replaying a write on an authentication failure. The token is still
-        // evicted, so the next attempt logs in again instead of presenting a
-        // credential the server has already refused.
-        val response = executeWithinBudget(request, deadline)
-        if (recoverableNacosPasswordTokenFailure(target, response) != null) {
-            sessions.invalidate(target.context.identity)
+    /**
+     * Publish classification: refused tokens are evicted without replay by the
+     * core; other HTTP failures keep their typed meaning. A 2xx body is parsed
+     * by the caller (including CAS `false`).
+     */
+    private fun classifyPublishResponse(
+        target: OperationTarget,
+        response: ProtocolResponse
+    ): ClassifiedResponse {
+        recoverableNacosPasswordTokenFailure(target, response)?.let {
+            return ClassifiedResponse.RecoverableTokenRefusal(it.status)
         }
-        when (val body = ensureSuccess(response).trim().lowercase()) {
-            "true" -> PublishOutcome.Written(response.body)
-            "false" -> PublishOutcome.CasConflict
-            else -> throw RemoteOperationError.Protocol("Unexpected V1 publish response: $body")
+        return try {
+            ensureSuccess(response)
+            ClassifiedResponse.Success(response)
+        } catch (error: RemoteOperationError) {
+            ClassifiedResponse.Failure(error)
         }
     }
 
@@ -386,22 +416,7 @@ class V1ProtocolAdapter(
         require(target.context.resolvedGeneration == NacosApiGeneration.V1) {
             throw RemoteOperationError.Unsupported("V1 adapter requires a V1-locked target")
         }
-        when (target.context.authenticationStrategy) {
-            V1AuthenticationStrategy.ANONYMOUS -> require(
-                target.context.identity.principal == "<anonymous>" && target.context.credential.secret.isBlank()
-            ) {
-                throw RemoteOperationError.Unsupported("Anonymous target must not carry credentials")
-            }
-            V1AuthenticationStrategy.NACOS_PASSWORD,
-            V1AuthenticationStrategy.HTTP_BASIC -> require(
-                target.context.identity.principal != "<anonymous>" && target.context.credential.secret.isNotBlank()
-            ) {
-                throw RemoteOperationError.Unsupported("Password and principal are required for V1 authentication")
-            }
-            V1AuthenticationStrategy.BEARER_TOKEN -> require(target.context.credential.secret.isNotBlank()) {
-                throw RemoteOperationError.Unsupported("Bearer token is required for V1 authentication")
-            }
-        }
+        validateOperationAuthentication(target, "V1")
     }
 
     private fun ensureSuccess(response: ProtocolResponse): String = when (response.status) {
@@ -559,30 +574,6 @@ class V1ProtocolAdapter(
         throw RemoteOperationError.Protocol("Invalid V1 namespace response", error)
     }
 
-    private suspend fun authenticationFor(target: OperationTarget, deadline: Long): RequestAuthentication =
-        when (target.context.authenticationStrategy) {
-            V1AuthenticationStrategy.ANONYMOUS -> RequestAuthentication()
-            V1AuthenticationStrategy.NACOS_PASSWORD -> {
-                val token = withinBudget(deadline) {
-                    sessions.getOrLogin(AuthenticationExecutionKey(target.context)) { performLogin(target) }?.value
-                } ?: throw RemoteOperationError.Authentication(401)
-                RequestAuthentication(query = listOf("accessToken" to token))
-            }
-            V1AuthenticationStrategy.HTTP_BASIC -> {
-                val credentials = "${target.context.identity.principal}:${target.context.credential.secret}"
-                val encoded = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray(StandardCharsets.UTF_8))
-                RequestAuthentication(headers = mapOf("Authorization" to "Basic $encoded"))
-            }
-            V1AuthenticationStrategy.BEARER_TOKEN -> RequestAuthentication(
-                headers = mapOf("Authorization" to "Bearer ${target.context.credential.secret}")
-            )
-        }
-
-    /**
-     * Dialect-owned V1 login wire over the same [transport] as ordinary
-     * operations. Credentials stay on the request body only (ADR-0009 /
-     * ADR-0021 / issue #96).
-     */
     private suspend fun performLogin(target: OperationTarget): AuthenticationToken? {
         val username = target.context.identity.principal.takeUnless { it == "<anonymous>" }.orEmpty()
         val password = target.context.credential.secret
@@ -614,15 +605,6 @@ class V1ProtocolAdapter(
             value = accessToken,
             expiresAtMillis = now + tokenTtl * 1000 - TOKEN_REFRESH_BUFFER_MILLIS
         )
-    }
-
-    private suspend fun executeWithinBudget(request: ProtocolRequest, deadline: Long): ProtocolResponse =
-        withinBudget(deadline) { transport.execute(request) }
-
-    private suspend fun <T> withinBudget(deadline: Long, operation: suspend () -> T): T {
-        val remaining = deadline - clock()
-        if (remaining <= 0) throw RemoteOperationError.Protocol("V1 read budget exhausted")
-        return withTimeout(remaining) { operation() }
     }
 
     /**
