@@ -42,12 +42,18 @@ import com.nanyin.nacos.search.invokeOnEdt
  * Right panel: detail form for the selected server (URL, credentials,
  * namespace, auth mode, advanced params).
  *
- * Uses a draft model: edits go into an in-memory draft list; Apply/OK
- * commit to NacosSettings, Cancel rolls back.
+ * Intent-only draft model (ADR-0049 / issue #106): the dialog holds dual-write
+ * draft rows that map 1:1 to [com.nanyin.nacos.search.models.ProfileIntent]s
+ * (no profile revision, access revision, or credential slot identity). Opening,
+ * Cancel, and the configurable Reset lifecycle only replace in-memory draft
+ * state. Apply / OK is the sole path that publishes through the profile store
+ * and the deletion lifecycle.
  *
- * The blue-dot "active" marker follows the **current project's** selected
- * environment (when a project context is available). Orange dirty dots still
- * mark unsaved draft edits relative to the persisted server list.
+ * Row dirty indicators and Apply enablement use the store's one change-
+ * classification rule ([NacosSettings.classifyDraft]), not a hand-built field
+ * comparison. The blue-dot "active" marker follows the **current project's**
+ * selected environment when a project context is available and is never written
+ * back on open.
  */
 class NacosConfigurable @JvmOverloads constructor(
     private val project: Project? = null
@@ -56,9 +62,11 @@ class NacosConfigurable @JvmOverloads constructor(
     private val apiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
     private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
 
-    // ---- Draft model ----
+    // ---- Draft model (in-memory only; never written except via apply()) ----
     private lateinit var draftServers: MutableList<NacosServerConfig>
     private var draftActiveId: String = ""
+    /** Active id captured when the draft was loaded — for isModified only. */
+    private var openBaselineActiveId: String = ""
 
    // ---- Left panel (master) ----
    private lateinit var serverList: JBList<NacosServerConfig>
@@ -121,28 +129,28 @@ class NacosConfigurable @JvmOverloads constructor(
     // ------------------------------------------------------------------
 
     private fun initializeDraft() {
-        draftServers = settings.cloneServers().onEach {
+        // Pure read of published profiles + secrets. Never migrates, stages,
+        // rewrites the seed, or realigns project selection (issue #106).
+        draftServers = settings.loadSettingsDraft().onEach {
             it.authMode = AuthStrategyFormPolicy.normalizeStored(it.authMode, settings.enableTokenAuth)
         }.toMutableList()
         if (draftServers.isEmpty()) {
-            val default = NacosServerConfig(id = "default", displayName = "Local")
+            val default = settings.defaultDraftRow("default", "Local")
             draftServers.add(default)
             draftActiveId = "default"
+            openBaselineActiveId = draftActiveId
             selectedServerId = draftActiveId
             return
         }
-        // Blue-dot = environment for the current project. Align the persisted
-        // app-wide activeServerId so opening Settings does not look "dirty"
-        // solely because project session and default drifted apart.
+        // Blue-dot = environment for the current project. Capture it only in
+        // draft state — do not write activeServerId or the migration seed.
         val preferred = resolveSettingsBlueDotId(
             servers = draftServers,
             projectProfileId = resolveProjectProfileId(),
             activeServerId = settings.activeServerId
         )
-        if (preferred != settings.activeServerId) {
-            settings.setActiveServer(preferred)
-        }
         draftActiveId = preferred
+        openBaselineActiveId = preferred
         selectedServerId = draftActiveId
     }
 
@@ -150,6 +158,9 @@ class NacosConfigurable @JvmOverloads constructor(
      * Profile id selected by the tool window for [project], or the focused /
      * sole open project when this configurable was constructed without one
      * (IDE Preferences → Tools → Nacos Search).
+     *
+     * Pure read of the session selection — does not call [NacosProjectSession.healSelection]
+     * so opening Settings cannot write project state (issue #106).
      */
     private fun resolveProjectProfileId(): String? {
         val context = project
@@ -158,9 +169,46 @@ class NacosConfigurable @JvmOverloads constructor(
             ?: return null
         if (context.isDisposed) return null
         val session = context.getService(NacosProjectSession::class.java) ?: return null
-        session.healSelection(settings)
         return session.sessionState.selectedProfileId.takeIf { it.isNotBlank() }
     }
+
+    /**
+     * Store-owned draft classification against the open baseline active id so
+     * a blue-dot that differs from the app-wide seed does not look dirty until
+     * the user changes the draft (issue #106).
+     */
+    private fun classifyCurrentDraft(): ProfileIntentClassification {
+        if (!::draftServers.isInitialized) {
+            return ProfileIntentClassification()
+        }
+        return settings.classifyDraft(
+            draft = draftServers,
+            draftActiveId = draftActiveId,
+            previousActiveId = openBaselineActiveId
+        )
+    }
+
+    /**
+     * Draft rows that differ from the published state for any reason the store
+     * owns, plus dual-write-only extras not yet on the intent.
+     */
+    fun dirtyDraftProfileIds(): Set<String> {
+        if (!::draftServers.isInitialized) return emptySet()
+        return classifyCurrentDraft().dirtyProfileIds() +
+            settings.dualWriteExtrasDirtyIds(draftServers)
+    }
+
+    /**
+     * Public seam: profile intents currently held in the draft (no revisions).
+     */
+    fun draftIntents(): List<com.nanyin.nacos.search.models.ProfileIntent> {
+        if (!::draftServers.isInitialized) return emptyList()
+        commitDetailFormToDraft()
+        return settings.intentsFromDraft(draftServers)
+    }
+
+    /** Public seam: draft active profile id (blue-dot). */
+    fun draftActiveProfileId(): String = if (::draftServers.isInitialized) draftActiveId else ""
 
     private fun contextProject(): Project? {
         val candidate = project
@@ -293,16 +341,9 @@ class NacosConfigurable @JvmOverloads constructor(
     }
 
     /**
-     * Computes the set of server ids that differ from their saved state.
-     * Used to show the orange dirty dot per-row per design guide.
+     * Row dirty dots from the store-owned classification (plus dual-write extras).
      */
-    private fun computeDirtyIds(): Set<String> {
-        val saved = settings.cloneServers().associateBy { it.id }
-        return draftServers.filter { draft ->
-            val s = saved[draft.id]
-            s == null || s != draft
-        }.map { it.id }.toSet()
-    }
+    private fun computeDirtyIds(): Set<String> = dirtyDraftProfileIds()
 
     private fun commitDetailFormToDraft() {
         if (loadingForm) return
@@ -890,7 +931,7 @@ class NacosConfigurable @JvmOverloads constructor(
     // ------------------------------------------------------------------
 
     private fun addServer() {
-        val newServer = NacosServerConfig.createDefault()
+        val newServer = settings.defaultDraftRow(NacosServerConfig.generateId())
         draftServers.add(newServer)
         serverListModel.addElement(newServer)
         serverList.selectedIndex = serverListModel.size() - 1
@@ -1003,9 +1044,8 @@ class NacosConfigurable @JvmOverloads constructor(
         val server = selectedDraft() ?: return
         val keepId = server.id
         val keepName = server.displayName
-        val reset = NacosServerConfig.createDefault(keepId).apply {
-            displayName = keepName
-        }
+        // Defaults from the complete persisted shape, in-memory only until Apply.
+        val reset = settings.defaultDraftRow(keepId, keepName)
         val idx = draftServers.indexOfFirst { it.id == keepId }
         if (idx >= 0) {
             draftServers[idx] = reset
@@ -1021,26 +1061,26 @@ class NacosConfigurable @JvmOverloads constructor(
     // ------------------------------------------------------------------
 
     override fun isModified(): Boolean {
-        val langChanged = (languageComboBox.selectedItem as LanguageService.SupportedLanguage) != languageService.getCurrentLanguage()
-
-        if (draftActiveId != settings.activeServerId) return true
-        if (draftServers.size != settings.servers.size) return true
-
-        for (i in draftServers.indices) {
-            val d = draftServers[i]
-            val s = settings.servers.getOrNull(i) ?: return true
-            if (d.id != s.id || d.displayName != s.displayName ||
-                d.serverUrl != s.serverUrl || d.username != s.username ||
-                d.password != s.password || d.namespace != s.namespace ||
-                d.apiPolicy != s.apiPolicy ||
-                d.authMode != s.authMode || d.defaultGroup != s.defaultGroup ||
-                d.connectionTimeoutMs != s.connectionTimeoutMs ||
-                d.allowCrossNamespaceNavigation != s.allowCrossNamespaceNavigation ||
-                d.navigationDetailPrefetchEnabled != s.navigationDetailPrefetchEnabled ||
-                d.writeIntent != s.writeIntent
-            ) return true
+        if (!::draftServers.isInitialized) return false
+        if (::displayNameField.isInitialized) {
+            // Ensure the latest form keystrokes are in the draft before classify.
+            commitDetailFormToDraft()
         }
-        return langChanged
+        if (!::languageComboBox.isInitialized) {
+            // Component not built yet — only draft classification matters.
+            return classifyCurrentDraft().isModified() ||
+                settings.dualWriteExtrasDirtyIds(draftServers).isNotEmpty()
+        }
+        val langChanged =
+            (languageComboBox.selectedItem as LanguageService.SupportedLanguage) !=
+                languageService.getCurrentLanguage()
+        if (langChanged) return true
+        // Store-owned semantic comparison is the sole answer for profile rows
+        // (issue #106). Dual-write-only extras (timeout / default group) sit
+        // beside it until they join ProfileIntent.
+        if (classifyCurrentDraft().isModified()) return true
+        if (settings.dualWriteExtrasDirtyIds(draftServers).isNotEmpty()) return true
+        return false
     }
 
     override fun apply() {
@@ -1067,10 +1107,15 @@ class NacosConfigurable @JvmOverloads constructor(
         admitProfileDeletionGuards()
         admitEnvironmentRealignGuards()
 
-        // Publish through the profile-intent store. The write outcome is the
-        // sole classification for connection-vs-preferences notifications —
-        // do not re-compare signatures, passwords, or list positions (#103).
-        val outcome = settings.applyServers(draftServers, draftActiveId)
+        // Sole write path: profile intents through the store (issue #106).
+        // The write outcome is the sole classification for connection-vs-
+        // preferences notifications — do not re-compare signatures, passwords,
+        // or list positions (#103).
+        val outcome = settings.applyProfileIntents(
+            intents = settings.intentsFromDraft(draftServers),
+            newActiveId = draftActiveId,
+            dualWriteServers = draftServers
+        )
 
         // Stage / deletion withhold failures: dual-write already kept the
         // published pair. Resync the draft from published state and tell the
@@ -1107,6 +1152,12 @@ class NacosConfigurable @JvmOverloads constructor(
             refreshServerListDecorations()
             selectActiveServerInList()
             loadDraftIntoForm()
+        } else {
+            // Successful publish: re-baseline the open active id so isModified
+            // is false for the active selection Apply just committed (#106).
+            // Failed Adds stay in the draft and correctly remain dirty.
+            openBaselineActiveId = draftActiveId
+            refreshServerListDecorations()
         }
 
         // Keep the current project's tool-window selection on the same profile
@@ -1165,12 +1216,13 @@ class NacosConfigurable @JvmOverloads constructor(
     }
 
     override fun reset() {
+        // Configurable Reset / Cancel: restore the persisted draft in memory
+        // only — no settings, credential, seed, or project-selection write.
         initializeDraft()
-        // Rebuild list model
+        if (!::serverListModel.isInitialized) return
         serverListModel.clear()
         draftServers.forEach { serverListModel.addElement(it) }
         refreshServerListDecorations()
-        // Select active server
         selectActiveServerInList()
         loadDraftIntoForm()
     }

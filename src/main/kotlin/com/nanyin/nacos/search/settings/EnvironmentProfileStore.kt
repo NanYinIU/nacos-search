@@ -255,6 +255,134 @@ class EnvironmentProfileStore(
     }
 
     /**
+     * Pure classification of [intents] against published state. Reads credential
+     * slots only to compare secrets; never stages, deletes, or mutates settings
+     * (issue #106). Row dirty dots and Apply enablement use this answer.
+     */
+    fun classifyIntents(
+        intents: List<ProfileIntent>,
+        activeProfileId: String,
+        previousProfiles: List<EnvironmentProfile>,
+        previousPreferences: List<EnvironmentPreferences> = emptyList(),
+        previousActiveId: String = "",
+        previousSuggestedNamespaces: Map<String, String> = emptyMap()
+    ): ProfileIntentClassification {
+        val previousById = previousProfiles
+            .filter { it.id.isNotBlank() }
+            .associateBy { it.id }
+        val previousPrefsById = previousPreferences
+            .filter { it.profileId.isNotBlank() }
+            .associate { it.profileId to it.copyPreferences() }
+
+        val intentIds = linkedSetOf<String>()
+        val normalizedIntents = intents.mapNotNull { intent ->
+            val id = intent.profileId.trim()
+            if (id.isBlank() || !intentIds.add(id)) return@mapNotNull null
+            intent.copy(
+                profileId = id,
+                preferences = intent.preferences.copyPreferences().also { it.profileId = id }
+            )
+        }
+
+        val currentIds = intentIds.toSet()
+        val previousIds = previousById.keys
+        val removedIds = previousIds - currentIds
+        val addedIds = mutableSetOf<String>()
+        val preferenceChanged = mutableSetOf<String>()
+        val displayOnlyChanged = mutableSetOf<String>()
+        val profileRevisionAdvanced = mutableSetOf<String>()
+        val accessRevisionAdvanced = mutableSetOf<String>()
+        val namespaceChanged = mutableSetOf<String>()
+        val classifiedIds = mutableSetOf<String>()
+
+        for (intent in normalizedIntents) {
+            val id = intent.profileId
+            val previous = previousById[id]
+            val nextPrefs = intent.preferences.copyPreferences().also { it.profileId = id }
+            val prevPrefs = previousPrefsById[id] ?: EnvironmentPreferences.defaultsFor(id)
+            val suggestedNs = intent.suggestedNamespace.trim().ifBlank { "public" }
+
+            // Tombstoned ids cannot re-enter; classify as failed-stage-like dirty
+            // (added-or-kept attempt) so the draft still looks modified until the
+            // user drops the row. They are not published on Apply.
+            if (isEntombed(id)) {
+                if (previous == null) {
+                    addedIds += id
+                } else {
+                    // Keep attempting to republish an entombed id counts as dirty.
+                    accessRevisionAdvanced += id
+                }
+                continue
+            }
+
+            when (val decision = decidePublication(previous, intent)) {
+                is PublishDecision.Add -> {
+                    addedIds += id
+                    classifiedIds += id
+                }
+                is PublishDecision.Keep -> {
+                    classifiedIds += id
+                    if (decision.accessAdvanced) accessRevisionAdvanced += id
+                    if (decision.profileAdvanced) profileRevisionAdvanced += id
+                    recordClassificationSideEffects(
+                        id = id,
+                        previous = previous,
+                        previousDisplayName = previous?.displayName,
+                        nextDisplayName = intent.displayName,
+                        prevPrefs = prevPrefs,
+                        nextPrefs = nextPrefs,
+                        suggestedNs = suggestedNs,
+                        previousSuggestedNamespaces = previousSuggestedNamespaces,
+                        accessAdvanced = decision.accessAdvanced,
+                        profileAdvanced = decision.profileAdvanced,
+                        preferenceChanged = preferenceChanged,
+                        displayOnlyChanged = displayOnlyChanged,
+                        namespaceChanged = namespaceChanged
+                    )
+                }
+                is PublishDecision.Unchanged -> {
+                    classifiedIds += id
+                    recordClassificationSideEffects(
+                        id = id,
+                        previous = previous,
+                        previousDisplayName = previous?.displayName,
+                        nextDisplayName = intent.displayName,
+                        prevPrefs = prevPrefs,
+                        nextPrefs = nextPrefs,
+                        suggestedNs = suggestedNs,
+                        previousSuggestedNamespaces = previousSuggestedNamespaces,
+                        accessAdvanced = false,
+                        profileAdvanced = false,
+                        preferenceChanged = preferenceChanged,
+                        displayOnlyChanged = displayOnlyChanged,
+                        namespaceChanged = namespaceChanged
+                    )
+                }
+            }
+        }
+
+        val resolvedActive = when {
+            activeProfileId.isNotBlank() && activeProfileId in currentIds -> activeProfileId
+            previousActiveId.isNotBlank() && previousActiveId in currentIds -> previousActiveId
+            else -> currentIds.firstOrNull().orEmpty()
+        }
+        val activeChanged = previousActiveId.isNotBlank() &&
+            resolvedActive.isNotBlank() &&
+            resolvedActive != previousActiveId
+
+        return ProfileIntentClassification(
+            addedProfileIds = addedIds.toSet(),
+            removedProfileIds = removedIds,
+            preferenceChangedIds = preferenceChanged.toSet(),
+            displayOnlyChangedIds = displayOnlyChanged.toSet(),
+            profileRevisionWouldAdvanceIds = profileRevisionAdvanced.toSet(),
+            accessRevisionWouldAdvanceIds = accessRevisionAdvanced.toSet(),
+            suggestedNamespaceChangedIds = namespaceChanged.toSet(),
+            activeProfileIdChanged = activeChanged
+        )
+    }
+
+    /**
      * Immutable defensive copy of a published profile. Callers must not mutate
      * the returned instance and write it back — only [applyIntents] publishes.
      */
@@ -287,6 +415,39 @@ class EnvironmentProfileStore(
 
     private fun isImmutableSlotFailure(failure: CredentialStageResult.Failure): Boolean =
         failure.reason.contains("immutable", ignoreCase = true)
+
+    private fun recordClassificationSideEffects(
+        id: String,
+        previous: EnvironmentProfile?,
+        previousDisplayName: String?,
+        nextDisplayName: String,
+        prevPrefs: EnvironmentPreferences,
+        nextPrefs: EnvironmentPreferences,
+        suggestedNs: String,
+        previousSuggestedNamespaces: Map<String, String>,
+        accessAdvanced: Boolean,
+        profileAdvanced: Boolean,
+        preferenceChanged: MutableSet<String>,
+        displayOnlyChanged: MutableSet<String>,
+        namespaceChanged: MutableSet<String>
+    ) {
+        if (!preferencesEqual(prevPrefs, nextPrefs)) {
+            preferenceChanged += id
+        }
+        if (previous != null && previousSuggestedNamespaces.containsKey(id)) {
+            val previousNs = previousSuggestedNamespaces.getValue(id).trim().ifBlank { "public" }
+            if (previousNs != suggestedNs) {
+                namespaceChanged += id
+            }
+        }
+        if (previous != null &&
+            previousDisplayName != nextDisplayName &&
+            !accessAdvanced &&
+            !profileAdvanced
+        ) {
+            displayOnlyChanged += id
+        }
+    }
 
     private fun recordSuccessfulSideEffects(
         id: String,
