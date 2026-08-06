@@ -1,0 +1,23 @@
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_36f6706875e447::t_8480a8c6c29457 11-12,50-53,60-66,69-72,155-172,176-180,184-195,206-209,225-233,245-246,368,370,469-475,518-519,522-524,545,548-555,558,569,574,577,640-643,674-675
+src/main/kotlin/com/nanyin/nacos/search/services/CacheStore.kt
+  s_36f6706875e447::t_066a341de881e6 5,14-17,39-49,57,84-94,98
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_36f6706875e447::t_1c725fbdc89365 96,100-103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "f2b69c69299328faaf81cd29ee63467eb9e7b9d5",
+  "prompts": {},
+  "sessions": {
+    "s_36f6706875e447": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4127616a-1472-4b6c-8786-3a77f2b1bdde",
+        "model": "deepseek-v4-flash:0731-cloud"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
