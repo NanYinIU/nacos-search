@@ -5,6 +5,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.DatasetCompleteness
+import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosSettings
@@ -144,12 +145,37 @@ class NacosApiServiceTest {
     fun setUp() {
         settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         settings.resetToDefaults()
-        settings.serverUrl = "http://localhost:$serverPort"
-        settings.username = "nacos"
-        settings.password = "nacos"
-        settings.authMode = AuthMode.BASIC
+        publishEnvironment(
+            serverUrl = "http://localhost:$serverPort",
+            username = "nacos",
+            password = "nacos",
+            authMode = AuthMode.BASIC
+        )
 
         apiService = NacosApiService()
+    }
+
+    /** Publish via the profile write path — flat fields are not runtime sources after migration. */
+    private fun publishEnvironment(
+        serverUrl: String,
+        username: String = "",
+        password: String = "",
+        authMode: AuthMode = AuthMode.ANONYMOUS,
+        id: String = "s_local"
+    ) {
+        settings.applyServers(
+            listOf(
+                NacosServerConfig(
+                    id = id,
+                    displayName = "Test",
+                    serverUrl = serverUrl,
+                    username = username,
+                    password = password,
+                    authMode = authMode
+                )
+            ),
+            id
+        )
     }
 
     @Test
@@ -211,9 +237,12 @@ class NacosApiServiceTest {
             "test-ns",
             NacosConfiguration("test.properties", "DEFAULT_GROUP", "test-ns", "cached=value")
         )
-        settings.serverUrl = "http://localhost:$serverPort/nacos"
-        settings.username = "nacos"
-        settings.password = ""
+        publishEnvironment(
+            serverUrl = "http://localhost:$serverPort/nacos",
+            username = "nacos",
+            password = "",
+            authMode = AuthMode.BASIC
+        )
         val before = requestCount.get()
 
         val result = apiService.getConfiguration("test.properties", "DEFAULT_GROUP", "test-ns")
@@ -236,7 +265,7 @@ class NacosApiServiceTest {
 
     @Test
     fun `loadNamespace returns FAILED when list endpoint unreachable`() = runBlocking {
-        settings.serverUrl = "http://localhost:1"
+        publishEnvironment(serverUrl = "http://localhost:1", authMode = AuthMode.ANONYMOUS)
         // Capture context against the unreachable endpoint before constructing the service.
         val failingContext = settings.captureOperationContext().getOrThrow()
         val failingService = NacosApiService()
@@ -265,7 +294,7 @@ class NacosApiServiceTest {
     @Test
     fun `test get namespaces returns public namespace when api fails`() = runBlocking {
         // Point to a non-existent port to trigger error handling
-        settings.serverUrl = "http://localhost:1"
+        publishEnvironment(serverUrl = "http://localhost:1", authMode = AuthMode.ANONYMOUS)
         val failingContext = settings.captureOperationContext().getOrThrow()
         val failingService = NacosApiService()
 
@@ -328,6 +357,8 @@ class NacosApiServiceTest {
    fun `test settings validation`() {
        assertTrue(settings.isValid())
 
+       publishEnvironment(serverUrl = "http://invalid", authMode = AuthMode.ANONYMOUS)
+       // Empty origin is invalid; an unparseable endpoint fails validation too.
        settings.serverUrl = ""
        assertFalse(settings.isValid())
    }

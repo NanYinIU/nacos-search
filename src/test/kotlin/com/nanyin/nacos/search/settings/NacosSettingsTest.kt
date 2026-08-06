@@ -66,7 +66,7 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `setActiveServer updates profile default so Settings badge tracks tool window`() {
+    fun `setActiveServer updates dual-write active id without rewriting migration seed`() {
         settings.applyServers(
             listOf(
                 NacosServerConfig(id = "s_local", displayName = "本地 Local", serverUrl = "http://localhost:8848"),
@@ -76,12 +76,15 @@ class NacosSettingsTest {
         )
         assertEquals("s_local", settings.activeServerId)
         assertEquals("s_local", settings.resolveDefaultProfileId())
+        val seed = settings.migratedDefaultProfileId
 
         settings.setActiveServer("s_qa")
 
         assertEquals("s_qa", settings.activeServerId)
-        assertEquals("s_qa", settings.migratedDefaultProfileId)
-        assertEquals("s_qa", settings.resolveDefaultProfileId())
+        // Seed is migration-owned (issue #104); switching active must not retarget
+        // the default a newly opened project would inherit.
+        assertEquals(seed, settings.migratedDefaultProfileId)
+        assertEquals("s_local", settings.resolveDefaultProfileId())
         assertEquals("http://47.95.169.10:8848", settings.serverUrl)
     }
 
@@ -256,42 +259,6 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `test cache aliases`() {
-        settings.cacheEnabled = false
-        assertFalse(settings.enableCache)
-
-        settings.enableCache = true
-        assertTrue(settings.cacheEnabled)
-    }
-
-    @Test
-    fun `test cacheTtlSeconds alias`() {
-        settings.cacheTtlMinutes = 5
-        assertEquals(300, settings.cacheTtlSeconds)
-
-        settings.cacheTtlSeconds = 600
-        assertEquals(10, settings.cacheTtlMinutes)
-    }
-
-    @Test
-    fun `test autoRefresh aliases`() {
-        settings.autoRefreshEnabled = false
-        assertFalse(settings.autoRefreshCache)
-
-        settings.autoRefreshCache = true
-        assertTrue(settings.autoRefreshEnabled)
-    }
-
-    @Test
-    fun `test autoRefreshIntervalSeconds alias`() {
-        settings.autoRefreshIntervalMinutes = 10
-        assertEquals(600, settings.autoRefreshIntervalSeconds)
-
-        settings.autoRefreshIntervalSeconds = 1200
-        assertEquals(20, settings.autoRefreshIntervalMinutes)
-    }
-
-    @Test
     fun `test getTokenCacheDurationMillis`() {
         settings.tokenCacheDurationMinutes = 30
         assertEquals(30 * 60 * 1000L, settings.getTokenCacheDurationMillis())
@@ -360,15 +327,25 @@ class NacosSettingsTest {
 
     @Test
     fun `test state persistence`() {
-        settings.serverUrl = "http://persist:8848"
-        // Also update the active server's URL since loadState() calls syncFromActiveServer()
-        settings.getActiveServer().serverUrl = "http://persist:8848"
+        // Persist via the profile write path — flat fields alone are not the
+        // runtime source of truth after migration (issue #104).
+        settings.applyServers(
+            listOf(
+                NacosServerConfig(
+                    id = "s_local",
+                    displayName = "本地 Local",
+                    serverUrl = "http://persist:8848"
+                )
+            ),
+            "s_local"
+        )
         val state = settings.getState()
 
         val newSettings = NacosSettings()
         newSettings.loadState(state)
 
         assertEquals("http://persist:8848", newSettings.serverUrl)
+        assertEquals("http://persist:8848", newSettings.getActiveProfile()?.canonicalEndpoint)
     }
 
     @Test
@@ -436,7 +413,7 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `loadState drops blank-id profiles and remigrates from servers`() {
+    fun `loadState drops blank-id profiles and remigrates from servers when schema is legacy`() {
         settings.applyServers(
             listOf(
                 NacosServerConfig(
@@ -452,7 +429,7 @@ class NacosSettingsTest {
         )
         val state = settings.getState()
         // Simulate corrupt XML debris that Instantiator used to blow up on, or
-        // partially written profile rows with an empty id.
+        // partially written profile rows with an empty id under a legacy schema.
         state.profiles = mutableListOf(
             com.nanyin.nacos.search.models.EnvironmentProfile(
                 id = "",
@@ -460,7 +437,9 @@ class NacosSettingsTest {
                 canonicalEndpoint = "http://localhost:8848"
             )
         )
-        state.profileMigrationCompleted = true
+        state.settingsSchemaVersion = 0
+        state.profileMigrationCompleted = false
+        state.credentialSlotsPublished = false
 
         val loaded = NacosSettings()
         loaded.loadState(state)
@@ -470,6 +449,7 @@ class NacosSettingsTest {
         assertEquals("s_ok", profile!!.id)
         assertEquals("OK", profile.displayName)
         assertTrue(profile.credentialSlotId.isNotBlank())
+        assertEquals(SettingsSchema.CURRENT, loaded.settingsSchemaVersion)
     }
 
     @Test
@@ -498,8 +478,8 @@ class NacosSettingsTest {
             "s_auth"
         )
         val state = settings.getState()
-        // Profiles present (migration already done) but the revision-pinned slot
-        // was never written — the failure mode after Instantiator aborted mid-save.
+        // Profiles present under a legacy schema version with a missing slot —
+        // the failure mode after Instantiator aborted mid-save.
         state.profiles = mutableListOf(
             com.nanyin.nacos.search.models.EnvironmentProfile(
                 id = "s_auth",
@@ -510,6 +490,7 @@ class NacosSettingsTest {
                 credentialSlotId = "s_auth:v1"
             )
         )
+        state.settingsSchemaVersion = 0
         state.profileMigrationCompleted = true
         state.credentialSlotsPublished = true
         NacosCredentialStore.remove("s_auth:v1")
@@ -522,6 +503,7 @@ class NacosSettingsTest {
         val context = loaded.captureOperationContext("s_auth").getOrThrow()
         assertEquals("correct-horse", context.credential.secret)
         assertEquals("nacos", context.identity.principal)
+        assertEquals(SettingsSchema.CURRENT, loaded.settingsSchemaVersion)
     }
 
     @Test
@@ -539,7 +521,6 @@ class NacosSettingsTest {
             ),
             "s_live"
         )
-        settings.credentialSlotsPublished = true
 
         val result = settings.captureOperationContext("deleted-profile")
         assertTrue(result.isFailure)
@@ -547,7 +528,7 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `reconcile recreates missing profiles for existing servers`() {
+    fun `pure getProfile does not remigrate when profiles were cleared in memory`() {
         settings.applyServers(
             listOf(
                 NacosServerConfig(
@@ -562,12 +543,8 @@ class NacosSettingsTest {
             "s_only"
         )
         settings.profiles = mutableListOf()
-        settings.profileMigrationCompleted = true
-
-        val profile = settings.getProfile("s_only")
-        assertNotNull(profile)
-        assertEquals("Only", profile!!.displayName)
-        assertEquals("pw", NacosCredentialStore.get(profile.credentialSlotId))
+        // Reads never re-derive profiles from servers (issue #104).
+        assertNull(settings.getProfile("s_only"))
     }
 
     @Test

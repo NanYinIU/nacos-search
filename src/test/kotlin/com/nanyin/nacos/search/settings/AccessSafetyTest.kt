@@ -54,7 +54,11 @@ class AccessSafetyTest {
         val first = LegacyProfileMigrator(credentials).migrate(legacy, "dev", "team-a")
         val second = LegacyProfileMigrator(credentials).migrate(legacy, "dev", "team-a")
 
-        assertEquals(first, second)
+        // Profiles and seed are deterministic; the second pass stages nothing
+        // (idempotent credential writes) so action lists may differ.
+        assertEquals(first.profiles, second.profiles)
+        assertEquals(first.defaultProfileId, second.defaultProfileId)
+        assertEquals(first.defaultNamespaceId, second.defaultNamespaceId)
         assertEquals("dev", first.defaultProfileId)
         assertEquals("team-a", first.defaultNamespaceId)
         assertEquals("https://nacos.example", first.profiles.single().canonicalEndpoint)
