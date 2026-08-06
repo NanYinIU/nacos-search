@@ -1,0 +1,33 @@
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_36f6706875e447::t_5c4070b81dcc4b 184-195,197,200-202,378-381
+src/main/kotlin/com/nanyin/nacos/search/services/FileCacheStore.kt
+  s_36f6706875e447::t_4fffa2892ec883 113-118,124
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt
+  s_36f6706875e447::t_7871ec117b3c2d 226-228
+src/main/kotlin/com/nanyin/nacos/search/services/operations/OperationGateway.kt
+  s_36f6706875e447::t_0e5949561a2da9 109-111,142,212-216,222-224
+src/main/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibility.kt
+  s_36f6706875e447::t_cdfff991491da2 20,27-29,32-37,101,154-159,161,167-173,178,185,198-200,210,239-257
+src/test/kotlin/com/nanyin/nacos/search/services/operations/OperationGatewayTest.kt
+  s_36f6706875e447::t_418fdfe21985cb 189-249
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibilityCacheIntegrationTest.kt
+  s_36f6706875e447::t_338d58c0fa7b73 186-223
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibilityTest.kt
+  s_36f6706875e447::t_a94db760128556 5,210-262
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "99788d2b2c78188ac3ef3f8953334ee4f619b744",
+  "prompts": {},
+  "sessions": {
+    "s_36f6706875e447": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4127616a-1472-4b6c-8786-3a77f2b1bdde",
+        "model": "deepseek-v4-flash:0731-cloud"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
