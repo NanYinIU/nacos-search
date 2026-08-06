@@ -1040,14 +1040,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     /**
-     * Prefer the persisted migration default, then the active dual-write id, then
-     * the first live profile. Pure read — never rewrites the seed.
+     * Seed-only default for newly initialized projects (issue #107). Prefer the
+     * persisted migration default, then the first live profile. Does **not**
+     * consult [activeServerId] — that dual-write field is not a live selection
+     * and must not retarget a project that has not yet seeded.
      */
     fun resolveDefaultProfileId(): String {
-        return migratedDefaultProfileId.takeIf { id -> profiles.any { it.id == id } }
-            ?: activeServerId.takeIf { id -> profiles.any { it.id == id } }
-            ?: profiles.firstOrNull()?.id
-            ?: activeServerId
+        return migratedDefaultProfileId.takeIf { id -> id.isNotBlank() && profiles.any { it.id == id } }
+            ?: profiles.firstOrNull()?.id.orEmpty()
     }
 
     /**

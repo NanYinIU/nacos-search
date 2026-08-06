@@ -95,12 +95,17 @@ class EnvironmentSwitcher(
      * Call after settings change (e.g. switching environment or applying settings).
      */
     fun refresh() {
-        projectSession?.healSelection(settings)
+        projectSession?.ensureInitialized(settings.migrationDefaults())
         val selectedProfileId = projectSession?.sessionState?.selectedProfileId.orEmpty()
-            .ifBlank { settings.resolveDefaultProfileId() }
-        val active = settings.cloneServers().firstOrNull { it.id == selectedProfileId } ?: settings.getActiveServer()
-        val name = active.displayName.ifBlank {
-            active.serverUrl.ifBlank { NacosSearchBundle.message("toolwindow.env.none") }
+        val active = settings.cloneServers().firstOrNull { it.id == selectedProfileId }
+        val name = when {
+            active != null -> active.displayName.ifBlank {
+                active.serverUrl.ifBlank { NacosSearchBundle.message("toolwindow.env.none") }
+            }
+            selectedProfileId.isNotBlank() ->
+                settings.getProfile(selectedProfileId)?.displayName?.takeIf { it.isNotBlank() }
+                    ?: selectedProfileId
+            else -> NacosSearchBundle.message("toolwindow.env.none")
         }
         envButton.icon = null
         envButton.text = name
@@ -112,9 +117,8 @@ class EnvironmentSwitcher(
 
     private fun showPopup() {
         if (!envButton.isShowing) return
-        projectSession?.healSelection(settings)
+        projectSession?.ensureInitialized(settings.migrationDefaults())
         val activeId = projectSession?.sessionState?.selectedProfileId.orEmpty()
-            .ifBlank { settings.resolveDefaultProfileId() }
         val entries = settings.cloneServers()
             .map { EnvEntry.Server(it, it.id == activeId) } + EnvEntry.Manage
         val popup = JBPopupFactory.getInstance().createListPopup(EnvListStep(entries))
@@ -147,11 +151,9 @@ class EnvironmentSwitcher(
                 "config.detail.draft.discard.environment"
             )
         ) return
-        val namespace = projectSession?.sessionState?.namespaceId.orEmpty().ifBlank { "public" }
-        projectSession?.select(entry.config.id, namespace)
-        // Keep the Settings "default" badge in sync with the tool-window choice so
-        // operators are not left thinking Local is still the live target.
-        settings.setActiveServer(entry.config.id)
+        // Project-local only — never write the application-wide migration seed
+        // or dual-write active id (issue #107 / ADR-0004).
+        projectSession?.adoptEnvironment(entry.config.id)
         project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)?.bump()
         onSelectionChanged?.invoke(entry.config.id)
         refresh()

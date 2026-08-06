@@ -188,7 +188,7 @@ class NamespacePanel(
 
         return try {
             val result = projectSession?.let { session ->
-                session.healSelection(settings)
+                session.ensureInitialized(settings.migrationDefaults())
                 // The capture reads PasswordSafe, and this panel's scope is the
                 // event dispatch thread — never capture a credential on it
                 // (ADR-0039).
@@ -229,8 +229,8 @@ class NamespacePanel(
         invokeOnEdt(ModalityState.defaultModalityState()) {
             // Restore this project's selection, otherwise keep the local
             // selection, otherwise default to the first. Never adopt another
-            // project's app-wide NamespaceService state.
-            projectSession?.healSelection(settings)
+            // project's app-wide NamespaceService state (issue #107).
+            projectSession?.ensureInitialized(settings.migrationDefaults())
             val projectSelection = projectSession?.sessionState?.namespaceId
                 ?.let { selectedId -> namespaces.find { it.namespaceId == selectedId } }
             val toSelect: NamespaceInfo? = projectSelection ?: currentNamespace
@@ -301,10 +301,11 @@ class NamespacePanel(
     private fun onNamespaceSelected(namespace: NamespaceInfo) {
         coroutineScope.launch {
             try {
-                projectSession?.healSelection(settings)
+                projectSession?.ensureInitialized(settings.migrationDefaults())
                 val profileId = projectSession?.sessionState?.selectedProfileId.orEmpty()
-                    .ifBlank { settings.resolveDefaultProfileId() }
-                projectSession?.select(profileId, namespace.namespaceId)
+                if (profileId.isNotBlank()) {
+                    projectSession?.adoptEnvironment(profileId, namespace.namespaceId)
+                }
                 project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)?.bump()
                 onSelectionChanged?.invoke(namespace)
                 updateStatus(NacosSearchBundle.message("namespace.selected", namespace.namespaceName))

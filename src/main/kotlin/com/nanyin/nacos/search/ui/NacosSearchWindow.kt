@@ -105,12 +105,12 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     )
 
     private fun selectedProfileId(): String {
-        projectSession.healSelection(settings)
-        return projectSession.sessionState.selectedProfileId.ifBlank { settings.resolveDefaultProfileId() }
+        projectSession.ensureInitialized(settings.migrationDefaults())
+        return projectSession.sessionState.selectedProfileId
     }
 
     init {
-        projectSession.healSelection(settings)
+        projectSession.ensureInitialized(settings.migrationDefaults())
         NacosUpgradeSummary.showOnce(project, projectSession, settings)
         initializeComponents()
         setupLayout()

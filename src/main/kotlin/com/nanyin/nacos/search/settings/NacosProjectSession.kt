@@ -5,12 +5,12 @@ import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
+import com.intellij.openapi.components.StoragePathMacros
 import com.intellij.openapi.project.Project
 import com.intellij.util.xmlb.XmlSerializerUtil
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
-import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.ResolvedGenerationLocator
 import com.nanyin.nacos.search.services.captureAccessIdentity
 
@@ -29,45 +29,59 @@ data class NacosProjectSessionState(
      * Legacy boolean retained for one-release XML compatibility. Mapped into
      * [upgradeSummaryShownForSchemaVersion] on load when the version field is 0.
      */
-    var upgradeSummaryShown: Boolean = false
+    var upgradeSummaryShown: Boolean = false,
+    /**
+     * True after this project has read the migration seed once (or restored a
+     * prior workspace selection). An initialized session never re-reads the
+     * application-wide default as a live selection (issue #107).
+     */
+    var sessionInitialized: Boolean = false
 ) {
-    fun seedIfNew(defaults: LegacyMigrationResult) {
-        if (selectionWasExplicit || selectedProfileId.isNotBlank()) return
+    /**
+     * Reads the stable migration default exactly once for a blank session and
+     * persists the resulting project-local selection. Subsequent calls are no-ops
+     * even when the shared seed later moves (issue #107).
+     */
+    fun ensureInitialized(defaults: LegacyMigrationResult) {
+        if (sessionInitialized) return
+        if (selectedProfileId.isNotBlank() || selectionWasExplicit) {
+            sessionInitialized = true
+            return
+        }
         selectedProfileId = defaults.defaultProfileId
         namespaceId = defaults.defaultNamespaceId.ifBlank { "public" }
+        sessionInitialized = true
     }
 
+    /** @deprecated Prefer [ensureInitialized]; kept for call-site migration. */
+    fun seedIfNew(defaults: LegacyMigrationResult) = ensureInitialized(defaults)
+
     /**
-     * Keeps [selectedProfileId] pointing at a live profile. Stale workspace
-     * selections (deleted server, failed Instantiator migration, empty seed)
-     * otherwise make every search fail with "Select a Nacos environment profile".
+     * Ensures the session is initialized, then leaves the selection alone.
+     * An initialized or explicit selection that points at a missing profile
+     * stays put (profile-unavailable) — never silently retargets (ADR-0025 / #107).
      */
     fun healSelection(defaults: LegacyMigrationResult, profileExists: (String) -> Boolean) {
-        seedIfNew(defaults)
+        ensureInitialized(defaults)
+        // profileExists is retained so call sites keep the same signature; an
+        // initialized session must not adopt another profile when the selected
+        // one is missing.
         if (selectedProfileId.isNotBlank() && profileExists(selectedProfileId)) return
-        // Explicit selections must not silently retarget after profile deletion
-        // (ADR 0025). Leave the stale id so captureOperationContext fails closed.
-        if (selectionWasExplicit && selectedProfileId.isNotBlank()) return
-        val healed = defaults.defaultProfileId.takeIf { it.isNotBlank() && profileExists(it) }
-            ?: defaults.profiles.firstOrNull { profileExists(it.id) }?.id
-            ?: ""
-        if (healed.isNotBlank()) {
-            selectedProfileId = healed
-            if (namespaceId.isBlank()) {
-                namespaceId = defaults.defaultNamespaceId.ifBlank { "public" }
-            }
-        }
     }
 
     fun select(profileId: String, namespace: String) {
         selectedProfileId = profileId
         namespaceId = namespace.ifBlank { "public" }
         selectionWasExplicit = true
+        sessionInitialized = true
     }
 }
 
 @Service(Service.Level.PROJECT)
-@State(name = "NacosProjectSession", storages = [Storage("nacos-project-session.xml")])
+@State(
+    name = "NacosProjectSession",
+    storages = [Storage(StoragePathMacros.WORKSPACE_FILE)]
+)
 class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
     var sessionState = NacosProjectSessionState()
         private set
@@ -82,9 +96,19 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
         if (sessionState.upgradeSummaryShownForSchemaVersion == 0 && sessionState.upgradeSummaryShown) {
             sessionState.upgradeSummaryShownForSchemaVersion = 1
         }
+        // Pre-#107 workspace XML had a selection but no initialized flag —
+        // treat any restored selection as already initialized so we do not
+        // re-seed from the application-wide default.
+        if (!sessionState.sessionInitialized &&
+            (sessionState.selectedProfileId.isNotBlank() || sessionState.selectionWasExplicit)
+        ) {
+            sessionState.sessionInitialized = true
+        }
     }
 
-    fun seedIfNew(defaults: LegacyMigrationResult) = sessionState.seedIfNew(defaults)
+    fun seedIfNew(defaults: LegacyMigrationResult) = sessionState.ensureInitialized(defaults)
+
+    fun ensureInitialized(defaults: LegacyMigrationResult) = sessionState.ensureInitialized(defaults)
 
     fun healSelection(settings: NacosSettings) {
         val defaults = settings.migrationDefaults()
@@ -92,6 +116,17 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
     }
 
     fun select(profileId: String, namespace: String) = sessionState.select(profileId, namespace)
+
+    /**
+     * Project-local environment adoption (issue #107). Updates only this
+     * session — never [NacosSettings.activeServerId] or the migration seed.
+     */
+    fun adoptEnvironment(profileId: String, namespaceId: String? = null) {
+        val ns = namespaceId?.takeIf { it.isNotBlank() }
+            ?: sessionState.namespaceId.takeIf { it.isNotBlank() }
+            ?: "public"
+        select(profileId, ns)
+    }
 
     fun markUpgradeSummaryShown(schemaVersion: Int = SettingsSchema.CURRENT) {
         sessionState.upgradeSummaryShownForSchemaVersion =
@@ -110,39 +145,47 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
         val id = profileId.trim()
         if (id.isBlank() || sessionState.selectedProfileId != id) return false
         sessionState.selectionWasExplicit = true
+        sessionState.sessionInitialized = true
         return true
     }
 }
 
 /**
+ * Namespace id owned by an initialized project session. External (application-
+ * wide) namespace ids are ignored once the session exists (issue #107).
+ */
+internal fun resolveProjectNamespaceId(
+    sessionState: NacosProjectSessionState,
+    externalNamespaceId: String? = null
+): String? {
+    if (sessionState.sessionInitialized || sessionState.selectedProfileId.isNotBlank() ||
+        sessionState.selectionWasExplicit
+    ) {
+        return sessionState.namespaceId.takeIf { it.isNotBlank() }
+    }
+    return externalNamespaceId?.takeIf { it.isNotBlank() }
+        ?: sessionState.namespaceId.takeIf { it.isNotBlank() }
+}
+
+/**
  * PSI/UI helpers that read the project-selected profile and namespace.
  * Tool-window selection lives here; app-wide [NacosSettings.activeServerId] and
- * [NamespaceService] must not retarget another project's navigation.
+ * NamespaceService must not retarget another project's navigation.
  */
 internal fun Project.selectedNacosProfileId(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
 ): String {
     val session = getService(NacosProjectSession::class.java) ?: return settings.resolveDefaultProfileId()
-    session.healSelection(settings)
-    return session.sessionState.selectedProfileId.ifBlank { settings.resolveDefaultProfileId() }
+    session.ensureInitialized(settings.migrationDefaults())
+    return session.sessionState.selectedProfileId
 }
 
 internal fun Project.selectedNacosNamespaceId(
-    settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java),
-    namespaceService: NamespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
+    settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
 ): String? {
-    val session = getService(NacosProjectSession::class.java)
-    if (session != null) {
-        session.seedIfNew(settings.migrationDefaults())
-        if (session.sessionState.selectionWasExplicit) {
-            return session.sessionState.namespaceId
-        }
-        val seeded = session.sessionState.namespaceId.takeIf { it.isNotBlank() }
-        // Prefer an explicit app-service override only before the project has
-        // made its own selection (tests / cold start).
-        return namespaceService.getCurrentNamespace()?.namespaceId ?: seeded
-    }
-    return namespaceService.getCurrentNamespace()?.namespaceId
+    val session = getService(NacosProjectSession::class.java) ?: return null
+    session.ensureInitialized(settings.migrationDefaults())
+    return resolveProjectNamespaceId(session.sessionState)
 }
 
 /**

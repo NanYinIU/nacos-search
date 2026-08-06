@@ -536,20 +536,18 @@ class ProfileDeletionLifecycleTest {
         val settings = NacosSettings().also { it.resetToDefaults() }
         settings.applyServers(listOf(live), "live")
 
-        // Non-explicit session pointing at a now-deleted profile — without
-        // markSelectedProfileUnavailable, healSelection would retarget to "live".
-        // Construct via no-arg + fields so the test stays stable across session
-        // schema field order (issue #104 upgraded the upgrade-summary fields).
+        // Non-explicit session pointing at a now-deleted profile: an initialized
+        // (or non-blank) selection must not retarget to "live" (issue #107 /
+        // ADR-0025). markSelectedProfileUnavailable is the production seam after
+        // deletion; healSelection alone must also leave the stale id.
         val session = NacosProjectSessionState().apply {
             selectedProfileId = "deleted"
             namespaceId = "public"
             selectionWasExplicit = false
+            sessionInitialized = true
         }
-        // Simulate deletion cleanup forcing the unavailable posture.
-        session.selectionWasExplicit = true
         session.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
         assertEquals("deleted", session.selectedProfileId, "must not auto-select another environment")
-        assertTrue(session.selectionWasExplicit)
 
         // NacosProjectSession.markSelectedProfileUnavailable is the production seam.
         val projectSession = NacosProjectSession()
