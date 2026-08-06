@@ -55,7 +55,7 @@ class V3PublishContractTest {
 
     @Test
     fun `V3 publish never retries on write failure`() = runBlocking {
-        val fixture = SingleTransport(ProtocolResponse(500, """{"code":500,"message":"err","data":null}"""))
+        val fixture = CountingTransport(ProtocolResponse(500, """{"code":500,"message":"err","data":null}"""))
         val adapter = V3ProtocolAdapter(fixture)
         val command = PublishCommand(
             dataId = "app.yaml", group = "G", content = "new", type = "yaml",
@@ -65,6 +65,7 @@ class V3PublishContractTest {
         val error = adapter.publish(anonymousV3Target(), command).exceptionOrNull()
 
         assertInstanceOf(RemoteOperationError.Server::class.java, error)
+        assertEquals(1, fixture.requests.size)
     }
 
     @Test
@@ -108,6 +109,15 @@ class V3PublishContractTest {
 
         override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
             lastRequest = request
+            return response
+        }
+    }
+
+    private class CountingTransport(private val response: ProtocolResponse) : ProtocolTransport {
+        val requests = mutableListOf<ProtocolRequest>()
+
+        override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
+            requests += request
             return response
         }
     }

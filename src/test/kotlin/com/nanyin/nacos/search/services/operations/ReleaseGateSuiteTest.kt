@@ -115,14 +115,23 @@ class ReleaseGateSuiteTest {
 
     @Test
     fun `V1 CAS conflict is surfaced and V3 never fabricates CAS`() = runBlocking {
-        // V1 maps a "false" publish body to CasConflict; V3 has no CAS wire and
-        // its publish outcome is never CasConflict.
+        // V1 maps a "false" publish body to WriteConflict; the publish gateway
+        // remaps that to CasConflict for the controller. V3 has no CAS wire.
         val v1Fixture = QueuedTransport(ProtocolResponse(200, "false"))
-        val v1Outcome = V1ProtocolAdapter(v1Fixture).publish(
+        val v1Error = V1ProtocolAdapter(v1Fixture).publish(
             v1AnonymousTarget(),
-            PublishCommand("app.yaml", "G", "new", "yaml", "public", "base-md5")
+            PublishCommand("app.yaml", "G", "new", "yaml", "public", casMd5 = "base-md5")
+        ).exceptionOrNull()
+        assertInstanceOf(RemoteOperationError.WriteConflict::class.java, v1Error)
+
+        val gateway = OperationGatewayPublishGateway(
+            OperationGateway(mapOf(NacosApiGeneration.V1 to V1ProtocolAdapter(QueuedTransport(ProtocolResponse(200, "false")))))
+        )
+        val casOutcome = gateway.write(
+            v1AnonymousTarget(),
+            PublishCommand("app.yaml", "G", "new", "yaml", "public", casMd5 = "base-md5")
         ).getOrThrow()
-        assertEquals(PublishOutcome.CasConflict, v1Outcome)
+        assertEquals(PublishOutcome.CasConflict, casOutcome)
 
         val v3Fixture = QueuedTransport(ProtocolResponse(200, """{"code":0,"message":"success","data":true}"""))
         val v3Outcome = V3ProtocolAdapter(v3Fixture).publish(
@@ -130,6 +139,7 @@ class ReleaseGateSuiteTest {
             PublishCommand("app.yaml", "G", "new", "yaml", "public")
         ).getOrThrow()
         assertInstanceOf(PublishOutcome.Written::class.java, v3Outcome)
+        assertFalse(v3Outcome is PublishOutcome.CasConflict)
     }
 
     private fun v1AnonymousTarget(namespaceId: String = "public"): OperationTarget {

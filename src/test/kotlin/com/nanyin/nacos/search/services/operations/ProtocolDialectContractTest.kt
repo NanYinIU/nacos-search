@@ -21,15 +21,17 @@ import org.junit.jupiter.api.Test
  * Behaviour both protocol dialects must share at the generation-neutral
  * [ProtocolAdapter] seam over a scripted [ProtocolTransport]. Concrete suites
  * supply one dialect and its response envelopes. Execution behaviour for
- * probing (issue #97) and configuration browsing (issue #98) — auth recovery,
- * shared budget, cancellation, classified outcomes — runs through [ProtocolCore].
+ * probing, configuration browsing, and publishing (issues #97–#99) — auth
+ * recovery, shared budget, cancellation, classified outcomes, and
+ * non-replaying writes — runs through [ProtocolCore].
  *
  * Seams under test:
  * - [ProtocolAdapter] over scripted [ProtocolTransport] (request, outcome,
- *   request count — including login)
+ *   request count — including login and write)
  * - [AuthenticationSessionRegistry] as the one completed-token store both
  *   dialects must use (issue #96)
- * - [ProtocolCore] execution rules for probe and browsing reads (issues #97 / #98)
+ * - [ProtocolCore] execution rules for probe, browsing reads, and publish
+ *   (issues #97 / #98 / #99)
  *
  * Contract assertions cover the request that was built, the outcome returned,
  * and the transport request count. Failure diagnostics name only method/path/
@@ -46,6 +48,7 @@ internal abstract class ProtocolDialectContractTest {
     protected abstract val discoveryPath: String
     protected abstract val loginPath: String
     protected abstract val probePath: String
+    protected abstract val publishPath: String
 
     protected abstract fun newAdapter(
         transport: ProtocolTransport,
@@ -81,6 +84,9 @@ internal abstract class ProtocolDialectContractTest {
     /** Dialect-shaped refused-token response for a generation probe. */
     protected abstract fun refusedTokenProbeResponse(): ProtocolResponse
 
+    /** Dialect-shaped refused-token response for a publish write. */
+    protected abstract fun refusedTokenPublishResponse(): ProtocolResponse
+
     /** Dialect-shaped permission-denied response for a generation probe. */
     protected abstract fun permissionDeniedProbeResponse(): ProtocolResponse
 
@@ -95,6 +101,12 @@ internal abstract class ProtocolDialectContractTest {
      * dialect never classifies generation absence on probe (V1).
      */
     protected abstract fun unsupportedGenerationProbeResponse(): ProtocolResponse?
+
+    /** Successful publish body (after optional login). */
+    protected abstract fun publishSuccessBody(): String
+
+    /** Dialect-shaped permission-denied response for a publish write. */
+    protected abstract fun permissionDeniedPublishResponse(): ProtocolResponse
 
     /**
      * Assert this dialect's public-Namespace wire encoding on a request that
@@ -672,6 +684,157 @@ internal abstract class ProtocolDialectContractTest {
             }
         }
 
+    @Test
+    fun `publish sends exactly one write after login and never replays a refused token`() =
+        runBlocking {
+            val transport = ScriptedTransport(
+                ProtocolResponse(200, loginBody("stale")),
+                refusedTokenPublishResponse(),
+                ProtocolResponse(200, loginBody("fresh")),
+                ProtocolResponse(200, publishSuccessBody())
+            )
+            val sessions = AuthenticationSessionRegistry()
+            val target = passwordTarget()
+
+            val error = newAdapter(transport, sessions)
+                .publish(target, publishCommand())
+                .exceptionOrNull()
+
+            assertInstanceOf(RemoteOperationError.InvalidOrExpiredNacosPasswordToken::class.java, error)
+            assertNull(sessions.completedToken(target.context.identity))
+            val writes = transport.requests.filter { it.path == publishPath && it.method == "POST" }
+            assertEquals(1, writes.size, requestCountDiagnostic(transport))
+            assertEquals(2, transport.requests.size, requestCountDiagnostic(transport))
+            assertEquals(loginPath, transport.requests[0].path)
+            assertEquals(publishPath, transport.requests[1].path)
+            assertNoSecrets(requestCountDiagnostic(transport))
+        }
+
+    @Test
+    fun `publish permission denial stays Authorization and keeps the token`() = runBlocking {
+        val transport = ScriptedTransport(
+            ProtocolResponse(200, loginBody("current")),
+            permissionDeniedPublishResponse()
+        )
+        val sessions = AuthenticationSessionRegistry()
+        val target = passwordTarget()
+
+        val error = newAdapter(transport, sessions)
+            .publish(target, publishCommand())
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
+        assertEquals("current", sessions.completedToken(target.context.identity)?.value)
+        assertEquals(2, transport.requests.size, requestCountDiagnostic(transport))
+        assertEquals(1, transport.requests.count { it.path == publishPath && it.method == "POST" })
+        assertNoSecrets(requestCountDiagnostic(transport))
+    }
+
+    @Test
+    fun `login plus publish shares one request budget`() = runBlocking {
+        val clock = java.util.concurrent.atomic.AtomicLong(0L)
+        val transport = object : ProtocolTransport {
+            val requests = mutableListOf<ProtocolRequest>()
+            private val script = ArrayDeque(
+                listOf(
+                    ProtocolResponse(200, loginBody("token")),
+                    ProtocolResponse(200, publishSuccessBody())
+                )
+            )
+
+            override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
+                requests += request
+                clock.addAndGet(400)
+                return script.removeFirst()
+            }
+        }
+        val error = newAdapter(
+            transport = transport,
+            budgetMillis = 350L,
+            clock = { clock.get() }
+        ).publish(passwordTarget(), publishCommand()).exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Protocol::class.java, error)
+        assertTrue(
+            error!!.message!!.contains("budget", ignoreCase = true),
+            "expected budget exhaustion, got: ${error.message}"
+        )
+        assertEquals(
+            1,
+            transport.requests.size,
+            "shared budget must stop before the write when login consumed it; ${transport.requests.size}"
+        )
+        assertNoSecrets(
+            transport.requests.joinToString(prefix = "requests=", separator = "; ") {
+                "${it.method} ${it.path} keys=${it.query.map { q -> q.first }}"
+            }
+        )
+    }
+
+    @Test
+    fun `publish never retries a server failure`() = runBlocking {
+        val transport = ScriptedTransport(ProtocolResponse(500, "server error"))
+        val error = newAdapter(transport)
+            .publish(anonymousTarget(), publishCommand())
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Server::class.java, error)
+        assertEquals(1, transport.requests.size, requestCountDiagnostic(transport))
+        assertEquals(publishPath, transport.requests.single().path)
+    }
+
+    @Test
+    fun `cancellation after the publish write is AmbiguousWriteResult not Cancelled`() =
+        runBlocking {
+            val transport = ProtocolTransport {
+                throw kotlinx.coroutines.CancellationException("write cancelled")
+            }
+            val error = newAdapter(transport)
+                .publish(anonymousTarget(), publishCommand())
+                .exceptionOrNull()
+
+            assertInstanceOf(RemoteOperationError.AmbiguousWriteResult::class.java, error)
+        }
+
+    @Test
+    fun `connection failure after the publish write is AmbiguousWriteResult`() = runBlocking {
+        val transport = ProtocolTransport {
+            throw RemoteOperationError.Connection(RuntimeException("boom"))
+        }
+        val error = newAdapter(transport)
+            .publish(anonymousTarget(), publishCommand())
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.AmbiguousWriteResult::class.java, error)
+    }
+
+    @Test
+    fun `budget timeout after the publish write is AmbiguousWriteResult`() = runBlocking {
+        val clock = java.util.concurrent.atomic.AtomicLong(0L)
+        val transport = ProtocolTransport {
+            // Exhaust the remaining budget while the write is already in flight.
+            clock.set(10_000L)
+            kotlinx.coroutines.delay(50)
+            ProtocolResponse(200, publishSuccessBody())
+        }
+        val error = newAdapter(
+            transport = transport,
+            budgetMillis = 20L,
+            clock = { clock.get() }
+        ).publish(anonymousTarget(), publishCommand()).exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.AmbiguousWriteResult::class.java, error)
+    }
+
+    protected fun publishCommand(): PublishCommand = PublishCommand(
+        dataId = "app.yaml",
+        group = "DEFAULT_GROUP",
+        content = "k=v",
+        type = "yaml",
+        namespaceId = "public",
+        casMd5 = if (generation == NacosApiGeneration.V1) "base-md5" else null
+    )
+
     protected fun anonymousTarget(namespaceId: String = "public"): OperationTarget {
         val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
         val context = NacosOperationContext(
@@ -786,6 +949,7 @@ internal class V1ProtocolDialectContractTest : ProtocolDialectContractTest() {
     override val discoveryPath: String = "/nacos/v1/console/namespaces"
     override val loginPath: String = "/nacos/v1/auth/login"
     override val probePath: String = "/nacos/v1/console/namespaces"
+    override val publishPath: String = "/nacos/v1/cs/configs"
 
     override fun newAdapter(
         transport: ProtocolTransport,
@@ -827,6 +991,9 @@ internal class V1ProtocolDialectContractTest : ProtocolDialectContractTest() {
     override fun refusedTokenProbeResponse(): ProtocolResponse =
         ProtocolResponse(403, """{"code":403,"message":"token is invalid"}""")
 
+    override fun refusedTokenPublishResponse(): ProtocolResponse =
+        ProtocolResponse(403, """{"code":403,"message":"token is invalid"}""")
+
     override fun permissionDeniedProbeResponse(): ProtocolResponse =
         ProtocolResponse(403, """{"code":403,"message":"permission denied"}""")
 
@@ -837,6 +1004,11 @@ internal class V1ProtocolDialectContractTest : ProtocolDialectContractTest() {
         ProtocolResponse(399, "unexpected status")
 
     override fun unsupportedGenerationProbeResponse(): ProtocolResponse? = null
+
+    override fun publishSuccessBody(): String = "true"
+
+    override fun permissionDeniedPublishResponse(): ProtocolResponse =
+        ProtocolResponse(403, """{"code":403,"message":"permission denied"}""")
 
     override fun assertPublicNamespaceWire(request: ProtocolRequest) {
         assertFalse(request.query.any { it.first == "tenant" }) {
@@ -855,6 +1027,7 @@ internal class V3ProtocolDialectContractTest : ProtocolDialectContractTest() {
     override val discoveryPath: String = "/nacos/v3/admin/core/namespace/list"
     override val loginPath: String = "/nacos/v3/auth/user/login"
     override val probePath: String = "/nacos/v3/admin/core/state"
+    override val publishPath: String = "/nacos/v3/admin/cs/config"
 
     override fun newAdapter(
         transport: ProtocolTransport,
@@ -896,6 +1069,9 @@ internal class V3ProtocolDialectContractTest : ProtocolDialectContractTest() {
     override fun refusedTokenProbeResponse(): ProtocolResponse =
         ProtocolResponse(401, """{"code":401,"message":"token invalid","data":null}""")
 
+    override fun refusedTokenPublishResponse(): ProtocolResponse =
+        ProtocolResponse(401, """{"code":401,"message":"token invalid","data":null}""")
+
     override fun permissionDeniedProbeResponse(): ProtocolResponse =
         ProtocolResponse(403, """{"code":10001,"message":"access denied","data":null}""")
 
@@ -907,6 +1083,12 @@ internal class V3ProtocolDialectContractTest : ProtocolDialectContractTest() {
 
     override fun unsupportedGenerationProbeResponse(): ProtocolResponse =
         ProtocolResponse(404, "")
+
+    override fun publishSuccessBody(): String =
+        """{"code":0,"message":"success","data":true}"""
+
+    override fun permissionDeniedPublishResponse(): ProtocolResponse =
+        ProtocolResponse(403, """{"code":10001,"message":"access denied","data":null}""")
 
     override fun assertPublicNamespaceWire(request: ProtocolRequest) {
         assertEquals("public", request.query.single { it.first == "namespaceId" }.second) {

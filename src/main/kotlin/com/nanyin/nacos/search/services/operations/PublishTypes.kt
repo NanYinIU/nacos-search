@@ -5,8 +5,7 @@ import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 
-/**
- * The immutable command derived from preflight: replaces content,
+/** The immutable command derived from preflight: replaces content,
  * preserves readable metadata from the remote detail.
  */
 data class PublishCommand(
@@ -22,6 +21,20 @@ data class PublishCommand(
     val encryptedDataKey: String? = null
 ) {
     val isEncrypted: Boolean get() = !encryptedDataKey.isNullOrBlank()
+
+    /**
+     * Generation-neutral form fields both dialects POST. Namespace wire
+     * encoding and CAS headers stay on each dialect.
+     */
+    fun commonFormFields(): List<Pair<String, String>> = buildList {
+        add("dataId" to dataId)
+        add("group" to group)
+        add("content" to content)
+        add("type" to type)
+        appName?.let { add("appName" to it) }
+        desc?.let { add("desc" to it) }
+        configTags?.let { add("config_tags" to it) }
+    }
 }
 
 /** The adapter-level result of a publish attempt. */

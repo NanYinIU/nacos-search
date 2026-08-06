@@ -8,7 +8,6 @@ import com.google.gson.JsonParseException
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
-import com.nanyin.nacos.search.services.AuthenticationExecutionKey
 import com.nanyin.nacos.search.services.AuthenticationSessionRegistry
 import com.nanyin.nacos.search.services.AuthenticationToken
 import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
@@ -17,7 +16,7 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 /**
- * Owns every V3 wire decision for the read path: method, path,
+ * Owns every V3 wire decision for the read and write path: method, path,
  * query, namespaceId encoding, authentication placement, raw state-map
  * handling, JSON envelope codes, and typed error mapping.
  *
@@ -28,9 +27,9 @@ import java.nio.charset.StandardCharsets
  * issue #96). This dialect supplies the login request and response shape;
  * it does not own a private completed-token store.
  *
- * Generation probing and configuration browsing (summary, detail, history,
- * Namespace discovery) run through [ProtocolCore] (ADR-0048 / issues #97 /
- * #98). Publish still uses the adapter-local non-replaying shell until #99.
+ * Probing, configuration browsing, and publishing all run through
+ * [ProtocolCore] (ADR-0048 / issues #97–#99). Publish uses
+ * [ProtocolCore.executeOnce] so a refused token is never replayed.
  */
 class V3ProtocolAdapter(
     private val transport: ProtocolTransport,
@@ -154,20 +153,14 @@ class V3ProtocolAdapter(
     override suspend fun publish(
         target: OperationTarget,
         command: PublishCommand
-    ): Result<PublishOutcome> = runCatching {
+    ): Result<PublishOutcome> {
         validate(target)
-        val params = buildList {
-            add("dataId" to command.dataId)
-            add("group" to command.group)
-            add("content" to command.content)
-            add("type" to command.type)
-            command.appName?.let { add("appName" to it) }
-            command.desc?.let { add("desc" to it) }
-            command.configTags?.let { add("config_tags" to it) }
-            add("namespaceId" to NamespaceInfo.canonicalId(command.namespaceId))
-        }
+        val params = command.commonFormFields() + listOf(
+            "namespaceId" to NamespaceInfo.canonicalId(command.namespaceId)
+        )
         val formData = params.joinToString("&") { (k, v) ->
-            "${URLEncoder.encode(k, "UTF-8")}=${URLEncoder.encode(v, "UTF-8")}"
+            "${URLEncoder.encode(k, StandardCharsets.UTF_8.name())}=" +
+                URLEncoder.encode(v, StandardCharsets.UTF_8.name())
         }
         val baseRequest = ProtocolRequest(
             method = "POST",
@@ -180,15 +173,31 @@ class V3ProtocolAdapter(
             ),
             body = formData
         )
-        // One write, never replayed: see executeOnce.
-        val response = executeOnce(target) { auth -> applyAuth(baseRequest, auth) }
+        return core.executeOnce(
+            target = target,
+            build = { auth -> applyAuth(baseRequest, auth) },
+            classify = { classifyPublishResponse(target, it) },
+            parse = { response ->
+                // V3 publish response data is a boolean, not a JSON object.
+                verifyV3EnvelopeSuccess(response, "publish")
+                // V3 has no CAS parameter; ordinary publish success only.
+                PublishOutcome.Written(response.body)
+            },
+            login = { performLogin(it) }
+        )
+    }
+
+    private fun classifyPublishResponse(
+        target: OperationTarget,
+        response: ProtocolResponse
+    ): ClassifiedResponse {
         if (rejectedNacosPasswordToken(target, response)) {
-            invalidateAccessToken(target)
+            return ClassifiedResponse.RecoverableTokenRefusal(response.status)
         }
-        // V3 publish response data is a boolean, not a JSON object.
-        verifyV3EnvelopeSuccess(response, "publish")
-        // V3 has no CAS parameter; ordinary publish success only.
-        PublishOutcome.Written(response.body)
+        return when (response.status) {
+            in 200..299 -> ClassifiedResponse.Success(response)
+            else -> ClassifiedResponse.Failure(mapStatusFailure(response))
+        }
     }
 
     /** V3 declares the documented content-search capability. V1 does not. */
@@ -324,65 +333,15 @@ class V3ProtocolAdapter(
 
     // ---- authentication ----
 
-    /**
-     * Sends the request exactly once, whatever the response says.
-     *
-     * Writes go through here rather than [ProtocolCore.executeIdempotent]: a
-     * rejected token cannot prove the first request never reached the
-     * configuration store, so replaying it risks applying the same write twice.
-     * ADR-0011 forbids that. The rejected token is still evicted so the next
-     * attempt logs in again instead of reusing a credential the server has refused.
-     */
-    private suspend fun executeOnce(
-        target: OperationTarget,
-        build: (RequestAuthentication) -> ProtocolRequest
-    ): ProtocolResponse = transport.execute(build(authenticationFor(target, forceRefresh = false)))
-
     private fun rejectedNacosPasswordToken(target: OperationTarget, response: ProtocolResponse): Boolean =
         target.context.authenticationStrategy == V1AuthenticationStrategy.NACOS_PASSWORD &&
             isInvalidOrExpiredToken(response)
-
-    private fun invalidateAccessToken(target: OperationTarget) {
-        sessions.invalidate(target.context.identity)
-    }
 
     private fun applyAuth(request: ProtocolRequest, auth: RequestAuthentication): ProtocolRequest =
         request.copy(
             query = request.query + auth.query,
             headers = request.headers + auth.headers
         )
-
-    private suspend fun authenticationFor(
-        target: OperationTarget,
-        forceRefresh: Boolean
-    ): RequestAuthentication = when (target.context.authenticationStrategy) {
-        V1AuthenticationStrategy.ANONYMOUS -> RequestAuthentication()
-        V1AuthenticationStrategy.NACOS_PASSWORD -> {
-            val token = loginAccessToken(target, forceRefresh)
-                ?: throw RemoteOperationError.Authentication(401)
-            RequestAuthentication(query = listOf("accessToken" to token))
-        }
-        V1AuthenticationStrategy.HTTP_BASIC -> {
-            val credentials = "${target.context.identity.principal}:${target.context.credential.secret}"
-            val encoded = java.util.Base64.getEncoder()
-                .encodeToString(credentials.toByteArray(StandardCharsets.UTF_8))
-            RequestAuthentication(headers = mapOf("Authorization" to "Basic $encoded"))
-        }
-        V1AuthenticationStrategy.BEARER_TOKEN -> RequestAuthentication(
-            headers = mapOf("Authorization" to "Bearer ${target.context.credential.secret}")
-        )
-    }
-
-    private fun executionKey(target: OperationTarget): AuthenticationExecutionKey =
-        AuthenticationExecutionKey(target.context)
-
-    private suspend fun loginAccessToken(target: OperationTarget, forceRefresh: Boolean): String? {
-        val key = executionKey(target)
-        if (forceRefresh) {
-            sessions.invalidate(key.identity)
-        }
-        return sessions.getOrLogin(key) { performLogin(target) }?.value
-    }
 
     /**
      * Dialect-owned V3 login wire. Credentials stay on the request body only —
@@ -676,22 +635,7 @@ class V3ProtocolAdapter(
         require(target.context.resolvedGeneration == NacosApiGeneration.V3) {
             throw RemoteOperationError.Unsupported("V3 adapter requires a V3-locked target")
         }
-        when (target.context.authenticationStrategy) {
-            V1AuthenticationStrategy.ANONYMOUS -> require(
-                target.context.identity.principal == "<anonymous>" && target.context.credential.secret.isBlank()
-            ) {
-                throw RemoteOperationError.Unsupported("Anonymous target must not carry credentials")
-            }
-            V1AuthenticationStrategy.NACOS_PASSWORD,
-            V1AuthenticationStrategy.HTTP_BASIC -> require(
-                target.context.identity.principal != "<anonymous>" && target.context.credential.secret.isNotBlank()
-            ) {
-                throw RemoteOperationError.Unsupported("Password and principal are required for V3 authentication")
-            }
-            V1AuthenticationStrategy.BEARER_TOKEN -> require(target.context.credential.secret.isNotBlank()) {
-                throw RemoteOperationError.Unsupported("Bearer token is required for V3 authentication")
-            }
-        }
+        validateOperationAuthentication(target, "V3")
     }
 
     private data class V3Envelope(

@@ -28,6 +28,8 @@ class OperationGatewayPublishGateway(
             onSuccess = { Result.success(it) },
             onFailure = { error ->
                 when (error) {
+                    // Adapter-typed CAS rejection (ADR-0014) becomes the publish
+                    // conflict outcome the controller already understands.
                     is RemoteOperationError.WriteConflict -> Result.success(PublishOutcome.CasConflict)
                     else -> Result.failure(error)
                 }
