@@ -8,7 +8,7 @@ import com.nanyin.nacos.search.services.InMemoryCacheStore
 import com.nanyin.nacos.search.services.operations.RemoteOperationError
 import com.nanyin.nacos.search.services.visibility.CompletedObservation
 import com.nanyin.nacos.search.services.visibility.ObservationOutcome
-import com.nanyin.nacos.search.services.visibility.VisibilityOperationClass
+import com.nanyin.nacos.search.services.operations.ProtocolCapability
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -488,7 +488,7 @@ class NacosKeyResolverTest {
             CompletedObservation(
                 observation = 10_000,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.Authentication(401))
             )
         )
@@ -518,7 +518,7 @@ class NacosKeyResolverTest {
             CompletedObservation(
                 observation = 10_000,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 namespaceId = "team-a",
                 outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.Authorization(403))
             )
@@ -561,7 +561,7 @@ class NacosKeyResolverTest {
             CompletedObservation(
                 observation = 10_000,
                 identity = identity,
-                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
                 outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.Authentication(401))
             )
         )

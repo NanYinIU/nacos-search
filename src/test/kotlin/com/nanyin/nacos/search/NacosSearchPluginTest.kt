@@ -1,17 +1,45 @@
 package com.nanyin.nacos.search
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.junit5.TestApplication
+import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.operations.RemoteOperationError
+import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
+import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 @TestApplication
 class NacosSearchPluginTest {
+
+    @BeforeEach
+    fun publishAnonymousProfile() {
+        // captureNamespaceIndexRequest reads the published EnvironmentProfile
+        // (ADR-0049): republish an ANONYMOUS profile so the refresh fails with
+        // a typed connection error instead of ConfigurationRequired, which
+        // would be logged as an error and fail the test via TestLogger.
+        ApplicationManager.getApplication().getService(NacosSettings::class.java).apply {
+            resetToDefaults()
+            applyServers(
+                listOf(
+                    NacosServerConfig(
+                        id = "s_local",
+                        displayName = "Local",
+                        serverUrl = "https://nacos.example",
+                        authMode = AuthMode.ANONYMOUS,
+                        apiPolicy = com.nanyin.nacos.search.models.NacosApiPolicy.V1
+                    )
+                ),
+                "s_local"
+            )
+        }
+    }
 
     @Test
     fun `plugin implements Disposable so the platform reclaims its coroutine scope`() {
