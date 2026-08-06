@@ -12,6 +12,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -19,14 +20,16 @@ import org.junit.jupiter.api.Test
 /**
  * Behaviour both protocol dialects must share at the generation-neutral
  * [ProtocolAdapter] seam over a scripted [ProtocolTransport]. Concrete suites
- * supply one dialect and its response envelopes; later slices extend this
- * harness with execution-behaviour cases (auth recovery, budgets, retries).
+ * supply one dialect and its response envelopes. Execution behaviour for
+ * probing (auth recovery, shared budget, cancellation, classified outcomes)
+ * runs through [ProtocolCore] (issue #97).
  *
  * Seams under test:
  * - [ProtocolAdapter] over scripted [ProtocolTransport] (request, outcome,
  *   request count — including login)
  * - [AuthenticationSessionRegistry] as the one completed-token store both
  *   dialects must use (issue #96)
+ * - [ProtocolCore] execution rules for probe (issue #97)
  *
  * Contract assertions cover the request that was built, the outcome returned,
  * and the transport request count. Failure diagnostics name only method/path/
@@ -46,7 +49,9 @@ internal abstract class ProtocolDialectContractTest {
 
     protected abstract fun newAdapter(
         transport: ProtocolTransport,
-        sessions: AuthenticationSessionRegistry = AuthenticationSessionRegistry()
+        sessions: AuthenticationSessionRegistry = AuthenticationSessionRegistry(),
+        budgetMillis: Long = ProtocolCore.DEFAULT_READ_BUDGET_MILLIS,
+        clock: () -> Long = System::currentTimeMillis
     ): ProtocolAdapter
 
     /** Successful summary list whose single page item carries [rawTenant]. */
@@ -72,6 +77,24 @@ internal abstract class ProtocolDialectContractTest {
 
     /** Dialect-shaped refused-token response for an idempotent detail read. */
     protected abstract fun refusedTokenDetailResponse(): ProtocolResponse
+
+    /** Dialect-shaped refused-token response for a generation probe. */
+    protected abstract fun refusedTokenProbeResponse(): ProtocolResponse
+
+    /** Dialect-shaped permission-denied response for a generation probe. */
+    protected abstract fun permissionDeniedProbeResponse(): ProtocolResponse
+
+    /** Dialect-shaped bare authentication failure for a generation probe. */
+    protected abstract fun authenticationFailureProbeResponse(): ProtocolResponse
+
+    /** Dialect-shaped protocol failure for a generation probe. */
+    protected abstract fun protocolFailureProbeResponse(): ProtocolResponse
+
+    /**
+     * Dialect-shaped unsupported-generation probe response, or null when this
+     * dialect never classifies generation absence on probe (V1).
+     */
+    protected abstract fun unsupportedGenerationProbeResponse(): ProtocolResponse?
 
     /**
      * Assert this dialect's public-Namespace wire encoding on a request that
@@ -329,6 +352,144 @@ internal abstract class ProtocolDialectContractTest {
         assertNoSecrets(requestCountDiagnostic(transport))
     }
 
+    @Test
+    fun `NACOS_PASSWORD probe recovers once from a refused token with a fixed request sequence`() = runBlocking {
+        val transport = ScriptedTransport(
+            ProtocolResponse(200, loginBody("stale")),
+            refusedTokenProbeResponse(),
+            ProtocolResponse(200, loginBody("fresh")),
+            ProtocolResponse(200, probeBody())
+        )
+        val sessions = AuthenticationSessionRegistry()
+
+        newAdapter(transport, sessions).probe(passwordTarget()).getOrThrow()
+
+        assertEquals(4, transport.requests.size, requestCountDiagnostic(transport))
+        assertEquals(loginPath, transport.requests[0].path)
+        assertEquals(probePath, transport.requests[1].path)
+        assertEquals(loginPath, transport.requests[2].path)
+        assertEquals(probePath, transport.requests[3].path)
+        assertTrue(transport.requests[3].query.any { it == "accessToken" to "fresh" })
+        assertNoSecrets(requestCountDiagnostic(transport))
+    }
+
+    @Test
+    fun `permission denial on probe is not recovered and stays Authorization`() = runBlocking {
+        val transport = ScriptedTransport(
+            ProtocolResponse(200, loginBody("current")),
+            permissionDeniedProbeResponse()
+        )
+        val sessions = AuthenticationSessionRegistry()
+        val target = passwordTarget()
+
+        val error = newAdapter(transport, sessions).probe(target).exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
+        assertEquals(2, transport.requests.size, requestCountDiagnostic(transport))
+        assertEquals("current", sessions.completedToken(target.context.identity)?.value)
+        assertNoSecrets(requestCountDiagnostic(transport))
+    }
+
+    @Test
+    fun `authentication failure on probe is not recovered`() = runBlocking {
+        // Anonymous: no NACOS_PASSWORD recovery path. Dialect-shaped 401 must
+        // surface as Authentication on both generations (issue #97 parity).
+        val transport = ScriptedTransport(authenticationFailureProbeResponse())
+
+        val error = newAdapter(transport).probe(anonymousTarget()).exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Authentication::class.java, error)
+        assertEquals(1, transport.requests.size, requestCountDiagnostic(transport))
+    }
+
+    @Test
+    fun `protocol failure on probe is Protocol and is not retried`() = runBlocking {
+        val transport = ScriptedTransport(protocolFailureProbeResponse())
+        val error = newAdapter(transport).probe(anonymousTarget()).exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Protocol::class.java, error)
+        assertEquals(1, transport.requests.size, requestCountDiagnostic(transport))
+    }
+
+    @Test
+    fun `network failure on probe is Connection and is not retried by the core`() = runBlocking {
+        val transport = ProtocolTransport {
+            throw RemoteOperationError.Connection(RuntimeException("boom"))
+        }
+        val error = newAdapter(transport).probe(anonymousTarget()).exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Connection::class.java, error)
+    }
+
+    @Test
+    fun `unsupported-generation probe outcome is GenerationUnsupported when the dialect classifies it`() =
+        runBlocking {
+            val response = unsupportedGenerationProbeResponse() ?: return@runBlocking
+            val error = newAdapter(ScriptedTransport(response))
+                .probe(anonymousTarget())
+                .exceptionOrNull()
+
+            assertInstanceOf(RemoteOperationError.GenerationUnsupported::class.java, error)
+        }
+
+    @Test
+    fun `authentication recovery shares the original request budget rather than resetting it`() =
+        runBlocking {
+            val clock = java.util.concurrent.atomic.AtomicLong(0L)
+            val transport = object : ProtocolTransport {
+                val requests = mutableListOf<ProtocolRequest>()
+                private val script = ArrayDeque(
+                    listOf(
+                        ProtocolResponse(200, loginBody("stale")),
+                        refusedTokenProbeResponse(),
+                        ProtocolResponse(200, loginBody("fresh")),
+                        ProtocolResponse(200, probeBody())
+                    )
+                )
+
+                override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
+                    requests += request
+                    clock.addAndGet(400)
+                    return script.removeFirst()
+                }
+            }
+            // Shared 1000ms budget: four 400ms steps cannot complete without a reset.
+            val error = newAdapter(
+                transport = transport,
+                budgetMillis = 1_000L,
+                clock = { clock.get() }
+            ).probe(passwordTarget()).exceptionOrNull()
+
+            assertInstanceOf(RemoteOperationError.Protocol::class.java, error)
+            assertTrue(
+                error!!.message!!.contains("budget", ignoreCase = true),
+                "expected budget exhaustion, got: ${error.message}"
+            )
+            assertTrue(
+                transport.requests.size < 4,
+                "shared budget must stop recovery before a fourth request; ${transport.requests.size}"
+            )
+            assertNoSecrets(
+                transport.requests.joinToString(prefix = "requests=", separator = "; ") {
+                    "${it.method} ${it.path} keys=${it.query.map { q -> q.first }}"
+                }
+            )
+        }
+
+    @Test
+    fun `cancellation during probe propagates and is not remapped to connection or protocol`() =
+        runBlocking {
+            val transport = ProtocolTransport {
+                throw kotlinx.coroutines.CancellationException("probe cancelled")
+            }
+            try {
+                newAdapter(transport).probe(anonymousTarget()).getOrThrow()
+                org.junit.jupiter.api.Assertions.fail("expected CancellationException")
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                assertEquals("probe cancelled", error.message)
+            }
+        }
+
     protected fun anonymousTarget(namespaceId: String = "public"): OperationTarget {
         val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
         val context = NacosOperationContext(
@@ -446,8 +607,16 @@ internal class V1ProtocolDialectContractTest : ProtocolDialectContractTest() {
 
     override fun newAdapter(
         transport: ProtocolTransport,
-        sessions: AuthenticationSessionRegistry
-    ): ProtocolAdapter = V1ProtocolAdapter(transport, sessions)
+        sessions: AuthenticationSessionRegistry,
+        budgetMillis: Long,
+        clock: () -> Long
+    ): ProtocolAdapter = V1ProtocolAdapter(
+        transport = transport,
+        sessions = sessions,
+        readBudgetMillis = budgetMillis,
+        clock = clock,
+        gson = com.google.gson.Gson()
+    )
 
     override fun summaryBody(rawTenant: String?): String =
         """{"totalCount":1,"pageNumber":1,"pagesAvailable":1,"pageItems":[{"id":"1","dataId":"app.yaml","group":"DEFAULT_GROUP","content":null,"type":"yaml","tenant":${tenantJson(rawTenant)}}]}"""
@@ -473,6 +642,20 @@ internal class V1ProtocolDialectContractTest : ProtocolDialectContractTest() {
     override fun refusedTokenDetailResponse(): ProtocolResponse =
         ProtocolResponse(403, """{"code":403,"message":"token is invalid"}""")
 
+    override fun refusedTokenProbeResponse(): ProtocolResponse =
+        ProtocolResponse(403, """{"code":403,"message":"token is invalid"}""")
+
+    override fun permissionDeniedProbeResponse(): ProtocolResponse =
+        ProtocolResponse(403, """{"code":403,"message":"permission denied"}""")
+
+    override fun authenticationFailureProbeResponse(): ProtocolResponse =
+        ProtocolResponse(401, """{"code":401,"message":"user not found"}""")
+
+    override fun protocolFailureProbeResponse(): ProtocolResponse =
+        ProtocolResponse(399, "unexpected status")
+
+    override fun unsupportedGenerationProbeResponse(): ProtocolResponse? = null
+
     override fun assertPublicNamespaceWire(request: ProtocolRequest) {
         assertFalse(request.query.any { it.first == "tenant" }) {
             "V1 public must omit tenant; keys=${request.query.map { it.first }}"
@@ -493,8 +676,16 @@ internal class V3ProtocolDialectContractTest : ProtocolDialectContractTest() {
 
     override fun newAdapter(
         transport: ProtocolTransport,
-        sessions: AuthenticationSessionRegistry
-    ): ProtocolAdapter = V3ProtocolAdapter(transport, sessions)
+        sessions: AuthenticationSessionRegistry,
+        budgetMillis: Long,
+        clock: () -> Long
+    ): ProtocolAdapter = V3ProtocolAdapter(
+        transport = transport,
+        sessions = sessions,
+        budgetMillis = budgetMillis,
+        clock = clock,
+        gson = com.google.gson.Gson()
+    )
 
     override fun summaryBody(rawTenant: String?): String =
         """{"code":0,"message":"success","data":{"totalCount":1,"pageNumber":1,"pagesAvailable":1,"pageItems":[{"id":"1","dataId":"app.yaml","group":"DEFAULT_GROUP","content":null,"type":"yaml","tenant":${tenantJson(rawTenant)}}]}}"""
@@ -519,6 +710,21 @@ internal class V3ProtocolDialectContractTest : ProtocolDialectContractTest() {
 
     override fun refusedTokenDetailResponse(): ProtocolResponse =
         ProtocolResponse(401, """{"code":401,"message":"token invalid","data":null}""")
+
+    override fun refusedTokenProbeResponse(): ProtocolResponse =
+        ProtocolResponse(401, """{"code":401,"message":"token invalid","data":null}""")
+
+    override fun permissionDeniedProbeResponse(): ProtocolResponse =
+        ProtocolResponse(403, """{"code":10001,"message":"access denied","data":null}""")
+
+    override fun authenticationFailureProbeResponse(): ProtocolResponse =
+        ProtocolResponse(401, "not a json envelope")
+
+    override fun protocolFailureProbeResponse(): ProtocolResponse =
+        ProtocolResponse(600, "unexpected status")
+
+    override fun unsupportedGenerationProbeResponse(): ProtocolResponse =
+        ProtocolResponse(404, "")
 
     override fun assertPublicNamespaceWire(request: ProtocolRequest) {
         assertEquals("public", request.query.single { it.first == "namespaceId" }.second) {

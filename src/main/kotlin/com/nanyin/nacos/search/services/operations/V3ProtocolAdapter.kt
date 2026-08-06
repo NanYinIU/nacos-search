@@ -27,33 +27,56 @@ import java.nio.charset.StandardCharsets
  * Completed Nacos-password tokens live only in [sessions] (ADR-0012 /
  * issue #96). This dialect supplies the login request and response shape;
  * it does not own a private completed-token store.
+ *
+ * Generation probing runs through [ProtocolCore] (ADR-0048 / issue #97);
+ * browsing and publish still use the adapter-local shell until later slices.
  */
 class V3ProtocolAdapter(
     private val transport: ProtocolTransport,
     private val sessions: AuthenticationSessionRegistry = AuthenticationSessionRegistry(),
     private val gson: Gson = Gson()
 ) : ProtocolAdapter {
+    private var core: ProtocolCore = ProtocolCore(transport, sessions)
 
     override val capabilities: ProtocolCapabilities = ProtocolCapabilities.V3
 
-    override suspend fun probe(target: OperationTarget): Result<Unit> = runCatching {
+    internal constructor(
+        transport: ProtocolTransport,
+        sessions: AuthenticationSessionRegistry,
+        budgetMillis: Long,
+        clock: () -> Long,
+        gson: Gson
+    ) : this(transport, sessions, gson) {
+        this.core = ProtocolCore(transport, sessions, budgetMillis, clock)
+    }
+
+    override suspend fun probe(target: OperationTarget): Result<Unit> {
         validate(target)
-        try {
-            val response = executeAuthenticated(target) { auth -> applyAuth(stateRequest(target), auth) }
-            // V3 state is a raw map — not wrapped in the {code,message,data} envelope.
-            // A 404 on this path means V3 is not available; a non-JSON or envelope
-            // response means we are not talking to a V3 server.
-            when (response.status) {
-                in 200..299 -> parseRawStateMap(response.body)
-                404 -> classifyStateNotFound(response)
-                else -> throw mapStatusFailure(response)
+        return core.executeIdempotent(
+            target = target,
+            build = { auth -> applyAuth(stateRequest(target), auth) },
+            classify = { response -> classifyProbeResponse(target, response) },
+            parse = { response -> parseRawStateMap(response.body) },
+            login = { performLogin(it) }
+        )
+    }
+
+    private fun classifyProbeResponse(
+        target: OperationTarget,
+        response: ProtocolResponse
+    ): ClassifiedResponse {
+        if (rejectedNacosPasswordToken(target, response)) {
+            return ClassifiedResponse.RecoverableTokenRefusal(response.status)
+        }
+        return when (response.status) {
+            in 200..299 -> ClassifiedResponse.Success(response)
+            404 -> try {
+                classifyStateNotFound(response)
+                error("classifyStateNotFound must throw")
+            } catch (error: RemoteOperationError) {
+                ClassifiedResponse.Failure(error)
             }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: RemoteOperationError) {
-            throw error
-        } catch (error: Throwable) {
-            throw RemoteOperationError.Connection(error)
+            else -> ClassifiedResponse.Failure(mapStatusFailure(response))
         }
     }
 
@@ -600,7 +623,11 @@ class V3ProtocolAdapter(
         val code = envelope?.code
         return when {
             code != null && code != 0 -> mapEnvelopeCode(code, envelope?.message)
-            response.status in setOf(401, 403) -> RemoteOperationError.Authorization(response.status)
+            // Bare status without a usable envelope: keep authentication vs
+            // authorization distinct so V1 and V3 agree on product meaning
+            // for the same classified outcome (ADR-0048 / issue #97).
+            response.status == 401 -> RemoteOperationError.Authentication(response.status)
+            response.status == 403 -> RemoteOperationError.Authorization(response.status)
             response.status == 404 -> RemoteOperationError.NotFound()
             response.status == 429 -> RemoteOperationError.RateLimited()
             response.status in 400..499 -> RemoteOperationError.Client(response.status)
@@ -648,11 +675,6 @@ class V3ProtocolAdapter(
             }
         }
     }
-
-    private data class RequestAuthentication(
-        val query: List<Pair<String, String>> = emptyList(),
-        val headers: Map<String, String> = emptyMap()
-    )
 
     private data class V3Envelope(
         val code: Int = -1,

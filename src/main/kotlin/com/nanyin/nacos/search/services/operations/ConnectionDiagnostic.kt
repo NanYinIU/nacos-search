@@ -216,6 +216,7 @@ class ConnectionDiagnostic(
 
     private fun sanitize(error: Throwable): String = when (error) {
         is RemoteOperationError.Authentication -> "Authentication failed"
+        is RemoteOperationError.InvalidOrExpiredNacosPasswordToken -> "Authentication failed"
         is RemoteOperationError.Authorization -> "Permission denied"
         is RemoteOperationError.NotFound -> "Resource not found"
         is RemoteOperationError.GenerationUnsupported -> "Generation not supported"
@@ -224,6 +225,8 @@ class ConnectionDiagnostic(
         is RemoteOperationError.RateLimited -> "Rate limited"
         is RemoteOperationError.Connection -> "Connection failed"
         is RemoteOperationError.Protocol -> "Protocol error"
+        is RemoteOperationError.Cancelled -> "Cancelled"
+        is kotlinx.coroutines.CancellationException -> "Cancelled"
         else -> "Unknown failure"
     }
 
