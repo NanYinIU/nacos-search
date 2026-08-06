@@ -8,6 +8,8 @@ import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CacheAgeCalculator
 import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.services.operations.ObservationHighWater
+import com.nanyin.nacos.search.services.visibility.AccessVisibility
+import com.nanyin.nacos.search.services.visibility.ConfigurationVisibility
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,16 +47,29 @@ import java.util.concurrent.atomic.AtomicLong
  * carries its own version and as-of instant. The cache lends out no
  * modification counter, no clock, and no coroutine scope, so no caller can
  * assemble an invalidation rule out of its internals (issue #64).
+ *
+ * Access visibility is owned by [AccessVisibility]; this cache depends on it
+ * for every read and does not own the confirmation-state machine (ADR-0044 /
+ * ADR-0050 / issue #123). Blocked reads hide payloads without deleting them.
  */
 @Service(Service.Level.APP)
 @OptIn(CacheWriteAccess::class)
 class CacheService internal constructor(
     private val currentTimeMillis: () -> Long,
     private val tombstones: ProfileTombstoneRegistry,
-    private val store: CacheStore
+    private val store: CacheStore,
+    /**
+     * Shared with the operation gateway. Defaults to a module over the same
+     * [store] so production and the common test constructors keep one store
+     * for both payloads and visibility records.
+     */
+    private val visibility: AccessVisibility = AccessVisibility(store)
 ) : Disposable {
     constructor() : this(System::currentTimeMillis, defaultTombstones(), FileCacheStore())
-    internal constructor(store: CacheStore) : this(System::currentTimeMillis, ProfileTombstoneRegistry(), store)
+
+    internal constructor(store: CacheStore) :
+        this(System::currentTimeMillis, ProfileTombstoneRegistry(), store)
+
     internal constructor(currentTimeMillis: () -> Long, store: CacheStore) :
         this(currentTimeMillis, ProfileTombstoneRegistry(), store)
 
@@ -138,12 +153,54 @@ class CacheService internal constructor(
     }
 
     /**
+     * The access-visibility module this cache enforces on reads. The gateway
+     * reports every completed formal observation here (ADR-0050).
+     * Internal because [AccessVisibility] and [CacheStore] share module scope.
+     */
+    internal fun accessVisibility(): AccessVisibility = visibility
+
+    /** Reporter seam for the operation gateway (ADR-0050). */
+    fun visibilityReporter(): com.nanyin.nacos.search.services.visibility.VisibilityReporter = visibility
+
+    /**
+     * Configuration-read visibility for [identity]. Distinct from a cache miss:
+     * a [ConfigurationVisibility.Blocked] identity still retains payloads that
+     * become readable again after a matching success.
+     */
+    fun configurationVisibility(identity: AccessIdentity): ConfigurationVisibility =
+        visibility.configurationVisibility(identity)
+
+    /**
      * A versioned, self-dating view of this cache for [identity]. Taking one is
      * O(1); its payload views are computed on first use.
+     *
+     * When the identity is access-blocked, payload views are empty and
+     * [CacheSnapshot.visibility] carries the refusal. The version advances when
+     * either cache content or visibility state changes so a derived key index
+     * cannot outlive a block (issue #123).
      */
     fun snapshot(identity: AccessIdentity): CacheSnapshot {
         val state = publishedState
-        return CacheSnapshot(state.version, currentTimeMillis(), identity, state.details, state.namespaceIndexes)
+        val genBefore = visibility.stateGeneration()
+        val firstDecision = visibility.configurationVisibility(identity)
+        val candidateDetails =
+            if (firstDecision is ConfigurationVisibility.Blocked) emptyMap() else state.details
+        val candidateIndexes =
+            if (firstDecision is ConfigurationVisibility.Blocked) emptyMap() else state.namespaceIndexes
+        // Fail-closed re-check: a concurrent accepted block between the first
+        // sample and map selection must not publish Visible + payloads (issue
+        // #123 review / snapshot TOCTOU).
+        val finalDecision = visibility.configurationVisibility(identity)
+        val genAfter = visibility.stateGeneration()
+        val blocked = finalDecision is ConfigurationVisibility.Blocked
+        return CacheSnapshot(
+            version = compositeSnapshotVersion(state.version, maxOf(genBefore, genAfter)),
+            asOfMillis = currentTimeMillis(),
+            identity = identity,
+            details = if (blocked) emptyMap() else candidateDetails,
+            namespaceIndexes = if (blocked) emptyMap() else candidateIndexes,
+            visibility = finalDecision
+        )
     }
 
     /**
@@ -154,6 +211,10 @@ class CacheService internal constructor(
      * and does not go through [applyMutation]. Serialized with mutations via
      * [cacheMutex] so a late write cannot re-land under the same lock after
      * the outer tombstone check but before residual removal.
+     *
+     * Also drops matching visibility records so a deleted profile cannot leave
+     * a block that would hide a re-created profile with the same id under a
+     * new access revision (issue #123).
      */
     fun purgeProfile(profileId: String) {
         val id = profileId.trim()
@@ -169,17 +230,16 @@ class CacheService internal constructor(
                 val detailKeys = detailCache.keys.filter { it.startsWith(prefix) }
                 val listKeys = listPageCache.keys.filter { it.startsWith(prefix) }
                 val indexKeys = namespaceIndexCache.keys.filter { it.startsWith(prefix) }
-                if (detailKeys.isEmpty() && listKeys.isEmpty() && indexKeys.isEmpty()) {
-                    return@withLock emptyList<String>() to emptyList<String>()
+                if (detailKeys.isNotEmpty() || listKeys.isNotEmpty() || indexKeys.isNotEmpty()) {
+                    discardGeneration.incrementAndGet()
+                    detailKeys.forEach { detailCache.remove(it) }
+                    listKeys.forEach { listPageCache.remove(it) }
+                    indexKeys.forEach { key ->
+                        namespaceIndexCache.remove(key)
+                        namespaceIndexAuthority.remove(key)
+                    }
+                    publish()
                 }
-                discardGeneration.incrementAndGet()
-                detailKeys.forEach { detailCache.remove(it) }
-                listKeys.forEach { listPageCache.remove(it) }
-                indexKeys.forEach { key ->
-                    namespaceIndexCache.remove(key)
-                    namespaceIndexAuthority.remove(key)
-                }
-                publish()
                 detailKeys to listKeys
             }
         }
@@ -190,6 +250,8 @@ class CacheService internal constructor(
         removed.second.forEach { key ->
             serviceScope.launch { runCatching { store.removeListPage(key) } }
         }
+        // Visibility records for this profile must go even when no payloads remain.
+        kotlinx.coroutines.runBlocking { visibility.purgeProfile(id) }
         logger.info("Purged cache entries for deleted profile $id")
     }
 
@@ -311,6 +373,14 @@ class CacheService internal constructor(
                 listPageCache.clear()
                 namespaceIndexCache.clear()
                 namespaceIndexAuthority.clear()
+                // Fence visibility **before** the durable wipe. reportCompleted
+                // only holds the visibility mutex, not cacheMutex: if store.clear
+                // ran first, a concurrent acceptFailure could putVisibilityRecord
+                // after the wipe and leave an orphan that re-blocks on restart
+                // (issue #123 re-review). Fence first so lower-seq failures are
+                // rejected; store.clear then drops any put that finished fully
+                // before the fence.
+                visibility.onUserClear(observation)
                 store.clear()
                 logger.info("Cache cleared")
             }
@@ -410,6 +480,13 @@ class CacheService internal constructor(
         // Trigger the oversized-caches sweep only once the cache grows past the hard
         // cap by this margin, so per-insert writes stay O(1) instead of O(n).
         private const val CLEANUP_BUFFER = 100
+
+        /**
+         * Combines cache content version with visibility generation so a snapshot
+         * (and any derivation) invalidates when either changes.
+         */
+        internal fun compositeSnapshotVersion(cacheVersion: Long, visibilityGeneration: Long): Long =
+            cacheVersion + visibilityGeneration * 1_000_000_003L
     }
 
     init {
@@ -452,8 +529,13 @@ class CacheService internal constructor(
         allowStale: Boolean = false
     ): CachedListPage? {
         loadCompleted.await()
+        // Identity-wide authentication block: hide without deleting (issue #123).
+        if (visibility.isIdentityAuthBlocked(identity)) return null
         val key = listPageKey(identity, namespaceId, requestKey)
         val entry = listPageCache[key] ?: return null
+        // Re-check after the map read so a concurrent block cannot race a payload
+        // into visibility (ADR-0050).
+        if (visibility.isIdentityAuthBlocked(identity)) return null
         if (!entry.isExpired(currentTimeMillis()) || allowStale) {
             return CachedListPage(entry.data, entry.createdAt)
         }
@@ -474,12 +556,20 @@ class CacheService internal constructor(
         allowStale: Boolean = false
     ): NacosConfiguration? {
         val key = detailKey(identity, namespaceId, dataId, group)
-        return getConfigDetailByKey(key, allowStale)
+        return getConfigDetailByKey(identity, key, allowStale)
     }
 
-    private suspend fun getConfigDetailByKey(key: String, allowStale: Boolean): NacosConfiguration? {
+    private suspend fun getConfigDetailByKey(
+        identity: AccessIdentity,
+        key: String,
+        allowStale: Boolean
+    ): NacosConfiguration? {
+        // Enforce visibility before and after every async step so a concurrent
+        // block cannot race a payload into visibility (issue #123 / ADR-0050).
+        if (visibility.isIdentityAuthBlocked(identity)) return null
         val entry = detailCache[key]
         if (entry != null) {
+            if (visibility.isIdentityAuthBlocked(identity)) return null
             if (!entry.isExpired(currentTimeMillis()) || allowStale) {
                 return entry.data
             }
@@ -490,12 +580,15 @@ class CacheService internal constructor(
         // background load is still in flight and the entry is genuinely absent, await it
         // and re-check so the result reflects any entry loaded concurrently.
         reconstituteDetail(key)?.let { reconstituted ->
+            if (visibility.isIdentityAuthBlocked(identity)) return null
             if (reconstituted.isExpired(currentTimeMillis()) && !allowStale) return null
             return reconstituted.data
         }
         loadCompleted.await()
+        if (visibility.isIdentityAuthBlocked(identity)) return null
         val loadedLate = detailCache[key]
         if (loadedLate != null && (!loadedLate.isExpired(currentTimeMillis()) || allowStale)) {
+            if (visibility.isIdentityAuthBlocked(identity)) return null
             return loadedLate.data
         }
         return null
@@ -558,7 +651,10 @@ class CacheService internal constructor(
         allowStale: Boolean = false
     ): CachedNamespaceIndex? {
         loadCompleted.await()
-        return getNamespaceIndexByKey(namespaceKey(identity, namespaceId), allowStale)
+        if (visibility.isIdentityAuthBlocked(identity)) return null
+        val result = getNamespaceIndexByKey(namespaceKey(identity, namespaceId), allowStale)
+        if (result != null && visibility.isIdentityAuthBlocked(identity)) return null
+        return result
     }
 
     /** Payload plus the entry metadata needed for age / confidence reporting. */
@@ -589,6 +685,8 @@ class CacheService internal constructor(
         cacheMutex.withLock {
             loadIdentityScopedDetailsFromStore()
             loadIdentityScopedListPagesFromStore()
+            // Visibility records hydrate without raising process-local high-water.
+            visibility.hydrateFromStore()
             publish()
         }
     }

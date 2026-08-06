@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.services
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CacheAgeCalculator
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.services.visibility.ConfigurationVisibility
 
 /**
  * An immutable, self-dating view of the cache for one access identity.
@@ -14,11 +15,17 @@ import com.nanyin.nacos.search.models.NacosConfiguration
  * of step left the derivation stale or rebuilt for nothing. A snapshot carries
  * both facts a derivation needs and nothing else (issue #64):
  *
- * - [version] advances when, and only when, the cache's content changed. A
- *   mutation the gate drops changes nothing, so it does not advance it.
+ * - [version] advances when the cache's content **or** relevant visibility
+ *   state changed. A mutation the gate drops changes nothing, so it does not
+ *   advance the content half; a visibility block/clear advances the visibility
+ *   half (issue #123).
  * - [asOfMillis] is the single instant every freshness judgement made from this
  *   snapshot is against, so one decision cannot straddle a freshness boundary
  *   and report a list of matches in inconsistent states.
+ *
+ * Under an identity-wide authentication block, payload views are empty and
+ * [visibility] is [ConfigurationVisibility.Blocked] so code navigation can
+ * distinguish undecidable from unresolved (#126 consumes this hook).
  *
  * Taking one is O(1): the payload views below are computed lazily, so the PSI
  * hot path can take a snapshot per decision and only pay for a scan when it
@@ -29,8 +36,11 @@ class CacheSnapshot internal constructor(
     val asOfMillis: Long,
     val identity: AccessIdentity,
     private val details: Map<String, CacheService.CacheEntry<NacosConfiguration>>,
-    private val namespaceIndexes: Map<String, NamespaceIndexRecord>
+    private val namespaceIndexes: Map<String, NamespaceIndexRecord>,
+    val visibility: ConfigurationVisibility = ConfigurationVisibility.Visible
 ) {
+    /** True when configuration-read data for [identity] is hidden by an access block. */
+    val isAccessBlocked: Boolean get() = visibility is ConfigurationVisibility.Blocked
     private val detailPrefix: String get() = "${CacheCoordinate.identityPrefix(identity)}|"
 
     /**

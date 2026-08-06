@@ -2,6 +2,7 @@ package com.nanyin.nacos.search.services
 
 import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.services.visibility.AccessVisibilityRecord
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -9,6 +10,10 @@ import java.util.concurrent.ConcurrentHashMap
  * persistence — the entry payloads and the key list that names them — so the
  * two cannot drift apart and leave behind a payload no reclamation path can
  * ever see.
+ *
+ * Access-visibility records that gate those payloads live on the same contract
+ * (issue #123 / ADR-0050): clear, profile deletion, and reclamation must
+ * consider both.
  *
  * Two adapters implement it: [FileCacheStore] in production and
  * [InMemoryCacheStore] in tests.
@@ -31,7 +36,17 @@ internal interface CacheStore {
 
     suspend fun removeListPage(key: String)
 
-    /** Discards every payload together with its key entry, leaving nothing unreachable. */
+    /** Every persisted access-visibility record, keyed by its storage key. */
+    suspend fun loadVisibilityRecords(): Map<String, AccessVisibilityRecord>
+
+    suspend fun putVisibilityRecord(key: String, record: AccessVisibilityRecord)
+
+    suspend fun removeVisibilityRecord(key: String)
+
+    /**
+     * Discards every payload and visibility record together with its key entry,
+     * leaving nothing unreachable.
+     */
     suspend fun clear()
 }
 
@@ -39,6 +54,7 @@ internal interface CacheStore {
 internal class InMemoryCacheStore : CacheStore {
     private val details = ConcurrentHashMap<String, CacheService.CacheEntry<NacosConfiguration>>()
     private val listPages = ConcurrentHashMap<String, CacheService.CacheEntry<ConfigListResponse>>()
+    private val visibility = ConcurrentHashMap<String, AccessVisibilityRecord>()
 
     override suspend fun loadDetails(): Map<String, CacheService.CacheEntry<NacosConfiguration>> =
         details.toMap()
@@ -65,8 +81,20 @@ internal class InMemoryCacheStore : CacheStore {
         listPages.remove(key)
     }
 
+    override suspend fun loadVisibilityRecords(): Map<String, AccessVisibilityRecord> =
+        visibility.toMap()
+
+    override suspend fun putVisibilityRecord(key: String, record: AccessVisibilityRecord) {
+        visibility[key] = record
+    }
+
+    override suspend fun removeVisibilityRecord(key: String) {
+        visibility.remove(key)
+    }
+
     override suspend fun clear() {
         details.clear()
         listPages.clear()
+        visibility.clear()
     }
 }
