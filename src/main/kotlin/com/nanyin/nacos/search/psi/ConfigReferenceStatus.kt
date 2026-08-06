@@ -16,5 +16,13 @@ enum class ConfigReferenceStatus { RESOLVED, STALE, UNRESOLVED, UNDECIDABLE, UNA
 
 data class ConfigResolution(
     val status: ConfigReferenceStatus,
-    val hits: List<NacosKeyResolver.KeyHit>
+    val hits: List<NacosKeyResolver.KeyHit>,
+    /**
+     * True when the reference is [ConfigReferenceStatus.UNDECIDABLE] because a
+     * visibility block hides the whole access identity or the evaluation
+     * Namespace — distinct from the data-id-known-but-detail-missing case,
+     * where the block reason would be a lie in the gutter tooltip
+     * (issue #126).
+     */
+    val visibilityBlocked: Boolean = false
 )

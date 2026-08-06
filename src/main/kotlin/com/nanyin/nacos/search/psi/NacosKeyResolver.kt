@@ -2,6 +2,7 @@ package com.nanyin.nacos.search.psi
 
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.CacheSnapshot
 
@@ -61,16 +62,34 @@ object NacosKeyResolver {
     }
 
     /**
-     * The derived index, stamped with the snapshot version it was built from.
-     * That version — not a modification counter, a clock, or an object identity
-     * — is the whole staleness rule.
+     * The derived index, stamped with the snapshot version it was built from
+     * and the visibility state it was built under. The version — not a
+     * modification counter, a clock, or an object identity — is the whole
+     * content-staleness rule; [visibilityCompatibleWith] is the extra gate
+     * that stops an index built while a block hid definitions from serving a
+     * snapshot that hides different ones (issue #126).
      */
     data class KeyIndex(
         val accessIdentity: AccessIdentity,
         val version: Long,
         val definitionsByKey: Map<String, List<KeyDefinition>>,
-        val dataIdsByNamespace: Map<String, Set<String>> = emptyMap()
-    )
+        val dataIdsByNamespace: Map<String, Set<String>> = emptyMap(),
+        /** True when built under an identity-wide authentication block. */
+        val accessBlocked: Boolean = false,
+        /** Canonical Namespace ids hidden by authorization blocks at build time. */
+        val blockedNamespaces: Set<String> = emptySet()
+    ) {
+        /**
+         * True when [snapshot]'s visibility state is the one this index was
+         * derived under. The snapshot's payload views are already filtered to
+         * the complement of its hidden set, so an index built from it cannot
+         * hold a definition the snapshot hides; an index built under a
+         * different state may, and must not be served (issue #126).
+         */
+        fun visibilityCompatibleWith(snapshot: CacheSnapshot): Boolean =
+            accessBlocked == snapshot.isAccessBlocked &&
+                blockedNamespaces == snapshot.blockedNamespaces
+    }
 
     fun buildIndex(snapshot: CacheSnapshot): KeyIndex {
         val cached = snapshot.configurations
@@ -94,7 +113,9 @@ object NacosKeyResolver {
                 .asSequence()
                 .filter { it.configuration.dataId.isNotBlank() }
                 .groupBy { normalizeNamespaceId(it.configuration.tenantId) }
-                .mapValues { (_, entries) -> entries.mapTo(mutableSetOf()) { it.configuration.dataId } }
+                .mapValues { (_, entries) -> entries.mapTo(mutableSetOf()) { it.configuration.dataId } },
+            accessBlocked = snapshot.isAccessBlocked,
+            blockedNamespaces = snapshot.blockedNamespaces
         )
     }
 
@@ -117,6 +138,10 @@ object NacosKeyResolver {
         allowCrossNamespace: Boolean = true
     ): List<KeyHit> {
         if (key.isBlank() || index == null) return emptyList()
+        // A blocked identity hides every cached definition; an index derived
+        // under a different visibility state may hold definitions the snapshot
+        // hides and must not serve them (issue #126).
+        if (snapshot.isAccessBlocked || !index.visibilityCompatibleWith(snapshot)) return emptyList()
         val scoped = scopedDefinitions(index, key, activeNamespaceId, allowCrossNamespace, preferredDataId)
         return scoped
             .sortedWith(definitionComparator(activeNamespaceId, preferredGroup, preferredNamespaceId, preferredDataId))
@@ -132,20 +157,44 @@ object NacosKeyResolver {
         allowCrossNamespace: Boolean = true
     ): ConfigResolution {
         if (key.isBlank()) return ConfigResolution(ConfigReferenceStatus.UNRESOLVED, emptyList())
+        // A blocked identity returns no cached key hits, and absence is
+        // undecidable rather than a confident miss: the payload may exist but
+        // is hidden (issue #126).
+        if (snapshot.isAccessBlocked) {
+            return ConfigResolution(ConfigReferenceStatus.UNDECIDABLE, emptyList(), visibilityBlocked = true)
+        }
         if (index == null) return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
+        // An index derived under a different visibility state may hold hidden
+        // definitions; do not serve it. Identity gating stays the service's job
+        // (the service never hands an index for another identity), so this
+        // guard only has to decide visibility-state mismatches.
+        if (!index.visibilityCompatibleWith(snapshot)) {
+            return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
+        }
         val hits = scopedDefinitions(index, key, activeNamespaceId, allowCrossNamespace, preferredDataId)
             .map { it.judgedAt(snapshot.asOfMillis) }
         if (hits.isNotEmpty()) return resolutionFromHits(hits)
 
-        // No detail hit for the key. When a preferred data id is declared, the
-        // complete namespace summary index decides absence (UNRESOLVED) vs
-        // "exists but body not loaded" (UNDECIDABLE) — issue #52 / ADR-0041.
+        // No detail hit for the key. A Namespace-scoped block hides that
+        // Namespace's definitions and its summary index, so absence in it is
+        // undecidable — never a confident miss (issue #126). Only a visible
+        // Namespace's fresh complete index may prove a data id absent.
+        if (isNamespaceBlocked(snapshot, activeNamespaceId)) {
+            return ConfigResolution(ConfigReferenceStatus.UNDECIDABLE, emptyList(), visibilityBlocked = true)
+        }
+
+        // When a preferred data id is declared, the complete namespace summary
+        // index decides absence (UNRESOLVED) vs "exists but body not loaded"
+        // (UNDECIDABLE) — issue #52 / ADR-0041.
         val dataId = preferredDataId?.takeIf { it.isNotBlank() }
         if (dataId != null) {
             return dataIdPresenceResolution(dataId, snapshot, activeNamespaceId)
         }
         return resolutionFromHits(hits)
     }
+
+    private fun isNamespaceBlocked(snapshot: CacheSnapshot, namespaceId: String?): Boolean =
+        NamespaceInfo.canonicalId(namespaceId) in snapshot.blockedNamespaces
 
     /**
      * Returns true when [dataId] is known to exist among the cached
@@ -154,7 +203,10 @@ object NacosKeyResolver {
      * When no index has been built yet, or the cache is empty (cold start /
      * namespace not yet loaded), this returns true optimistically so the
      * unresolved gutter marker can still appear and drive a lazy remote fetch.
-     * Only a fresh, complete namespace index may prove absence.
+     * Only a fresh, complete namespace index may prove absence — and only when
+     * visibility permits it: under a block the index and the namespace view
+     * for that coordinate are filtered out, so this falls through to the
+     * optimistic `true` and absence stays unproven (issue #126).
      */
     fun isDataIdKnown(
         dataId: String,
@@ -164,7 +216,11 @@ object NacosKeyResolver {
     ): Boolean {
         if (dataId.isBlank()) return false
         val normalizedNamespace = normalizeNamespaceId(activeNamespaceId)
+        // A compatible index never lists a hidden Namespace; an index that is
+        // not compatible is not served by the service, so the only way past
+        // this check is the snapshot's own authority below.
         if (dataId in index?.dataIdsByNamespace?.get(normalizedNamespace).orEmpty()) return true
+        if (isNamespaceBlocked(snapshot, activeNamespaceId)) return true
 
         val namespaceState = snapshot.namespaceIndex(activeNamespaceId) ?: return true
         if (namespaceState.freshness != CacheService.DetailFreshness.FRESH ||

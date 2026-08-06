@@ -5,9 +5,12 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.testIdentity
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.InMemoryCacheStore
+import com.nanyin.nacos.search.services.QueueingDispatcher
 import com.nanyin.nacos.search.services.clearAll
+import com.nanyin.nacos.search.services.operations.RemoteOperationError
+import com.nanyin.nacos.search.services.replaceNamespaceIndex
+import com.nanyin.nacos.search.services.reportVisibility
 import com.nanyin.nacos.search.services.writeDetail
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -18,7 +21,6 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
-import kotlin.coroutines.CoroutineContext
 
 /**
  * Drives real cache mutations against the real index service: the derived key
@@ -211,20 +213,136 @@ class NacosKeyIndexServiceTest {
         assertEquals(ConfigReferenceStatus.UNAVAILABLE, resolution.status)
         assertNull(service.currentIndex(cache.snapshot(identity)))
     }
-}
 
-/** Runs nothing until [drain], so a rebuild can be observed while still queued. */
-private class QueueingDispatcher : CoroutineDispatcher() {
-    private val queued = ArrayDeque<Runnable>()
+    // ── Visibility-aware reuse (issue #126) ──
 
-    override fun dispatch(context: CoroutineContext, block: Runnable) {
-        synchronized(queued) { queued.addLast(block) }
+    @Test
+    fun `an index built before an identity block is not served and hides every hit`() = runBlocking {
+        val dispatcher = QueueingDispatcher()
+        val cache = loadedCache()
+        val service = NacosKeyIndexService(dispatcher)
+        cache.writeDetail(identity, null, config("app.properties", "timeout=1\n"))
+        service.ensureIndexBuilt(cache.snapshot(identity))
+        dispatcher.drain()
+        assertEquals(setOf("timeout"), service.currentIndex(cache.snapshot(identity))!!.definitionsByKey.keys)
+
+        reportVisibility(cache, identity, observation = 10_000, error = RemoteOperationError.Authentication(401))
+
+        val blocked = cache.snapshot(identity)
+        assertTrue(blocked.isAccessBlocked)
+        assertTrue(blocked.configurations.isEmpty())
+
+        // The stale index still holds the definition; serving it while the
+        // rebuild is queued would be a temporary bypass.
+        assertNull(service.currentIndex(blocked))
+        assertTrue(service.resolve(blocked, "timeout").isEmpty())
+        assertEquals(ConfigReferenceStatus.UNDECIDABLE, service.resolveCurrentState(blocked, "timeout").status)
+
+        dispatcher.drain()
+        val rebuilt = service.currentIndex(blocked)!!
+        assertTrue(rebuilt.accessBlocked)
+        assertTrue(rebuilt.definitionsByKey.isEmpty())
+        assertEquals(emptySet<String>(), rebuilt.blockedNamespaces)
+        assertEquals(ConfigReferenceStatus.UNDECIDABLE, service.resolveCurrentState(blocked, "timeout").status)
     }
 
-    fun drain() {
-        while (true) {
-            val next = synchronized(queued) { queued.removeFirstOrNull() } ?: return
-            next.run()
-        }
+    @Test
+    fun `a matching success rebuilds the derivation and restores retained payloads`() = runBlocking {
+        val cache = loadedCache()
+        val service = indexService()
+        cache.writeDetail(identity, null, config("app.properties", "timeout=1\n"))
+        service.refreshIndex(cache.snapshot(identity))
+        assertTrue(service.resolve(cache.snapshot(identity), "timeout").isNotEmpty())
+
+        reportVisibility(cache, identity, observation = 10_000, error = RemoteOperationError.Authentication(401))
+        val blocked = cache.snapshot(identity)
+        assertTrue(service.resolve(blocked, "timeout").isEmpty())
+        assertEquals(ConfigReferenceStatus.UNDECIDABLE, service.resolveCurrentState(blocked, "timeout").status)
+
+        reportVisibility(cache, identity, observation = 10_001)
+        val recovered = cache.snapshot(identity)
+        assertFalse(recovered.isAccessBlocked)
+        assertEquals(1, service.resolve(recovered, "timeout").size)
+        assertEquals(ConfigReferenceStatus.RESOLVED, service.resolveCurrentState(recovered, "timeout").status)
+    }
+
+    @Test
+    fun `an index built before a namespace block stops serving that namespace only`() = runBlocking {
+        val dispatcher = QueueingDispatcher()
+        val cache = loadedCache()
+        val service = NacosKeyIndexService(dispatcher)
+        cache.writeDetail(identity, "team-a", config("a.properties", "a.key=1\n", tenantId = "team-a"))
+        cache.writeDetail(identity, "team-b", config("b.properties", "b.key=2\n", tenantId = "team-b"))
+        service.ensureIndexBuilt(cache.snapshot(identity))
+        dispatcher.drain()
+        assertEquals(
+            setOf("a.key", "b.key"),
+            service.currentIndex(cache.snapshot(identity))!!.definitionsByKey.keys
+        )
+
+        reportVisibility(cache, identity, observation = 10_000, namespaceId = "team-a", error = RemoteOperationError.Authorization(403))
+
+        val blocked = cache.snapshot(identity)
+        assertFalse(blocked.isAccessBlocked)
+        assertEquals(setOf("team-a"), blocked.blockedNamespaces)
+        assertTrue(blocked.configurations.none { it.configuration.tenantId == "team-a" })
+
+        // While the rebuild is queued the stale index is not served at all.
+        assertNull(service.currentIndex(blocked))
+
+        dispatcher.drain()
+        val rebuilt = service.currentIndex(blocked)!!
+        assertEquals(setOf("b.key"), rebuilt.definitionsByKey.keys)
+        assertEquals(setOf("team-a"), rebuilt.blockedNamespaces)
+
+        // team-a: no cached hits and undecidable; team-b: unchanged.
+        assertTrue(service.resolve(blocked, "a.key").isEmpty())
+        val inBlocked = service.resolveCurrentState(blocked, "a.key", activeNamespaceId = "team-a")
+        assertEquals(ConfigReferenceStatus.UNDECIDABLE, inBlocked.status)
+        assertTrue(inBlocked.hits.isEmpty())
+        assertTrue(inBlocked.visibilityBlocked)
+        assertEquals(1, service.resolve(blocked, "b.key").size)
+        assertEquals(
+            ConfigReferenceStatus.RESOLVED,
+            service.resolveCurrentState(blocked, "b.key", activeNamespaceId = "team-b").status
+        )
+    }
+
+    @Test
+    fun `cross namespace resolution never yields a hidden namespace's hit`() = runBlocking {
+        val cache = loadedCache()
+        val service = indexService()
+        cache.writeDetail(identity, "team-a", config("a.properties", "shared=1\n", tenantId = "team-a"))
+        cache.writeDetail(identity, "team-b", config("b.properties", "shared=2\n", tenantId = "team-b"))
+        service.refreshIndex(cache.snapshot(identity))
+        assertEquals(2, service.resolve(cache.snapshot(identity), "shared").size)
+
+        reportVisibility(cache, identity, observation = 10_000, namespaceId = "team-a", error = RemoteOperationError.Authorization(403))
+        val blocked = cache.snapshot(identity)
+
+        val hits = service.resolve(blocked, "shared", activeNamespaceId = "team-b")
+        assertEquals(1, hits.size)
+        assertEquals("team-b", hits.single().namespaceId)
+    }
+
+    @Test
+    fun `a fresh complete namespace index proves absence only when the namespace is visible`() = runBlocking {
+        val cache = loadedCache()
+        val service = indexService()
+        cache.writeDetail(identity, "team-a", config("a.properties", "a.key=1\n", tenantId = "team-a"))
+        cache.replaceNamespaceIndex(identity, "team-a", listOf(config("a.properties", "a.key=1\n", tenantId = "team-a")))
+        service.refreshIndex(cache.snapshot(identity))
+        assertFalse(service.isDataIdKnown(cache.snapshot(identity), "gone.properties", activeNamespaceId = "team-a"))
+
+        reportVisibility(cache, identity, observation = 10_000, namespaceId = "team-a", error = RemoteOperationError.Authorization(403))
+        val blocked = cache.snapshot(identity)
+
+        // Absence can no longer be proven: the summary view for the blocked
+        // namespace is filtered, so the data id stays "possibly present".
+        assertTrue(service.isDataIdKnown(blocked, "gone.properties", activeNamespaceId = "team-a"))
+        assertEquals(
+            ConfigReferenceStatus.UNDECIDABLE,
+            service.resolveCurrentState(blocked, "a.key", preferredDataId = "a.properties", activeNamespaceId = "team-a").status
+        )
     }
 }

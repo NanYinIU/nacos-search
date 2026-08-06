@@ -22,7 +22,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * Staleness is decided by one number: the [CacheSnapshot.version] the index was
  * built from. No modification counter, no clock comparison, and no JVM identity
- * hash standing in for a generation token.
+ * hash standing in for a generation token. Visibility is the second rule: the
+ * version advances when a block or clear lands, and an index built under one
+ * visibility state is served only for snapshots that hide the same Namespaces
+ * and identity — never as the previous index for the same identity while a
+ * rebuild is in flight (issue #126).
  */
 @Service(Service.Level.APP)
 class NacosKeyIndexService internal constructor(
@@ -54,10 +58,15 @@ class NacosKeyIndexService internal constructor(
     private var pendingRebuild: CacheSnapshot? = null
 
     /**
-     * The index for [snapshot], or null while none has been built for its access
-     * identity. Never blocks and never rebuilds inline: PSI asks from the
-     * highlighter, so a moved version only schedules a rebuild and the previous
-     * index for the same identity is served meanwhile.
+     * The index for [snapshot], or null while none has been built for its
+     * access identity. Never blocks and never rebuilds inline: PSI asks from
+     * the highlighter, so a moved version only schedules a rebuild and the
+     * previous index for the same identity is served meanwhile — but only when
+     * it was derived under the same visibility state. A block or clear that
+     * moved the version also changed what the snapshot hides, so the previous
+     * index may hold definitions the snapshot now hides; serving it would be a
+     * temporary bypass, so it is dropped and the rebuild's index is awaited
+     * (issue #126).
      */
     fun currentIndex(snapshot: CacheSnapshot): NacosKeyResolver.KeyIndex? {
         index?.let { existing ->
@@ -68,9 +77,12 @@ class NacosKeyIndexService internal constructor(
         scheduleRebuild(snapshot)
         // Re-read: the rebuild may already have landed, and if it has, serving
         // the previous index instead would be gratuitously stale. Otherwise
-        // this is still the previous index — for this identity only, so one
-        // environment's keys never stand in for another's.
-        return index?.takeIf { it.accessIdentity == snapshot.identity }
+        // this is still the previous index — only for this identity AND a
+        // compatible visibility state, so one environment's keys never stand
+        // in for another's and a hidden definition is never served.
+        return index?.takeIf {
+            it.accessIdentity == snapshot.identity && it.visibilityCompatibleWith(snapshot)
+        }
     }
 
     /** Rebuilds from [snapshot] on the calling thread. Never call this from the EDT. */

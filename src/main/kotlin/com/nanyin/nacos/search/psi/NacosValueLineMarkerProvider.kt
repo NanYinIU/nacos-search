@@ -73,7 +73,7 @@ class NacosValueLineMarkerProvider internal constructor(
         // is available for remote lookup fallback.
         if (!shouldShowMarker(project, snapshot, resolution, codeContext)) return null
 
-        val presentation = markerPresentation(resolution.status)
+        val presentation = markerPresentation(resolution)
         return LineMarkerInfo(
             anchor,
             anchor.textRange,
@@ -224,6 +224,19 @@ class NacosValueLineMarkerProvider internal constructor(
             val icon: javax.swing.Icon,
             val tooltipKey: String
         )
+
+        private fun markerPresentation(resolution: ConfigResolution): MarkerPresentation {
+            // A block hides the identity or the evaluation Namespace: the
+            // undecidable tooltip must say why, or it would claim the data id
+            // is known when it may merely be hidden (issue #126).
+            if (resolution.status == ConfigReferenceStatus.UNDECIDABLE && resolution.visibilityBlocked) {
+                return MarkerPresentation(
+                    NacosIcons.GutterConfigUnresolved,
+                    "nacosvalue.marker.tooltip.undecidable.blocked"
+                )
+            }
+            return markerPresentation(resolution.status)
+        }
 
         private fun markerPresentation(status: ConfigReferenceStatus): MarkerPresentation = when (status) {
             ConfigReferenceStatus.RESOLVED -> MarkerPresentation(
