@@ -81,12 +81,31 @@ fun interface ProtocolTransport {
     suspend fun execute(request: ProtocolRequest): ProtocolResponse
 }
 
-/** Generation-neutral protocol contract. The gateway decides which adapter receives a captured target. */
+/**
+ * Generation-neutral protocol contract. The gateway decides which adapter
+ * receives a captured target. Optional operations (history, Namespace
+ * discovery) and graded coverage (content search, discovery) are declared on
+ * [capabilities]; upper layers must not infer them from API generation
+ * (ADR-0048).
+ */
 interface ProtocolAdapter {
+    /** Graded operations this dialect actually provides. */
+    val capabilities: ProtocolCapabilities
+        get() = ProtocolCapabilities.NONE
+
     suspend fun probe(target: OperationTarget): Result<Unit>
     suspend fun listSummaries(target: OperationTarget, query: SummaryQuery): Result<SummaryPage>
     suspend fun readDetail(target: OperationTarget, coordinate: ConfigurationCoordinate): Result<NacosConfiguration?>
     suspend fun publish(target: OperationTarget, command: PublishCommand): Result<PublishOutcome>
+
+    suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage> =
+        Result.failure(RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support configuration history"))
+
+    suspend fun readHistoryDetail(target: OperationTarget, historyId: String): Result<HistoryDetail> =
+        Result.failure(RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support configuration history"))
+
+    suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> =
+        Result.failure(RemoteOperationError.CapabilityUnsupported("Protocol adapter does not support namespace discovery"))
 }
 
 sealed class RemoteOperationError(message: String, cause: Throwable? = null) : Exception(message, cause) {
@@ -121,9 +140,11 @@ class V1ProtocolAdapter(
     private val transport: ProtocolTransport,
     private val sessions: AuthenticationSessionRegistry = AuthenticationSessionRegistry(),
     private val gson: Gson = Gson()
-) : ProtocolAdapter, HistoryCapability, NamespaceDiscoveryCapability {
+) : ProtocolAdapter {
     private var readBudgetMillis: Long = DEFAULT_READ_BUDGET_MILLIS
     private var clock: () -> Long = System::currentTimeMillis
+
+    override val capabilities: ProtocolCapabilities = ProtocolCapabilities.V1
 
     internal constructor(
         transport: ProtocolTransport,

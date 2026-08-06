@@ -52,6 +52,15 @@ object NacosCredentialStore {
         }
 
     fun set(serverId: String, password: String) {
+        setDurable(serverId, password)
+    }
+
+    /**
+     * Write [password] for [serverId] and report whether the write is durable.
+     * Used by [PlatformCredentialSlotStore] so a failed stage cannot publish a
+     * pending profile revision (ADR-0035 / issue #102).
+     */
+    fun setDurable(serverId: String, password: String): Boolean =
         try {
             val attributes = attributesFor(serverId)
             SlowOperations.allowSlowOperations(
@@ -64,10 +73,11 @@ object NacosCredentialStore {
                 }
             )
             cache[serverId] = Optional.of(password)
+            true
         } catch (e: Exception) {
-            // PasswordSafe may be unavailable in some headless contexts; ignore.
+            // PasswordSafe may be unavailable in some headless contexts.
+            false
         }
-    }
 
     fun remove(serverId: String) {
         try {
@@ -81,4 +91,7 @@ object NacosCredentialStore {
             // ignore
         }
     }
+
+    /** Keys present in the in-process cache (not a PasswordSafe directory listing). */
+    fun cachedKeys(): Set<String> = cache.keys.toSet()
 }

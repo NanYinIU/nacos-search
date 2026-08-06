@@ -4,7 +4,6 @@ import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.operations.ConfigurationCoordinate
-import com.nanyin.nacos.search.services.operations.HistoryCapability
 import com.nanyin.nacos.search.services.operations.HistoryDetail
 import com.nanyin.nacos.search.services.operations.HistoryEntry
 import com.nanyin.nacos.search.services.operations.HistoryPage
@@ -12,6 +11,8 @@ import com.nanyin.nacos.search.services.operations.HistoryQuery
 import com.nanyin.nacos.search.services.operations.OperationGateway
 import com.nanyin.nacos.search.services.operations.OperationTarget
 import com.nanyin.nacos.search.services.operations.ProtocolAdapter
+import com.nanyin.nacos.search.services.operations.ProtocolCapabilities
+import com.nanyin.nacos.search.services.operations.CapabilityCoverage
 import com.nanyin.nacos.search.services.operations.PublishCommand
 import com.nanyin.nacos.search.services.operations.PublishOutcome
 import com.nanyin.nacos.search.services.operations.RemoteOperationError
@@ -169,7 +170,9 @@ class HistoryBrowserControllerTest {
         private val error: RemoteOperationError? = null,
         private val onList: (() -> Unit)? = null,
         private val blankEntryCoordinate: Boolean = false
-    ) : ProtocolAdapter, HistoryCapability {
+    ) : ProtocolAdapter {
+        override val capabilities = ProtocolCapabilities.NONE.copy(history = CapabilityCoverage.COMPLETE)
+
         override suspend fun probe(target: OperationTarget) = Result.success(Unit)
         override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery) =
             Result.success(SummaryPage(0, 1, 0, emptyList()))

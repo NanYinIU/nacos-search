@@ -25,6 +25,7 @@ import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.services.operations.ObservationSequence
 import com.nanyin.nacos.search.services.operations.OperationGateway
 import com.nanyin.nacos.search.services.operations.OperationTarget
+import com.nanyin.nacos.search.services.operations.ProtocolCapabilities
 import com.nanyin.nacos.search.services.operations.SummaryPage
 import com.nanyin.nacos.search.services.operations.SummaryQuery
 import com.nanyin.nacos.search.services.operations.V1ProtocolAdapter
@@ -108,6 +109,14 @@ class NacosApiService(
             v1Adapter = V1ProtocolAdapter(transport, probeSessions)
         )
     }
+
+    /**
+     * Graded capabilities of the dialect selected for [generation]. Null when
+     * no adapter is registered (e.g. UNKNOWN). Upper layers use this for
+     * coverage reporting instead of switching on API generation (ADR-0048).
+     */
+    fun protocolCapabilities(generation: NacosApiGeneration): ProtocolCapabilities? =
+        v1Gateway.capabilities(generation)
 
     /**
      * Builds a throwaway adapter stack for one diagnostic run.

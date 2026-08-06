@@ -12,8 +12,7 @@ import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.models.SearchCriteria
 import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.services.operations.SearchCoverage
-import com.nanyin.nacos.search.services.operations.contentSearchCapability
-import com.nanyin.nacos.search.services.operations.SearchCapability
+import com.nanyin.nacos.search.services.operations.searchCoverageFromCapability
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosOperationContext
@@ -549,7 +548,7 @@ class NacosSearchService(
                     configurations,
                     SearchSource.REMOTE,
                     confidenceFor(SearchSource.REMOTE, configurations.size, fetchedAtMillis = null),
-                    coverageFor(request, context, response.totalCount),
+                    coverageFor(request, context, response.totalCount, nacosApiService),
                     observed.observation
                 )
             )
@@ -665,7 +664,7 @@ class NacosSearchService(
                     filtered.size,
                     fetchedAtMillis = indexFetchedAtMillis
                 ),
-                coverageForLocalIndex(request, context, filtered.size, allConfigurations.size)
+                coverageForLocalIndex(request, context, filtered.size, allConfigurations.size, nacosApiService)
             )
         )
     }
@@ -756,36 +755,36 @@ class NacosSearchService(
     private fun coverageFor(
         request: SearchRequest,
         context: NacosOperationContext,
-        totalCount: Int
+        totalCount: Int,
+        nacosApiService: NacosApiService
     ): SearchCoverage? {
         if (!request.searchContent && request.query.isBlank()) return null
-        return when (contentSearchCapability(context.resolvedGeneration)) {
-            SearchCapability.SERVER_SIDE -> SearchCoverage.complete(totalCount, totalCount)
-            SearchCapability.COVERAGE_LIMITED -> SearchCoverage.partial(
-                totalCount,
-                totalCount,
-                "V1 content search is coverage-limited"
-            )
-            SearchCapability.UNKNOWN -> null
-        }
+        val contentSearch = nacosApiService.protocolCapabilities(context.resolvedGeneration)?.contentSearch
+            ?: return null
+        return searchCoverageFromCapability(
+            contentSearch,
+            searched = totalCount,
+            total = totalCount,
+            limitedReason = "content search is coverage-limited"
+        )
     }
 
     private fun coverageForLocalIndex(
         request: SearchRequest,
         context: NacosOperationContext,
         matched: Int,
-        total: Int
+        total: Int,
+        nacosApiService: NacosApiService
     ): SearchCoverage? {
         if (!request.searchContent && request.query.isBlank()) return null
-        return when (contentSearchCapability(context.resolvedGeneration)) {
-            SearchCapability.SERVER_SIDE -> SearchCoverage.complete(matched, total)
-            SearchCapability.COVERAGE_LIMITED -> SearchCoverage.partial(
-                matched,
-                total,
-                "V1 local index only"
-            )
-            SearchCapability.UNKNOWN -> SearchCoverage.localComplete(matched, total)
-        }
+        val contentSearch = nacosApiService.protocolCapabilities(context.resolvedGeneration)?.contentSearch
+            ?: return SearchCoverage.localComplete(matched, total)
+        return searchCoverageFromCapability(
+            contentSearch,
+            searched = matched,
+            total = total,
+            limitedReason = "local index only"
+        )
     }
     
     /**

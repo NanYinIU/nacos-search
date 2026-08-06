@@ -1,5 +1,8 @@
 package com.nanyin.nacos.search.services.operations
 
+import com.nanyin.nacos.search.services.operations.CapabilityCoverage
+import com.nanyin.nacos.search.services.operations.ProtocolCapabilities
+
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.settings.AuthMode
@@ -103,7 +106,9 @@ class HistoryEpochFencingTest {
         return OperationTarget(context, "public")
     }
 
-    private class SlowHistoryAdapter(private val delayMillis: Long) : ProtocolAdapter, HistoryCapability {
+    private class SlowHistoryAdapter(private val delayMillis: Long) : ProtocolAdapter {
+        override val capabilities = ProtocolCapabilities.NONE.copy(history = CapabilityCoverage.COMPLETE)
+
         override suspend fun probe(target: OperationTarget) = Result.success(Unit)
         override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery) =
             Result.success(SummaryPage(0, 1, 0, emptyList()))
@@ -125,8 +130,10 @@ class HistoryEpochFencingTest {
         }
     }
 
-    private class RecordingHistoryAdapter : ProtocolAdapter, HistoryCapability {
+    private class RecordingHistoryAdapter : ProtocolAdapter {
         var listCalls = 0
+
+        override val capabilities = ProtocolCapabilities.NONE.copy(history = CapabilityCoverage.COMPLETE)
 
         override suspend fun probe(target: OperationTarget) = Result.success(Unit)
         override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery) =
