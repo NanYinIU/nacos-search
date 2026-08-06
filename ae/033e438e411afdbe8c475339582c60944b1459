@@ -1,0 +1,26 @@
+src/main/kotlin/com/nanyin/nacos/search/models/ProfileIntent.kt
+  h_231225c3625e99 60-62
+src/main/kotlin/com/nanyin/nacos/search/settings/EnvironmentProfileStore.kt
+  h_231225c3625e99 257-384,419-451
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosConfigurable.kt
+  h_231225c3625e99 45-50,52-56,65,68-69,132-134,138,141,145-146,153,161-163,175-212,344,346,934,1047-1048,1064-1072,1074-1083,1110-1118,1155-1160,1219-1220,1222
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosSettings.kt
+  h_231225c3625e99 31-33,432-446,448-453,455-460,464-485,487-488,490-563,566-571,1182-1187,1190-1199,1201-1202,1311-1342
+src/main/kotlin/com/nanyin/nacos/search/settings/ProfileIntentClassification.kt
+  h_231225c3625e99 1-70
+src/test/kotlin/com/nanyin/nacos/search/settings/SettingsDialogCancelSafetyTest.kt
+  h_231225c3625e99 1-172
+src/test/kotlin/com/nanyin/nacos/search/settings/SettingsIntentDraftTest.kt
+  h_231225c3625e99 1-328
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ae033e438e411afdbe8c475339582c60944b1459",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
