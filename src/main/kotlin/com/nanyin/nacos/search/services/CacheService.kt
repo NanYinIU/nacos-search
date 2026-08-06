@@ -163,44 +163,92 @@ class CacheService internal constructor(
     fun visibilityReporter(): com.nanyin.nacos.search.services.visibility.VisibilityReporter = visibility
 
     /**
-     * Configuration-read visibility for [identity]. Distinct from a cache miss:
-     * a [ConfigurationVisibility.Blocked] identity still retains payloads that
-     * become readable again after a matching success.
+     * Identity-wide configuration-read visibility (authentication block only).
+     * Distinct from a cache miss: a [ConfigurationVisibility.Blocked] decision
+     * still retains payloads that become readable again after a matching success
+     * (issue #123).
      */
     fun configurationVisibility(identity: AccessIdentity): ConfigurationVisibility =
         visibility.configurationVisibility(identity)
 
     /**
+     * Configuration-read visibility for [identity] and a Namespace coordinate
+     * (identity-wide authentication or Namespace-scoped authorization). Null /
+     * blank / public are one Namespace (issue #124 / ADR-0015).
+     */
+    fun configurationVisibility(
+        identity: AccessIdentity,
+        namespaceId: String?
+    ): ConfigurationVisibility =
+        visibility.configurationVisibility(identity, namespaceId)
+
+    /**
      * A versioned, self-dating view of this cache for [identity]. Taking one is
      * O(1); its payload views are computed on first use.
      *
-     * When the identity is access-blocked, payload views are empty and
-     * [CacheSnapshot.visibility] carries the refusal. The version advances when
-     * either cache content or visibility state changes so a derived key index
-     * cannot outlive a block (issue #123).
+     * When the identity is access-blocked (identity-wide authentication), payload
+     * views are empty and [CacheSnapshot.visibility] carries the refusal. When
+     * only Namespace-scoped authorization blocks exist, payloads for those
+     * Namespaces are filtered out while other Namespaces remain visible and
+     * identity-level [CacheSnapshot.visibility] stays [ConfigurationVisibility.Visible]
+     * (issues #123 / #124). The version advances when either cache content or
+     * visibility state changes so a derived key index cannot outlive a block.
      */
     fun snapshot(identity: AccessIdentity): CacheSnapshot {
         val state = publishedState
         val genBefore = visibility.stateGeneration()
         val firstDecision = visibility.configurationVisibility(identity)
         val candidateDetails =
-            if (firstDecision is ConfigurationVisibility.Blocked) emptyMap() else state.details
+            if (firstDecision is ConfigurationVisibility.Blocked) {
+                emptyMap()
+            } else {
+                filterBlockedNamespaces(identity, state.details)
+            }
         val candidateIndexes =
-            if (firstDecision is ConfigurationVisibility.Blocked) emptyMap() else state.namespaceIndexes
+            if (firstDecision is ConfigurationVisibility.Blocked) {
+                emptyMap()
+            } else {
+                filterBlockedNamespaces(identity, state.namespaceIndexes)
+            }
         // Fail-closed re-check: a concurrent accepted block between the first
         // sample and map selection must not publish Visible + payloads (issue
         // #123 review / snapshot TOCTOU).
         val finalDecision = visibility.configurationVisibility(identity)
         val genAfter = visibility.stateGeneration()
-        val blocked = finalDecision is ConfigurationVisibility.Blocked
+        val identityBlocked = finalDecision is ConfigurationVisibility.Blocked
+        val details = if (identityBlocked) {
+            emptyMap()
+        } else {
+            // Re-filter so a concurrent Namespace block cannot race payloads in.
+            filterBlockedNamespaces(identity, candidateDetails)
+        }
+        val indexes = if (identityBlocked) {
+            emptyMap()
+        } else {
+            filterBlockedNamespaces(identity, candidateIndexes)
+        }
         return CacheSnapshot(
             version = compositeSnapshotVersion(state.version, maxOf(genBefore, genAfter)),
             asOfMillis = currentTimeMillis(),
             identity = identity,
-            details = if (blocked) emptyMap() else candidateDetails,
-            namespaceIndexes = if (blocked) emptyMap() else candidateIndexes,
+            details = details,
+            namespaceIndexes = indexes,
             visibility = finalDecision
         )
+    }
+
+    private fun <T> filterBlockedNamespaces(
+        identity: AccessIdentity,
+        entries: Map<String, T>
+    ): Map<String, T> {
+        if (entries.isEmpty()) return entries
+        // Fast path: no Namespace authorization blocks at all.
+        if (visibility.namespaceConfigReadBlocks().isEmpty()) return entries
+        return entries.filterKeys { key ->
+            val ns = CacheCoordinate.namespaceFromIdentityScopedKey(identity, key)
+                ?: return@filterKeys true
+            !visibility.isConfigurationReadBlocked(identity, ns)
+        }
     }
 
     /**
@@ -529,13 +577,14 @@ class CacheService internal constructor(
         allowStale: Boolean = false
     ): CachedListPage? {
         loadCompleted.await()
-        // Identity-wide authentication block: hide without deleting (issue #123).
-        if (visibility.isIdentityAuthBlocked(identity)) return null
+        // Identity-wide auth or Namespace-scoped config-read authz: hide without
+        // deleting (issues #123 / #124).
+        if (visibility.isConfigurationReadBlocked(identity, namespaceId)) return null
         val key = listPageKey(identity, namespaceId, requestKey)
         val entry = listPageCache[key] ?: return null
         // Re-check after the map read so a concurrent block cannot race a payload
         // into visibility (ADR-0050).
-        if (visibility.isIdentityAuthBlocked(identity)) return null
+        if (visibility.isConfigurationReadBlocked(identity, namespaceId)) return null
         if (!entry.isExpired(currentTimeMillis()) || allowStale) {
             return CachedListPage(entry.data, entry.createdAt)
         }
@@ -556,20 +605,21 @@ class CacheService internal constructor(
         allowStale: Boolean = false
     ): NacosConfiguration? {
         val key = detailKey(identity, namespaceId, dataId, group)
-        return getConfigDetailByKey(identity, key, allowStale)
+        return getConfigDetailByKey(identity, namespaceId, key, allowStale)
     }
 
     private suspend fun getConfigDetailByKey(
         identity: AccessIdentity,
+        namespaceId: String?,
         key: String,
         allowStale: Boolean
     ): NacosConfiguration? {
         // Enforce visibility before and after every async step so a concurrent
-        // block cannot race a payload into visibility (issue #123 / ADR-0050).
-        if (visibility.isIdentityAuthBlocked(identity)) return null
+        // block cannot race a payload into visibility (issues #123 / #124 / ADR-0050).
+        if (visibility.isConfigurationReadBlocked(identity, namespaceId)) return null
         val entry = detailCache[key]
         if (entry != null) {
-            if (visibility.isIdentityAuthBlocked(identity)) return null
+            if (visibility.isConfigurationReadBlocked(identity, namespaceId)) return null
             if (!entry.isExpired(currentTimeMillis()) || allowStale) {
                 return entry.data
             }
@@ -580,15 +630,15 @@ class CacheService internal constructor(
         // background load is still in flight and the entry is genuinely absent, await it
         // and re-check so the result reflects any entry loaded concurrently.
         reconstituteDetail(key)?.let { reconstituted ->
-            if (visibility.isIdentityAuthBlocked(identity)) return null
+            if (visibility.isConfigurationReadBlocked(identity, namespaceId)) return null
             if (reconstituted.isExpired(currentTimeMillis()) && !allowStale) return null
             return reconstituted.data
         }
         loadCompleted.await()
-        if (visibility.isIdentityAuthBlocked(identity)) return null
+        if (visibility.isConfigurationReadBlocked(identity, namespaceId)) return null
         val loadedLate = detailCache[key]
         if (loadedLate != null && (!loadedLate.isExpired(currentTimeMillis()) || allowStale)) {
-            if (visibility.isIdentityAuthBlocked(identity)) return null
+            if (visibility.isConfigurationReadBlocked(identity, namespaceId)) return null
             return loadedLate.data
         }
         return null
@@ -651,9 +701,9 @@ class CacheService internal constructor(
         allowStale: Boolean = false
     ): CachedNamespaceIndex? {
         loadCompleted.await()
-        if (visibility.isIdentityAuthBlocked(identity)) return null
+        if (visibility.isConfigurationReadBlocked(identity, namespaceId)) return null
         val result = getNamespaceIndexByKey(namespaceKey(identity, namespaceId), allowStale)
-        if (result != null && visibility.isIdentityAuthBlocked(identity)) return null
+        if (result != null && visibility.isConfigurationReadBlocked(identity, namespaceId)) return null
         return result
     }
 

@@ -76,5 +76,19 @@ sealed interface CacheCoordinate {
             identity.authMode.name,
             identity.principal
         ).joinToString("|")
+
+        /**
+         * Canonical Namespace embedded in an identity-scoped storage key
+         * (`identityPrefix|namespace|…` for details/list pages, or
+         * `identityPrefix|namespace` for namespace indexes). Null when the key
+         * does not belong to [identity].
+         */
+        fun namespaceFromIdentityScopedKey(identity: AccessIdentity, key: String): String? {
+            val prefix = identityPrefix(identity) + "|"
+            if (!key.startsWith(prefix)) return null
+            val rest = key.removePrefix(prefix)
+            if (rest.isEmpty()) return null
+            return rest.substringBefore('|')
+        }
     }
 }
