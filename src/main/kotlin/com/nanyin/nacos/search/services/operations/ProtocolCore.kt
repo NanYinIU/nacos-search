@@ -238,3 +238,30 @@ class ProtocolCore(
         const val DEFAULT_READ_BUDGET_MILLIS = 30_000L
     }
 }
+
+/**
+ * Generation-neutral credential checks shared by both dialects. Each dialect
+ * still validates that the target's resolved generation matches its own.
+ */
+internal fun validateOperationAuthentication(target: OperationTarget, dialectLabel: String) {
+    when (target.context.authenticationStrategy) {
+        V1AuthenticationStrategy.ANONYMOUS -> require(
+            target.context.identity.principal == "<anonymous>" && target.context.credential.secret.isBlank()
+        ) {
+            throw RemoteOperationError.Unsupported("Anonymous target must not carry credentials")
+        }
+        V1AuthenticationStrategy.NACOS_PASSWORD,
+        V1AuthenticationStrategy.HTTP_BASIC -> require(
+            target.context.identity.principal != "<anonymous>" && target.context.credential.secret.isNotBlank()
+        ) {
+            throw RemoteOperationError.Unsupported(
+                "Password and principal are required for $dialectLabel authentication"
+            )
+        }
+        V1AuthenticationStrategy.BEARER_TOKEN -> require(target.context.credential.secret.isNotBlank()) {
+            throw RemoteOperationError.Unsupported(
+                "Bearer token is required for $dialectLabel authentication"
+            )
+        }
+    }
+}

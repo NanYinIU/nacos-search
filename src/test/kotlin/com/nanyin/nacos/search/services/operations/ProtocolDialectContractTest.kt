@@ -808,6 +808,24 @@ internal abstract class ProtocolDialectContractTest {
         assertInstanceOf(RemoteOperationError.AmbiguousWriteResult::class.java, error)
     }
 
+    @Test
+    fun `budget timeout after the publish write is AmbiguousWriteResult`() = runBlocking {
+        val clock = java.util.concurrent.atomic.AtomicLong(0L)
+        val transport = ProtocolTransport {
+            // Exhaust the remaining budget while the write is already in flight.
+            clock.set(10_000L)
+            kotlinx.coroutines.delay(50)
+            ProtocolResponse(200, publishSuccessBody())
+        }
+        val error = newAdapter(
+            transport = transport,
+            budgetMillis = 20L,
+            clock = { clock.get() }
+        ).publish(anonymousTarget(), publishCommand()).exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.AmbiguousWriteResult::class.java, error)
+    }
+
     protected fun publishCommand(): PublishCommand = PublishCommand(
         dataId = "app.yaml",
         group = "DEFAULT_GROUP",
