@@ -2,6 +2,10 @@
 
 This repository is **Nacos Search**, an IntelliJ IDEA Community plugin (Kotlin + Gradle). For a full architecture and command overview, see `CLAUDE.md` and `README.md`.
 
+## Codegraph
+
+Prefer codegraph for symbol, call-path, and blast-radius retrieval. **Gate readiness first** for this workspace root (worktrees each need their own `.codegraph/`): `codegraph init` when not initialized, `codegraph sync` when it already is, then pass that root as `projectPath`. Full steps: `docs/agents/codegraph.md`.
+
 ## Cursor Cloud specific instructions
 
 ### Services / components

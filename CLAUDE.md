@@ -231,6 +231,10 @@ Two actions are registered in `plugin.xml` and added to the `ToolsMenu`:
 
 ## Agent skills
 
+### Codegraph
+
+Prefer codegraph for symbol, call-path, and blast-radius retrieval. Before the first query in a session, **gate readiness** for **this** workspace root (each git worktree has its own `.codegraph/`): `codegraph init` when missing, `codegraph sync` when present, full `codegraph index` only if the index is broken. Always pass that root as `projectPath`. See `docs/agents/codegraph.md`.
+
 ### Issue tracker
 
 Issues and PRDs are tracked in GitHub Issues; external PRs are also a triage surface. See `docs/agents/issue-tracker.md`.
