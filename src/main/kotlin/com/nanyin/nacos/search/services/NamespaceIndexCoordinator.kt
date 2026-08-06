@@ -14,7 +14,6 @@ import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.OperationContextResolver
 import com.nanyin.nacos.search.settings.NacosOperationContext
-import com.nanyin.nacos.search.services.network.NacosRequestError
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Deferred
@@ -113,9 +112,26 @@ internal suspend fun NamespaceIndexRequester.requestManualNamespaceRefresh(reque
 
 sealed interface IndexOutcome {
     data class Complete(val count: Int, val state: DatasetState) : IndexOutcome
-    data class Partial(val loaded: Int, val expected: Int, val state: DatasetState) : IndexOutcome
+    /**
+     * Summary pagination stopped after loading some rows. [stoppingCause] is
+     * the typed remote error that stopped the load when known (issue #122);
+     * null when incompleteness is inferred without a distinct page failure
+     * (for example fewer rows than totalCount with a clean last page).
+     */
+    data class Partial(
+        val loaded: Int,
+        val expected: Int,
+        val state: DatasetState,
+        val stoppingCause: Throwable? = null
+    ) : IndexOutcome
     data class Stale(val count: Int, val state: DatasetState) : IndexOutcome
-    data class Failed(val error: NacosRequestError) : IndexOutcome
+    /**
+     * Index load failed before any usable complete dataset was published.
+     * [error] keeps the original typed cause (RemoteOperationError,
+     * ConfigurationRequired, …) rather than a collapsed connection failure
+     * (issue #122).
+     */
+    data class Failed(val error: Throwable) : IndexOutcome
 }
 
 /**
@@ -220,10 +236,8 @@ class NamespaceIndexCoordinator internal constructor(
             if (result.isFailure) {
                 markNonAuthoritative(key, observation)
                 recordPsiFailure(key)
-                val error = result.exceptionOrNull()
                 return IndexOutcome.Failed(
-                    if (error is NacosRequestError) error
-                    else NacosRequestError.Connection(error ?: RuntimeException("Unknown"))
+                    result.exceptionOrNull() ?: RuntimeException("Unknown namespace index failure")
                 )
             }
 
@@ -264,24 +278,29 @@ class NamespaceIndexCoordinator internal constructor(
                     // Partial summary pagination: do not publish an authoritative
                     // index and do not seed the detail cache (issue #52). Details
                     // arrive only via navigation prefetch or explicit reads.
+                    // Keep the typed stopping cause so search stale-fallback
+                    // policy and presentation can refuse refused-access (issue #122).
                     markNonAuthoritative(key, observation)
                     IndexOutcome.Partial(
-                        loadResult.configurations.size,
-                        loadResult.expectedCount,
-                        DatasetState(DataSource.REMOTE, DataFreshness.FRESH, DatasetCompleteness.PARTIAL, now)
+                        loaded = loadResult.configurations.size,
+                        expected = loadResult.expectedCount,
+                        state = DatasetState(DataSource.REMOTE, DataFreshness.FRESH, DatasetCompleteness.PARTIAL, now),
+                        stoppingCause = loadResult.stoppingCause
                     )
                 }
                 DatasetCompleteness.FAILED -> {
                     markNonAuthoritative(key, observation)
                     recordPsiFailure(key)
-                    IndexOutcome.Failed(NacosRequestError.Connection(RuntimeException("Namespace list failed")))
+                    IndexOutcome.Failed(
+                        loadResult.stoppingCause
+                            ?: RuntimeException("Namespace list failed")
+                    )
                 }
             }
         } catch (e: Exception) {
             markNonAuthoritative(key, observation)
             recordPsiFailure(key)
-            val error = if (e is NacosRequestError) e else NacosRequestError.Connection(e)
-            IndexOutcome.Failed(error)
+            IndexOutcome.Failed(e)
         }
     }
 

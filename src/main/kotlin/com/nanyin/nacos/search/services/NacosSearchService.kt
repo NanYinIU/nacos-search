@@ -554,6 +554,14 @@ class NacosSearchService(
             )
         }
 
+        val remoteError = result.exceptionOrNull() ?: Exception("Unknown search error")
+        // ADR-0019 / issue #122: only eligible transient failures may surface
+        // same-identity cache as REFRESH_FAILED. Refused access, configuration-
+        // required, unsupported generation/capability, and cancellation return
+        // their structured non-cache outcome.
+        if (!StaleSearchFallbackPolicy.allowsStaleCache(remoteError)) {
+            return Result.failure(remoteError)
+        }
         val stale = cacheService.getListPageEntry(
             context.identity,
             request.namespace?.namespaceId,
@@ -578,7 +586,7 @@ class NacosSearchService(
             )
         }
 
-        return Result.failure(result.exceptionOrNull() ?: Exception("Unknown search error"))
+        return Result.failure(remoteError)
     }
 
     private suspend fun searchWithLocalIndex(
@@ -618,19 +626,36 @@ class NacosSearchService(
                 indexFetchedAtMillis = loadedIndex.createdAtMillis
                 loadedIndex.data
             } else {
-                val staleIndex = cacheService.getNamespaceIndexEntry(
-                    indexKey.identity,
-                    namespaceId,
-                    allowStale = true
-                )
-                if (staleIndex != null) {
-                    source = SearchSource.STALE_CACHE
-                    indexFetchedAtMillis = staleIndex.createdAtMillis
-                    staleIndex.data
+                // Typed stopping cause when the index load failed or stopped mid-
+                // pagination. IndexOutcome.Stale (front-end cutoff / cooldown) has
+                // no remote refusal and may still use retained cache.
+                val stoppingCause = when (outcome) {
+                    is IndexOutcome.Failed -> outcome.error
+                    is IndexOutcome.Partial -> outcome.stoppingCause
+                    else -> null
+                }
+                val mayUseStale = stoppingCause == null ||
+                    StaleSearchFallbackPolicy.allowsStaleCache(stoppingCause)
+                if (mayUseStale) {
+                    val staleIndex = cacheService.getNamespaceIndexEntry(
+                        indexKey.identity,
+                        namespaceId,
+                        allowStale = true
+                    )
+                    if (staleIndex != null) {
+                        source = SearchSource.STALE_CACHE
+                        indexFetchedAtMillis = staleIndex.createdAtMillis
+                        staleIndex.data
+                    } else {
+                        val error = stoppingCause
+                            ?: IllegalStateException("Namespace index load did not produce a complete dataset")
+                        return Result.failure(error)
+                    }
                 } else {
-                    val error = (outcome as? IndexOutcome.Failed)?.error
-                        ?: IllegalStateException("Namespace index load did not produce a complete dataset")
-                    return Result.failure(error)
+                    return Result.failure(
+                        stoppingCause
+                            ?: IllegalStateException("Namespace index load did not produce a complete dataset")
+                    )
                 }
             }
         }
