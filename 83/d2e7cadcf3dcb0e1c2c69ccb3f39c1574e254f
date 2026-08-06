@@ -1,0 +1,85 @@
+src/main/kotlin/com/nanyin/nacos/search/services/operations/V1ProtocolAdapter.kt
+  s_8cab446444cf5b::t_acac88e2f409c9 398-409
+src/main/kotlin/com/nanyin/nacos/search/services/operations/OperationGateway.kt
+  s_8cab446444cf5b::t_de13af7b726f05 94
+  s_8cab446444cf5b::t_80bba9074f4eb1 31-35
+  s_8cab446444cf5b::t_d883aa534fe8e2 71
+  s_8cab446444cf5b::t_6079d5e60a6929 229
+  s_8cab446444cf5b::t_2845483dfea5e7 253
+  s_8cab446444cf5b::t_0c918a1b39bc55 118,126,149,156
+  s_8cab446444cf5b::t_a426807c3bc472 52
+  s_8cab446444cf5b::t_2be95661fd4f3d 179
+  s_8cab446444cf5b::t_a87c6267cf2f20 185,192
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_8cab446444cf5b::t_66e9d8256311f7 38
+  s_8cab446444cf5b::t_e023acda3ad171 161-165
+src/main/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibilityModels.kt
+  s_8cab446444cf5b::t_55fb38d9a2064b 281-286,288
+  s_8cab446444cf5b::t_78cc997d1a74ec 106-119,121-127
+  s_8cab446444cf5b::t_aeb7b182a7b779 7,11-16
+  s_8cab446444cf5b::t_34dae0ebdbdfab 47-51,58
+  s_8cab446444cf5b::t_5af18a6817d7bd 166-237
+  s_8cab446444cf5b::t_80fde82a21e391 280,287,289-306
+src/test/kotlin/com/nanyin/nacos/search/services/operations/V1ProtocolAdapterTest.kt
+  s_8cab446444cf5b::t_39850e36f36aed 178-181
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/IdentityAuthBlockTransportIntegrationTest.kt
+  s_8cab446444cf5b::t_e7fc173ee90738 219
+  s_8cab446444cf5b::t_35db8471768681 20
+src/test/kotlin/com/nanyin/nacos/search/services/operations/OperationGatewayTest.kt
+  s_8cab446444cf5b::t_243033d9558186 233
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/OptionalCapabilityIsolationTransportIntegrationTest.kt
+  s_8cab446444cf5b::t_50f7fe42dbc9a7 1-24,26-49,53-100,103-127,132-145,150-153,155-170,173-187,193-194,198-207,212-215,217-225,229-249,251,253-270,275-280,282-295,357-376,382,384-386,390-393,395-397,399-419,421,423,425-436,438-479,481-532,540-541,546,548,552-555,557-560,562-563,566-567
+  s_8cab446444cf5b::t_2259977bda5da6 542-545,550-551,565
+  s_8cab446444cf5b::t_e972e371d45d7f 154,228
+  s_8cab446444cf5b::t_3bdd5744a56104 25,50-52,101-102,128-131,146-149,171-172,195-197,208-211,216,226-227,250,252,271-274,281,377-381,383,387-389,394,398,420,422,424,437,480,533-539,547,549,556,561,564
+  s_8cab446444cf5b::t_f4ee2c65a6f127 296-356
+  s_8cab446444cf5b::t_0d4af141ad4497 188-192
+src/main/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibility.kt
+  s_8cab446444cf5b::t_beddf299efe38b 48,50-61,76-78
+  s_8cab446444cf5b::t_5b8d252424a665 313,318,324-326,328,346-355,359-363,369,375,379-380,389,396-416
+  s_8cab446444cf5b::t_5d2c84ac45d640 287-291,295-297
+  s_8cab446444cf5b::t_6ca1f65bcd131d 8
+  s_8cab446444cf5b::t_2f5b56e7d81b73 456,478-564,582-586,588,591,594-650
+  s_8cab446444cf5b::t_e80c3cc044cf00 169-182,194-204
+  s_8cab446444cf5b::t_8719afedb1f2d7 99-101,106-108
+  s_8cab446444cf5b::t_4fa19b27d89a4c 237-243,246-251,255,262-264
+  s_32e334de7fa6c8::t_b498f7eef0dc95 205,651
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibilityCacheIntegrationTest.kt
+  s_8cab446444cf5b::t_de817d7620baaf 13
+  s_8cab446444cf5b::t_3f92c3babf82a6 67,108,173,199,213,241,255,287,305,365,415,455
+src/main/kotlin/com/nanyin/nacos/search/services/operations/ProtocolCapabilities.kt
+  s_8cab446444cf5b::t_330b1b751f01ff 4-28
+  s_8cab446444cf5b::t_96e12e7ef0e832 56-72
+  s_32e334de7fa6c8::t_8d140b49083a9f 3
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibilityTest.kt
+  s_8cab446444cf5b::t_a06e9c50803580 52,71,185,351,412,431,450,795,804,817
+  s_8cab446444cf5b::t_5bd618f5ea538b 8
+  s_8cab446444cf5b::t_3a7b8e70f03404 582-583,588,598
+  s_8cab446444cf5b::t_a323e4ddf7f542 818-843,845-879
+  s_8cab446444cf5b::t_24534dbd35d452 456-459,461
+  s_8cab446444cf5b::t_ce33e9995264dc 516-581,584-587,589-597,599-776
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "83d2e7cadcf3dcb0e1c2c69ccb3f39c1574e254f",
+  "prompts": {},
+  "sessions": {
+    "s_32e334de7fa6c8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b1c016e-ae12-40bd-8ee5-e99b51c7b6a4",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_8cab446444cf5b": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "995ba8f4-b90a-4b8d-ad33-ad59c0d7712d",
+        "model": "deepseek-v4-flash-0731"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
