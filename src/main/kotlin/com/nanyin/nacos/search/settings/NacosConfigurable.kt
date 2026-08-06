@@ -81,8 +81,12 @@ class NacosConfigurable @JvmOverloads constructor(
     private lateinit var displayNameField: JBTextField
     private lateinit var serverUrlField: JBTextField
     private lateinit var usernameField: JBTextField
+    private lateinit var usernameLabel: JLabel
+    private lateinit var usernameRow: JComponent
     private lateinit var passwordField: JPasswordField
     private lateinit var passwordLabel: JLabel
+    private lateinit var passwordRow: JComponent
+    private lateinit var secretVisibilityToggle: JButton
     private lateinit var namespaceField: JBTextField
     private lateinit var apiPolicyComboBox: JComboBox<NacosApiPolicy>
     private lateinit var authModeComboBox: JComboBox<AuthMode>
@@ -91,6 +95,7 @@ class NacosConfigurable @JvmOverloads constructor(
     private lateinit var crossNamespaceNavigationCheckBox: JCheckBox
     private lateinit var navigationDetailPrefetchCheckBox: JCheckBox
     private lateinit var writeIntentCheckBox: JCheckBox
+    private lateinit var detailFormPanel: JPanel
 
     // Test connection UI
     private lateinit var testConnectionButton: JButton
@@ -102,6 +107,8 @@ class NacosConfigurable @JvmOverloads constructor(
     // Selected server id currently displayed in the detail form
     private var selectedServerId: String? = null
     private var loadingForm = false
+    /** Strategy currently reflected by the form (for switch-effect deltas). */
+    private var displayedAuthMode: AuthMode = AuthMode.NACOS_PASSWORD
 
     private var mainPanel: JComponent? = null
     private val docListener = SimpleDocumentListener { commitDetailFormToDraft() }
@@ -354,36 +361,38 @@ class NacosConfigurable @JvmOverloads constructor(
         var password = String(passwordField.password)
         server.namespace = namespaceField.text.trim()
         server.apiPolicy = apiPolicyComboBox.selectedItem as NacosApiPolicy
-        val selectedAuth = AuthStrategyFormPolicy.normalizeStored(
-            authModeComboBox.selectedItem as AuthMode? ?: AuthMode.ANONYMOUS,
-            settings.enableTokenAuth
-        )
-        val inferred = AuthStrategyFormPolicy.onCredentialsEdited(selectedAuth, username, password)
-        if (inferred != selectedAuth) {
-            loadingForm = true
-            try {
-                authModeComboBox.selectedItem = inferred
-                applyAuthFormEffects(inferred, clearCredentials = false)
-            } finally {
-                loadingForm = false
-            }
-        }
+        // Strategy is chooser-only — never inferred from credential keystrokes.
         val authMode = AuthStrategyFormPolicy.normalizeStored(
-            authModeComboBox.selectedItem as AuthMode? ?: inferred,
+            authModeComboBox.selectedItem as AuthMode? ?: AuthMode.NACOS_PASSWORD,
             settings.enableTokenAuth
         )
-        if (authMode == AuthMode.ANONYMOUS) {
-            username = ""
-            password = ""
-            if (usernameField.text.isNotEmpty() || passwordField.password.isNotEmpty()) {
-                loadingForm = true
-                try {
-                    usernameField.text = ""
-                    passwordField.text = ""
-                } finally {
-                    loadingForm = false
+        when (authMode) {
+            AuthMode.ANONYMOUS -> {
+                username = ""
+                password = ""
+                if (usernameField.text.isNotEmpty() || passwordField.password.isNotEmpty()) {
+                    loadingForm = true
+                    try {
+                        usernameField.text = ""
+                        passwordField.text = ""
+                    } finally {
+                        loadingForm = false
+                    }
                 }
             }
+            AuthMode.BEARER_TOKEN -> {
+                // Bearer form has no username; do not persist a leftover principal.
+                username = ""
+                if (usernameField.text.isNotEmpty()) {
+                    loadingForm = true
+                    try {
+                        usernameField.text = ""
+                    } finally {
+                        loadingForm = false
+                    }
+                }
+            }
+            else -> Unit
         }
         server.username = username
         server.password = password
@@ -403,25 +412,63 @@ class NacosConfigurable @JvmOverloads constructor(
         updateApplyEnabledState()
     }
 
-    private fun applyAuthFormEffects(mode: AuthMode, clearCredentials: Boolean) {
-        val effects = AuthStrategyFormPolicy.onStrategyChosen(mode)
-        usernameField.isEnabled = effects.credentialsEnabled
-        passwordField.isEnabled = effects.credentialsEnabled
-        if (clearCredentials && effects.clearCredentials) {
+    private fun applyStrategySwitch(from: AuthMode, to: AuthMode) {
+        val effects = AuthStrategyFormPolicy.onStrategySwitch(from, to)
+        if (effects.clearUsername) {
             usernameField.text = ""
+        }
+        if (effects.clearSecret) {
             passwordField.text = ""
         }
-        when (effects.secretFieldKind) {
-            AuthStrategyFormPolicy.SecretFieldKind.TOKEN -> {
-                passwordLabel.text = NacosSearchBundle.message("settings.server.token")
-                passwordField.toolTipText = NacosSearchBundle.message("settings.server.token.tooltip")
-            }
-            AuthStrategyFormPolicy.SecretFieldKind.PASSWORD -> {
-                passwordLabel.text = NacosSearchBundle.message("settings.server.password")
-                passwordField.toolTipText = null
-            }
+        applyFieldVisibility(effects.visibility)
+        authModeComboBox.toolTipText = NacosSearchBundle.message(AuthStrategyFormPolicy.tooltipKey(to))
+    }
+
+    private fun applyFieldVisibility(visibility: AuthStrategyFormPolicy.FieldVisibility) {
+        if (::usernameLabel.isInitialized) {
+            usernameLabel.isVisible = visibility.usernameVisible
+            usernameRow.isVisible = visibility.usernameVisible
         }
-        authModeComboBox.toolTipText = NacosSearchBundle.message(AuthStrategyFormPolicy.tooltipKey(mode))
+        if (::passwordLabel.isInitialized) {
+            passwordLabel.isVisible = visibility.secretVisible
+            passwordRow.isVisible = visibility.secretVisible
+            when (visibility.secretFieldKind) {
+                AuthStrategyFormPolicy.SecretFieldKind.TOKEN -> {
+                    passwordLabel.text = NacosSearchBundle.message("settings.server.token")
+                    passwordField.toolTipText = NacosSearchBundle.message("settings.server.token.tooltip")
+                }
+                AuthStrategyFormPolicy.SecretFieldKind.PASSWORD -> {
+                    passwordLabel.text = NacosSearchBundle.message("settings.server.password")
+                    passwordField.toolTipText = null
+                }
+            }
+            refreshSecretVisibilityToggleTooltip(visibility.secretFieldKind)
+        }
+        // Always leave fields enabled when present — hide, do not disable.
+        usernameField.isEnabled = true
+        passwordField.isEnabled = true
+        if (::detailFormPanel.isInitialized) {
+            detailFormPanel.revalidate()
+            detailFormPanel.repaint()
+        }
+    }
+
+    private fun refreshSecretVisibilityToggleTooltip(
+        kind: AuthStrategyFormPolicy.SecretFieldKind =
+            AuthStrategyFormPolicy.fieldVisibility(displayedAuthMode).secretFieldKind
+    ) {
+        if (!::secretVisibilityToggle.isInitialized) return
+        val isShown = passwordField.echoChar == '\u0000'
+        secretVisibilityToggle.toolTipText = when (kind) {
+            AuthStrategyFormPolicy.SecretFieldKind.TOKEN ->
+                NacosSearchBundle.message(
+                    if (isShown) "settings.server.token.hide" else "settings.server.token.show"
+                )
+            AuthStrategyFormPolicy.SecretFieldKind.PASSWORD ->
+                NacosSearchBundle.message(
+                    if (isShown) "settings.server.password.hide" else "settings.server.password.show"
+                )
+        }
     }
 
     private fun updateFooter() {
@@ -537,8 +584,12 @@ class NacosConfigurable @JvmOverloads constructor(
             }
             addActionListener {
                 if (loadingForm) return@addActionListener
-                val mode = selectedItem as AuthMode? ?: return@addActionListener
-                applyAuthFormEffects(mode, clearCredentials = true)
+                val mode = AuthStrategyFormPolicy.normalizeStored(
+                    selectedItem as AuthMode? ?: return@addActionListener,
+                    settings.enableTokenAuth
+                )
+                applyStrategySwitch(displayedAuthMode, mode)
+                displayedAuthMode = mode
                 commitDetailFormToDraft()
             }
         }
@@ -709,6 +760,7 @@ class NacosConfigurable @JvmOverloads constructor(
     private fun buildDetailPanel(): JComponent {
         val scrollPanel = JPanel(GridBagLayout())
         scrollPanel.border = JBUI.Borders.empty(8, 12)
+        detailFormPanel = scrollPanel
 
         val gbc = GridBagConstraints().apply {
             fill = GridBagConstraints.HORIZONTAL
@@ -728,7 +780,7 @@ class NacosConfigurable @JvmOverloads constructor(
             }
         }
 
-        fun addRow(labelKey: String, field: JComponent): JLabel {
+        fun addRow(labelKey: String, field: JComponent): Pair<JLabel, JComponent> {
             gbc.gridx = 0; gbc.gridy++; gbc.weightx = 0.0; gbc.fill = GridBagConstraints.NONE
             gbc.anchor = GridBagConstraints.EAST
             val label = formLabel(labelKey)
@@ -739,7 +791,7 @@ class NacosConfigurable @JvmOverloads constructor(
             val wrapper = JPanel(BorderLayout(8, 0))
             wrapper.add(field, BorderLayout.CENTER)
             scrollPanel.add(wrapper, gbc)
-            return label
+            return label to wrapper
         }
 
         // Detail title row: selected environment + active badge.
@@ -760,7 +812,7 @@ class NacosConfigurable @JvmOverloads constructor(
         }, gbc)
         gbc.gridwidth = 1
 
-        // Fields
+        // Primary form: display name → URL → auth strategy → credentials → namespace.
         addRow("settings.server.display.name", displayNameField)
 
         // URL with inline test connection
@@ -777,8 +829,14 @@ class NacosConfigurable @JvmOverloads constructor(
         gbc.gridx = 1; gbc.gridy++; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL
         scrollPanel.add(testStatusLabel, gbc)
 
-        addRow("settings.server.username", usernameField)
-        // Password with eye toggle (show/hide) per design guide
+        // Authentication strategy on the primary form (before credentials).
+        addRow("settings.server.auth.strategy", authModeComboBox)
+
+        // Conditional credential fields (hide by strategy, not disable).
+        val usernamePair = addRow("settings.server.username", usernameField)
+        usernameLabel = usernamePair.first
+        usernameRow = usernamePair.second
+
         gbc.gridx = 0; gbc.gridy++; gbc.weightx = 0.0; gbc.fill = GridBagConstraints.NONE
         gbc.anchor = GridBagConstraints.EAST
         passwordLabel = formLabel("settings.server.password")
@@ -786,24 +844,23 @@ class NacosConfigurable @JvmOverloads constructor(
         gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.anchor = GridBagConstraints.WEST
         val pwdRow = JPanel(BorderLayout(4, 0))
         pwdRow.add(passwordField, BorderLayout.CENTER)
-        val eyeToggle = JButton(AllIcons.Actions.Preview).apply {
-            toolTipText = NacosSearchBundle.message("settings.server.password.show")
+        secretVisibilityToggle = JButton(AllIcons.Actions.Preview).apply {
             preferredSize = Dimension(28, 28)
+            toolTipText = NacosSearchBundle.message("settings.server.password.show")
             addActionListener {
                 val isShown = passwordField.echoChar == '\u0000'
                 if (isShown) {
                     passwordField.echoChar = '\u2022'
-                    toolTipText = NacosSearchBundle.message("settings.server.password.show")
-                    icon = AllIcons.Actions.Preview
                 } else {
                     passwordField.echoChar = '\u0000'
-                    toolTipText = NacosSearchBundle.message("settings.server.password.hide")
-                    icon = AllIcons.Actions.Preview
                 }
+                icon = AllIcons.Actions.Preview
+                refreshSecretVisibilityToggleTooltip()
             }
         }
-        pwdRow.add(eyeToggle, BorderLayout.EAST)
+        pwdRow.add(secretVisibilityToggle, BorderLayout.EAST)
         scrollPanel.add(pwdRow, gbc)
+        passwordRow = pwdRow
 
         // Namespace field with help text below
         addRow("settings.server.namespace", namespaceField)
@@ -835,7 +892,7 @@ class NacosConfigurable @JvmOverloads constructor(
         gbc.gridy++; gbc.weighty = 0.0
         scrollPanel.add(Box.createVerticalStrut(8), gbc)
 
-        // Advanced section (collapsible per design guide)
+        // Advanced section (collapsible) — no auth strategy here.
         gbc.gridx = 0; gbc.gridy++; gbc.gridwidth = 2; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL
         val advToggleButton = JButton(NacosSearchBundle.message("settings.advanced.parameters")).apply {
             putClientProperty("nacos.automation.id", "nacos.settings.advanced.toggle")
@@ -874,7 +931,6 @@ class NacosConfigurable @JvmOverloads constructor(
             advBody.add(wrapper, advGbc)
         }
 
-        addAdvRow("settings.server.auth.strategy", authModeComboBox)
         addAdvRow("settings.server.api.version", apiPolicyComboBox)
         addAdvRow("settings.server.write.intent", writeIntentCheckBox)
         addAdvRow("settings.server.default.group", defaultGroupField)
@@ -1012,6 +1068,8 @@ class NacosConfigurable @JvmOverloads constructor(
             if (authMode == AuthMode.ANONYMOUS) {
                 server.username = ""
                 server.password = ""
+            } else if (authMode == AuthMode.BEARER_TOKEN) {
+                server.username = ""
             }
             usernameField.text = server.username
             passwordField.text = server.password
@@ -1023,7 +1081,9 @@ class NacosConfigurable @JvmOverloads constructor(
             crossNamespaceNavigationCheckBox.isSelected = server.allowCrossNamespaceNavigation
             navigationDetailPrefetchCheckBox.isSelected = server.navigationDetailPrefetchEnabled
             writeIntentCheckBox.isSelected = server.writeIntent
-            applyAuthFormEffects(authMode, clearCredentials = false)
+            displayedAuthMode = authMode
+            applyFieldVisibility(AuthStrategyFormPolicy.fieldVisibility(authMode))
+            authModeComboBox.toolTipText = NacosSearchBundle.message(AuthStrategyFormPolicy.tooltipKey(authMode))
             updateDetailHeader(server)
         } finally {
             // Re-add listeners
@@ -1245,6 +1305,18 @@ class NacosConfigurable @JvmOverloads constructor(
         if (!server.isValidUrl()) {
             testStatusLabel.text = NacosSearchBundle.message("settings.connection.failed")
             testStatusLabel.foreground = JBColor.RED
+            testStatusLabel.toolTipText = null
+            return
+        }
+
+        val authMode = AuthStrategyFormPolicy.normalizeStored(server.authMode, settings.enableTokenAuth)
+        if (!AuthStrategyFormPolicy.credentialsReadyForConnectionTest(authMode, server.username, server.password)) {
+            // Local gate only — never hit the network with incomplete secrets.
+            testStatusLabel.text = NacosSearchBundle.message(
+                AuthStrategyFormPolicy.incompleteCredentialsMessageKey(authMode)
+            )
+            testStatusLabel.foreground = JBColor.RED
+            testStatusLabel.toolTipText = null
             return
         }
 

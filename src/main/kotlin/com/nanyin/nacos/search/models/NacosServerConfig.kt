@@ -17,7 +17,12 @@ data class NacosServerConfig(
     var namespace: String = "public",
     /** Explicit protocol choice persisted with the profile-compatible server draft. */
     var apiPolicy: NacosApiPolicy = NacosApiPolicy.AUTO,
-    /** Empty-credential profiles start anonymous (ADR 0040); credentials upgrade on apply. */
+    /**
+     * XmlSerializer deserialization default is ANONYMOUS so omitted `authMode` in
+     * existing `nacos-search.xml` keeps meaning ANONYMOUS (skip-defaults). New /
+     * seed / reset construction paths set [AuthMode.NACOS_PASSWORD] explicitly
+     * (ADR 0040) — do not flip this field default to product default.
+     */
     var authMode: AuthMode = AuthMode.ANONYMOUS,
     var defaultGroup: String = "DEFAULT_GROUP",
     var connectionTimeoutMs: Int = 30000,
@@ -64,8 +69,9 @@ data class NacosServerConfig(
     }
 
     companion object {
+        /** Product default for a newly added environment (not the XML deserialize default). */
         fun createDefault(id: String = generateId()): NacosServerConfig {
-            return NacosServerConfig(id = id)
+            return NacosServerConfig(id = id, authMode = AuthMode.NACOS_PASSWORD)
         }
 
         fun generateId(): String {

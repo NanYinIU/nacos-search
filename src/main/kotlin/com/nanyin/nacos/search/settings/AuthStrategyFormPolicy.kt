@@ -2,7 +2,10 @@ package com.nanyin.nacos.search.settings
 
 /**
  * Settings-form policy for authentication strategy progressive disclosure.
- * Inference here is apply-path UX only — never a runtime cross-strategy fallback.
+ *
+ * Strategy is **chooser-only** — never inferred from credential edits, and never
+ * a runtime cross-strategy fallback (ADR-0007 / ADR-0040). Credential fields are
+ * shown or hidden by strategy; they are not merely disabled.
  */
 object AuthStrategyFormPolicy {
 
@@ -22,41 +25,89 @@ object AuthStrategyFormPolicy {
     }
 
     /**
-     * Apply-path inference for primary-form credential edits.
-     * Only auto-upgrade: ANONYMOUS + complete credentials → NACOS_PASSWORD.
+     * Which credential fields the primary form shows for [mode].
+     * Hide unused fields entirely (do not leave them disabled in place).
      */
-    fun onCredentialsEdited(current: AuthMode, username: String, password: String): AuthMode {
-        val strategy = normalizeStored(current)
-        if (strategy != AuthMode.ANONYMOUS) return strategy
-        val principal = username.trim()
-        val secret = password
-        return if (principal.isNotEmpty() && secret.isNotEmpty()) {
-            AuthMode.NACOS_PASSWORD
-        } else {
-            AuthMode.ANONYMOUS
+    fun fieldVisibility(mode: AuthMode): FieldVisibility {
+        val strategy = normalizeStored(mode)
+        return when (strategy) {
+            AuthMode.ANONYMOUS -> FieldVisibility(
+                usernameVisible = false,
+                secretVisible = false,
+                secretFieldKind = SecretFieldKind.PASSWORD
+            )
+            AuthMode.BEARER_TOKEN -> FieldVisibility(
+                usernameVisible = false,
+                secretVisible = true,
+                secretFieldKind = SecretFieldKind.TOKEN
+            )
+            else -> FieldVisibility(
+                usernameVisible = true,
+                secretVisible = true,
+                secretFieldKind = SecretFieldKind.PASSWORD
+            )
         }
     }
 
-    fun onStrategyChosen(mode: AuthMode): FormEffects {
-        val strategy = normalizeStored(mode)
-        return when (strategy) {
-            AuthMode.ANONYMOUS -> FormEffects(
-                credentialsEnabled = false,
-                clearCredentials = true,
-                secretFieldKind = SecretFieldKind.PASSWORD
-            )
-            AuthMode.BEARER_TOKEN -> FormEffects(
-                credentialsEnabled = true,
-                clearCredentials = false,
-                secretFieldKind = SecretFieldKind.TOKEN
-            )
-            else -> FormEffects(
-                credentialsEnabled = true,
-                clearCredentials = false,
-                secretFieldKind = SecretFieldKind.PASSWORD
+    /**
+     * Effects of switching strategy in the chooser.
+     *
+     * - → ANONYMOUS: clear username + secret immediately
+     * - NACOS_PASSWORD ↔ HTTP_BASIC: preserve username + password
+     * - any transition involving BEARER_TOKEN: do not migrate secrets; clear secret;
+     *   clear username when landing on or leaving Bearer (username is not shown for Bearer)
+     * - ANONYMOUS → password family: nothing to clear (fields already empty)
+     */
+    fun onStrategySwitch(from: AuthMode, to: AuthMode): SwitchEffects {
+        val fromN = normalizeStored(from)
+        val toN = normalizeStored(to)
+        val visibility = fieldVisibility(toN)
+        if (fromN == toN) {
+            return SwitchEffects(clearUsername = false, clearSecret = false, visibility = visibility)
+        }
+        if (toN == AuthMode.ANONYMOUS) {
+            return SwitchEffects(clearUsername = true, clearSecret = true, visibility = visibility)
+        }
+        val passwordFamily = setOf(AuthMode.NACOS_PASSWORD, AuthMode.HTTP_BASIC)
+        if (fromN in passwordFamily && toN in passwordFamily) {
+            return SwitchEffects(clearUsername = false, clearSecret = false, visibility = visibility)
+        }
+        if (fromN == AuthMode.BEARER_TOKEN || toN == AuthMode.BEARER_TOKEN) {
+            return SwitchEffects(
+                clearUsername = true,
+                clearSecret = true,
+                visibility = visibility
             )
         }
+        return SwitchEffects(clearUsername = false, clearSecret = false, visibility = visibility)
     }
+
+    /**
+     * True when Test Connection may call the network for this strategy + fields.
+     * ANONYMOUS is always ready; other strategies need their required secrets.
+     * Exhaustive on [AuthMode] so a new enum constant is a compile error; legacy
+     * aliases are collapsed by [normalizeStored] before the branch is taken.
+     */
+    fun credentialsReadyForConnectionTest(mode: AuthMode, username: String, secret: String): Boolean =
+        when (val strategy = normalizeStored(mode)) {
+            AuthMode.ANONYMOUS -> true
+            AuthMode.BEARER_TOKEN -> secret.isNotEmpty()
+            AuthMode.NACOS_PASSWORD, AuthMode.HTTP_BASIC ->
+                username.trim().isNotEmpty() && secret.isNotEmpty()
+            // normalizeStored collapses these; listed for exhaustiveness only.
+            AuthMode.TOKEN, AuthMode.BASIC, AuthMode.HYBRID ->
+                error("normalizeStored must collapse legacy mode, got $strategy")
+        }
+
+    /** Bundle key for the local incomplete-credential Test Connection message. */
+    fun incompleteCredentialsMessageKey(mode: AuthMode): String =
+        when (val strategy = normalizeStored(mode)) {
+            AuthMode.BEARER_TOKEN -> "settings.test.token.incomplete"
+            AuthMode.ANONYMOUS, AuthMode.NACOS_PASSWORD, AuthMode.HTTP_BASIC ->
+                "settings.test.credentials.incomplete"
+            AuthMode.TOKEN, AuthMode.BASIC, AuthMode.HYBRID ->
+                error("normalizeStored must collapse legacy mode, got $strategy")
+        }
 
     fun labelKey(mode: AuthMode): String =
         "settings.auth.strategy.${normalizeStored(mode).name.lowercase()}.label"
@@ -69,9 +120,15 @@ object AuthStrategyFormPolicy {
         TOKEN
     }
 
-    data class FormEffects(
-        val credentialsEnabled: Boolean,
-        val clearCredentials: Boolean,
+    data class FieldVisibility(
+        val usernameVisible: Boolean,
+        val secretVisible: Boolean,
         val secretFieldKind: SecretFieldKind
+    )
+
+    data class SwitchEffects(
+        val clearUsername: Boolean,
+        val clearSecret: Boolean,
+        val visibility: FieldVisibility
     )
 }

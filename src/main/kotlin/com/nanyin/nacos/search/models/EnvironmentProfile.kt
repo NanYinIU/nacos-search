@@ -46,6 +46,12 @@ data class EnvironmentProfile(
     var displayName: String = "",
     var canonicalEndpoint: String = "",
     var apiPolicy: NacosApiPolicy = NacosApiPolicy.AUTO,
+    /**
+     * XmlSerializer deserialization default is ANONYMOUS so omitted `authMode`
+     * continues to mean ANONYMOUS for existing installs (skip-defaults / ADR 0040).
+     * New profiles receive NACOS_PASSWORD from factory seed / draft construction,
+     * not from this field default.
+     */
     var authMode: AuthMode = AuthMode.ANONYMOUS,
     var principal: String = "",
     var profileRevision: Long = 1,
