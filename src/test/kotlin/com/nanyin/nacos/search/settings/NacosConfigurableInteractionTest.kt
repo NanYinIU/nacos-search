@@ -160,13 +160,15 @@ class NacosConfigurableInteractionTest {
     }
 
     @Test
-    fun authApiAndWriteIntentLiveUnderAdvancedWithP0ChooserOnly() {
+    fun authStrategyOnPrimaryFormWithP0ChooserAndAdvancedWithoutAuth() {
         val configurable = NacosConfigurable()
         val component = configurable.createComponent()
         val advancedButton = findButtonByAutomationId(component, "nacos.settings.advanced.toggle")!!
         val authCombo = privateField<javax.swing.JComboBox<*>>(configurable, "authModeComboBox")
         val apiCombo = privateField<javax.swing.JComboBox<*>>(configurable, "apiPolicyComboBox")
         val writeIntent = findCheckBoxByAutomationId(component, "nacos.settings.writeIntent")!!
+        val usernameRow = privateField<javax.swing.JComponent>(configurable, "usernameRow")
+        val passwordRow = privateField<javax.swing.JComponent>(configurable, "passwordRow")
 
         assertEquals(4, authCombo.itemCount)
         assertEquals(
@@ -178,18 +180,145 @@ class NacosConfigurableInteractionTest {
             ),
             (0 until authCombo.itemCount).map { authCombo.getItemAt(it) }
         )
-        assertEquals(AuthMode.ANONYMOUS, authCombo.selectedItem)
+        // New / seed profiles default to Nacos password (not Anonymous).
+        assertEquals(AuthMode.NACOS_PASSWORD, authCombo.selectedItem)
+        // Password family shows credential rows (visibility is on wrappers, not fields).
+        assertTrue(usernameRow.isVisible)
+        assertTrue(passwordRow.isVisible)
 
         val advancedBody = findByAutomationId(component, "nacos.settings.advanced.body")
         assertNotNull(advancedBody)
         assertFalse(advancedBody!!.isVisible)
-        assertTrue(isAncestor(advancedBody, authCombo))
+        // Auth strategy is on the primary form, not under Advanced.
+        assertFalse(isAncestor(advancedBody, authCombo))
         assertTrue(isAncestor(advancedBody, apiCombo))
         assertTrue(isAncestor(advancedBody, writeIntent))
 
         runOnEdt { advancedButton.doClick() }
         waitForUi()
         assertTrue(advancedBody.isVisible)
+
+        // Switching to Anonymous hides credentials entirely.
+        runOnEdt {
+            authCombo.selectedItem = AuthMode.ANONYMOUS
+        }
+        waitForUi()
+        assertFalse(usernameRow.isVisible)
+        assertFalse(passwordRow.isVisible)
+
+        // Bearer shows only the token field.
+        runOnEdt {
+            authCombo.selectedItem = AuthMode.BEARER_TOKEN
+        }
+        waitForUi()
+        assertFalse(usernameRow.isVisible)
+        assertTrue(passwordRow.isVisible)
+    }
+
+    @Test
+    fun testConnectionGatesLocallyWhenPasswordCredentialsIncomplete() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val testConnectionButton = privateField<JButton>(configurable, "testConnectionButton")
+        val testStatusLabel = privateField<JLabel>(configurable, "testStatusLabel")
+        val authCombo = privateField<javax.swing.JComboBox<*>>(configurable, "authModeComboBox")
+        val serverUrlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+
+        runOnEdt {
+            serverUrlField.text = "http://localhost:8848"
+            authCombo.selectedItem = AuthMode.NACOS_PASSWORD
+            // Leave username/password empty (default seed).
+            testConnectionButton.doClick()
+        }
+        waitForUi()
+
+        assertEquals(
+            com.nanyin.nacos.search.bundle.NacosSearchBundle.message("settings.test.credentials.incomplete"),
+            testStatusLabel.text
+        )
+    }
+
+    @Test
+    fun testConnectionGatesLocallyWhenBearerTokenIncomplete() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val testConnectionButton = privateField<JButton>(configurable, "testConnectionButton")
+        val testStatusLabel = privateField<JLabel>(configurable, "testStatusLabel")
+        val authCombo = privateField<javax.swing.JComboBox<*>>(configurable, "authModeComboBox")
+        val serverUrlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+        val passwordField = privateField<javax.swing.JPasswordField>(configurable, "passwordField")
+
+        runOnEdt {
+            serverUrlField.text = "http://localhost:8848"
+            authCombo.selectedItem = AuthMode.BEARER_TOKEN
+            passwordField.text = ""
+            testConnectionButton.doClick()
+        }
+        waitForUi()
+
+        assertEquals(
+            com.nanyin.nacos.search.bundle.NacosSearchBundle.message("settings.test.token.incomplete"),
+            testStatusLabel.text
+        )
+    }
+
+    @Test
+    fun strategySwitchPreservesPasswordFamilyAndClearsOnAnonymousOrBearer() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val authCombo = privateField<javax.swing.JComboBox<*>>(configurable, "authModeComboBox")
+        val usernameField = privateField<javax.swing.JTextField>(configurable, "usernameField")
+        val passwordField = privateField<javax.swing.JPasswordField>(configurable, "passwordField")
+
+        runOnEdt {
+            authCombo.selectedItem = AuthMode.NACOS_PASSWORD
+            usernameField.text = "alice"
+            passwordField.text = "s3cret"
+        }
+        waitForUi()
+
+        // NACOS_PASSWORD → HTTP_BASIC preserves username + password in fields and draft.
+        runOnEdt {
+            authCombo.selectedItem = AuthMode.HTTP_BASIC
+        }
+        waitForUi()
+        assertEquals("alice", usernameField.text)
+        assertEquals("s3cret", String(passwordField.password))
+        val draftAfterBasic = selectedDraft(configurable)
+        assertEquals(AuthMode.HTTP_BASIC, draftAfterBasic.authMode)
+        assertEquals("alice", draftAfterBasic.username)
+        assertEquals("s3cret", draftAfterBasic.password)
+
+        // Any transition involving Bearer clears secret and username.
+        runOnEdt {
+            authCombo.selectedItem = AuthMode.BEARER_TOKEN
+        }
+        waitForUi()
+        assertEquals("", usernameField.text)
+        assertEquals("", String(passwordField.password))
+        val draftAfterBearer = selectedDraft(configurable)
+        assertEquals(AuthMode.BEARER_TOKEN, draftAfterBearer.authMode)
+        assertEquals("", draftAfterBearer.username)
+        assertEquals("", draftAfterBearer.password)
+
+        // Fill a token, then switch to ANONYMOUS → clear both.
+        runOnEdt {
+            passwordField.text = "tok-value"
+            authCombo.selectedItem = AuthMode.ANONYMOUS
+        }
+        waitForUi()
+        assertEquals("", usernameField.text)
+        assertEquals("", String(passwordField.password))
+        val draftAfterAnon = selectedDraft(configurable)
+        assertEquals(AuthMode.ANONYMOUS, draftAfterAnon.authMode)
+        assertEquals("", draftAfterAnon.username)
+        assertEquals("", draftAfterAnon.password)
+    }
+
+    private fun selectedDraft(configurable: NacosConfigurable): NacosServerConfig {
+        val draftServers = privateField<MutableList<NacosServerConfig>>(configurable, "draftServers")
+        val selectedId = privateField<String?>(configurable, "selectedServerId")
+        return draftServers.first { it.id == selectedId }
     }
 
     private fun findByAutomationId(root: Component, automationId: String): JComponent? {

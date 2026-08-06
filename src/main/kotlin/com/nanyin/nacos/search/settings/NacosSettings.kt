@@ -35,7 +35,10 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         NacosServerConfig(
             id = "s_local",
             displayName = "本地 Local",
-            serverUrl = "http://localhost:8848"
+            serverUrl = "http://localhost:8848",
+            // Product default for new installs; field default on the type stays
+            // ANONYMOUS so XmlSerializer-omitted authMode does not migrate.
+            authMode = AuthMode.NACOS_PASSWORD
         )
     )
     var activeServerId: String = "s_local"
@@ -79,7 +82,9 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     var password: String = ""
     var namespace: String = "public"
 
-    // Authentication configuration (flat legacy mirror)
+    // Authentication configuration (flat legacy mirror).
+    // Deserialization default is ANONYMOUS (XmlSerializer skip-defaults); product
+    // seed / reset force NACOS_PASSWORD via [defaultPersistedShape].
     var authMode: AuthMode = AuthMode.ANONYMOUS
     var enableTokenAuth: Boolean = true
     var tokenCacheDurationMinutes: Int = 30
@@ -150,7 +155,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     override fun noStateLoaded() {
         // Brand-new install: no XML. Seed CURRENT schema without treating the
         // factory default as a legacy upgrade (no upgrade summary, no credential
-        // staging beyond empty ANONYMOUS slots).
+        // staging beyond empty slots for the default NACOS_PASSWORD strategy).
         installFactoryDefaults()
     }
 
@@ -556,7 +561,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
      */
     fun defaultDraftRow(profileId: String, displayName: String? = null): NacosServerConfig {
         val shape = defaultPersistedShape()
-        val seed = shape.servers.firstOrNull() ?: NacosServerConfig()
+        val seed = shape.servers.firstOrNull() ?: NacosServerConfig.createDefault()
         return seed.copy(
             id = profileId,
             displayName = displayName?.takeIf { it.isNotBlank() } ?: seed.displayName
@@ -1318,7 +1323,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
          */
         fun defaultPersistedShape(): NacosSettings {
             val shape = NacosSettings()
+            // Product auth default for new installs / Reset / draft rows.
+            // Persisted type field defaults stay ANONYMOUS so XmlSerializer
+            // skip-defaults does not migrate omitted authMode (ADR 0040).
+            shape.authMode = AuthMode.NACOS_PASSWORD
+            shape.servers.forEach { it.authMode = AuthMode.NACOS_PASSWORD }
             // Field initializers already populated dual-write seed + prefs defaults.
+            // Promote seed rows (now NACOS_PASSWORD) into profiles — do not rewrite
+            // any non-empty profiles list that might appear on a future shape change.
             if (shape.profiles.isEmpty() && shape.servers.isNotEmpty()) {
                 shape.profiles = shape.servers
                     .map { EnvironmentProfile.fromLegacy(it) }

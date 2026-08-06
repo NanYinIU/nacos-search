@@ -33,7 +33,7 @@ data class ProfileIntent(
      */
     val endpoint: String = "http://localhost:8848",
     val apiPolicy: NacosApiPolicy = NacosApiPolicy.AUTO,
-    val authMode: AuthMode = AuthMode.ANONYMOUS,
+    val authMode: AuthMode = AuthMode.NACOS_PASSWORD,
     val principal: String = "",
     /**
      * Desired secret for this profile. Never stored on the profile itself;

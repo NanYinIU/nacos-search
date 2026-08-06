@@ -23,7 +23,7 @@ class NacosSettingsTest {
         assertEquals("", settings.username)
         assertEquals("", settings.password)
         assertEquals("public", settings.namespace)
-        assertEquals(AuthMode.ANONYMOUS, settings.authMode)
+        assertEquals(AuthMode.NACOS_PASSWORD, settings.authMode)
         assertTrue(settings.enableTokenAuth)
         assertEquals(30, settings.tokenCacheDurationMinutes)
         assertTrue(settings.autoTokenRefresh)
@@ -374,6 +374,62 @@ class NacosSettingsTest {
 
         assertTrue(str.contains("serverUrl"))
         assertFalse(str.contains("secret"))
+    }
+
+    @Test
+    fun `omitted authMode in XML deserializes as ANONYMOUS not product default`() {
+        // Product default for new profiles is NACOS_PASSWORD, but the XmlSerializer
+        // field default on EnvironmentProfile / NacosServerConfig must stay
+        // ANONYMOUS so existing installs whose XML omits authMode (historical
+        // skip-defaults) do not migrate to NACOS_PASSWORD (ADR 0040).
+        val state = NacosSettings()
+        state.settingsSchemaVersion = SettingsSchema.CURRENT
+        state.profileMigrationCompleted = true
+        state.credentialSlotsPublished = true
+        state.activeServerId = "s_local"
+        state.migratedDefaultProfileId = "s_local"
+        state.authMode = AuthMode.ANONYMOUS
+        state.profiles = mutableListOf(
+            com.nanyin.nacos.search.models.EnvironmentProfile(
+                id = "s_local",
+                displayName = "Local",
+                canonicalEndpoint = "http://localhost:8848",
+                authMode = AuthMode.ANONYMOUS
+            )
+        )
+        state.servers = mutableListOf(
+            NacosServerConfig(
+                id = "s_local",
+                displayName = "Local",
+                serverUrl = "http://localhost:8848",
+                authMode = AuthMode.ANONYMOUS
+            )
+        )
+
+        val element = com.intellij.util.xmlb.XmlSerializer.serialize(state)
+        // Real IDE files for ANONYMOUS-by-default installs often omit the option
+        // entirely. Strip any authMode nodes to reproduce that on-disk shape.
+        stripAuthModeOptions(element)
+        val xml = com.intellij.openapi.util.JDOMUtil.writeElement(element)
+        assertFalse(xml.contains("authMode"), "test fixture must omit authMode like legacy installs")
+
+        val restored = com.intellij.util.xmlb.XmlSerializer.deserialize(element, NacosSettings::class.java)
+        assertEquals(AuthMode.ANONYMOUS, restored.profiles.single().authMode)
+        assertEquals(AuthMode.ANONYMOUS, restored.servers.single().authMode)
+        assertEquals(AuthMode.ANONYMOUS, restored.authMode)
+
+        val loaded = NacosSettings()
+        loaded.loadState(restored)
+        assertEquals(AuthMode.ANONYMOUS, loaded.getActiveProfile()!!.authMode)
+    }
+
+    private fun stripAuthModeOptions(element: org.jdom.Element) {
+        val toRemove = element.children.filter { child ->
+            (child.name == "option" && child.getAttributeValue("name") == "authMode") ||
+                (child.name == "authMode")
+        }
+        toRemove.forEach { element.removeContent(it) }
+        element.children.toList().forEach { stripAuthModeOptions(it) }
     }
 
     @Test
