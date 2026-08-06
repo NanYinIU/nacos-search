@@ -395,8 +395,18 @@ class V1ProtocolAdapter(
 
     private fun ensureSuccess(response: ProtocolResponse): String = when (response.status) {
         in 200..299 -> response.body
-        401, 403 -> when (val failure = mapAuthenticationFailure(response)) {
-            null -> throw RemoteOperationError.Authentication(response.status)
+        401 -> when (val failure = mapAuthenticationFailure(response)) {
+            null -> throw RemoteOperationError.Authentication(401)
+            else -> throw failure
+        }
+        // 403 is a Forbidden answer, not an unauthenticated one. A recognized
+        // Nacos envelope still classifies first (permission denied / invalid
+        // token); a 403 without a recognized envelope maps to authorization,
+        // mirroring the V3 dialect (issue #125) so a publish, discovery, or
+        // history permission denial can never become an identity-wide
+        // authentication block that hides configuration-read data.
+        403 -> when (val failure = mapAuthenticationFailure(response)) {
+            null -> throw RemoteOperationError.Authorization(403)
             else -> throw failure
         }
         404 -> throw RemoteOperationError.NotFound()
