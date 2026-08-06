@@ -145,6 +145,21 @@ class ConfigListPresentationTest {
     }
 
     @Test
+    fun `invalid or expired nacos password token is blocked not empty`() {
+        // Pairs with StaleSearchFallbackPolicy refuse for the same type (#122).
+        val state = ConfigListPresentation.fromFailure(
+            RemoteOperationError.InvalidOrExpiredNacosPasswordToken(403),
+            "token expired"
+        )
+
+        assertInstanceOf(ConfigListViewState.Blocked::class.java, state)
+        assertEquals(
+            BlockedReason.REFUSED_ACCESS,
+            (state as ConfigListViewState.Blocked).reason
+        )
+    }
+
+    @Test
     fun `generic search error is failed with search title key`() {
         val state = ConfigListPresentation.fromSearchState(
             NacosSearchService.SearchState.Error(

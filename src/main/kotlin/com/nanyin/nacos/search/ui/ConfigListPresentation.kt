@@ -135,7 +135,10 @@ object ConfigListPresentation {
 
     private fun isRefusedAccess(error: Throwable?): Boolean = when (error) {
         is RemoteOperationError.Authentication,
-        is RemoteOperationError.Authorization -> true
+        is RemoteOperationError.Authorization,
+        // Terminal after auth recovery failed — still refused access, not a
+        // transient network failure (issue #122; pairs with stale-fallback policy).
+        is RemoteOperationError.InvalidOrExpiredNacosPasswordToken -> true
         else -> false
     }
 

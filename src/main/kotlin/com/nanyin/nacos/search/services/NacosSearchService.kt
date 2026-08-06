@@ -555,6 +555,9 @@ class NacosSearchService(
         }
 
         val remoteError = result.exceptionOrNull() ?: Exception("Unknown search error")
+        // Cooperative cancel must not become SearchState.Error or fall through
+        // to stale cache (issue #122 review).
+        rethrowIfCancellation(remoteError)
         // ADR-0019 / issue #122: only eligible transient failures may surface
         // same-identity cache as REFRESH_FAILED. Refused access, configuration-
         // required, unsupported generation/capability, and cancellation return
@@ -634,6 +637,9 @@ class NacosSearchService(
                     is IndexOutcome.Partial -> outcome.stoppingCause
                     else -> null
                 }
+                if (stoppingCause != null) {
+                    rethrowIfCancellation(stoppingCause)
+                }
                 val mayUseStale = stoppingCause == null ||
                     StaleSearchFallbackPolicy.allowsStaleCache(stoppingCause)
                 if (mayUseStale) {
@@ -649,13 +655,14 @@ class NacosSearchService(
                     } else {
                         val error = stoppingCause
                             ?: IllegalStateException("Namespace index load did not produce a complete dataset")
+                        rethrowIfCancellation(error)
                         return Result.failure(error)
                     }
                 } else {
-                    return Result.failure(
-                        stoppingCause
-                            ?: IllegalStateException("Namespace index load did not produce a complete dataset")
-                    )
+                    val error = stoppingCause
+                        ?: IllegalStateException("Namespace index load did not produce a complete dataset")
+                    rethrowIfCancellation(error)
+                    return Result.failure(error)
                 }
             }
         }
@@ -920,6 +927,21 @@ class NacosSearchService(
             if (!targetMatches && !contentMatches) return false
         }
         return true
+    }
+
+    /**
+     * Cooperative cancel must not be published as [SearchState.Error] or fall
+     * through to stale cache when a lower layer packed [CancellationException]
+     * into [Result.failure] (issue #122).
+     */
+    private fun rethrowIfCancellation(error: Throwable) {
+        var current: Throwable? = error
+        var depth = 0
+        while (current != null && depth < 4) {
+            if (current is CancellationException) throw current
+            current = current.cause
+            depth++
+        }
     }
 
     private fun paginate(configurations: List<NacosConfiguration>, pageNo: Int, pageSize: Int): List<NacosConfiguration> {
