@@ -28,6 +28,8 @@ import org.junit.Test
 import com.nanyin.nacos.search.services.writeDetail
 import com.nanyin.nacos.search.services.replaceNamespaceIndex
 import com.nanyin.nacos.search.services.clearAll
+import com.nanyin.nacos.search.services.operations.RemoteOperationError
+import com.nanyin.nacos.search.services.reportVisibility
 
 class NacosValueLineMarkerProviderTest {
 
@@ -504,6 +506,138 @@ class NacosValueLineMarkerProviderTest {
 
         assertNotNull(marker)
         assertEquals(NacosIcons.GutterConfig, marker?.createGutterRenderer()?.icon)
+    }
+
+    // ── Visibility-aware gutters (issue #126) ──
+
+    @Test
+    fun `blocked identity hides resolved markers and renders blocked references undecidable`() = runBlocking {
+        cacheAndRefresh(NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo\n", "properties"))
+        val baseline = markerFor(
+            """
+            class Demo {
+                @org.springframework.beans.factory.annotation.Value("${'$'}{app.name}")
+                private String name;
+            }
+            """.trimIndent()
+        )
+        assertNotNull(baseline)
+        assertEquals(NacosIcons.GutterConfig, baseline?.createGutterRenderer()?.icon)
+
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+        reportVisibility(
+            cache,
+            settings.captureAccessIdentity(),
+            observation = 10_000,
+            error = RemoteOperationError.Authentication(401)
+        )
+        refreshKeyIndex(cache, settings.captureAccessIdentity())
+
+        // Without a dataId context the marker is hidden entirely.
+        assertNull(
+            markerFor(
+                """
+                class Demo {
+                    @org.springframework.beans.factory.annotation.Value("${'$'}{app.name}")
+                    private String name;
+                }
+                """.trimIndent()
+            )
+        )
+
+        // With a declared property source the marker shows hollow and
+        // undecidable, with an access-refused tooltip.
+        val undecidable = markerFor(
+            """
+            @NacosPropertySource(dataId = "app.properties")
+            class Demo {
+                @NacosValue(value = "${'$'}{app.name}")
+                private String name;
+            }
+            """.trimIndent()
+        )
+        assertNotNull(undecidable)
+        assertEquals(NacosIcons.GutterConfigUnresolved, undecidable?.createGutterRenderer()?.icon)
+        val tooltip = ApplicationManager.getApplication().runReadAction<String?> { undecidable?.lineMarkerTooltip }
+        assertTrue("tooltip was: $tooltip", tooltip?.contains("access refused") == true)
+
+        // Reference resolution returns no cached key hits.
+        assertTrue(resolveReferenceForKey("app.name").isEmpty())
+
+        // A newer matching success restores the resolved marker over the
+        // retained payload.
+        reportVisibility(cache, settings.captureAccessIdentity(), observation = 10_001)
+        refreshKeyIndex(cache, settings.captureAccessIdentity())
+        val restored = markerFor(
+            """
+            class Demo {
+                @org.springframework.beans.factory.annotation.Value("${'$'}{app.name}")
+                private String name;
+            }
+            """.trimIndent()
+        )
+        assertNotNull(restored)
+        assertEquals(NacosIcons.GutterConfig, restored?.createGutterRenderer()?.icon)
+    }
+
+    @Test
+    fun `namespace block hides only that namespace's gutter markers`() = runBlocking {
+        setAllowCrossNamespaceNavigation(false)
+        selectProjectNamespace("team-a")
+        ApplicationManager.getApplication().getService(NamespaceService::class.java)
+            .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("team-a", "Team A"))
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+        cache.writeDetail(
+            identity = settings.captureAccessIdentity(),
+            namespaceId = "team-a",
+            configuration = NacosConfiguration(
+                "room.properties", "DEFAULT_GROUP", "team-a", "room.key=one\n", "properties"
+            ),
+            ttl = 60_000L
+        )
+        cache.writeDetail(
+            identity = settings.captureAccessIdentity(),
+            namespaceId = "team-b",
+            configuration = NacosConfiguration(
+                "room.properties", "DEFAULT_GROUP", "team-b", "room.key=two\n", "properties"
+            ),
+            ttl = 60_000L
+        )
+        refreshKeyIndex(cache, settings.captureAccessIdentity())
+        val javaText = """
+            @NacosPropertySource(dataId = "room.properties")
+            class Demo {
+                @NacosValue(value = "${'$'}{room.key}")
+                private String value;
+            }
+        """.trimIndent()
+        assertEquals(NacosIcons.GutterConfig, markerFor(javaText)?.createGutterRenderer()?.icon)
+
+        reportVisibility(
+            cache,
+            settings.captureAccessIdentity(),
+            observation = 10_000,
+            namespaceId = "team-a",
+            error = RemoteOperationError.Authorization(403)
+        )
+        refreshKeyIndex(cache, settings.captureAccessIdentity())
+
+        // Active namespace blocked: hollow undecidable marker, access-refused tooltip.
+        val blockedMarker = markerFor(javaText)
+        assertNotNull(blockedMarker)
+        assertEquals(NacosIcons.GutterConfigUnresolved, blockedMarker?.createGutterRenderer()?.icon)
+        val blockedTooltip = ApplicationManager.getApplication().runReadAction<String?> { blockedMarker?.lineMarkerTooltip }
+        assertTrue("tooltip was: $blockedTooltip", blockedTooltip?.contains("access refused") == true)
+
+        // The visible namespace keeps its resolved marker.
+        selectProjectNamespace("team-b")
+        ApplicationManager.getApplication().getService(NamespaceService::class.java)
+            .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("team-b", "Team B"))
+        val visibleMarker = markerFor(javaText)
+        assertNotNull(visibleMarker)
+        assertEquals(NacosIcons.GutterConfig, visibleMarker?.createGutterRenderer()?.icon)
     }
 
     private fun cacheKeyInOtherNamespaceForActive(activeNamespaceId: String, allowCrossNamespace: Boolean) {

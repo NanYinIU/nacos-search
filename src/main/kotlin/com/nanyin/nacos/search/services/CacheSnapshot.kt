@@ -28,7 +28,9 @@ import com.nanyin.nacos.search.services.visibility.ConfigurationVisibility
  * distinguish undecidable from unresolved (#126 consumes this hook). Under a
  * Namespace-scoped configuration-read authorization block only that Namespace's
  * payloads are absent from the views; [visibility] stays [Visible] at the
- * identity level (issue #124).
+ * identity level while [blockedNamespaces] names the hidden coordinates, so a
+ * derivation records the visibility state it was built under and never serves
+ * a snapshot that hides different Namespaces (#126 / issue #124).
  *
  * Taking one is O(1): the payload views below are computed lazily, so the PSI
  * hot path can take a snapshot per decision and only pay for a scan when it
@@ -40,7 +42,17 @@ class CacheSnapshot internal constructor(
     val identity: AccessIdentity,
     private val details: Map<String, CacheService.CacheEntry<NacosConfiguration>>,
     private val namespaceIndexes: Map<String, NamespaceIndexRecord>,
-    val visibility: ConfigurationVisibility = ConfigurationVisibility.Visible
+    val visibility: ConfigurationVisibility = ConfigurationVisibility.Visible,
+    /**
+     * Canonical Namespace ids hidden for [identity] by Namespace-scoped
+     * configuration-read authorization blocks at the decision instant (issue
+     * #126). Empty when nothing is blocked, and also when [isAccessBlocked]
+     * hides the whole identity — the identity-wide gate dominates, so the set
+     * carries no additional information there. Payload views below are filtered
+     * to the complement of this set, and a derived key index records it so it
+     * can refuse to serve a snapshot with a different hiding state.
+     */
+    val blockedNamespaces: Set<String> = emptySet()
 ) {
     /**
      * True when configuration-read data for the whole [identity] is hidden by an

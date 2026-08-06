@@ -7,6 +7,7 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CacheAgeCalculator
 import com.nanyin.nacos.search.models.ConfigListResponse
+import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.operations.ObservationHighWater
 import com.nanyin.nacos.search.services.visibility.AccessVisibility
 import com.nanyin.nacos.search.services.visibility.ConfigurationVisibility
@@ -193,22 +194,35 @@ class CacheService internal constructor(
      * identity-level [CacheSnapshot.visibility] stays [ConfigurationVisibility.Visible]
      * (issues #123 / #124). The version advances when either cache content or
      * visibility state changes so a derived key index cannot outlive a block.
+     *
+     * [CacheSnapshot.blockedNamespaces] carries the canonical Namespace ids
+     * hidden at this decision instant, so a derivation can record the exact
+     * visibility state it was built under and refuse to serve a snapshot that
+     * hides different Namespaces (issue #126). Each filter pass extracts it
+     * afresh, so a block that lands mid-snapshot both hides its payloads and
+     * stamps the snapshot with the same final decision.
      */
     fun snapshot(identity: AccessIdentity): CacheSnapshot {
         val state = publishedState
         val genBefore = visibility.stateGeneration()
         val firstDecision = visibility.configurationVisibility(identity)
+        val firstBlockedNamespaces =
+            if (firstDecision is ConfigurationVisibility.Blocked) {
+                emptySet()
+            } else {
+                visibility.configurationReadBlockedNamespaces(identity)
+            }
         val candidateDetails =
             if (firstDecision is ConfigurationVisibility.Blocked) {
                 emptyMap()
             } else {
-                filterBlockedNamespaces(identity, state.details)
+                filterBlockedNamespaces(identity, state.details, firstBlockedNamespaces)
             }
         val candidateIndexes =
             if (firstDecision is ConfigurationVisibility.Blocked) {
                 emptyMap()
             } else {
-                filterBlockedNamespaces(identity, state.namespaceIndexes)
+                filterBlockedNamespaces(identity, state.namespaceIndexes, firstBlockedNamespaces)
             }
         // Fail-closed re-check: a concurrent accepted block between the first
         // sample and map selection must not publish Visible + payloads (issue
@@ -216,16 +230,24 @@ class CacheService internal constructor(
         val finalDecision = visibility.configurationVisibility(identity)
         val genAfter = visibility.stateGeneration()
         val identityBlocked = finalDecision is ConfigurationVisibility.Blocked
+        val blockedNamespaces =
+            if (identityBlocked) {
+                emptySet()
+            } else {
+                // Fresh extraction: a Namespace block that landed between the
+                // passes must hide its payloads and stamp this snapshot.
+                visibility.configurationReadBlockedNamespaces(identity)
+            }
         val details = if (identityBlocked) {
             emptyMap()
         } else {
             // Re-filter so a concurrent Namespace block cannot race payloads in.
-            filterBlockedNamespaces(identity, candidateDetails)
+            filterBlockedNamespaces(identity, candidateDetails, blockedNamespaces)
         }
         val indexes = if (identityBlocked) {
             emptyMap()
         } else {
-            filterBlockedNamespaces(identity, candidateIndexes)
+            filterBlockedNamespaces(identity, candidateIndexes, blockedNamespaces)
         }
         return CacheSnapshot(
             version = compositeSnapshotVersion(state.version, maxOf(genBefore, genAfter)),
@@ -233,21 +255,21 @@ class CacheService internal constructor(
             identity = identity,
             details = details,
             namespaceIndexes = indexes,
-            visibility = finalDecision
+            visibility = finalDecision,
+            blockedNamespaces = blockedNamespaces
         )
     }
 
     private fun <T> filterBlockedNamespaces(
         identity: AccessIdentity,
-        entries: Map<String, T>
+        entries: Map<String, T>,
+        blockedNamespaces: Set<String>
     ): Map<String, T> {
-        if (entries.isEmpty()) return entries
-        // Fast path: no Namespace authorization blocks at all.
-        if (visibility.namespaceConfigReadBlocks().isEmpty()) return entries
+        if (entries.isEmpty() || blockedNamespaces.isEmpty()) return entries
         return entries.filterKeys { key ->
             val ns = CacheCoordinate.namespaceFromIdentityScopedKey(identity, key)
                 ?: return@filterKeys true
-            !visibility.isConfigurationReadBlocked(identity, ns)
+            NamespaceInfo.canonicalId(ns) !in blockedNamespaces
         }
     }
 

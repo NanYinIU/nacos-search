@@ -5,6 +5,10 @@ import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.testIdentity
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.InMemoryCacheStore
+import com.nanyin.nacos.search.services.operations.RemoteOperationError
+import com.nanyin.nacos.search.services.visibility.CompletedObservation
+import com.nanyin.nacos.search.services.visibility.ObservationOutcome
+import com.nanyin.nacos.search.services.visibility.VisibilityOperationClass
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -469,5 +473,106 @@ class NacosKeyResolverTest {
             "jdbc:test",
             indexService.resolve(cache.snapshot(identity), "db.url").single().location.value
         )
+    }
+
+    // ── Visibility-aware resolution (issue #126) ──
+
+    @Test
+    fun `blocked identity yields no hits and reports references undecidable`() = runBlocking {
+        seedConfigurations(
+            listOf(cfg("app.properties", "DEFAULT_GROUP", null, "timeout=3000\n", "properties"))
+        )
+        assertTrue(indexService.resolve(cache.snapshot(identity), "timeout").isNotEmpty())
+
+        cache.visibilityReporter().reportCompleted(
+            CompletedObservation(
+                observation = 10_000,
+                identity = identity,
+                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.Authentication(401))
+            )
+        )
+        val blocked = cache.snapshot(identity)
+        assertTrue(blocked.isAccessBlocked)
+
+        assertTrue(indexService.resolve(blocked, "timeout").isEmpty())
+        val resolution = indexService.resolveCurrentState(blocked, "timeout")
+        assertEquals(ConfigReferenceStatus.UNDECIDABLE, resolution.status)
+        assertTrue(resolution.hits.isEmpty())
+        assertTrue(resolution.visibilityBlocked)
+        // Absence cannot be proven either: the data id stays "possibly present".
+        assertTrue(indexService.isDataIdKnown(blocked, "app.properties"))
+    }
+
+    @Test
+    fun `namespace block hides only that namespace from resolution`() = runBlocking {
+        seedConfigurations(
+            listOf(
+                cfg("a.properties", "DEFAULT_GROUP", "team-a", "a.only=one\n", "properties"),
+                cfg("b.properties", "DEFAULT_GROUP", "team-b", "b.only=two\n", "properties"),
+                cfg("shared-a.properties", "DEFAULT_GROUP", "team-a", "shared=blocked\n", "properties"),
+                cfg("shared-b.properties", "DEFAULT_GROUP", "team-b", "shared=visible\n", "properties")
+            )
+        )
+        cache.visibilityReporter().reportCompleted(
+            CompletedObservation(
+                observation = 10_000,
+                identity = identity,
+                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                namespaceId = "team-a",
+                outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.Authorization(403))
+            )
+        )
+        val blocked = cache.snapshot(identity)
+        assertFalse(blocked.isAccessBlocked)
+        assertEquals(setOf("team-a"), blocked.blockedNamespaces)
+
+        // Only team-a's definitions are hidden.
+        assertTrue(indexService.resolve(blocked, "a.only").isEmpty())
+        assertEquals(1, indexService.resolve(blocked, "b.only").size)
+
+        // In the blocked namespace the reference is undecidable, never a confident miss.
+        val inBlocked = indexService.resolveCurrentState(blocked, "a.only", activeNamespaceId = "team-a")
+        assertEquals(ConfigReferenceStatus.UNDECIDABLE, inBlocked.status)
+        assertTrue(inBlocked.hits.isEmpty())
+        assertTrue(inBlocked.visibilityBlocked)
+
+        // The visible namespace keeps its normal resolution.
+        assertEquals(
+            ConfigReferenceStatus.RESOLVED,
+            indexService.resolveCurrentState(blocked, "b.only", activeNamespaceId = "team-b").status
+        )
+
+        // Cross-namespace resolution serves the visible hit, never the hidden one.
+        val shared = indexService.resolve(blocked, "shared", activeNamespaceId = "team-b")
+        assertEquals(1, shared.size)
+        assertEquals("team-b", shared.single().namespaceId)
+    }
+
+    @Test
+    fun `an index derived under a different visibility state serves nothing`() = runBlocking {
+        seedConfigurations(
+            listOf(cfg("app.properties", "DEFAULT_GROUP", null, "timeout=3000\n", "properties"))
+        )
+        val visibleSnapshot = cache.snapshot(identity)
+        val staleIndex = indexService.currentIndex(visibleSnapshot)!!
+
+        cache.visibilityReporter().reportCompleted(
+            CompletedObservation(
+                observation = 10_000,
+                identity = identity,
+                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.Authentication(401))
+            )
+        )
+        val blockedSnapshot = cache.snapshot(identity)
+        assertTrue(blockedSnapshot.isAccessBlocked)
+
+        // The resolver itself refuses the mismatched pair: no hit from the
+        // stale index, and the decision is undecidable, not unresolved.
+        assertTrue(NacosKeyResolver.resolve("timeout", staleIndex, blockedSnapshot).isEmpty())
+        val resolution = NacosKeyResolver.resolveCurrentState("timeout", staleIndex, blockedSnapshot)
+        assertEquals(ConfigReferenceStatus.UNDECIDABLE, resolution.status)
+        assertTrue(resolution.hits.isEmpty())
     }
 }

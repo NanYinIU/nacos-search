@@ -179,8 +179,11 @@ internal object VisibilityScopes {
     fun identityAuthKey(record: AccessVisibilityRecord): String =
         identityAuthKey(record.toAccessIdentity())
 
+    fun configurationReadKeyPrefix(identity: AccessIdentity): String =
+        "vis|cfgread|${CacheCoordinate.identityPrefix(identity)}|"
+
     fun configurationReadKey(identity: AccessIdentity, namespaceId: String): String =
-        "vis|cfgread|${CacheCoordinate.identityPrefix(identity)}|${NamespaceInfo.canonicalId(namespaceId)}"
+        configurationReadKeyPrefix(identity) + NamespaceInfo.canonicalId(namespaceId)
 
     fun configurationReadScope(identity: AccessIdentity, namespaceId: String): String =
         configurationReadKey(identity, namespaceId)

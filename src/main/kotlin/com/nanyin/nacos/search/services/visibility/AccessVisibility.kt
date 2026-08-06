@@ -150,6 +150,26 @@ internal class AccessVisibility(
         namespaceConfigReadBlocks[VisibilityScopes.configurationReadKey(identity, namespaceId)]
 
     /**
+     * Canonical Namespace ids whose configuration reads are authorization-
+     * blocked for [identity]. Empty when the identity-wide authentication gate
+     * hides everything (that decision lives on [configurationVisibility]) or
+     * nothing is blocked. Cheap: one pass over the in-memory block map, which
+     * is bounded by identities × refused Namespaces.
+     *
+     * Consumed by [com.nanyin.nacos.search.services.CacheService.snapshot] so
+     * a derived key index can record the visibility state it was built under
+     * and refuse to serve a snapshot that hides different Namespaces
+     * (issue #126).
+     */
+    fun configurationReadBlockedNamespaces(identity: AccessIdentity): Set<String> {
+        if (namespaceConfigReadBlocks.isEmpty()) return emptySet()
+        val prefix = VisibilityScopes.configurationReadKeyPrefix(identity)
+        return namespaceConfigReadBlocks.keys.asSequence()
+            .filter { it.startsWith(prefix) }
+            .mapTo(linkedSetOf()) { it.removePrefix(prefix) }
+    }
+
+    /**
      * Snapshot of every identity-wide auth block currently held in memory.
      * For tests and lifecycle enumeration; not a public API for UI.
      */
