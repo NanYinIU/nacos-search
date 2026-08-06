@@ -19,6 +19,16 @@ data class NacosProjectSessionState(
     var selectedProfileId: String = "",
     var namespaceId: String = "public",
     var selectionWasExplicit: Boolean = false,
+    /**
+     * Schema version for which the dismissible upgrade summary was already
+     * shown in this project. 0 means never shown. Replaces the old boolean so
+     * a later schema bump can present a new summary once (issue #104).
+     */
+    var upgradeSummaryShownForSchemaVersion: Int = 0,
+    /**
+     * Legacy boolean retained for one-release XML compatibility. Mapped into
+     * [upgradeSummaryShownForSchemaVersion] on load when the version field is 0.
+     */
     var upgradeSummaryShown: Boolean = false
 ) {
     fun seedIfNew(defaults: LegacyMigrationResult) {
@@ -66,6 +76,12 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
 
     override fun loadState(state: NacosProjectSessionState) {
         XmlSerializerUtil.copyBean(state, this.sessionState)
+        // Promote legacy boolean: shown once under the previous boolean model
+        // counts as shown for schema v1 so we do not re-notify on upgrade to
+        // the versioned field alone.
+        if (sessionState.upgradeSummaryShownForSchemaVersion == 0 && sessionState.upgradeSummaryShown) {
+            sessionState.upgradeSummaryShownForSchemaVersion = 1
+        }
     }
 
     fun seedIfNew(defaults: LegacyMigrationResult) = sessionState.seedIfNew(defaults)
@@ -76,7 +92,12 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
     }
 
     fun select(profileId: String, namespace: String) = sessionState.select(profileId, namespace)
-    fun markUpgradeSummaryShown() { sessionState.upgradeSummaryShown = true }
+
+    fun markUpgradeSummaryShown(schemaVersion: Int = SettingsSchema.CURRENT) {
+        sessionState.upgradeSummaryShownForSchemaVersion =
+            maxOf(sessionState.upgradeSummaryShownForSchemaVersion, schemaVersion)
+        sessionState.upgradeSummaryShown = schemaVersion > 0
+    }
 }
 
 /**

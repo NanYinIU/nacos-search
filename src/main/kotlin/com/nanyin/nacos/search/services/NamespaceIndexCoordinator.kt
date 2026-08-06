@@ -83,7 +83,8 @@ internal fun NacosSettings.captureAccessIdentity(
     profileId: String? = null,
     locator: ResolvedGenerationLocator = ResolvedGenerationLocator.forSelectedProfile()
 ): AccessIdentity {
-    val selectedProfileId = profileId?.trim()?.takeUnless { it.isNullOrBlank() } ?: activeServerId
+    val selectedProfileId = profileId?.trim()?.takeUnless { it.isNullOrBlank() }
+        ?: resolveDefaultProfileId()
     val profile = getProfile(selectedProfileId)
         ?: return AccessIdentity.ofProfile(
             profileId = "<configuration-required>",

@@ -6,53 +6,61 @@ import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosApiPolicy
-import java.nio.charset.StandardCharsets
-import java.util.UUID
 
 // Credential-slot storage lives in CredentialSlotStore.kt (issue #102).
-// Migration still accepts the narrow CredentialSlots compatibility surface.
+// Versioned settings migration lives in SettingsMigration.kt (issue #104).
 
-data class LegacyMigrationResult(
-    val profiles: List<EnvironmentProfile>,
-    val defaultProfileId: String,
-    val defaultNamespaceId: String
-)
-
-/** Converts legacy app-wide connection state once without guessing cache ownership. */
+/**
+ * Compatibility wrapper over [SettingsMigrator] for older tests that still
+ * drive migration through the narrow [CredentialSlots] surface.
+ */
 class LegacyProfileMigrator(private val credentials: CredentialSlots = PasswordSafeCredentialSlots) {
     fun migrate(
         legacyServers: List<NacosServerConfig>,
         legacyActiveServerId: String,
         legacyNamespaceId: String
     ): LegacyMigrationResult {
-        val usedIds = mutableSetOf<String>()
-        val profiles = legacyServers
-            .ifEmpty { listOf(NacosServerConfig(id = "default")) }
-            .mapIndexed { index, server ->
-                val profileId = uniqueProfileId(server, index, usedIds)
-                val normalizedServer = server.copy(id = profileId)
-                val profile = EnvironmentProfile.fromLegacy(normalizedServer)
-                val legacySecret = credentials.get(server.id).orEmpty().ifEmpty { server.password }
-                credentials.put(profile.credentialSlotId, legacySecret)
-                profile
-            }
-        val selected = profiles.firstOrNull { it.id == legacyActiveServerId } ?: profiles.first()
-        return LegacyMigrationResult(
-            profiles = profiles,
-            defaultProfileId = selected.id,
-            defaultNamespaceId = legacyNamespaceId.trim().ifBlank { "public" }
-        )
-    }
+        val slots = object : CredentialSlotStore {
+            override fun read(profileId: String, accessRevision: Long): String? =
+                credentials[CredentialSlotStore.slotKey(profileId, accessRevision)]
 
-    private fun uniqueProfileId(server: NacosServerConfig, index: Int, usedIds: MutableSet<String>): String {
-        val requested = server.id.trim()
-        val source = listOf(index, server.displayName, server.serverUrl, server.username, server.authMode.name)
-            .joinToString("\u0000")
-        val deterministicSuffix = UUID.nameUUIDFromBytes(source.toByteArray(StandardCharsets.UTF_8)).toString()
-        val base = requested.ifBlank { "legacy-$deterministicSuffix" }
-        val unique = if (usedIds.add(base)) base else "$base-$deterministicSuffix"
-        usedIds.add(unique)
-        return unique
+            override fun stage(
+                profileId: String,
+                accessRevision: Long,
+                secret: String
+            ): CredentialStageResult {
+                val key = CredentialSlotStore.slotKey(profileId, accessRevision)
+                credentials.put(key, secret)
+                return CredentialStageResult.Success
+            }
+
+            override fun removeAllForProfile(profileId: String) {
+                // Compatibility surface has no enumerate-by-prefix; no-op.
+            }
+        }
+        val report = SettingsMigrator(
+            credentialSlots = slots,
+            legacySecretByKey = { key -> credentials[key] }
+        ).migrate(
+            SettingsMigrationInput(
+                schemaVersion = 0,
+                servers = legacyServers,
+                activeServerId = legacyActiveServerId,
+                flatNamespace = legacyNamespaceId,
+                profiles = emptyList(),
+                preferences = emptyList(),
+                defaultProfileId = legacyActiveServerId,
+                defaultNamespaceId = legacyNamespaceId
+            )
+        )
+        return LegacyMigrationResult(
+            profiles = report.profiles,
+            defaultProfileId = report.defaultProfileId,
+            defaultNamespaceId = report.defaultNamespaceId,
+            migrationActions = report.actions,
+            fromSchemaVersion = report.fromSchemaVersion,
+            toSchemaVersion = report.toSchemaVersion
+        )
     }
 }
 

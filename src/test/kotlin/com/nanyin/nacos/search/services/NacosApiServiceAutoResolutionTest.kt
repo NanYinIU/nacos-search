@@ -2,6 +2,7 @@ package com.nanyin.nacos.search.services
 
 import com.google.gson.Gson
 import com.intellij.testFramework.junit5.TestApplication
+import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.sun.net.httpserver.HttpExchange
@@ -79,10 +80,17 @@ class NacosApiServiceAutoResolutionTest {
     fun setUp() {
         settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         settings.resetToDefaults()
-        settings.serverUrl = "http://localhost:${server.address.port}"
-        settings.username = ""
-        settings.password = ""
-        settings.authMode = AuthMode.ANONYMOUS
+        settings.applyServers(
+            listOf(
+                NacosServerConfig(
+                    id = "s_local",
+                    displayName = "Test",
+                    serverUrl = "http://localhost:${server.address.port}",
+                    authMode = AuthMode.ANONYMOUS
+                )
+            ),
+            "s_local"
+        )
         // AUTO is the default; the plugin must resolve V3 on its own.
         kotlinx.coroutines.runBlocking { ApplicationManager.getApplication().getService(com.nanyin.nacos.search.services.CacheService::class.java).clearAll() }
         apiService = NacosApiService()

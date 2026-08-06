@@ -23,6 +23,7 @@ import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.operations.Observed
+import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosSettings
@@ -39,12 +40,21 @@ class NacosSearchServiceTest {
 
     @BeforeEach
     fun resetSharedSettingsToAnonymousDefaults() {
-        // Product defaults are NACOS_PASSWORD; these mocked search paths still exercise
-        // anonymous credential-less stubs, so force ANONYMOUS after reset.
+        // Publish an ANONYMOUS profile through the write path so capture is pure
+        // and does not read flat-field mirrors (issue #104).
         ApplicationManager.getApplication().getService(NacosSettings::class.java).apply {
             resetToDefaults()
-            authMode = AuthMode.ANONYMOUS
-            getActiveServer().authMode = AuthMode.ANONYMOUS
+            applyServers(
+                listOf(
+                    NacosServerConfig(
+                        id = "s_local",
+                        displayName = "本地 Local",
+                        serverUrl = "http://localhost:8848",
+                        authMode = AuthMode.ANONYMOUS
+                    )
+                ),
+                "s_local"
+            )
         }
     }
 
@@ -138,7 +148,18 @@ class NacosSearchServiceTest {
         val original = settings.copy()
         try {
             settings.resetToDefaults()
-            settings.serverUrl = "https://nacos.example/not-an-origin"
+            // Invalid origin (path present) — must fail closed via profile capture.
+            settings.applyServers(
+                listOf(
+                    NacosServerConfig(
+                        id = "s_local",
+                        displayName = "Bad",
+                        serverUrl = "https://nacos.example/not-an-origin",
+                        authMode = AuthMode.ANONYMOUS
+                    )
+                ),
+                "s_local"
+            )
             val api = mock<NacosApiService>()
             val service = NacosSearchService()
 
@@ -279,17 +300,27 @@ class NacosSearchServiceTest {
         // must not participate in cache keys (or any other identity-derived key).
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         settings.resetToDefaults()
-        settings.serverUrl = "https://nacos.example"
-        settings.username = "alice"
-        settings.password = "s3cret-one"
-        settings.authMode = AuthMode.NACOS_PASSWORD
-        settings.getActiveServer().apply {
-            serverUrl = "https://nacos.example"
-            username = "alice"
-            password = "s3cret-one"
-            authMode = AuthMode.NACOS_PASSWORD
-        }
-        val context = settings.captureOperationContext().getOrThrow()
+        val slots = com.nanyin.nacos.search.settings.InMemoryCredentialSlotStore()
+        settings.applyProfileIntents(
+            intents = listOf(
+                com.nanyin.nacos.search.models.ProfileIntent(
+                    profileId = "s_local",
+                    displayName = "Alice",
+                    endpoint = "https://nacos.example",
+                    authMode = AuthMode.NACOS_PASSWORD,
+                    principal = "alice",
+                    secret = "s3cret-one"
+                )
+            ),
+            newActiveId = "s_local",
+            credentialSlots = slots
+        )
+        val profile = requireNotNull(settings.getProfile("s_local"))
+        val context = com.nanyin.nacos.search.settings.OperationContextResolver.resolve(
+            profile,
+            slots.read(profile.id, profile.credentialSlotVersion)
+        ).getOrThrow()
+        assertEquals("s3cret-one", context.credential.secret)
         val request = NacosSearchService.SearchRequest(
             dataId = "app.yaml",
             namespace = NamespaceInfo.createPublicNamespace(),
@@ -300,6 +331,7 @@ class NacosSearchServiceTest {
         assertFalse(cacheKey.contains("s3cret-one"))
         assertFalse(cacheKey.contains(context.credential.secret))
         assertEquals(context, request.operationContext)
+        // CredentialSnapshot masks the secret in toString; the raw value must not leak.
         assertFalse(request.toString().contains("s3cret-one"))
     }
 

@@ -44,6 +44,7 @@ class NacosValueLineMarkerProviderTest {
             namespaceId = "public"
             selectionWasExplicit = false
             upgradeSummaryShown = false
+            upgradeSummaryShownForSchemaVersion = 0
         }
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
@@ -193,9 +194,7 @@ class NacosValueLineMarkerProviderTest {
             serverUrl = "http://qa.example:8848"
         )
         val local = settings.getActiveServer()
-        settings.servers = mutableListOf(local, qa)
-        settings.profileMigrationCompleted = false
-        settings.migrationDefaults()
+        settings.applyServers(listOf(local, qa), local.id)
 
         val project = ProjectManager.getInstance().defaultProject
         project.getService(NacosProjectSession::class.java).select("qa", "public")
