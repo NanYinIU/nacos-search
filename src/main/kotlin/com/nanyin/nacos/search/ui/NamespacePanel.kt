@@ -188,7 +188,7 @@ class NamespacePanel(
 
         return try {
             val result = projectSession?.let { session ->
-                session.healSelection(settings)
+                session.ensureInitialized(settings.migrationDefaults())
                 // The capture reads PasswordSafe, and this panel's scope is the
                 // event dispatch thread — never capture a credential on it
                 // (ADR-0039).
@@ -227,19 +227,22 @@ class NamespacePanel(
 
     private fun updateNamespaceButton() {
         invokeOnEdt(ModalityState.defaultModalityState()) {
-            // Restore this project's selection, otherwise keep the local
-            // selection, otherwise default to the first. Never adopt another
-            // project's app-wide NamespaceService state.
-            projectSession?.healSelection(settings)
-            val projectSelection = projectSession?.sessionState?.namespaceId
-                ?.let { selectedId -> namespaces.find { it.namespaceId == selectedId } }
-            val toSelect: NamespaceInfo? = projectSelection ?: currentNamespace
+            // Restore this project's session Namespace. If discovery omitted it,
+            // keep the stored id on the button — never adopt namespaces.first()
+            // and overwrite the project session (issue #107).
+            projectSession?.ensureInitialized(settings.migrationDefaults())
+            val storedId = projectSession?.sessionState?.namespaceId?.takeIf { it.isNotBlank() }
+            val projectSelection = storedId?.let { id -> namespaces.find { it.namespaceId == id } }
+            val toSelect: NamespaceInfo? = projectSelection
+                ?: currentNamespace
+                ?: storedId?.let { NamespaceInfo(namespaceId = it, namespaceName = it) }
             if (toSelect != null) {
                 val matching = namespaces.find { it.namespaceId == toSelect.namespaceId }
                 if (matching != null) {
                     selectNamespace(matching, notify = currentNamespace == null)
-                } else if (namespaces.isNotEmpty()) {
-                    selectNamespace(namespaces.first(), notify = currentNamespace == null)
+                } else {
+                    currentNamespace = toSelect
+                    renderButton(toSelect)
                 }
             } else if (namespaces.isNotEmpty()) {
                 selectNamespace(namespaces.first(), notify = true)
@@ -301,10 +304,11 @@ class NamespacePanel(
     private fun onNamespaceSelected(namespace: NamespaceInfo) {
         coroutineScope.launch {
             try {
-                projectSession?.healSelection(settings)
+                projectSession?.ensureInitialized(settings.migrationDefaults())
                 val profileId = projectSession?.sessionState?.selectedProfileId.orEmpty()
-                    .ifBlank { settings.resolveDefaultProfileId() }
-                projectSession?.select(profileId, namespace.namespaceId)
+                if (profileId.isNotBlank()) {
+                    projectSession?.adoptEnvironment(profileId, namespace.namespaceId)
+                }
                 project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)?.bump()
                 onSelectionChanged?.invoke(namespace)
                 updateStatus(NacosSearchBundle.message("namespace.selected", namespace.namespaceName))

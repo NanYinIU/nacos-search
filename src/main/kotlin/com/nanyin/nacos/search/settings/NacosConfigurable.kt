@@ -1160,18 +1160,19 @@ class NacosConfigurable @JvmOverloads constructor(
             refreshServerListDecorations()
         }
 
-        // Keep the current project's tool-window selection on the same profile
-        // as the blue-dot so Settings and the search panel stay aligned.
-        // Skip realign when the requested active id failed to publish.
-        val publishedActive = settings.activeServerId
+        // Align this project's session to the draft blue-dot — project-local
+        // only. Do not treat settings.activeServerId as a live selection or
+        // rewrite the migration seed (issue #107).
+        val requestedActive = draftActiveId.takeIf {
+            it.isNotBlank() && it !in outcome.failedStageProfileIds
+        }
         contextProject()?.let { ctx ->
             val session = ctx.getService(NacosProjectSession::class.java) ?: return@let
-            val namespace = session.sessionState.namespaceId.ifBlank { "public" }
-            if (session.sessionState.selectedProfileId != publishedActive &&
-                publishedActive.isNotBlank() &&
-                publishedActive !in outcome.failedStageProfileIds
+            if (requestedActive != null &&
+                session.sessionState.selectedProfileId != requestedActive &&
+                settings.getProfile(requestedActive) != null
             ) {
-                session.select(publishedActive, namespace)
+                session.adoptEnvironment(requestedActive)
                 ctx.getService(ProjectSessionEpochs::class.java)?.bump()
             }
         }

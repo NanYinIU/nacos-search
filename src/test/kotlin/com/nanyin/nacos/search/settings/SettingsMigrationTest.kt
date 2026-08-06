@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.settings
 import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.ProfileIntent
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
@@ -269,20 +270,46 @@ class SettingsMigrationTest {
     fun `setActiveServer does not rewrite migration seed`() {
         val settings = NacosSettings()
         settings.resetToDefaults()
-        settings.applyServers(
+        val slots = InMemoryCredentialSlotStore()
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(id = "s_local", displayName = "Local", serverUrl = "http://localhost:8848"),
-                NacosServerConfig(id = "s_qa", displayName = "QA", serverUrl = "http://qa.example:8848")
+                ProfileIntent(
+                    profileId = "s_local",
+                    displayName = "Local",
+                    endpoint = "http://localhost:8848",
+                    apiPolicy = com.nanyin.nacos.search.models.NacosApiPolicy.AUTO,
+                    authMode = AuthMode.ANONYMOUS,
+                    principal = "",
+                    secret = "",
+                    writeIntent = false,
+                    suggestedNamespace = "public",
+                    preferences = EnvironmentPreferences.defaultsFor("s_local")
+                ),
+                ProfileIntent(
+                    profileId = "s_qa",
+                    displayName = "QA",
+                    endpoint = "http://qa.example:8848",
+                    apiPolicy = com.nanyin.nacos.search.models.NacosApiPolicy.AUTO,
+                    authMode = AuthMode.ANONYMOUS,
+                    principal = "",
+                    secret = "",
+                    writeIntent = false,
+                    suggestedNamespace = "public",
+                    preferences = EnvironmentPreferences.defaultsFor("s_qa")
+                )
             ),
-            "s_local"
+            "s_local",
+            credentialSlots = slots
         )
         val seedBefore = settings.migratedDefaultProfileId
         assertEquals("s_local", seedBefore)
+        assertTrue(settings.profiles.any { it.id == "s_qa" })
 
         settings.setActiveServer("s_qa")
 
         assertEquals("s_qa", settings.activeServerId)
         assertEquals(seedBefore, settings.migratedDefaultProfileId)
+        assertEquals("s_local", settings.resolveDefaultProfileId())
     }
 
     @Test

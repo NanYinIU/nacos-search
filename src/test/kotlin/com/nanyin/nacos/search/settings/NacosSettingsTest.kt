@@ -548,7 +548,7 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `project session healSelection replaces blank profile ids but not explicit deleted ones`() {
+    fun `project session healSelection seeds blank sessions once but never retargets explicit deleted ones`() {
         settings.applyServers(
             listOf(
                 NacosServerConfig(
@@ -569,6 +569,7 @@ class NacosSettingsTest {
         )
         blank.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
         assertEquals("s_ok", blank.selectedProfileId)
+        assertTrue(blank.sessionInitialized)
 
         val explicitDeleted = NacosProjectSessionState(
             selectedProfileId = "ghost",
@@ -577,5 +578,6 @@ class NacosSettingsTest {
         )
         explicitDeleted.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
         assertEquals("ghost", explicitDeleted.selectedProfileId)
+        assertTrue(explicitDeleted.sessionInitialized)
     }
 }

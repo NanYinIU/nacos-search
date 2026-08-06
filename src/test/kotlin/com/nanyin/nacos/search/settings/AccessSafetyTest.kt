@@ -369,14 +369,15 @@ class AccessSafetyTest {
             defaultNamespaceId = "team-a"
         )
 
-        first.seedIfNew(defaults)
-        second.seedIfNew(defaults)
+        first.ensureInitialized(defaults)
+        second.ensureInitialized(defaults)
         first.select("prod", "team-b")
 
         assertEquals("prod", first.selectedProfileId)
         assertEquals("team-b", first.namespaceId)
         assertEquals("dev", second.selectedProfileId)
         assertEquals("team-a", second.namespaceId)
+        assertTrue(second.sessionInitialized)
         assertFalse(second.selectionWasExplicit)
     }
     @Test
