@@ -1,0 +1,16 @@
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinatorTest.kt
+  h_231225c3625e99 81,83-85,89,96,105,109,117-118,120,122-125,127-136,143,147-169
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexRefreshServiceTest.kt
+  h_231225c3625e99 3,5,8,38-41,47-64,66-84,86-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "a2f7268c08e7387bc7965508aae0a2d58d74f5dc",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
