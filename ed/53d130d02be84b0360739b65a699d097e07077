@@ -1,0 +1,23 @@
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_36f6706875e447::t_c1bf920ec49269 376-382,384
+src/main/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibility.kt
+  s_36f6706875e447::t_462d73f323c150 158-162
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibilityCacheIntegrationTest.kt
+  s_36f6706875e447::t_2824fdda65fad9 224-270
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ed53d130d02be84b0360739b65a699d097e07077",
+  "prompts": {},
+  "sessions": {
+    "s_36f6706875e447": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4127616a-1472-4b6c-8786-3a77f2b1bdde",
+        "model": "deepseek-v4-flash:0731-cloud"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
