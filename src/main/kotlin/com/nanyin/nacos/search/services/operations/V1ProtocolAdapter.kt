@@ -135,14 +135,18 @@ sealed class RemoteOperationError(message: String, cause: Throwable? = null) : E
  * Completed Nacos-password tokens live only in [sessions] (ADR-0012 /
  * issue #96). This dialect supplies the login request and response shape
  * over [transport]; it does not own a private completed-token store.
+ *
+ * Generation probing runs through [ProtocolCore] (ADR-0048 / issue #97);
+ * browsing and publish still use the adapter-local shell until later slices.
  */
 class V1ProtocolAdapter(
     private val transport: ProtocolTransport,
     private val sessions: AuthenticationSessionRegistry = AuthenticationSessionRegistry(),
     private val gson: Gson = Gson()
 ) : ProtocolAdapter {
-    private var readBudgetMillis: Long = DEFAULT_READ_BUDGET_MILLIS
+    private var readBudgetMillis: Long = ProtocolCore.DEFAULT_READ_BUDGET_MILLIS
     private var clock: () -> Long = System::currentTimeMillis
+    private var core: ProtocolCore = ProtocolCore(transport, sessions)
 
     override val capabilities: ProtocolCapabilities = ProtocolCapabilities.V1
 
@@ -155,6 +159,7 @@ class V1ProtocolAdapter(
     ) : this(transport, sessions, gson) {
         this.readBudgetMillis = readBudgetMillis
         this.clock = clock
+        this.core = ProtocolCore(transport, sessions, readBudgetMillis, clock)
     }
 
     override suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage> =
@@ -182,11 +187,31 @@ class V1ProtocolAdapter(
                 authentication
             )
         }.mapCatching { response -> parseHistoryDetail(ensureSuccess(response)) }
-    override suspend fun probe(target: OperationTarget): Result<Unit> = execute(target) {
-        request(target, NAMESPACES_PATH, authentication = it)
-    }.mapCatching { response ->
-        ensureSuccess(response)
-        Unit
+    override suspend fun probe(target: OperationTarget): Result<Unit> {
+        validate(target)
+        return core.executeIdempotent(
+            target = target,
+            build = { auth -> request(target, NAMESPACES_PATH, authentication = auth) },
+            classify = { response -> classifyIdempotentResponse(target, response) },
+            parse = { Unit },
+            login = { performLogin(it) }
+        )
+    }
+
+    /** Classify a V1 wire response for the shared core's recovery rules. */
+    private fun classifyIdempotentResponse(
+        target: OperationTarget,
+        response: ProtocolResponse
+    ): ClassifiedResponse {
+        recoverableNacosPasswordTokenFailure(target, response)?.let {
+            return ClassifiedResponse.RecoverableTokenRefusal(it.status)
+        }
+        return try {
+            ensureSuccess(response)
+            ClassifiedResponse.Success(response)
+        } catch (error: RemoteOperationError) {
+            ClassifiedResponse.Failure(error)
+        }
     }
 
     override suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> =
@@ -630,11 +655,6 @@ class V1ProtocolAdapter(
     private fun isPermissionDenied(message: String?): Boolean =
         Regex("(?i)permission|forbidden|denied").containsMatchIn(message.orEmpty())
 
-    private data class RequestAuthentication(
-        val query: List<Pair<String, String>> = emptyList(),
-        val headers: Map<String, String> = emptyMap()
-    )
-
     private data class V1ConfigListEnvelope(
         val totalCount: Int = 0,
         val pageNumber: Int = 0,
@@ -707,7 +727,6 @@ class V1ProtocolAdapter(
         const val NAMESPACES_PATH = "/nacos/v1/console/namespaces"
         const val HISTORY_PATH = "/nacos/v1/cs/history"
         const val AUTH_LOGIN_PATH = "/nacos/v1/auth/login"
-        const val DEFAULT_READ_BUDGET_MILLIS = 30_000L
         const val DEFAULT_TOKEN_TTL_SECONDS = 18_000L
         const val TOKEN_REFRESH_BUFFER_MILLIS = 5 * 60 * 1000L
     }

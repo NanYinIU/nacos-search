@@ -216,6 +216,7 @@ class ConnectionDiagnostic(
 
     private fun sanitize(error: Throwable): String = when (error) {
         is RemoteOperationError.Authentication -> "Authentication failed"
+        is RemoteOperationError.InvalidOrExpiredNacosPasswordToken -> "Authentication failed"
         is RemoteOperationError.Authorization -> "Permission denied"
         is RemoteOperationError.NotFound -> "Resource not found"
         is RemoteOperationError.GenerationUnsupported -> "Generation not supported"
@@ -224,11 +225,15 @@ class ConnectionDiagnostic(
         is RemoteOperationError.RateLimited -> "Rate limited"
         is RemoteOperationError.Connection -> "Connection failed"
         is RemoteOperationError.Protocol -> "Protocol error"
+        is RemoteOperationError.Cancelled -> "Cancelled"
+        is kotlinx.coroutines.CancellationException -> "Cancelled"
         else -> "Unknown failure"
     }
 
     private suspend fun <T> timed(stage: String, operation: suspend () -> Result<T>): Pair<Long, Result<T>> {
         val start = clock()
+        // CancellationException must propagate: a cancelled diagnostic is
+        // cancellation, not a connection/protocol failure (issue #97 / ADR-0021).
         val result = operation()
         val duration = clock() - start
         return duration to result
