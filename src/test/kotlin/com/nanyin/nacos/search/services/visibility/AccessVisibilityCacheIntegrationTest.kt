@@ -11,6 +11,7 @@ import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.InMemoryCacheStore
 import com.nanyin.nacos.search.services.ProfileTombstoneRegistry
 import com.nanyin.nacos.search.services.clearAll
+import com.nanyin.nacos.search.services.deleteDetailNotFound
 import com.nanyin.nacos.search.services.replaceNamespaceIndex
 import com.nanyin.nacos.search.services.writeDetail
 import com.nanyin.nacos.search.services.writeListPage
@@ -307,6 +308,198 @@ class AccessVisibilityCacheIntegrationTest {
         assertEquals(
             "v=1",
             second.getConfigDetail(identity, "public", "keep.properties", "DEFAULT_GROUP")?.content
+        )
+    }
+
+    // --- Namespace-scoped configuration-read authorization (issue #124) ---
+
+    @Test
+    fun `namespace authz block hides only that namespace across every cache read surface`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
+        val cache = CacheService(System::currentTimeMillis, ProfileTombstoneRegistry(), store, visibility)
+        cache.awaitLoadCompleted()
+        val identity = identity("dev")
+        val other = identity("other", principal = "bob")
+
+        cache.writeDetail(
+            identity, "team-a",
+            NacosConfiguration("secret.properties", "DEFAULT_GROUP", "team-a", "k=v", "properties")
+        )
+        cache.writeDetail(
+            identity, "team-b",
+            NacosConfiguration("open.properties", "DEFAULT_GROUP", "team-b", "ok=1", "properties")
+        )
+        cache.writeListPage(
+            identity, "team-a", "page=1",
+            ConfigListResponse(
+                1, 1, 1,
+                listOf(ConfigItem("1", "secret.properties", "DEFAULT_GROUP", "k=v", "properties", "team-a"))
+            )
+        )
+        cache.writeListPage(
+            identity, "team-b", "page=1",
+            ConfigListResponse(
+                1, 1, 1,
+                listOf(ConfigItem("1", "open.properties", "DEFAULT_GROUP", "ok=1", "properties", "team-b"))
+            )
+        )
+        cache.replaceNamespaceIndex(
+            identity, "team-a",
+            listOf(NacosConfiguration("secret.properties", "DEFAULT_GROUP", "team-a", "", "properties"))
+        )
+        cache.replaceNamespaceIndex(
+            identity, "team-b",
+            listOf(NacosConfiguration("open.properties", "DEFAULT_GROUP", "team-b", "", "properties"))
+        )
+        cache.writeDetail(
+            other, "team-a",
+            NacosConfiguration("other.properties", "DEFAULT_GROUP", "team-a", "peer=1", "properties")
+        )
+
+        visibility.reportCompleted(
+            CompletedObservation(
+                observation = 100,
+                identity = identity,
+                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                namespaceId = "team-a",
+                outcome = ObservationOutcome.RemoteFailure(
+                    com.nanyin.nacos.search.services.operations.RemoteOperationError.Authorization(403)
+                )
+            )
+        )
+
+        // Blocked namespace: every surface hidden.
+        assertNull(cache.getConfigDetail(identity, "team-a", "secret.properties", "DEFAULT_GROUP"))
+        assertNull(cache.getListPage(identity, "team-a", "page=1"))
+        assertNull(cache.getNamespaceIndex(identity, "team-a"))
+
+        // Other namespace under the same identity remains visible.
+        assertEquals(
+            "ok=1",
+            cache.getConfigDetail(identity, "team-b", "open.properties", "DEFAULT_GROUP")?.content
+        )
+        assertEquals(1, cache.getListPage(identity, "team-b", "page=1")?.totalCount)
+        assertEquals(1, cache.getNamespaceIndex(identity, "team-b")?.size)
+
+        // Same namespace under another identity remains visible.
+        assertEquals(
+            "peer=1",
+            cache.getConfigDetail(other, "team-a", "other.properties", "DEFAULT_GROUP")?.content
+        )
+
+        // Snapshot: identity not fully blocked; blocked namespace filtered out.
+        val snap = cache.snapshot(identity)
+        assertFalse(snap.isAccessBlocked)
+        assertNull(snap.detail("team-a", "secret.properties", "DEFAULT_GROUP"))
+        assertNull(snap.namespaceIndex("team-a"))
+        assertNotNull(snap.detail("team-b", "open.properties", "DEFAULT_GROUP"))
+        assertTrue(snap.configurations.none { it.configuration.dataId == "secret.properties" })
+        assertTrue(snap.configurations.any { it.configuration.dataId == "open.properties" })
+
+        // Payload still on the store.
+        assertNotNull(
+            store.loadDetail(
+                com.nanyin.nacos.search.services.CacheCoordinate.detailKey(
+                    identity, "team-a", "secret.properties", "DEFAULT_GROUP"
+                )
+            )
+        )
+
+        // Matching success in the blocked namespace reveals retained data.
+        visibility.reportCompleted(
+            CompletedObservation(
+                observation = 101,
+                identity = identity,
+                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                namespaceId = "team-a",
+                outcome = ObservationOutcome.Success
+            )
+        )
+        assertEquals(
+            "k=v",
+            cache.getConfigDetail(identity, "team-a", "secret.properties", "DEFAULT_GROUP")?.content
+        )
+        assertEquals(1, cache.getListPage(identity, "team-a", "page=1")?.totalCount)
+        assertEquals(1, cache.getNamespaceIndex(identity, "team-a")?.size)
+    }
+
+    @Test
+    fun `authoritative not-found deletes coordinate without creating namespace block`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
+        val cache = CacheService(System::currentTimeMillis, ProfileTombstoneRegistry(), store, visibility)
+        cache.awaitLoadCompleted()
+        val identity = identity("dev")
+
+        cache.writeDetail(
+            identity, "team-a",
+            NacosConfiguration("gone.properties", "DEFAULT_GROUP", "team-a", "x=1", "properties")
+        )
+        cache.writeDetail(
+            identity, "team-a",
+            NacosConfiguration("stay.properties", "DEFAULT_GROUP", "team-a", "y=2", "properties")
+        )
+
+        // Authoritative not-found is a cache mutation, not a visibility report.
+        // Use the process sequence so the delete outranks the seed writes above.
+        cache.deleteDetailNotFound(
+            identity, "team-a", "gone.properties", "DEFAULT_GROUP"
+        )
+        // Visibility report for NotFound must not create a Namespace block.
+        visibility.reportCompleted(
+            CompletedObservation(
+                observation = com.nanyin.nacos.search.services.operations.ObservationSequence.process.next(),
+                identity = identity,
+                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                namespaceId = "team-a",
+                outcome = ObservationOutcome.RemoteFailure(
+                    com.nanyin.nacos.search.services.operations.RemoteOperationError.NotFound()
+                )
+            )
+        )
+
+        assertNull(cache.getConfigDetail(identity, "team-a", "gone.properties", "DEFAULT_GROUP"))
+        assertEquals(
+            "y=2",
+            cache.getConfigDetail(identity, "team-a", "stay.properties", "DEFAULT_GROUP")?.content
+        )
+        assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
+    }
+
+    @Test
+    fun `direct reconstitution is hidden under a namespace authz block`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val identity = identity("dev")
+        val detail = NacosConfiguration("seeded.properties", "DEFAULT_GROUP", "team-a", "seed=1", "properties")
+        val key = com.nanyin.nacos.search.services.CacheCoordinate.detailKey(
+            identity, "team-a", "seeded.properties", "DEFAULT_GROUP"
+        )
+        store.putDetail(
+            key,
+            CacheService.CacheEntry(
+                CacheService.CacheEntryType.CONFIG_DETAIL,
+                detail,
+                createdAt = System.currentTimeMillis(),
+                ttlMs = 300_000L,
+                source = CacheService.CacheSource.REMOTE
+            )
+        )
+        store.putVisibilityRecord(
+            VisibilityScopes.configurationReadKey(identity, "team-a"),
+            AccessVisibilityRecord.configurationReadAuthz(
+                identity,
+                "team-a",
+                recordedAtMillis = System.currentTimeMillis()
+            )
+        )
+
+        val cache = CacheService(store)
+        cache.awaitLoadCompleted()
+
+        assertNull(cache.getConfigDetail(identity, "team-a", "seeded.properties", "DEFAULT_GROUP"))
+        assertTrue(
+            cache.configurationVisibility(identity, "team-a") is ConfigurationVisibility.Blocked
         )
     }
 

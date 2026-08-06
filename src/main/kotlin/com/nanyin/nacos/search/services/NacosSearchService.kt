@@ -562,9 +562,11 @@ class NacosSearchService(
         // Cooperative cancel must not become SearchState.Error or fall through
         // to stale cache (issue #122 review).
         rethrowIfCancellation(remoteError)
-        // A persisted identity-wide auth block outranks a later eligible transient
-        // failure: presentation stays access-refused, not refresh-failed (issue #123).
-        refusedAccessIfBlocked(context.identity)?.let { return Result.failure(it) }
+        // A persisted access block (identity-wide auth or Namespace config-read
+        // authz) outranks a later eligible transient failure: presentation stays
+        // access-refused, not refresh-failed (issues #123 / #124).
+        refusedAccessIfBlocked(context.identity, request.namespace?.namespaceId)
+            ?.let { return Result.failure(it) }
         // ADR-0019 / issue #122: only eligible transient failures may surface
         // same-identity cache as REFRESH_FAILED. Refused access, configuration-
         // required, unsupported generation/capability, and cancellation return
@@ -598,7 +600,8 @@ class NacosSearchService(
 
         // Cache miss under a concurrent block (or restored block with no eligible
         // payload) must not look like an empty network failure.
-        refusedAccessIfBlocked(context.identity)?.let { return Result.failure(it) }
+        refusedAccessIfBlocked(context.identity, request.namespace?.namespaceId)
+            ?.let { return Result.failure(it) }
         return Result.failure(remoteError)
     }
 
@@ -650,9 +653,10 @@ class NacosSearchService(
                 if (stoppingCause != null) {
                     rethrowIfCancellation(stoppingCause)
                 }
-                // Identity-wide auth block: never surface retained index data and
-                // keep the structured refused-access outcome (issue #123).
-                refusedAccessIfBlocked(indexKey.identity)?.let { return Result.failure(it) }
+                // Identity-wide auth or Namespace config-read authz block: never
+                // surface retained index data; keep structured refused-access
+                // (issues #123 / #124).
+                refusedAccessIfBlocked(indexKey.identity, namespaceId)?.let { return Result.failure(it) }
                 val mayUseStale = stoppingCause == null ||
                     StaleSearchFallbackPolicy.allowsStaleCache(stoppingCause)
                 if (mayUseStale) {
@@ -669,7 +673,7 @@ class NacosSearchService(
                         val error = stoppingCause
                             ?: IllegalStateException("Namespace index load did not produce a complete dataset")
                         rethrowIfCancellation(error)
-                        refusedAccessIfBlocked(indexKey.identity)?.let { return Result.failure(it) }
+                        refusedAccessIfBlocked(indexKey.identity, namespaceId)?.let { return Result.failure(it) }
                         return Result.failure(error)
                     }
                 } else {
@@ -959,12 +963,16 @@ class NacosSearchService(
     }
 
     /**
-     * When a restored or still-active identity-wide authentication block hides
-     * cache data, searches must present structured access-refused state rather
-     * than empty or refresh-failed results (issue #123).
+     * When a restored or still-active access block hides cache data — either
+     * identity-wide authentication (#123) or Namespace-scoped configuration-read
+     * authorization (#124) — searches must present structured access-refused
+     * state rather than empty or refresh-failed results.
      */
-    private fun refusedAccessIfBlocked(identity: AccessIdentity): RemoteOperationError? {
-        return when (val decision = cacheService.configurationVisibility(identity)) {
+    private fun refusedAccessIfBlocked(
+        identity: AccessIdentity,
+        namespaceId: String?
+    ): RemoteOperationError? {
+        return when (val decision = cacheService.configurationVisibility(identity, namespaceId)) {
             is ConfigurationVisibility.Visible -> null
             is ConfigurationVisibility.Blocked -> when (decision.reason) {
                 AccessRefusalReason.AUTHENTICATION ->

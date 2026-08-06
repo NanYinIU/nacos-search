@@ -25,7 +25,10 @@ import com.nanyin.nacos.search.services.visibility.ConfigurationVisibility
  *
  * Under an identity-wide authentication block, payload views are empty and
  * [visibility] is [ConfigurationVisibility.Blocked] so code navigation can
- * distinguish undecidable from unresolved (#126 consumes this hook).
+ * distinguish undecidable from unresolved (#126 consumes this hook). Under a
+ * Namespace-scoped configuration-read authorization block only that Namespace's
+ * payloads are absent from the views; [visibility] stays [Visible] at the
+ * identity level (issue #124).
  *
  * Taking one is O(1): the payload views below are computed lazily, so the PSI
  * hot path can take a snapshot per decision and only pay for a scan when it
@@ -39,7 +42,11 @@ class CacheSnapshot internal constructor(
     private val namespaceIndexes: Map<String, NamespaceIndexRecord>,
     val visibility: ConfigurationVisibility = ConfigurationVisibility.Visible
 ) {
-    /** True when configuration-read data for [identity] is hidden by an access block. */
+    /**
+     * True when configuration-read data for the whole [identity] is hidden by an
+     * identity-wide authentication block. Namespace-only authorization blocks do
+     * not set this; those are already filtered out of payload views (issue #124).
+     */
     val isAccessBlocked: Boolean get() = visibility is ConfigurationVisibility.Blocked
     private val detailPrefix: String get() = "${CacheCoordinate.identityPrefix(identity)}|"
 

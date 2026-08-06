@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -260,6 +261,253 @@ class AccessVisibilityTest {
         assertTrue(visibility.isIdentityAuthBlocked(identity))
     }
 
+    // --- Namespace-scoped configuration-read authorization (issue #124) ---
+
+    @Test
+    fun `configuration list authorization blocks only that identity and namespace`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val identity = identity("dev")
+
+        assertTrue(visibility.reportCompleted(authzFailure(identity, "team-a", observation = 1)))
+
+        assertFalse(visibility.isIdentityAuthBlocked(identity))
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
+        assertFalse(visibility.isConfigurationReadBlocked(identity, "team-b"))
+        assertFalse(visibility.isConfigurationReadBlocked(identity, "public"))
+        assertEquals(
+            AccessRefusalReason.AUTHORIZATION,
+            (visibility.configurationVisibility(identity, "team-a") as ConfigurationVisibility.Blocked).reason
+        )
+        assertTrue(visibility.configurationVisibility(identity) is ConfigurationVisibility.Visible)
+    }
+
+    @Test
+    fun `configuration detail authorization produces the same namespace block`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val identity = identity("dev")
+
+        // Detail and list share CONFIGURATION_READ + namespace; either source is enough.
+        assertTrue(visibility.reportCompleted(authzFailure(identity, "public", observation = 1)))
+        assertTrue(visibility.isConfigurationReadBlocked(identity, ""))
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "public"))
+        assertTrue(visibility.isConfigurationReadBlocked(identity, null))
+        assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
+        assertFalse(visibility.isIdentityAuthBlocked(identity))
+    }
+
+    @Test
+    fun `same namespace under another identity remains visible`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val alice = identity("dev", principal = "alice")
+        val bob = identity("dev", principal = "bob")
+
+        visibility.reportCompleted(authzFailure(alice, "team-a", observation = 1))
+
+        assertTrue(visibility.isConfigurationReadBlocked(alice, "team-a"))
+        assertFalse(visibility.isConfigurationReadBlocked(bob, "team-a"))
+    }
+
+    @Test
+    fun `newer matching configuration read success clears the namespace block`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val identity = identity("dev")
+        visibility.reportCompleted(authzFailure(identity, "team-a", observation = 1))
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
+
+        val cleared = visibility.reportCompleted(
+            success(identity, observation = 2, namespaceId = "team-a")
+        )
+
+        assertTrue(cleared)
+        assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
+    }
+
+    @Test
+    fun `success in another namespace does not clear the blocked namespace`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val identity = identity("dev")
+        visibility.reportCompleted(authzFailure(identity, "team-a", observation = 1))
+
+        val accepted = visibility.reportCompleted(
+            success(identity, observation = 2, namespaceId = "team-b")
+        )
+
+        assertTrue(accepted) // ordering for team-b advanced
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
+        assertFalse(visibility.isConfigurationReadBlocked(identity, "team-b"))
+    }
+
+    @Test
+    fun `publish success does not clear a namespace configuration-read block`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val identity = identity("dev")
+        visibility.reportCompleted(authzFailure(identity, "team-a", observation = 1))
+
+        val accepted = visibility.reportCompleted(
+            CompletedObservation(
+                observation = 2,
+                identity = identity,
+                operationClass = VisibilityOperationClass.PUBLISH,
+                namespaceId = "team-a",
+                outcome = ObservationOutcome.Success
+            )
+        )
+
+        // Publish success still clears identity-auth (none present) and advances
+        // identity ordering, but must not clear the Namespace config-read block.
+        assertTrue(accepted)
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
+    }
+
+    @Test
+    fun `success for another identity does not clear the namespace block`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val alice = identity("dev", principal = "alice")
+        val bob = identity("dev", principal = "bob")
+        visibility.reportCompleted(authzFailure(alice, "team-a", observation = 1))
+
+        visibility.reportCompleted(success(bob, observation = 2, namespaceId = "team-a"))
+
+        assertTrue(visibility.isConfigurationReadBlocked(alice, "team-a"))
+        assertFalse(visibility.isConfigurationReadBlocked(bob, "team-a"))
+    }
+
+    @Test
+    fun `older late namespace failure cannot re-block after newer success`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val identity = identity("dev")
+
+        visibility.reportCompleted(success(identity, observation = 5, namespaceId = "team-a"))
+        val reblocked = visibility.reportCompleted(authzFailure(identity, "team-a", observation = 3))
+
+        assertFalse(reblocked)
+        assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
+    }
+
+    @Test
+    fun `older late success cannot clear after newer namespace refusal`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val identity = identity("dev")
+
+        visibility.reportCompleted(authzFailure(identity, "team-a", observation = 5))
+        // Namespace chain rejects observation 3; the identity half may still
+        // advance (its mark was never raised by the Namespace refusal), but the
+        // Namespace block must remain.
+        visibility.reportCompleted(success(identity, observation = 3, namespaceId = "team-a"))
+
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
+        assertNotNull(visibility.namespaceConfigReadBlock(identity, "team-a"))
+    }
+
+    @Test
+    fun `authoritative not-found does not create a namespace block`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val identity = identity("dev")
+
+        val applied = visibility.reportCompleted(
+            CompletedObservation(
+                observation = 1,
+                identity = identity,
+                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                namespaceId = "team-a",
+                outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.NotFound())
+            )
+        )
+
+        assertFalse(applied)
+        assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
+    }
+
+    @Test
+    fun `cancellation does not create a namespace block`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val identity = identity("dev")
+
+        val applied = visibility.reportCompleted(
+            CompletedObservation(
+                observation = 1,
+                identity = identity,
+                operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+                namespaceId = "team-a",
+                outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.Cancelled())
+            )
+        )
+
+        assertFalse(applied)
+        assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
+    }
+
+    @Test
+    fun `publish authorization does not create a configuration-read namespace block`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val identity = identity("dev")
+
+        val applied = visibility.reportCompleted(
+            CompletedObservation(
+                observation = 1,
+                identity = identity,
+                operationClass = VisibilityOperationClass.PUBLISH,
+                namespaceId = "team-a",
+                outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.Authorization(403))
+            )
+        )
+
+        assertFalse(applied)
+        assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
+    }
+
+    @Test
+    fun `namespace block survives reconstruction over the same store while high-water resets`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val first = AccessVisibility(store, ObservationHighWater())
+        val identity = identity("dev")
+        first.reportCompleted(authzFailure(identity, "team-a", observation = 10))
+        assertTrue(first.isConfigurationReadBlocked(identity, "team-a"))
+
+        val second = AccessVisibility(store, ObservationHighWater())
+        second.hydrateFromStore()
+
+        assertTrue(second.isConfigurationReadBlocked(identity, "team-a"))
+        val cleared = second.reportCompleted(success(identity, observation = 1, namespaceId = "team-a"))
+        assertTrue(cleared)
+        assertFalse(second.isConfigurationReadBlocked(identity, "team-a"))
+        assertNull(
+            store.loadVisibilityRecords()[VisibilityScopes.configurationReadKey(identity, "team-a")]
+        )
+    }
+
+    @Test
+    fun `blank and public namespace spellings share one block`() = runBlocking {
+        val visibility = AccessVisibility(InMemoryCacheStore())
+        val identity = identity("dev")
+
+        visibility.reportCompleted(authzFailure(identity, "", observation = 1))
+
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "public"))
+        assertTrue(visibility.isConfigurationReadBlocked(identity, null))
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "  "))
+    }
+
+    @Test
+    fun `purgeProfile removes namespace visibility records for that profile only`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
+        val dev = identity("dev")
+        val sit = identity("sit")
+        visibility.reportCompleted(authzFailure(dev, "team-a", observation = 1))
+        visibility.reportCompleted(authzFailure(sit, "team-a", observation = 2))
+
+        visibility.purgeProfile("dev")
+
+        assertFalse(visibility.isConfigurationReadBlocked(dev, "team-a"))
+        assertTrue(visibility.isConfigurationReadBlocked(sit, "team-a"))
+        assertTrue(
+            store.loadVisibilityRecords().keys.none {
+                it.startsWith("vis|cfgread|v2|dev|")
+            }
+        )
+    }
+
     private fun identity(
         profileId: String,
         accessRevision: Long = 1,
@@ -283,12 +531,25 @@ class AccessVisibilityTest {
             outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.Authentication(401))
         )
 
-    private fun success(identity: AccessIdentity, observation: Long) =
+    private fun authzFailure(identity: AccessIdentity, namespaceId: String, observation: Long) =
         CompletedObservation(
             observation = observation,
             identity = identity,
             operationClass = VisibilityOperationClass.CONFIGURATION_READ,
-            namespaceId = "public",
+            namespaceId = namespaceId,
+            outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.Authorization(403))
+        )
+
+    private fun success(
+        identity: AccessIdentity,
+        observation: Long,
+        namespaceId: String = "public"
+    ) =
+        CompletedObservation(
+            observation = observation,
+            identity = identity,
+            operationClass = VisibilityOperationClass.CONFIGURATION_READ,
+            namespaceId = namespaceId,
             outcome = ObservationOutcome.Success
         )
 }
