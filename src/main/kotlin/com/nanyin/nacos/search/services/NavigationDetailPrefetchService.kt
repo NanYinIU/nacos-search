@@ -2,8 +2,10 @@ package com.nanyin.nacos.search.services
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
 import com.intellij.util.indexing.FileBasedIndex
 import com.nanyin.nacos.search.models.AccessIdentity
@@ -346,13 +348,23 @@ class NavigationDetailPrefetchService internal constructor(
         fun projectLocationHash(project: Project): String =
             project.locationHash
 
+        /**
+         * Reads [NacosDeclaredSourceIndex] keys. Must hold a read action —
+         * FileBasedIndex asserts it even when called off the EDT (e.g. from
+         * [Dispatchers.Default] inside [executePrefetch]).
+         */
         fun lookupDeclaredDataIds(project: Project): Set<String> {
             if (project.isDisposed || project.isDefault) return emptySet()
             return try {
-                FileBasedIndex.getInstance()
-                    .getAllKeys(NacosDeclaredSourceIndex.INDEX_ID, project)
-                    .filter { it.isNotBlank() }
-                    .toSet()
+                ReadAction.compute<Set<String>, RuntimeException> {
+                    if (project.isDisposed) return@compute emptySet()
+                    FileBasedIndex.getInstance()
+                        .getAllKeys(NacosDeclaredSourceIndex.INDEX_ID, project)
+                        .filter { it.isNotBlank() }
+                        .toSet()
+                }
+            } catch (cancelled: ProcessCanceledException) {
+                throw cancelled
             } catch (_: Exception) {
                 emptySet()
             }

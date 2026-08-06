@@ -337,4 +337,16 @@ class NavigationDetailPrefetchServiceTest {
         // Dual-write surface stays aligned for the settings dialog.
         assertFalse(settings.getActiveServer().navigationDetailPrefetchEnabled)
     }
+
+    @Test
+    fun `lookupDeclaredDataIds returns empty for disposed or default project`() {
+        val disposed = mock<Project>()
+        whenever(disposed.isDisposed).thenReturn(true)
+        assertTrue(NavigationDetailPrefetchService.lookupDeclaredDataIds(disposed).isEmpty())
+
+        val defaultProject = mock<Project>()
+        whenever(defaultProject.isDisposed).thenReturn(false)
+        whenever(defaultProject.isDefault).thenReturn(true)
+        assertTrue(NavigationDetailPrefetchService.lookupDeclaredDataIds(defaultProject).isEmpty())
+    }
 }
