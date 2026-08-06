@@ -1,0 +1,53 @@
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolverTest.kt
+  s_57f82049f784a6::t_6d148b8fff3472 491,521,564
+  s_57f82049f784a6::t_b6367cabdb3d22 11
+README.md
+  s_57f82049f784a6::t_dc22e05245dcca 133
+src/test/kotlin/com/nanyin/nacos/search/ui/ToolWindowSearchControllerTest.kt
+  s_57f82049f784a6::t_589546f1a1dfab 7
+  s_57f82049f784a6::t_fc5dfdaaa8dad5 54-69
+src/test/kotlin/com/nanyin/nacos/search/settings/NacosConfigurableInteractionTest.kt
+  s_57f82049f784a6::t_ec9943aecebd28 3,11,27-34
+  s_57f82049f784a6::t_a26edfcb89fadb 35
+src/test/kotlin/com/nanyin/nacos/search/NacosSearchPluginTest.kt
+  s_57f82049f784a6::t_4ce99726943f5f 3,6,9,11,15,21-42
+  s_57f82049f784a6::t_1e9638a22eaa48 43
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibilityCacheIntegrationTest.kt
+  s_57f82049f784a6::t_6847e0e0095bb1 16
+  s_57f82049f784a6::t_3f67e1dfcdbcc1 508-671
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/ReleaseGateOrderingRacesTransportIntegrationTest.kt
+  s_57f82049f784a6::t_9d57e81a08fe6a 490-495
+  s_57f82049f784a6::t_a64fb06e91aae5 24
+  s_57f82049f784a6::t_1ced3c84c38691 1-23,25-122,124-203,205-297,299-387,389-489,496-546
+  s_57f82049f784a6::t_fcb84db6a24084 123,298
+  s_57f82049f784a6::t_c05cdc5262e146 204,388
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceCancelTest.kt
+  s_57f82049f784a6::t_b758a42044ecae 40-42,45-56
+build.gradle.kts
+  s_57f82049f784a6::t_a7180fe228d57c 113-115,117
+  s_57f82049f784a6::t_a3ed3cbd230c5a 12
+  s_57f82049f784a6::t_36c4fb1725a4bb 116
+src/main/resources/META-INF/plugin.xml
+  s_57f82049f784a6::t_d8c54303b29f04 23
+  s_57f82049f784a6::t_a9447bec44ebb0 22
+  s_57f82049f784a6::t_71b02898acf761 20-21,24
+src/test/kotlin/com/nanyin/nacos/search/services/TestDispatchers.kt
+  s_57f82049f784a6::t_582485ad11969d 7
+  s_57f82049f784a6::t_83544ab18de358 47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "c06b3b0e62ce3c9b41d440a0081a936407d0809f",
+  "prompts": {},
+  "sessions": {
+    "s_57f82049f784a6": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "845e11c8-67b0-465a-8f99-0a2052021edd",
+        "model": "deepseek-v4-flash-0731"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
