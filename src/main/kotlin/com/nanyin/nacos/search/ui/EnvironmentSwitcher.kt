@@ -97,7 +97,16 @@ class EnvironmentSwitcher(
     fun refresh() {
         projectSession?.ensureInitialized(settings.migrationDefaults())
         val selectedProfileId = projectSession?.sessionState?.selectedProfileId.orEmpty()
-        val active = settings.cloneServers().firstOrNull { it.id == selectedProfileId }
+        val active = when {
+            selectedProfileId.isNotBlank() ->
+                settings.cloneServers().firstOrNull { it.id == selectedProfileId }
+            // No project session service (standalone tests): display-only fallback.
+            // An initialized project session never falls through here (issue #107).
+            projectSession == null ->
+                settings.cloneServers().firstOrNull { it.id == settings.activeServerId }
+                    ?: settings.getActiveServer()
+            else -> null
+        }
         val name = when {
             active != null -> active.displayName.ifBlank {
                 active.serverUrl.ifBlank { NacosSearchBundle.message("toolwindow.env.none") }
@@ -119,6 +128,9 @@ class EnvironmentSwitcher(
         if (!envButton.isShowing) return
         projectSession?.ensureInitialized(settings.migrationDefaults())
         val activeId = projectSession?.sessionState?.selectedProfileId.orEmpty()
+            .ifBlank {
+                if (projectSession == null) settings.activeServerId else ""
+            }
         val entries = settings.cloneServers()
             .map { EnvEntry.Server(it, it.id == activeId) } + EnvEntry.Manage
         val popup = JBPopupFactory.getInstance().createListPopup(EnvListStep(entries))
