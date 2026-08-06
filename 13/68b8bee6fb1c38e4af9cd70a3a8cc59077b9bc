@@ -1,0 +1,35 @@
+src/main/kotlin/com/nanyin/nacos/search/models/EnvironmentProfile.kt
+  s_32e334de7fa6c8::t_bad06b2fbe8396 49-54
+src/main/kotlin/com/nanyin/nacos/search/models/NacosServerConfig.kt
+  s_32e334de7fa6c8::t_86d4debcf4279b 20-25,72,74
+src/main/kotlin/com/nanyin/nacos/search/models/ProfileIntent.kt
+  s_36f6706875e447::t_e85cb92e3316a2 36
+src/main/kotlin/com/nanyin/nacos/search/settings/AuthStrategyFormPolicy.kt
+  s_32e334de7fa6c8::t_301f2566f11e72 5-8,28-29,31,34-36,39-41,44-46,52-111,123-125,128-133
+src/test/kotlin/com/nanyin/nacos/search/settings/AuthStrategyFormPolicyTest.kt
+  s_36f6706875e447::t_0240bfef84f0fb 4-5,34-118,120-121,123-124,126-136,141,143-144,147-148,151-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "1368b8bee6fb1c38e4af9cd70a3a8cc59077b9bc",
+  "prompts": {},
+  "sessions": {
+    "s_32e334de7fa6c8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b1c016e-ae12-40bd-8ee5-e99b51c7b6a4",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_36f6706875e447": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4127616a-1472-4b6c-8786-3a77f2b1bdde",
+        "model": "deepseek-v4-flash:0731-cloud"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
