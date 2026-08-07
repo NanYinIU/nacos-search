@@ -1,0 +1,28 @@
+src/main/kotlin/com/nanyin/nacos/search/ui/DetailController.kt
+  s_baa852e64e80a4::t_b68e6e4526f07f 60-62,64,67
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanel.kt
+  s_baa852e64e80a4::t_b17af2e778677b 1220-1223
+  s_baa852e64e80a4::t_ae95d17fd8e2f9 1253-1263
+  s_baa852e64e80a4::t_be77f160587bbe 1287-1288,1304-1307,1309-1310
+  s_baa852e64e80a4::t_86f6198caeabcd 1054-1060
+src/test/kotlin/com/nanyin/nacos/search/ui/DetailContentCardRaceTest.kt
+  s_baa852e64e80a4::t_56d0acf1d2a5a2 1-51
+src/test/kotlin/com/nanyin/nacos/search/ui/DetailControllerTest.kt
+  s_baa852e64e80a4::t_84ba5f78ff6b2c 126-149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "270f2c9307f94266a3b57480ed012de0af7351e6",
+  "prompts": {},
+  "sessions": {
+    "s_baa852e64e80a4": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "0e852ac6-3e3b-4634-b375-f02a566c744d",
+        "model": "grok-4.5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
