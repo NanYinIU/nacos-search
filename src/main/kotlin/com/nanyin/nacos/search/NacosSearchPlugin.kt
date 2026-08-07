@@ -2,7 +2,6 @@ package com.nanyin.nacos.search
 
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
-import com.nanyin.nacos.search.services.SearchService
 import com.nanyin.nacos.search.services.IndexOutcome
 import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
 import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
@@ -36,7 +35,6 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
     private val settings by lazy { ApplicationManager.getApplication().getService(NacosSettings::class.java) }
     private val apiService by lazy { ApplicationManager.getApplication().getService(NacosApiService::class.java) }
     private val cacheService by lazy { ApplicationManager.getApplication().getService(CacheService::class.java) }
-    private val searchService by lazy { ApplicationManager.getApplication().getService(SearchService::class.java) }
     private val indexCoordinator by lazy { ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java) }
 
     private fun keyIndexService(): NacosKeyIndexService =
@@ -260,25 +258,6 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         }
     }
     
-    /**
-     * Get plugin statistics
-     */
-    suspend fun getStatistics(): com.nanyin.nacos.search.PluginStatistics {
-        val cachedCount = if (settings.cacheEnabled) {
-            cacheService.getAllCachedConfigurations(settings.captureAccessIdentity()).size
-        } else {
-            0
-        }
-        
-        return com.nanyin.nacos.search.PluginStatistics(
-            cachedConfigurationsCount = cachedCount,
-            cacheEnabled = settings.cacheEnabled,
-            autoRefreshEnabled = settings.autoRefreshEnabled,
-            serverUrl = settings.serverUrl,
-            lastRefreshTime = null // TODO: Implement getLastRefreshTime in CacheService
-        )
-    }
-    
    /**
     * Dispose plugin resources
      */
@@ -302,14 +281,3 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         }
     }
 }
-
-/**
- * Plugin statistics data class
- */
-data class PluginStatistics(
-    val cachedConfigurationsCount: Int,
-    val cacheEnabled: Boolean,
-    val autoRefreshEnabled: Boolean,
-    val serverUrl: String,
-    val lastRefreshTime: Long?
-)
