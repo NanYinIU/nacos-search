@@ -26,8 +26,10 @@ data class EnvironmentPreferences(
     var navigationDetailPrefetchEnabled: Boolean = true,
     /**
      * Suggested default namespace for newly seeded project sessions.
-     * Not part of the access identity; persisted here so the legacy server list
-     * need not be rewritten after migration (ADR-0049 / issue #153).
+     * Not part of the access identity. Persisted on this record so the legacy
+     * server list need not be rewritten (ADR-0049 / issue #153), but a change
+     * is still classified as operational (session seed) — not preference-only —
+     * by [com.nanyin.nacos.search.settings.EnvironmentProfileStore].
      */
     var suggestedNamespace: String = "public",
     /**

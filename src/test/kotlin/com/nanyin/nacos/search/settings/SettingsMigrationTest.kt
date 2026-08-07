@@ -336,9 +336,17 @@ class SettingsMigrationTest {
         settings.runVersionedMigration(slots) { key ->
             if (key == "dev" || key.startsWith("dev:")) "secret" else null
         }
+        settings.serverUrl = "https://should-not-persist.example"
+        settings.username = "alice"
+        settings.namespace = "team-a"
+        settings.authMode = AuthMode.NACOS_PASSWORD
 
         val persisted = settings.getState()
         assertTrue(persisted.servers.isEmpty(), "legacy server list must not be re-persisted")
+        assertEquals("", persisted.serverUrl)
+        assertEquals("", persisted.username)
+        assertEquals("public", persisted.namespace)
+        assertEquals(AuthMode.ANONYMOUS, persisted.authMode)
         assertEquals(SettingsSchema.CURRENT, persisted.settingsSchemaVersion)
         assertEquals(1, persisted.profiles.size)
         assertEquals("dev", persisted.profiles.single().id)

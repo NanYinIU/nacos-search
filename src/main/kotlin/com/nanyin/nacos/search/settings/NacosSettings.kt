@@ -141,8 +141,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         XmlSerializerUtil.copyBean(this, sanitized)
         sanitized.password = ""
         // Environment configuration persists as profiles + preferences only
-        // (ADR-0049 / issue #153). Legacy servers remain deserialization input.
+        // (ADR-0049 / issue #153). Legacy servers and flat active-server mirrors
+        // remain deserialization inputs and are never rewritten.
         sanitized.servers = mutableListOf()
+        sanitized.serverUrl = ""
+        sanitized.username = ""
+        sanitized.password = ""
+        sanitized.namespace = "public"
+        sanitized.authMode = AuthMode.ANONYMOUS
         sanitized.environmentPreferences = environmentPreferences
             .map { it.copyPreferences() }
             .toMutableList()
@@ -182,11 +188,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         }
 
         // Hydrate in-memory dual-write secrets from the credential store without
-        // writing — migration stages revision-pinned slots itself.
-        for (server in servers) {
-            val stored = NacosCredentialStore.get(server.id)
-            if (!stored.isNullOrEmpty()) {
-                server.password = stored
+        // writing — only when migration may still need them as upgrade input.
+        // Already-migrated installs never touch PasswordSafe here (issue #153).
+        if (settingsSchemaVersion < SettingsSchema.CURRENT || profiles.none { it.id.isNotBlank() }) {
+            for (server in servers) {
+                val stored = NacosCredentialStore.get(server.id)
+                if (!stored.isNullOrEmpty()) {
+                    server.password = stored
+                }
             }
         }
 
