@@ -20,25 +20,32 @@ Nacos Search 支持管理多个 Nacos 环境，通过命名空间、Data ID、Gr
 ### 多环境与认证
 
 - 在一个设置页中维护 Local、Test、Staging、Prod 等多个 Nacos 服务。
-- 从工具窗口快速切换当前环境，环境与命名空间加载会绑定到发起请求时的服务器，避免切换过程中混入旧结果。
-- 支持 `TOKEN`、`BASIC` 和 `HYBRID` 三种认证方式。
-- 密码存储在 IntelliJ Platform PasswordSafe 中，不会以明文写入插件设置 XML。
-- 可按环境设置默认命名空间、默认 Group、连接超时以及是否允许跨命名空间导航。
+- 从工具窗口快速切换当前环境；环境与命名空间选择按项目本地保存，加载会绑定到发起请求时的服务器，避免切换过程中混入旧结果。
+- 支持 `Anonymous`、`Nacos password`、`HTTP Basic` 和 `Bearer Token` 四种认证策略（旧的 TOKEN/BASIC/HYBRID 设置会在加载时自动迁移）。
+- 密码与令牌存储在 IntelliJ Platform PasswordSafe 中，不会以明文写入插件设置 XML。
+- 可按环境设置默认命名空间、默认 Group、连接超时、API 策略（V1 / V3 / AUTO）以及是否允许跨命名空间导航。
+- 支持按环境开启写入意图后，在详情页编辑并发布配置（CAS + 回读确认）；默认只读。
 
 ### 代码与配置双向导航
 
 插件识别 Java 代码中 `@NacosValue` 和 Spring `@Value` 里的 `${key}`、`${key:default}` 占位符：
 
-- gutter 图标显示配置键是否已解析，并可直接打开对应的 Nacos 配置。
+- gutter 图标显示配置键是否已解析（新鲜 / 过期 / 未解析），并可直接打开对应的 Nacos 配置。
 - 同一个键存在多个候选配置时，提供带命名空间和来源信息的选择列表。
 - 在配置键上使用 **Find Usages**，可反向查找项目内的 Java 引用。
 - 在配置详情中查看代码用量并跳转到源码位置。
 - 支持 Properties、YAML/YML 和 JSON 配置键解析，包括单行压缩 JSON。
 - 持久化占位符索引，加速反向查找；1.3.4 会自动重建旧格式索引。
 
+### 历史与 Diff
+
+- 在配置详情中浏览该配置的历史版本（按当前访问身份隔离）。
+- 内嵌分栏 Diff 对比历史内容与当前内容，只读查看，不含合并操作。
+
 ### 缓存与稳定性
 
 - 配置数据按“服务器 + 访问身份 + 命名空间”隔离，防止不同环境或账号共享错误数据。
+- **访问可见性（1.3.8）**：服务器拒绝提供数据后（认证失败或配置读取权限被收回），插件不再展示此前缓存的配置；访问恢复后会自动重新显示。认证失败会隐藏该环境下的全部配置；配置读取权限被拒只隐藏对应命名空间；发布、命名空间发现、历史记录等权限拒绝不会隐藏仍可读取的配置。可见性屏蔽在 IDE 重启后仍然生效，执行 `Tools > Clear Cache` 时随缓存一并清除。
 - 大体积配置使用按条目文件持久化，后台加载，不阻塞 IDE 启动。
 - namespace 索引刷新由统一协调器合并，避免重复加载和旧请求覆盖新状态。
 - 网络请求采用有界、可取消的超时与重试策略。
@@ -85,10 +92,12 @@ export JAVA_HOME=/Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home
 | --- | --- |
 | Display Name | 环境显示名称，例如 `Local`、`Test`、`Prod` |
 | Nacos Server URL | Nacos 地址，例如 `http://localhost:8848` |
-| Username / Password | Nacos 账号和密码；无认证服务可以留空 |
+| Username / Password / Token | 按认证策略填写；`Anonymous` 可全部留空 |
 | Namespace | 默认命名空间；公开命名空间通常使用 `public` |
 | Default Group | 默认分组，通常为 `DEFAULT_GROUP` |
-| Authentication | `TOKEN`、`BASIC` 或 `HYBRID` |
+| Authentication | `Anonymous`、`Nacos password`、`HTTP Basic` 或 `Bearer Token` |
+| API Policy | `AUTO`（默认）、`V1` 或 `V3` |
+| Allow writes | 是否允许在该环境编辑并发布配置（默认关闭） |
 | Connection Timeout | 当前环境的连接超时时间 |
 | Cross-namespace navigation | 是否允许代码导航匹配其他命名空间中的配置 |
 
@@ -140,7 +149,7 @@ private boolean paymentEnabled;
 
 ## 开发指南
 
-仓库使用 Gradle Wrapper，所有构建命令均在项目根目录执行：
+仓库固定使用 Gradle Wrapper（当前为 Gradle 9.0.0），所有构建命令均在项目根目录执行。开发者、AI Agent 和其他自动化工具都必须使用 `./gradlew`，不要直接调用系统中的 `gradle`；后者可能是其他版本（例如 Homebrew 安装的 9.3.1），会使用错误版本构建并在 `~/.gradle/caches/`、`~/.gradle/daemon/` 下产生对应版本的缓存。
 
 ```bash
 # 编译主代码和测试代码

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is **Nacos Search**, an IntelliJ IDEA platform plugin that lets developers query Nacos configuration center data directly from the IDE. It is written in Kotlin and built with Gradle using the IntelliJ Platform Gradle Plugin.
 
 - **Plugin ID**: `com.nanyin.nacos.search`
-- **Version**: sourced from `build.gradle.kts` (currently `1.3.3`) — bump it there and mirror the `changeNotes`/`<change-notes>` blocks in both `build.gradle.kts` and `META-INF/plugin.xml` when releasing.
+- **Version**: sourced from `build.gradle.kts` (currently `1.3.8`) — bump it there and mirror the `changeNotes`/`<change-notes>` blocks in both `build.gradle.kts` and `META-INF/plugin.xml` when releasing.
 - **Target Platform**: IntelliJ IDEA Community Edition (`sinceBuild = 243`, `untilBuild = 261.*`)
 - **JDK**: Java 17
 - **Gradle**: 9.0.0
@@ -18,7 +18,7 @@ The plugin declares a right-side tool window (`Nacos Search`), a settings page u
 
 ## Common Commands
 
-Use the Gradle wrapper for all build operations:
+Use the Gradle wrapper for all build operations. AI agents and automation **must invoke `./gradlew`, never the system `gradle` command**. The wrapper pins Gradle 9.0.0; the machine may also have another version installed (for example Homebrew Gradle 9.3.1), and invoking it directly builds with the wrong version and creates version-specific entries under `~/.gradle/caches/` and `~/.gradle/daemon/`.
 
 ```bash
 # Build the installable plugin distribution
