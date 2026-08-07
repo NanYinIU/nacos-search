@@ -570,6 +570,35 @@ class CacheServiceTest {
     }
 
     @Test
+    fun `namespace index restored within TTL stays readable without proving absence`() = runBlocking {
+        val now = 1_000L
+        val store = InMemoryCacheStore()
+        CacheService({ now }, store).replaceNamespaceIndex(
+            identity = defaultIdentity,
+            namespaceId = "dev",
+            summaries = listOf(
+                NacosConfiguration("app.properties", "DEFAULT_GROUP", "dev", "", "properties")
+            ),
+            ttl = 60_000L
+        )
+
+        val restarted = CacheService({ now }, store)
+        restarted.awaitLoadCompleted()
+
+        assertEquals(
+            listOf("app.properties"),
+            restarted.getNamespaceIndex(defaultIdentity, "dev")?.map { it.dataId }
+        )
+        assertEquals(
+            CacheService.DetailFreshness.FRESH,
+            restarted.snapshot(defaultIdentity).namespaceIndex("dev")!!.freshness
+        )
+        assertFalse(
+            restarted.snapshot(defaultIdentity).namespaceIndex("dev")!!.authoritativeForAbsence
+        )
+    }
+
+    @Test
     fun `removing a detail reclaims its payload from the store`() = runBlocking {
         val store = InMemoryCacheStore()
         val cacheService = CacheService(store)

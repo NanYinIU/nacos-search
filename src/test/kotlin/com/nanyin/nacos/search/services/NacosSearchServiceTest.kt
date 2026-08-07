@@ -31,6 +31,7 @@ import com.intellij.openapi.application.ApplicationManager
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -291,6 +292,55 @@ class NacosSearchServiceTest {
         // Regression guard: this path used to pass no timestamp at all, so every
         // index-backed result claimed WITHIN_TTL regardless of its real age (#42).
         assertEquals(entry?.createdAtMillis, success.confidence.fetchedAtMillis)
+        Unit
+    }
+
+    @Test
+    fun `local index search serves a stale index without full namespace pagination`() = runBlocking {
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+        val context = settings.captureOperationContext().getOrThrow()
+        cache.clearAll()
+        // 1 ms TTL so the index is immediately expired; issue #147 requires
+        // serving it as STALE_CACHE without asking the coordinator to re-page.
+        cache.replaceNamespaceIndex(
+            context.identity,
+            "",
+            listOf(NacosConfiguration("app.yaml", "DEFAULT_GROUP", "", "", "yaml")),
+            ttl = 1L
+        )
+        delay(2L)
+        assertNull(cache.getNamespaceIndexEntry(context.identity, ""))
+        assertTrue(
+            cache.getNamespaceIndexEntry(context.identity, "", allowStale = true) != null
+        )
+
+        var coordinatorCalls = 0
+        val requester = object : NamespaceIndexRequester {
+            override suspend fun requestIndex(
+                request: NamespaceIndexRequest,
+                trigger: IndexTrigger
+            ): IndexOutcome {
+                coordinatorCalls++
+                error("full namespace pagination must not run when a stale index is present")
+            }
+        }
+        val service = NacosSearchService(indexRequester = requester)
+        service.performSearch(
+            NacosSearchService.SearchRequest(
+                dataId = "*",
+                namespace = NamespaceInfo.createPublicNamespace(),
+                operationContext = context
+            ),
+            mock<NacosApiService>()
+        )
+
+        val state = service.searchState.value
+        assertTrue(state is NacosSearchService.SearchState.Success, "search did not succeed: $state")
+        val success = state as NacosSearchService.SearchState.Success
+        assertEquals(NacosSearchService.SearchSource.STALE_CACHE, success.source)
+        assertEquals(listOf("app.yaml"), success.configurations.map { it.dataId })
+        assertEquals(0, coordinatorCalls)
         Unit
     }
 

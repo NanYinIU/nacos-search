@@ -795,10 +795,12 @@ class CacheService internal constructor(
 
     /**
      * Restores namespace indexes from the store. Unlike list pages, expired
-     * indexes are kept so a restart can serve them as STALE (issue #147) —
-     * amber markers and progressive refresh instead of a guaranteed full
-     * sweep. Authority for absence stays memory-only: nothing here raises
-     * [namespaceIndexAuthority], so a restored index cannot prove absence.
+     * indexes are kept so a restart can serve them via allowStale (issue #147)
+     * instead of forcing a full namespace sweep. Authority for absence stays
+     * memory-only: nothing here raises [namespaceIndexAuthority], so a
+     * restored index cannot prove a configuration gone. Freshness follows the
+     * entry's own createdAt/TTL — a long downtime surfaces as STALE the same
+     * way an in-session expiry does.
      */
     private suspend fun loadIdentityScopedNamespaceIndexesFromStore() {
         store.loadNamespaceIndexes().forEach { (key, entry) ->
