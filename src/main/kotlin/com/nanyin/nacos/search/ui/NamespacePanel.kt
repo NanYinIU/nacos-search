@@ -232,18 +232,22 @@ class NamespacePanel(
         // selection left over from the previous environment.
         projectSession?.ensureInitialized(settings.migrationDefaults())
         val storedId = projectSession?.sessionState?.namespaceId?.takeIf { it.isNotBlank() }
-        val projectSelection = storedId?.let { id -> findLoadedNamespace(id) }
+        val projectSelection = storedId?.let { token -> findLoadedNamespace(token) }
         val toSelect: NamespaceInfo? = projectSelection
             ?: storedId?.let { NamespaceInfo(namespaceId = it, namespaceName = it) }
             ?: currentNamespace
         val wasEmpty = currentNamespace == null
         if (toSelect != null) {
             val matching = findLoadedNamespace(toSelect.namespaceId)
+                ?: findLoadedNamespace(toSelect.namespaceName)
             if (matching != null) {
                 // Programmatic restore: update the field now; notify only on the
                 // first pick so env-switch restart (which opens the namespace
                 // itself) does not double-load.
                 currentNamespace = matching
+                // Settings often store the display name; once discovery returns
+                // the real UUID, heal the session so search uses that id.
+                healSessionNamespaceIfNeeded(matching)
                 invokeOnEdt(ModalityState.defaultModalityState()) {
                     renderButton(matching)
                     if (wasEmpty) onNamespaceSelected(matching)
@@ -277,10 +281,38 @@ class NamespacePanel(
         }
     }
 
-    /** Match by canonical Namespace id so `public` and blank both resolve. */
-    private fun findLoadedNamespace(namespaceId: String): NamespaceInfo? {
-        val want = NamespaceInfo.canonicalId(namespaceId)
-        return namespaces.find { NamespaceInfo.canonicalId(it.namespaceId) == want }
+    /**
+     * Resolve a stored token to a discovered Namespace. Tokens may be the
+     * canonical id (`public` / UUID) or the display name written in settings
+     * (e.g. `uxinlive`) — env switch must land on the row that has a real id,
+     * not a phantom name-as-id entry.
+     */
+    private fun findLoadedNamespace(token: String): NamespaceInfo? {
+        if (token.isBlank()) {
+            return namespaces.find { it.isPublicNamespace() }
+        }
+        val want = NamespaceInfo.canonicalId(token)
+        namespaces.find { NamespaceInfo.canonicalId(it.namespaceId) == want }?.let { return it }
+        if (want == NamespaceInfo.PUBLIC) return namespaces.find { it.isPublicNamespace() }
+        return namespaces.find { ns ->
+            !ns.isPublicNamespace() && (
+                ns.namespaceName.equals(token, ignoreCase = true) ||
+                    ns.namespaceShowName.equals(token, ignoreCase = true)
+                )
+        }
+    }
+
+    /** When discovery maps a name token to a UUID, persist that id on the session. */
+    private fun healSessionNamespaceIfNeeded(resolved: NamespaceInfo) {
+        val session = projectSession ?: return
+        val profileId = session.sessionState.selectedProfileId.takeIf { it.isNotBlank() } ?: return
+        val resolvedId = resolved.namespaceId.ifBlank { NamespaceInfo.PUBLIC }
+        if (NamespaceInfo.canonicalId(session.sessionState.namespaceId) ==
+            NamespaceInfo.canonicalId(resolvedId)
+        ) {
+            return
+        }
+        session.adoptEnvironment(profileId, resolvedId)
     }
 
     /**
