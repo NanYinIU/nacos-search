@@ -725,9 +725,15 @@ private fun setupEventHandlers() {
      */
     fun moveToLine(lineIndex: Int) {
         val ed = editor ?: return
+        if (ed.isDisposed) return
         val document = ed.document
+        if (document.lineCount <= 0) return
         val targetLine = lineIndex.coerceIn(0, document.lineCount - 1)
+        // invokeOnEdt always defers (#82). The editor can be released before
+        // this runs — selection change, clear, or tool-window dispose — so
+        // re-check identity and disposal the same way applyKeyGutterMarkers does.
         invokeOnEdt(ModalityState.defaultModalityState()) {
+            if (editor !== ed || ed.isDisposed) return@invokeOnEdt
             val offset = document.getLineStartOffset(targetLine)
             ed.caretModel.moveToOffset(offset)
             ed.scrollingModel.scrollToCaret(com.intellij.openapi.editor.ScrollType.CENTER)
