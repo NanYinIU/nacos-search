@@ -3,8 +3,6 @@ package com.nanyin.nacos.search.ui
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.models.SearchCriteria
-import com.nanyin.nacos.search.listeners.NamespaceChangeListener
-import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 // import com.nanyin.nacos.search.services.NacosConfigService // Not needed
@@ -52,10 +50,9 @@ import com.nanyin.nacos.search.invokeOnEdt
 * Main window for Nacos Search plugin
  * Integrates all UI components and manages their interactions
  */
-class NacosSearchWindow(private val project: Project, private val toolWindow: ToolWindow) : JPanel(BorderLayout()), NamespaceChangeListener, Disposable {
+class NacosSearchWindow(private val project: Project, private val toolWindow: ToolWindow) : JPanel(BorderLayout()), Disposable {
 
     // Services
-    private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
     private val nacosApiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
     // private val nacosConfigService = project.service<NacosConfigService>() // Not needed
     private val nacosSearchService = project.service<NacosSearchService>()
@@ -218,7 +215,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // the app-wide NamespaceService, which would leak another project's
         // selection into this window.
         namespacePanel.onSelectionChanged = { selected ->
-            coroutineScope.launch { onNamespaceChanged(currentNamespace, selected) }
+            coroutineScope.launch { openNamespaceSelection(selected) }
         }
         environmentSwitcher.onSelectionChanged = {
             handleProjectEnvironmentSelectionChanged()
@@ -362,9 +359,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         }
     }
 
-    override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
-        // Keep the window's notion of the active namespace in sync with the service so that
-        // subsequent reloads target the correct namespace.
+    private suspend fun openNamespaceSelection(newNamespace: NamespaceInfo?) {
         currentNamespace = newNamespace
         currentConfiguration = null
 
@@ -693,11 +688,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         namespaceId?.takeIf { it.isNotBlank() && it != "public" } ?: ""
 
     private fun findNamespaceForNavigation(namespaceId: String): NamespaceInfo? =
-        if (namespaceId.isBlank()) {
-            namespaceService.getPublicNamespace() ?: namespaceService.findNamespaceById("")
-        } else {
-            namespaceService.findNamespaceById(namespaceId)
-        }
+        namespacePanel.findNamespaceById(namespaceId)
     
     /**
      * Refresh all data.
