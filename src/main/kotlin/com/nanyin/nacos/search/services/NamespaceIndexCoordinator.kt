@@ -144,10 +144,11 @@ sealed interface IndexOutcome {
 /**
  * The sole owner of full-namespace index work. Ensures that concurrent
  * requests for the same identity+namespace join a single in-flight job
- * (single-flight), that PSI triggers respect a five-minute cooldown after
- * Failed **or Partial** outcomes (neither leaves a FRESH index, so without
- * a cooldown every gutter pass would re-page), and that the latest
- * foreground request wins.
+ * (single-flight), that PSI, SEARCH, and NAMESPACE_SWITCH share one per-key
+ * exponential failure backoff after Failed **or Partial** outcomes (neither
+ * leaves a FRESH index, so without a backoff every gesture would re-page), that
+ * MANUAL_REFRESH bypasses the backoff, and that the latest foreground request
+ * wins.
  *
  * Every generation is dispatched through [NacosApiService.loadNamespace] with
  * the captured operation context — there is no generation branch and no
@@ -163,7 +164,8 @@ sealed interface IndexOutcome {
 @Service(Service.Level.APP)
 class NamespaceIndexCoordinator internal constructor(
     private val apiService: NacosApiService,
-    private val cacheService: CacheService
+    private val cacheService: CacheService,
+    private val clock: () -> Long = { System.currentTimeMillis() }
 ) : NamespaceIndexRequester {
 
     constructor() : this(
@@ -178,14 +180,14 @@ class NamespaceIndexCoordinator internal constructor(
     private val inFlight = ConcurrentHashMap<NamespaceIndexKey, Deferred<IndexOutcome>>()
     private val flightMutex = Mutex()
 
-    // PSI cooldown: tracks the last failure time per key
-    private val psiCooldownUntil = ConcurrentHashMap<NamespaceIndexKey, Long>()
-    private val psiCooldownMs = 5L * 60 * 1000 // 5 minutes
+    // Shared failure backoff: consecutive Failed/Partial outcomes space out
+    // retries for every background/derived trigger (issue #145).
+    private val failureBackoff = ConcurrentHashMap<NamespaceIndexKey, FailureBackoff>()
 
     /**
      * Requests a full namespace index load for [request]. If an identical request
      * is already in flight, the caller joins it. The [trigger] determines the
-     * front-end cutoff and whether PSI cooldown applies.
+     * front-end cutoff and whether the shared failure backoff applies.
      */
     override suspend fun requestIndex(request: NamespaceIndexRequest, trigger: IndexTrigger): IndexOutcome {
         val key = request.key
@@ -193,12 +195,13 @@ class NamespaceIndexCoordinator internal constructor(
         require(request.operationContext.identity == key.identity) {
             "Namespace index key does not match its captured operation context"
         }
-        // PSI cooldown: skip if recently Failed or Partial
-        if (trigger == IndexTrigger.PSI) {
-            val cooldownUntil = psiCooldownUntil[key]
-            if (cooldownUntil != null && System.currentTimeMillis() < cooldownUntil) {
-                return IndexOutcome.Stale(0, DatasetState(DataSource.CACHE, DataFreshness.UNKNOWN, DatasetCompleteness.FAILED, null))
-            }
+        // Shared backoff: skip PSI / SEARCH / NAMESPACE_SWITCH while cooling
+        // down. MANUAL_REFRESH always proceeds (issue #145).
+        if (trigger != IndexTrigger.MANUAL_REFRESH && isInFailureBackoff(key)) {
+            return IndexOutcome.Stale(
+                0,
+                DatasetState(DataSource.CACHE, DataFreshness.UNKNOWN, DatasetCompleteness.FAILED, null)
+            )
         }
 
         // Single-flight: join or start
@@ -247,14 +250,14 @@ class NamespaceIndexCoordinator internal constructor(
             )
             if (result.isFailure) {
                 markNonAuthoritative(key, observation)
-                recordPsiFailure(key)
+                recordFailure(key)
                 return IndexOutcome.Failed(
                     result.exceptionOrNull() ?: RuntimeException("Unknown namespace index failure")
                 )
             }
 
             val loadResult = result.getOrNull()!!
-            val now = System.currentTimeMillis()
+            val now = clock()
 
             when (loadResult.completeness) {
                 DatasetCompleteness.COMPLETE -> {
@@ -280,7 +283,7 @@ class NamespaceIndexCoordinator internal constructor(
                             DatasetState(DataSource.REMOTE, DataFreshness.UNKNOWN, DatasetCompleteness.COMPLETE, now)
                         )
                     }
-                    clearPsiCooldown(key)
+                    clearFailureBackoff(key)
                     IndexOutcome.Complete(
                         loadResult.configurations.size,
                         DatasetState(DataSource.REMOTE, DataFreshness.FRESH, DatasetCompleteness.COMPLETE, now)
@@ -292,10 +295,10 @@ class NamespaceIndexCoordinator internal constructor(
                     // arrive only via navigation prefetch or explicit reads.
                     // Keep the typed stopping cause so search stale-fallback
                     // policy and presentation can refuse refused-access (issue #122).
-                    // Cool down PSI like Failed: Partial never leaves FRESH, so
-                    // without this every gutter pass would re-page the namespace.
+                    // Cool down like Failed: Partial never leaves FRESH, so
+                    // without this every gesture would re-page the namespace.
                     markNonAuthoritative(key, observation)
-                    recordPsiFailure(key)
+                    recordFailure(key)
                     IndexOutcome.Partial(
                         loaded = loadResult.configurations.size,
                         expected = loadResult.expectedCount,
@@ -305,7 +308,7 @@ class NamespaceIndexCoordinator internal constructor(
                 }
                 DatasetCompleteness.FAILED -> {
                     markNonAuthoritative(key, observation)
-                    recordPsiFailure(key)
+                    recordFailure(key)
                     IndexOutcome.Failed(
                         loadResult.stoppingCause
                             ?: RuntimeException("Namespace list failed")
@@ -314,7 +317,7 @@ class NamespaceIndexCoordinator internal constructor(
             }
         } catch (e: Exception) {
             markNonAuthoritative(key, observation)
-            recordPsiFailure(key)
+            recordFailure(key)
             IndexOutcome.Failed(e)
         }
     }
@@ -332,15 +335,39 @@ class NamespaceIndexCoordinator internal constructor(
         )
     }
 
-    private fun recordPsiFailure(key: NamespaceIndexKey) {
-        psiCooldownUntil[key] = System.currentTimeMillis() + psiCooldownMs
+    private fun isInFailureBackoff(key: NamespaceIndexKey): Boolean {
+        val until = failureBackoff[key]?.cooldownUntilMillis ?: return false
+        return clock() < until
     }
 
-    private fun clearPsiCooldown(key: NamespaceIndexKey) {
-        psiCooldownUntil.remove(key)
+    private fun recordFailure(key: NamespaceIndexKey) {
+        val previous = failureBackoff[key]
+        val consecutive = (previous?.consecutiveFailures ?: 0) + 1
+        failureBackoff[key] = FailureBackoff(
+            cooldownUntilMillis = clock() + backoffDelayMillis(consecutive),
+            consecutiveFailures = consecutive
+        )
+    }
+
+    private fun clearFailureBackoff(key: NamespaceIndexKey) {
+        failureBackoff.remove(key)
     }
 
     fun dispose() {
         scope.cancel()
+    }
+
+    private data class FailureBackoff(
+        val cooldownUntilMillis: Long,
+        val consecutiveFailures: Int
+    )
+
+    companion object {
+        /** First failure: 30s; second: 2m; third and later: 5m cap (issue #145). */
+        internal fun backoffDelayMillis(consecutiveFailures: Int): Long = when {
+            consecutiveFailures <= 1 -> 30_000L
+            consecutiveFailures == 2 -> 120_000L
+            else -> 300_000L
+        }
     }
 }

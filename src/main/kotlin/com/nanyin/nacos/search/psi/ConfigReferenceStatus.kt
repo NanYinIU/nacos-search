@@ -23,6 +23,19 @@ package com.nanyin.nacos.search.psi
  */
 enum class ConfigReferenceStatus { RESOLVED, STALE, UNRESOLVED, UNDECIDABLE, UNAVAILABLE }
 
+/**
+ * Whether a gutter pass for this status may kick off a background namespace-index
+ * refresh. Resolved-but-stale markers render amber without network; only
+ * unresolved / undecidable / unavailable states need a sweep (issue #145).
+ */
+fun ConfigReferenceStatus.mayRequestBackgroundRefresh(): Boolean = when (this) {
+    ConfigReferenceStatus.UNRESOLVED,
+    ConfigReferenceStatus.UNDECIDABLE,
+    ConfigReferenceStatus.UNAVAILABLE -> true
+    ConfigReferenceStatus.RESOLVED,
+    ConfigReferenceStatus.STALE -> false
+}
+
 data class ConfigResolution(
     val status: ConfigReferenceStatus,
     val hits: List<NacosKeyResolver.KeyHit>,

@@ -385,4 +385,138 @@ class NamespaceIndexCoordinatorTest {
         val second = coordinator.requestIndex(request, IndexTrigger.PSI)
         assertTrue("Expected stale during Partial cooldown: $second", second is IndexOutcome.Stale)
     }
+
+    @Test
+    fun `SEARCH and NAMESPACE_SWITCH share failure backoff with PSI`() = runBlocking {
+        val now = java.util.concurrent.atomic.AtomicLong(1_000_000L)
+        val apiService = mock<NacosApiService>()
+        val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
+        whenever(apiService.operationGateway()).thenReturn(gateway)
+        val cacheService = CacheService({ 2_000_000L }, InMemoryCacheStore())
+        cacheService.clearAll()
+        val request = indexRequest("shared-backoff-ns")
+        whenever(
+            apiService.loadNamespace(
+                namespaceId = "shared-backoff-ns",
+                useCache = false,
+                operationContext = context
+            )
+        ).thenReturn(Result.failure(RuntimeException("offline")))
+
+        val coordinator = NamespaceIndexCoordinator(apiService, cacheService, clock = { now.get() })
+        val first = coordinator.requestIndex(request, IndexTrigger.PSI)
+        assertTrue("Expected Failed: $first", first is IndexOutcome.Failed)
+
+        val searchDuringBackoff = coordinator.requestIndex(request, IndexTrigger.SEARCH)
+        assertTrue(
+            "SEARCH must share the failure backoff (issue #145): $searchDuringBackoff",
+            searchDuringBackoff is IndexOutcome.Stale
+        )
+        val switchDuringBackoff = coordinator.requestIndex(request, IndexTrigger.NAMESPACE_SWITCH)
+        assertTrue(
+            "NAMESPACE_SWITCH must share the failure backoff (issue #145): $switchDuringBackoff",
+            switchDuringBackoff is IndexOutcome.Stale
+        )
+    }
+
+    @Test
+    fun `MANUAL_REFRESH bypasses failure backoff`() = runBlocking {
+        val now = java.util.concurrent.atomic.AtomicLong(1_000_000L)
+        val apiService = mock<NacosApiService>()
+        val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
+        whenever(apiService.operationGateway()).thenReturn(gateway)
+        val cacheService = CacheService({ 2_000_000L }, InMemoryCacheStore())
+        cacheService.clearAll()
+        val request = indexRequest("manual-bypass-ns")
+        whenever(
+            apiService.loadNamespace(
+                namespaceId = "manual-bypass-ns",
+                useCache = false,
+                operationContext = context
+            )
+        ).thenReturn(Result.failure(RuntimeException("offline")))
+
+        val coordinator = NamespaceIndexCoordinator(apiService, cacheService, clock = { now.get() })
+        assertTrue(coordinator.requestIndex(request, IndexTrigger.PSI) is IndexOutcome.Failed)
+
+        // Still failing, but manual must not be gated by the backoff.
+        val manual = coordinator.requestIndex(request, IndexTrigger.MANUAL_REFRESH)
+        assertTrue("MANUAL_REFRESH must bypass backoff: $manual", manual is IndexOutcome.Failed)
+    }
+
+    @Test
+    fun `failure backoff grows 30s then 2m then 5m and resets on Complete`() = runBlocking {
+        val now = java.util.concurrent.atomic.AtomicLong(1_000_000L)
+        val apiService = mock<NacosApiService>()
+        val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
+        whenever(apiService.operationGateway()).thenReturn(gateway)
+        val cacheService = CacheService({ 2_000_000L }, InMemoryCacheStore())
+        cacheService.clearAll()
+        val request = indexRequest("exp-backoff-ns")
+        // Avoid thenAnswer + Result: mockito double-wraps the value type for
+        // suspend Result returns. Re-stub with thenReturn before each call.
+        suspend fun stubFailure() {
+            whenever(
+                apiService.loadNamespace(
+                    namespaceId = "exp-backoff-ns",
+                    useCache = false,
+                    operationContext = context
+                )
+            ).thenReturn(Result.failure(RuntimeException("offline")))
+        }
+        suspend fun stubComplete() {
+            whenever(
+                apiService.loadNamespace(
+                    namespaceId = "exp-backoff-ns",
+                    useCache = false,
+                    operationContext = context
+                )
+            ).thenReturn(
+                Result.success(
+                    NamespaceLoadResult(
+                        completeness = DatasetCompleteness.COMPLETE,
+                        expectedCount = 0,
+                        configurations = emptyList(),
+                        failures = emptyList()
+                    )
+                )
+            )
+        }
+
+        val coordinator = NamespaceIndexCoordinator(apiService, cacheService, clock = { now.get() })
+
+        stubFailure()
+        assertTrue(coordinator.requestIndex(request, IndexTrigger.PSI) is IndexOutcome.Failed)
+        // First backoff: 30s — still blocked at +29s, open at +30s.
+        now.addAndGet(29_000L)
+        assertTrue(coordinator.requestIndex(request, IndexTrigger.SEARCH) is IndexOutcome.Stale)
+        now.addAndGet(1_000L)
+        stubFailure()
+        assertTrue(coordinator.requestIndex(request, IndexTrigger.SEARCH) is IndexOutcome.Failed)
+
+        // Second backoff: 2m — blocked at +119s, open at +120s.
+        now.addAndGet(119_000L)
+        assertTrue(coordinator.requestIndex(request, IndexTrigger.NAMESPACE_SWITCH) is IndexOutcome.Stale)
+        now.addAndGet(1_000L)
+        stubFailure()
+        assertTrue(coordinator.requestIndex(request, IndexTrigger.NAMESPACE_SWITCH) is IndexOutcome.Failed)
+
+        // Third backoff: 5m cap — blocked at +299s, open at +300s.
+        now.addAndGet(299_000L)
+        assertTrue(coordinator.requestIndex(request, IndexTrigger.PSI) is IndexOutcome.Stale)
+        now.addAndGet(1_000L)
+        stubComplete()
+        val completeOutcome = coordinator.requestIndex(request, IndexTrigger.PSI)
+        assertTrue("Expected Complete after 5m backoff, got: $completeOutcome", completeOutcome is IndexOutcome.Complete)
+
+        // Success resets: a fresh failure starts again at 30s, not 5m.
+        stubFailure()
+        assertTrue(coordinator.requestIndex(request, IndexTrigger.PSI) is IndexOutcome.Failed)
+        now.addAndGet(30_000L)
+        stubComplete()
+        assertTrue(
+            "Backoff must reset after Complete so the next window is 30s",
+            coordinator.requestIndex(request, IndexTrigger.PSI) is IndexOutcome.Complete
+        )
+    }
 }
