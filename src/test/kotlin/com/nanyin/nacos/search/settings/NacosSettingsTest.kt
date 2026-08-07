@@ -118,8 +118,54 @@ class NacosSettingsTest {
     fun `legacy unused settings deserialize without affecting validation`() {
         // XmlSerializer ignores unknown attributes on load. Fields removed in
         // issue #156 must not block startup validation of a migrated install.
-        val errors = settings.validate()
-        assertTrue(errors.isEmpty())
+        val state = NacosSettings()
+        state.settingsSchemaVersion = SettingsSchema.CURRENT
+        state.profileMigrationCompleted = true
+        state.credentialSlotsPublished = true
+        state.activeServerId = "s_local"
+        state.migratedDefaultProfileId = "s_local"
+        state.profiles = mutableListOf(
+            com.nanyin.nacos.search.models.EnvironmentProfile(
+                id = "s_local",
+                displayName = "Local",
+                canonicalEndpoint = "http://localhost:8848",
+                authMode = AuthMode.ANONYMOUS
+            )
+        )
+        val element = com.intellij.util.xmlb.XmlSerializer.serialize(state)
+        // Inject removed-field attributes the way an older build would have written them.
+        element.addContent(
+            org.jdom.Element("option").apply {
+                setAttribute("name", "autoRefreshEnabled")
+                setAttribute("value", "true")
+            }
+        )
+        element.addContent(
+            org.jdom.Element("option").apply {
+                setAttribute("name", "rememberLastSearch")
+                setAttribute("value", "true")
+            }
+        )
+        element.addContent(
+            org.jdom.Element("option").apply {
+                setAttribute("name", "connectionTimeoutSeconds")
+                setAttribute("value", "5")
+            }
+        )
+        element.addContent(
+            org.jdom.Element("option").apply {
+                setAttribute("name", "searchResultLimit")
+                setAttribute("value", "50")
+            }
+        )
+
+        val restored = com.intellij.util.xmlb.XmlSerializer.deserialize(element, NacosSettings::class.java)
+        val loaded = NacosSettings()
+        loaded.loadState(restored)
+
+        assertTrue(loaded.validate().isEmpty())
+        assertTrue(loaded.isValid())
+        assertEquals("http://localhost:8848", loaded.getActiveProfile()?.canonicalEndpoint)
     }
 
     @Test
