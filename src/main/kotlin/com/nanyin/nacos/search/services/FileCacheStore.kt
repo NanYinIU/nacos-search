@@ -56,10 +56,19 @@ internal class FileCacheStore(
         legacyKeysProperty = "nacos.cache.list.keys",
         legacyBlobPrefix = "nacos.cache.list."
     )
+    private val namespaceIndexes = StoredKind<List<NacosConfiguration>>(
+        dir = baseDir.resolve("indexes"),
+        recordType = object : TypeToken<StoredRecord<List<NacosConfiguration>>>() {}.type,
+        entryType = object : TypeToken<CacheService.CacheEntry<List<NacosConfiguration>>>() {}.type,
+        // Namespace indexes were never on the pre-store schema; empty legacy
+        // names keep adoption a no-op for this kind.
+        legacyKeysProperty = "nacos.cache.index.keys",
+        legacyBlobPrefix = "nacos.cache.index."
+    )
     private val visibilityDir: Path = baseDir.resolve("visibility")
     private val visibilityRecordType: Type =
         object : TypeToken<VisibilityStoredRecord>() {}.type
-    private val kinds = listOf(details, listPages)
+    private val kinds = listOf(details, listPages, namespaceIndexes)
 
     private val migrationMutex = Mutex()
 
@@ -100,6 +109,17 @@ internal class FileCacheStore(
         store(listPages, key, entry)
 
     override suspend fun removeListPage(key: String) = remove(listPages, key)
+
+    override suspend fun loadNamespaceIndexes():
+        Map<String, CacheService.CacheEntry<List<NacosConfiguration>>> =
+        loadAll(namespaceIndexes)
+
+    override suspend fun putNamespaceIndex(
+        key: String,
+        entry: CacheService.CacheEntry<List<NacosConfiguration>>
+    ) = store(namespaceIndexes, key, entry)
+
+    override suspend fun removeNamespaceIndex(key: String) = remove(namespaceIndexes, key)
 
     override suspend fun loadVisibilityRecords(): Map<String, AccessVisibilityRecord> {
         // Visibility records have no legacy schema; skip adoption so a visibility

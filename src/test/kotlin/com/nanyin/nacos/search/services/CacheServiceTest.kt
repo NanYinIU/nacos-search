@@ -15,6 +15,7 @@ import kotlinx.coroutines.yield
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -481,9 +482,18 @@ class CacheServiceTest {
         )
 
         // Issue #52: summary index must not leave detail payloads behind.
+        // Issue #147: the index itself does round-trip; only details stay out.
         val reloaded = CacheService(store)
+        reloaded.awaitLoadCompleted()
         assertNull(reloaded.getConfigDetail(defaultIdentity, "dev", "seed.properties", "DEFAULT_GROUP"))
         assertTrue(store.loadDetails().isEmpty())
+        assertEquals(
+            listOf("seed.properties"),
+            reloaded.getNamespaceIndex(defaultIdentity, "dev", allowStale = true)?.map { it.dataId }
+        )
+        assertFalse(
+            reloaded.snapshot(defaultIdentity).namespaceIndex("dev")!!.authoritativeForAbsence
+        )
     }
 
     @Test
@@ -503,6 +513,14 @@ class CacheServiceTest {
             response = ConfigListResponse(0, 1, 1, emptyList()),
             ttl = 60_000L
         )
+        first.replaceNamespaceIndex(
+            identity = defaultIdentity,
+            namespaceId = "dev",
+            summaries = listOf(
+                NacosConfiguration("gone.properties", "DEFAULT_GROUP", "dev", "", "properties")
+            ),
+            ttl = 60_000L
+        )
         // Confirms the payload was persisted and reloadable before clear.
         assertEquals(
             "x=1",
@@ -515,7 +533,40 @@ class CacheServiceTest {
         // an entry the user explicitly discarded.
         assertTrue(store.loadDetails().isEmpty())
         assertTrue(store.loadListPages().isEmpty())
+        assertTrue(store.loadNamespaceIndexes().isEmpty())
         assertNull(CacheService(store).getConfigDetail(defaultIdentity, "dev", "gone.properties", "DEFAULT_GROUP"))
+        assertNull(CacheService(store).getNamespaceIndex(defaultIdentity, "dev", allowStale = true))
+    }
+
+    @Test
+    fun `expired namespace index survives restart and serves as stale`() = runBlocking {
+        var now = 1_000L
+        val store = InMemoryCacheStore()
+        CacheService({ now }, store).replaceNamespaceIndex(
+            identity = defaultIdentity,
+            namespaceId = "dev",
+            summaries = listOf(
+                NacosConfiguration("app.properties", "DEFAULT_GROUP", "dev", "", "properties")
+            ),
+            ttl = 60_000L
+        )
+
+        now = 1_000L + 60_000L + 1L
+        val restarted = CacheService({ now }, store)
+        restarted.awaitLoadCompleted()
+
+        assertNull(restarted.getNamespaceIndex(defaultIdentity, "dev"))
+        assertEquals(
+            listOf("app.properties"),
+            restarted.getNamespaceIndex(defaultIdentity, "dev", allowStale = true)?.map { it.dataId }
+        )
+        assertEquals(
+            CacheService.DetailFreshness.STALE,
+            restarted.snapshot(defaultIdentity).namespaceIndex("dev")!!.freshness
+        )
+        assertFalse(
+            restarted.snapshot(defaultIdentity).namespaceIndex("dev")!!.authoritativeForAbsence
+        )
     }
 
     @Test
