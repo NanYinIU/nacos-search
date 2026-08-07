@@ -350,4 +350,39 @@ class NamespaceIndexCoordinatorTest {
         val second = coordinator.requestIndex(request, IndexTrigger.PSI)
         assertTrue("Expected stale during cooldown: $second", second is IndexOutcome.Stale)
     }
+
+    @Test
+    fun `PSI trigger after Partial respects cooldown`() = runBlocking {
+        val apiService = mock<NacosApiService>()
+        val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
+        whenever(apiService.operationGateway()).thenReturn(gateway)
+        val cacheService = CacheService({ 2_000_000L }, InMemoryCacheStore())
+        cacheService.clearAll()
+        val request = indexRequest("partial-cooldown-ns")
+        whenever(
+            apiService.loadNamespace(
+                namespaceId = "partial-cooldown-ns",
+                useCache = false,
+                operationContext = context
+            )
+        ).thenReturn(
+            Result.success(
+                NamespaceLoadResult(
+                    completeness = DatasetCompleteness.PARTIAL,
+                    expectedCount = 2,
+                    configurations = listOf(
+                        NacosConfiguration("a.yaml", "DEFAULT_GROUP", "partial-cooldown-ns", "x=1")
+                    ),
+                    failures = emptyList()
+                )
+            )
+        )
+
+        val coordinator = NamespaceIndexCoordinator(apiService, cacheService)
+        val first = coordinator.requestIndex(request, IndexTrigger.PSI)
+        assertTrue("Expected Partial: $first", first is IndexOutcome.Partial)
+
+        val second = coordinator.requestIndex(request, IndexTrigger.PSI)
+        assertTrue("Expected stale during Partial cooldown: $second", second is IndexOutcome.Stale)
+    }
 }
