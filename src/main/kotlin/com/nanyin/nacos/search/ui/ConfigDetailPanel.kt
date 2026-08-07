@@ -94,6 +94,18 @@ class ConfigDetailPanel internal constructor(
 
     companion object {
         private const val DETAIL_HORIZONTAL_INSET = 10
+
+        /**
+         * Whether a Body re-render may keep the live editor. Quiet background
+         * confirms of the same content must not recreate it — that reset the
+         * caret to line 0 after @NacosValue navigation.
+         */
+        internal fun shouldReuseDetailEditor(
+            hasLiveEditor: Boolean,
+            sameCoordinate: Boolean,
+            editing: Boolean,
+            sameContent: Boolean
+        ): Boolean = hasLiveEditor && sameCoordinate && (editing || sameContent)
     }
 
     /** Namespace for history and publish — the one derivation, shared with the window. */
@@ -697,6 +709,12 @@ private fun setupEventHandlers() {
         keptCachedBody = plan.immediate
         plan.immediate?.let { render(it) }
         if (!plan.shouldLoad) return
+        // The immediate paint may have consumed pending navigation. Re-arm so a
+        // later Body paint (remote confirm that changes content and recreates
+        // the editor) can land on the same line again.
+        if (lineIndex >= 0) {
+            pendingNavigation = PendingNavigation(configuration.getKey(), lineIndex)
+        }
         loadConfigurationContent(
             configuration,
             fromCache,
@@ -999,9 +1017,15 @@ private fun setupEventHandlers() {
                 if (!isActive) return@launch
                 setLoadingState(false)
                 render(state)
-                if (state is DetailViewState.Body && state.overlay == DetailOverlay.None) {
-                    refreshNavigationState()
-                } else if (state is DetailViewState.Body && state.overlay == DetailOverlay.Deleted) {
+                // Quiet confirm of an already-fresh cached body must not restart
+                // the daemon: each restart clears then redraws @NacosValue gutters
+                // (blue↔gray flicker). Publish navigation only when this load may
+                // have introduced detail the key index has not seen.
+                val mayHaveNewDetail = !keepCachedVisible || forceRefresh
+                if (mayHaveNewDetail &&
+                    state is DetailViewState.Body &&
+                    (state.overlay == DetailOverlay.None || state.overlay == DetailOverlay.Deleted)
+                ) {
                     refreshNavigationState()
                 }
             } catch (e: Exception) {
@@ -1296,9 +1320,20 @@ private fun setupEventHandlers() {
                 hideFreshnessStatus()
             }
             is DetailViewState.Body -> {
-                val sameEditor = editor != null &&
-                    currentConfiguration?.getKey() == state.configuration.getKey() &&
-                    state.editing
+                val existing = editor
+                val hasLiveEditor = existing != null && !existing.isDisposed
+                val sameCoordinate = hasLiveEditor &&
+                    currentConfiguration?.getKey() == state.configuration.getKey()
+                val sameContent = sameCoordinate && existing!!.document.text == state.configuration.content
+                // Reuse the editor for quiet background confirms (same body) and
+                // for edit-mode re-renders. Recreating on every Body paint was
+                // resetting the caret to line 0 after @NacosValue navigation.
+                val reuseEditor = shouldReuseDetailEditor(
+                    hasLiveEditor = hasLiveEditor,
+                    sameCoordinate = sameCoordinate,
+                    editing = state.editing,
+                    sameContent = sameContent
+                )
                 currentConfiguration = state.configuration
                 keptCachedBody = state
                 val presented = PresentedResult(
@@ -1306,7 +1341,7 @@ private fun setupEventHandlers() {
                     selectedCoordinate,
                     state.observation
                 )
-                if (!sameEditor) {
+                if (!reuseEditor) {
                     // showCard("content") runs inside displayConfigurationContentSafely
                     // only after the editor is added — showing it earlier is a no-op
                     // when the content card does not exist yet (first load), and can
@@ -1314,6 +1349,12 @@ private fun setupEventHandlers() {
                     displayConfigurationContentSafely(state.configuration, presented)
                 } else {
                     showContentCard()
+                    // Remote confirm may arrive after the first paint consumed
+                    // pending navigation; re-apply if a later load re-armed it,
+                    // otherwise leave the caret where navigation placed it.
+                    if (!state.editing) {
+                        consumePendingNavigation(state.configuration)
+                    }
                 }
                 val overlayText = DetailCopy.overlayMessage(state.overlay, bundleMessage)
                 if (overlayText != null) {
