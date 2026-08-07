@@ -182,6 +182,33 @@ class NacosApiService(
     companion object {
         /** Process-wide formal probe flight shared by all NacosApiService instances. */
         private val sharedProbeFlight = GenerationProbeFlight()
+
+        /**
+         * Upper bound on how many summary pages [loadNamespace] may request.
+         * Uses the tighter of the server's [pagesAvailable] and
+         * ceil([totalCount] / [pageSize]) when both are present, so an inflated
+         * pagesAvailable cannot defeat the [totalCount] bound. When neither is
+         * usable, allow exactly one page so a full-page proxy response cannot
+         * loop forever (issue #145).
+         */
+        internal fun reportedNamespacePageCount(
+            pagesAvailable: Int,
+            totalCount: Int,
+            pageSize: Int
+        ): Int {
+            val fromPages = pagesAvailable.takeIf { it > 0 }
+            val fromTotal = if (totalCount > 0 && pageSize > 0) {
+                ((totalCount + pageSize - 1) / pageSize).coerceAtLeast(1)
+            } else {
+                null
+            }
+            return when {
+                fromPages != null && fromTotal != null -> minOf(fromPages, fromTotal)
+                fromPages != null -> fromPages
+                fromTotal != null -> fromTotal
+                else -> 1
+            }
+        }
     }
 
     /**
@@ -318,6 +345,7 @@ class NacosApiService(
             var expectedCount = 0
             var pageNo = 1
             val pageSize = 100
+            var endedOnShortPage = false
 
             do {
                 val result = listConfigurations(
@@ -364,15 +392,31 @@ class NacosApiService(
                         )
                     )
                 }
+                // Bound by the tighter of pagesAvailable and totalCount/pageSize
+                // so a proxy that ignores paging (or inflates pagesAvailable)
+                // cannot fetch forever (issue #145).
+                val reportedPages = reportedNamespacePageCount(
+                    pagesAvailable = response.pagesAvailable,
+                    totalCount = response.totalCount,
+                    pageSize = pageSize
+                )
+                val shortPage = response.pageItems.size < pageSize
+                if (shortPage) {
+                    endedOnShortPage = true
+                    break
+                }
+                if (pageNo >= reportedPages) break
                 pageNo++
-                if (response.pageItems.size < pageSize) break
             } while (true)
 
             // Completeness from summary pagination alone: we got every expected
             // summary row (or the server reported zero). A detail failure can no
             // longer mark the index partial because we never request details.
+            // A safety-cap stop with no usable totalCount is not a proven end —
+            // treat it as PARTIAL rather than claiming COMPLETE (issue #145).
             val completeness = when {
                 expectedCount > 0 && allSummaries.size < expectedCount -> DatasetCompleteness.PARTIAL
+                !endedOnShortPage && expectedCount <= 0 -> DatasetCompleteness.PARTIAL
                 else -> DatasetCompleteness.COMPLETE
             }
             Result.success(

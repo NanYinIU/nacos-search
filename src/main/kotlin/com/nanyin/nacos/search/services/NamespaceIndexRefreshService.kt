@@ -59,7 +59,7 @@ class NamespaceIndexRefreshService internal constructor(
      * [afterRefresh] runs only on [IndexOutcome.Complete]: Partial never
      * publishes a FRESH authoritative index, so restarting the daemon after
      * Partial would re-enter this path and page again. Partial / Failed cool
-     * down inside the coordinator.
+     * down inside the coordinator's shared failure backoff (issue #145).
      *
      * The navigation detail prefetch is always requested independently for
      * [project] with its own freshness gate (ADR-0043), so a newly declared

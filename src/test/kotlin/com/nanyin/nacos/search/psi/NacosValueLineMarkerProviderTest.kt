@@ -21,6 +21,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -122,7 +123,7 @@ class NacosValueLineMarkerProviderTest {
     }
 
     @Test
-    fun `stale gutter observation requests background refresh without blocking PSI`() = runBlocking {
+    fun `stale gutter observation does not request background refresh`() = runBlocking {
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         cache.writeDetail(
@@ -146,7 +147,8 @@ class NacosValueLineMarkerProviderTest {
         )
 
         assertNotNull(marker)
-        assertTrue(observed)
+        assertEquals(NacosIcons.GutterConfigStale, marker?.createGutterRenderer()?.icon)
+        assertFalse("STALE markers must render without network (issue #145)", observed)
     }
 
     @Test

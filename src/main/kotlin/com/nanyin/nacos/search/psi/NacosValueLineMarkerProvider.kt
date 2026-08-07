@@ -65,7 +65,9 @@ class NacosValueLineMarkerProvider internal constructor(
         val snapshot = ApplicationManager.getApplication().getService(CacheService::class.java)
             .snapshot(project.captureSelectedAccessIdentity())
         val resolution = currentResolution(project, snapshot, placeholder.key, codeContext)
-        if (resolution.status != ConfigReferenceStatus.RESOLVED) {
+        // STALE is resolved-but-aged: render the amber icon without network.
+        // Only states that cannot decide from cache may start a sweep (issue #145).
+        if (resolution.status.mayRequestBackgroundRefresh()) {
             refreshObserver(project, codeContext)
         }
 
