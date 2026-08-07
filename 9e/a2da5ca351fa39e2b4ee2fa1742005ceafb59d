@@ -1,0 +1,23 @@
+README.md
+  s_911d322948cf8f::t_91a7bd259c45ec 23-27,33,40-44,48,95,98-100,152
+AGENTS.md
+  s_911d322948cf8f::t_56a8789dab759f 5-8
+CLAUDE.md
+  s_911d322948cf8f::t_d5b34a5b3698f0 10,21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "9ea2da5ca351fa39e2b4ee2fa1742005ceafb59d",
+  "prompts": {},
+  "sessions": {
+    "s_911d322948cf8f": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "d9603317-f03e-4128-a735-1e169e538115",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
