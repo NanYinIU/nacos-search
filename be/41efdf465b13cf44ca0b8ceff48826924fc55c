@@ -1,0 +1,56 @@
+src/main/kotlin/com/nanyin/nacos/search/services/NacosApiService.kt
+  s_883023841f6ecd::t_3961acad8a25ce 72-73,87,93
+CLAUDE.md
+  s_883023841f6ecd::t_3961acad8a25ce 75,170
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/NamespaceConfigReadPermissionTransportIntegrationTest.kt
+  s_883023841f6ecd::t_3961acad8a25ce 318
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/ReleaseGateOrderingRacesTransportIntegrationTest.kt
+  s_883023841f6ecd::t_3961acad8a25ce 442
+src/test/kotlin/com/nanyin/nacos/search/services/AuthenticationSessionRegistryTest.kt
+  s_883023841f6ecd::t_beece4eba425c9 167,169
+  s_883023841f6ecd::t_faf0472efe4183 135
+  s_883023841f6ecd::t_51ab7e645630f9 10,123,134,140,147-154,156-157,163-164
+  s_883023841f6ecd::t_50dd8c2f56ed38 35
+  s_883023841f6ecd::t_04a5d9a38fbf2b 11,18,20-21,186-207
+  s_883023841f6ecd::t_c3da7370f988d9 15,32
+  s_883023841f6ecd::t_22fb40593156b8 3-4,17,24,27-31,33-34,170
+  s_883023841f6ecd::t_b50e3458cc4dd2 126-131,136
+  s_883023841f6ecd::t_7c1965f58877b8 171
+  s_883023841f6ecd::t_5015704e352c8f 160,162
+  s_883023841f6ecd::t_e7787edc1426b3 166,216-217,221
+  s_883023841f6ecd::t_e7d9514ca029bf 172-185,208
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/PsiNavigationVisibilityTransportIntegrationTest.kt
+  s_883023841f6ecd::t_3961acad8a25ce 243
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosSettings.kt
+  s_883023841f6ecd::t_ae4cdfa16c2157 956
+  s_883023841f6ecd::t_3961acad8a25ce 953
+src/main/kotlin/com/nanyin/nacos/search/services/AuthenticationSessionRegistry.kt
+  s_883023841f6ecd::t_ff4b707f3922e4 114
+  s_883023841f6ecd::t_51ab7e645630f9 56-59,63-64
+  s_883023841f6ecd::t_2c0b583f3bc54e 99-101,117-119,121,124
+  s_883023841f6ecd::t_3961acad8a25ce 3,35
+  s_883023841f6ecd::t_53c83691c01f82 39-43,47,53-54,62,67-75,81-84,102-111,120,122-123,139-141,143-144
+  s_883023841f6ecd::t_beece4eba425c9 88-94,142
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/IdentityAuthBlockTransportIntegrationTest.kt
+  s_883023841f6ecd::t_3961acad8a25ce 268
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/OptionalCapabilityIsolationTransportIntegrationTest.kt
+  s_883023841f6ecd::t_3961acad8a25ce 464
+src/test/kotlin/com/nanyin/nacos/search/services/SessionGenerationIntegrationTest.kt
+  s_883023841f6ecd::t_3961acad8a25ce 341,359-361,376
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "be41efdf465b13cf44ca0b8ceff48826924fc55c",
+  "prompts": {},
+  "sessions": {
+    "s_883023841f6ecd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fdb86-6b72-7833-8e68-aca178889f8e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": null
+    }
+  }
+}
