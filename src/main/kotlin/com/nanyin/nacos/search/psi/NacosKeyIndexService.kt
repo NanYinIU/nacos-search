@@ -1,8 +1,10 @@
 package com.nanyin.nacos.search.psi
 
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.nanyin.nacos.search.services.CacheSnapshot
+import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +32,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 @Service(Service.Level.APP)
 class NacosKeyIndexService internal constructor(
-    rebuildDispatcher: CoroutineDispatcher
+    rebuildDispatcher: CoroutineDispatcher,
+    private val onIndexPublished: () -> Unit = Companion::requestGutterPassAfterPublish
 ) : Disposable {
     constructor() : this(Dispatchers.Default)
 
@@ -57,6 +60,22 @@ class NacosKeyIndexService internal constructor(
     @Volatile
     private var pendingRebuild: CacheSnapshot? = null
 
+    companion object {
+        /**
+         * After an async rebuild publishes, gutters that already painted gray
+         * against the previous empty/stale index must re-analyze. Rebuild the
+         * index is not enough — without a daemon pass the hollow icon sticks.
+         */
+        private fun requestGutterPassAfterPublish() {
+            try {
+                ApplicationManager.getApplication()
+                    .getService(NavigationIndexRefreshService::class.java)
+                    .requestGutterPass(null)
+            } catch (_: Exception) {
+                // Application may be unavailable in unit tests / teardown.
+            }
+        }
+    }
     /**
      * The index for [snapshot], or null while none has been built for its
      * access identity. Never blocks and never rebuilds inline: PSI asks from
@@ -171,17 +190,33 @@ class NacosKeyIndexService internal constructor(
      * running is remembered rather than dropped, and picked up when the running
      * one finishes: a highlighter pass would heal a dropped ask on its own, but
      * [ensureIndexBuilt] is fire-and-forget and has no later pass to heal on.
+     *
+     * When a rebuild publishes a newer index (or the first index for an
+     * identity), [onIndexPublished] runs so gutters re-analyze — otherwise a
+     * hollow icon painted while the previous empty index was served sticks
+     * even though the configuration keys are now present.
      */
     private fun scheduleRebuild(snapshot: CacheSnapshot) {
         pendingRebuild = snapshot
         if (!building.compareAndSet(false, true)) return
         scope.launch {
             try {
+                val before = index
                 var next = pendingRebuild
                 while (next != null) {
                     pendingRebuild = null
                     refreshIndex(next)
                     next = pendingRebuild
+                }
+                val after = index
+                if (after != null &&
+                    (before == null ||
+                        after.version > before.version ||
+                        after.accessIdentity != before.accessIdentity ||
+                        after.accessBlocked != before.accessBlocked ||
+                        after.blockedNamespaces != before.blockedNamespaces)
+                ) {
+                    onIndexPublished()
                 }
             } finally {
                 building.set(false)

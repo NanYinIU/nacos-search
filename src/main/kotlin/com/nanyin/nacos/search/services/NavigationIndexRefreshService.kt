@@ -31,6 +31,16 @@ class NavigationIndexRefreshService {
             .getService(NacosKeyIndexService::class.java)
             .refreshIndex(cacheService.snapshot(identity))
 
+        requestGutterPass(project)
+    }
+
+    /**
+     * Coalesced [DaemonCodeAnalyzer.restart] without rebuilding the key index.
+     * Used when an async index rebuild has already published — gutters that
+     * analyzed against the previous empty/stale index would otherwise stay gray
+     * until the next manual edit.
+     */
+    fun requestGutterPass(project: Project? = null) {
         queueDaemonRestart(project)
     }
 
