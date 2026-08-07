@@ -91,7 +91,6 @@ class NacosConfigurable @JvmOverloads constructor(
     private lateinit var apiPolicyComboBox: JComboBox<NacosApiPolicy>
     private lateinit var authModeComboBox: JComboBox<AuthMode>
     private lateinit var defaultGroupField: JBTextField
-    private lateinit var connectionTimeoutSpinner: JSpinner
     private lateinit var crossNamespaceNavigationCheckBox: JCheckBox
     private lateinit var navigationDetailPrefetchCheckBox: JCheckBox
     private lateinit var writeIntentCheckBox: JCheckBox
@@ -197,12 +196,11 @@ class NacosConfigurable @JvmOverloads constructor(
 
     /**
      * Draft rows that differ from the published state for any reason the store
-     * owns, plus dual-write-only extras not yet on the intent.
+     * owns.
      */
     fun dirtyDraftProfileIds(): Set<String> {
         if (!::draftServers.isInitialized) return emptySet()
-        return classifyCurrentDraft().dirtyProfileIds() +
-            settings.dualWriteExtrasDirtyIds(draftServers)
+        return classifyCurrentDraft().dirtyProfileIds()
     }
 
     /**
@@ -398,7 +396,6 @@ class NacosConfigurable @JvmOverloads constructor(
         server.password = password
         server.authMode = authMode
         server.defaultGroup = defaultGroupField.text.trim()
-        server.connectionTimeoutMs = connectionTimeoutSpinner.value as Int
         server.allowCrossNamespaceNavigation = crossNamespaceNavigationCheckBox.isSelected
         server.navigationDetailPrefetchEnabled = navigationDetailPrefetchCheckBox.isSelected
         server.writeIntent = writeIntentCheckBox.isSelected
@@ -596,9 +593,6 @@ class NacosConfigurable @JvmOverloads constructor(
         defaultGroupField = JBTextField("DEFAULT_GROUP").apply {
             font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 13)
             document.addDocumentListener(docListener)
-        }
-        connectionTimeoutSpinner = JSpinner(SpinnerNumberModel(30000, 1000, 120000, 1000)).apply {
-            addChangeListener { commitDetailFormToDraft() }
         }
         crossNamespaceNavigationCheckBox = JCheckBox().apply {
             putClientProperty("nacos.automation.id", "nacos.settings.crossNamespaceNavigation")
@@ -935,16 +929,6 @@ class NacosConfigurable @JvmOverloads constructor(
         addAdvRow("settings.server.write.intent", writeIntentCheckBox)
         addAdvRow("settings.server.default.group", defaultGroupField)
 
-        // Connection timeout with "ms" unit label
-        advGbc.gridx = 0; advGbc.gridy++; advGbc.weightx = 0.0; advGbc.fill = GridBagConstraints.NONE
-        advGbc.anchor = GridBagConstraints.EAST
-        advBody.add(formLabel("settings.server.timeout"), advGbc)
-        advGbc.gridx = 1; advGbc.weightx = 1.0; advGbc.fill = GridBagConstraints.HORIZONTAL; advGbc.anchor = GridBagConstraints.WEST
-        val timeoutPanel = JPanel(BorderLayout(4, 0))
-        timeoutPanel.add(connectionTimeoutSpinner, BorderLayout.WEST)
-        timeoutPanel.add(JLabel("ms").apply { foreground = JBColor.GRAY }, BorderLayout.CENTER)
-        advBody.add(timeoutPanel, advGbc)
-
         // Cross-namespace code navigation checkbox
         advGbc.gridx = 0; advGbc.gridy++; advGbc.weightx = 0.0
         advBody.add(formLabel("settings.server.cross.namespace.navigation"), advGbc)
@@ -1077,7 +1061,6 @@ class NacosConfigurable @JvmOverloads constructor(
             apiPolicyComboBox.selectedItem = server.apiPolicy
             authModeComboBox.selectedItem = authMode
             defaultGroupField.text = server.defaultGroup
-            connectionTimeoutSpinner.value = server.connectionTimeoutMs
             crossNamespaceNavigationCheckBox.isSelected = server.allowCrossNamespaceNavigation
             navigationDetailPrefetchCheckBox.isSelected = server.navigationDetailPrefetchEnabled
             writeIntentCheckBox.isSelected = server.writeIntent
@@ -1128,19 +1111,15 @@ class NacosConfigurable @JvmOverloads constructor(
         }
         if (!::languageComboBox.isInitialized) {
             // Component not built yet — only draft classification matters.
-            return classifyCurrentDraft().isModified() ||
-                settings.dualWriteExtrasDirtyIds(draftServers).isNotEmpty()
+            return classifyCurrentDraft().isModified()
         }
         val langChanged =
             (languageComboBox.selectedItem as LanguageService.SupportedLanguage) !=
                 languageService.getCurrentLanguage()
         if (langChanged) return true
         // Store-owned semantic comparison is the sole answer for profile rows
-        // (issue #106). Dual-write-only extras (timeout / default group) sit
-        // beside it until they join ProfileIntent.
-        if (classifyCurrentDraft().isModified()) return true
-        if (settings.dualWriteExtrasDirtyIds(draftServers).isNotEmpty()) return true
-        return false
+        // (issue #106 / #156).
+        return classifyCurrentDraft().isModified()
     }
 
     override fun apply() {

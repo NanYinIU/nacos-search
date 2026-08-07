@@ -86,42 +86,19 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     // Deserialization default is ANONYMOUS (XmlSerializer skip-defaults); product
     // seed / reset force NACOS_PASSWORD via [defaultPersistedShape].
     var authMode: AuthMode = AuthMode.ANONYMOUS
+    /**
+     * Legacy HYBRID/TOKEN/BASIC normalization input for [AuthStrategyFormPolicy].
+     * Not a live toggle — retained so older XML and dual-write drafts still
+     * map correctly (issue #156).
+     */
     var enableTokenAuth: Boolean = true
-    var tokenCacheDurationMinutes: Int = 30
-    var autoTokenRefresh: Boolean = true
 
     // Cache configuration
     var cacheEnabled: Boolean = true
     var cacheTtlMinutes: Int = 5
-    var maxCacheSize: Int = 1000
-    // Legacy fields retained for backward-compatible deserialization of old
-    // settings files. They are never read at runtime — periodic refresh was
-    // removed; users trigger refreshes manually or via namespace-switch preheat.
-    var autoRefreshEnabled: Boolean = false
-    var autoRefreshIntervalMinutes: Int = 10
-
-    // Search configuration
-    var searchResultLimit: Int = 100
-    var enableRegexSearch: Boolean = true
-    var caseSensitiveSearch: Boolean = false
-    var highlightMatches: Boolean = true
-
-    // UI configuration
-    var showToolWindow: Boolean = true
-    var toolWindowLocation: String = "right"
-    var rememberLastSearch: Boolean = true
-    var lastSearchQuery: String = ""
-    var lastGroupFilter: String = ""
-    var lastTenantFilter: String = ""
 
     // Language configuration
     var language: String = "en"
-
-    // Connection configuration
-    var connectionTimeoutSeconds: Int = 30
-    var readTimeoutSeconds: Int = 60
-    var retryAttempts: Int = 3
-    var retryDelaySeconds: Int = 2
 
     /**
      * In-memory report from the most recent load-time migration. Not persisted.
@@ -330,7 +307,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             password = server.password
             namespace = server.namespace.ifBlank { "public" }
             authMode = server.authMode
-            connectionTimeoutSeconds = (server.connectionTimeoutMs / 1000).coerceAtLeast(1)
             return
         }
         val profile = profiles.firstOrNull { it.id == activeServerId }
@@ -372,20 +348,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         password = active.password
         namespace = active.namespace
         authMode = active.authMode
-        connectionTimeoutSeconds = (active.connectionTimeoutMs / 1000).coerceAtLeast(1)
-    }
-
-    /**
-     * Pushes the current flat field values back into the active server entry.
-     */
-    fun syncToActiveServer() {
-        val active = getActiveServer()
-        active.serverUrl = serverUrl
-        active.username = username
-        active.password = password
-        active.namespace = namespace
-        active.authMode = authMode
-        active.connectionTimeoutMs = getConnectionTimeoutMillis()
     }
 
     /**
@@ -411,38 +373,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         }
     }
 
-    fun addServer(config: NacosServerConfig, makeActive: Boolean = false) {
-        if (config.id.isEmpty()) {
-            config.id = NacosServerConfig.generateId()
-        }
-        servers.add(config)
-        if (makeActive) {
-            activeServerId = config.id
-            syncFromActiveServer()
-        }
-    }
-
-    fun removeServer(serverId: String): Boolean {
-        if (servers.size <= 1) return false
-        val removed = servers.removeIf { it.id == serverId }
-        if (removed && activeServerId == serverId) {
-            activeServerId = servers.firstOrNull()?.id ?: ""
-            syncFromActiveServer()
-        }
-        return removed
-    }
-
-    fun updateServer(serverId: String, config: NacosServerConfig) {
-        val idx = servers.indexOfFirst { it.id == serverId }
-        if (idx >= 0) {
-            config.id = serverId
-            servers[idx] = config
-            if (serverId == activeServerId) {
-                syncFromActiveServer()
-            }
-        }
-    }
-
     /**
      * Draft rows for the settings dialog. Preference records overlay the dual-write
      * list; when dual-write is empty, synthesizes from published profiles.
@@ -458,9 +388,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
 
     /**
      * Builds an in-memory settings draft from published profiles and preference
-     * records. Secrets come from the published credential slot; dual-write-only
-     * fields (timeout, default group, auto-refresh) come from the dual-write
-     * server row when present. Never writes settings or credentials.
+     * records. Secrets come from the published credential slot. Never writes
+     * settings or credentials.
      */
     fun loadSettingsDraft(
         credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore
@@ -504,9 +433,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 defaultGroup = prefs.defaultGroup.trim().ifBlank {
                     dual?.defaultGroup ?: "DEFAULT_GROUP"
                 },
-                connectionTimeoutMs = dual?.connectionTimeoutMs
-                    ?: getConnectionTimeoutMillis(),
-                autoRefreshOnOpen = dual?.autoRefreshOnOpen ?: true,
                 allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
                 navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled,
                 writeIntent = profile.writeIntent
@@ -549,28 +475,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             previousActiveId = previousActiveId,
             previousSuggestedNamespaces = previousNamespaces
         )
-    }
-
-    /**
-     * Draft-only extras that are not yet preference records: connection timeout
-     * and the retired auto-refresh-on-open toggle. Prefer preference dirty via
-     * [classifyDraft] for default group / navigation prefs (issue #153).
-     */
-    fun dualWriteExtrasDirtyIds(draft: List<NacosServerConfig>): Set<String> {
-        val publishedById = loadSettingsDraft().associateBy { it.id }
-        return draft.mapNotNull { row ->
-            val published = publishedById[row.id]
-            if (published == null) {
-                null
-            } else if (
-                row.connectionTimeoutMs != published.connectionTimeoutMs ||
-                row.autoRefreshOnOpen != published.autoRefreshOnOpen
-            ) {
-                row.id
-            } else {
-                null
-            }
-        }.toSet()
     }
 
     /**
@@ -1159,30 +1063,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             if (cacheTtlMinutes < 1) {
                 errors.add("Cache TTL must be at least 1 minute")
             }
-            
-            if (maxCacheSize < 1) {
-                errors.add("Max cache size must be at least 1")
-            }
-        }
-        
-        if (searchResultLimit < 1) {
-            errors.add("Search result limit must be at least 1")
-        }
-        
-        if (connectionTimeoutSeconds < 1) {
-            errors.add("Connection timeout must be at least 1 second")
-        }
-        
-        if (readTimeoutSeconds < 1) {
-            errors.add("Read timeout must be at least 1 second")
-        }
-        
-        if (retryAttempts < 0) {
-            errors.add("Retry attempts cannot be negative")
-        }
-        
-        if (retryDelaySeconds < 0) {
-            errors.add("Retry delay cannot be negative")
         }
         
         return errors
@@ -1243,79 +1123,10 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
     
     /**
-     * Checks if authentication is configured
-     */
-    fun hasAuthentication(): Boolean {
-        return username.isNotBlank() && password.isNotBlank()
-    }
-    
-    /**
-     * 检查是否配置了token认证
-     */
-    fun hasTokenAuthentication(): Boolean {
-        return enableTokenAuth && username.isNotBlank() && password.isNotBlank()
-    }
-    
-    /**
-     * 获取token缓存时间（毫秒）
-     */
-    fun getTokenCacheDurationMillis(): Long {
-        return tokenCacheDurationMinutes * 60 * 1000L
-    }
-    
-    /**
      * Gets cache TTL in milliseconds
      */
     fun getCacheTtlMillis(): Long {
         return cacheTtlMinutes * 60 * 1000L
-    }
-    
-    /**
-     * Gets auto refresh interval in milliseconds
-     */
-    fun getAutoRefreshIntervalMillis(): Long {
-        return autoRefreshIntervalMinutes * 60 * 1000L
-    }
-    
-    /**
-     * Gets connection timeout in milliseconds
-     */
-    fun getConnectionTimeoutMillis(): Int {
-        return connectionTimeoutSeconds * 1000
-    }
-    
-    /**
-     * Gets read timeout in milliseconds
-     */
-    fun getReadTimeoutMillis(): Int {
-        return readTimeoutSeconds * 1000
-    }
-    
-    /**
-     * Gets retry delay in milliseconds
-     */
-    fun getRetryDelayMillis(): Long {
-        return retryDelaySeconds * 1000L
-    }
-    
-    /**
-     * Updates last search parameters
-     */
-    fun updateLastSearch(query: String, groupFilter: String = "", tenantFilter: String = "") {
-        if (rememberLastSearch) {
-            lastSearchQuery = query
-            lastGroupFilter = groupFilter
-            lastTenantFilter = tenantFilter
-        }
-    }
-    
-    /**
-     * Clears last search parameters
-     */
-    fun clearLastSearch() {
-        lastSearchQuery = ""
-        lastGroupFilter = ""
-        lastTenantFilter = ""
     }
     
     override fun toString(): String {
@@ -1325,11 +1136,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 "namespace='$namespace', " +
                 "authMode=$authMode, " +
                 "enableTokenAuth=$enableTokenAuth, " +
-                "tokenCacheDurationMinutes=$tokenCacheDurationMinutes, " +
-                "autoTokenRefresh=$autoTokenRefresh, " +
                 "cacheEnabled=$cacheEnabled, " +
-                "cacheTtlMinutes=$cacheTtlMinutes, " +
-                "maxCacheSize=$maxCacheSize" +
+                "cacheTtlMinutes=$cacheTtlMinutes" +
                 ")"
     }
 

@@ -538,38 +538,46 @@ class EnvironmentProfileStoreTest {
     }
 
     @Test
-    fun `timeout only dual-write fields do not advance profile revision through the store`() {
-        // ADR-0024 follow-up (#47/#106): connectionTimeoutMs rides the server
-        // dual-write only and is outside ProfileIntent revision classification.
+    fun `preference only dual-write fields do not advance profile revision through the store`() {
+        // Preference-only edits (default group) must not advance profile/access
+        // revisions — store classification owns that gate (ADR-0042 / #156).
         val slots = InMemoryCredentialSlotStore()
         val settings = NacosSettings()
         settings.resetToDefaults()
-        fun server(timeoutMs: Int) = com.nanyin.nacos.search.models.NacosServerConfig(
+        fun server(defaultGroup: String) = com.nanyin.nacos.search.models.NacosServerConfig(
             id = "dev",
             displayName = "Dev",
             serverUrl = "https://nacos.example",
             username = "alice",
             password = "s1",
             authMode = AuthMode.NACOS_PASSWORD,
-            connectionTimeoutMs = timeoutMs
+            defaultGroup = defaultGroup
         )
         settings.applyProfileIntents(
             intents = listOf(intent(id = "dev", secret = "s1", principal = "alice", displayName = "Dev")),
             newActiveId = "dev",
-            dualWriteServers = listOf(server(30_000)),
+            dualWriteServers = listOf(server("DEFAULT_GROUP")),
             credentialSlots = slots
         )
         val before = settings.getProfile("dev")!!
         val outcome = settings.applyProfileIntents(
-            intents = listOf(intent(id = "dev", secret = "s1", principal = "alice", displayName = "Dev")),
+            intents = listOf(
+                intent(
+                    id = "dev",
+                    secret = "s1",
+                    principal = "alice",
+                    displayName = "Dev",
+                    preferences = EnvironmentPreferences.defaultsFor("dev").copy(defaultGroup = "CUSTOM_GROUP")
+                )
+            ),
             newActiveId = "dev",
-            dualWriteServers = listOf(server(60_000)),
+            dualWriteServers = listOf(server("CUSTOM_GROUP")),
             credentialSlots = slots
         )
         assertEquals(before.profileRevision, settings.getProfile("dev")!!.profileRevision)
         assertEquals(before.accessRevision, settings.getProfile("dev")!!.accessRevision)
         assertFalse(outcome.isOperationalChange())
-        assertEquals(60_000, settings.servers.single { it.id == "dev" }.connectionTimeoutMs)
+        assertEquals("CUSTOM_GROUP", settings.preferencesFor("dev").defaultGroup)
     }
 
     // ------------------------------------------------------------------

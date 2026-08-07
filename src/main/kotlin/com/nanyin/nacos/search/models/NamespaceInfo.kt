@@ -53,18 +53,7 @@ data class NamespaceInfo(
             namespaceName.ifEmpty { namespaceId }
         }
     }
-    
-    /**
-     * 获取命名空间的完整描述
-     */
-    fun getFullDescription(): String {
-        return if (namespaceDesc.isNotEmpty()) {
-            "${getDisplayName()} - $namespaceDesc"
-        } else {
-            getDisplayName()
-        }
-    }
-    
+
     companion object {
         /** The one spelling of the public namespace. */
         const val PUBLIC = "public"

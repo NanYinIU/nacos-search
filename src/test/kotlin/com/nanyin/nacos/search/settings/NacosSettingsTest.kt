@@ -25,25 +25,9 @@ class NacosSettingsTest {
         assertEquals("public", settings.namespace)
         assertEquals(AuthMode.NACOS_PASSWORD, settings.authMode)
         assertTrue(settings.enableTokenAuth)
-        assertEquals(30, settings.tokenCacheDurationMinutes)
-        assertTrue(settings.autoTokenRefresh)
         assertTrue(settings.cacheEnabled)
         assertEquals(5, settings.cacheTtlMinutes)
-        assertEquals(1000, settings.maxCacheSize)
-        assertFalse(settings.autoRefreshEnabled)
-        assertEquals(10, settings.autoRefreshIntervalMinutes)
-        assertEquals(100, settings.searchResultLimit)
-        assertTrue(settings.enableRegexSearch)
-        assertFalse(settings.caseSensitiveSearch)
-        assertTrue(settings.highlightMatches)
-        assertTrue(settings.showToolWindow)
-        assertEquals("right", settings.toolWindowLocation)
-        assertTrue(settings.rememberLastSearch)
         assertEquals("en", settings.language)
-        assertEquals(30, settings.connectionTimeoutSeconds)
-        assertEquals(60, settings.readTimeoutSeconds)
-        assertEquals(3, settings.retryAttempts)
-        assertEquals(2, settings.retryDelaySeconds)
         assertFalse(settings.getActiveServer().allowCrossNamespaceNavigation)
     }
 
@@ -131,53 +115,57 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `test validate with invalid max cache size`() {
-        settings.maxCacheSize = 0
-        val errors = settings.validate()
-        assertTrue(errors.contains("Max cache size must be at least 1"))
-    }
+    fun `legacy unused settings deserialize without affecting validation`() {
+        // XmlSerializer ignores unknown attributes on load. Fields removed in
+        // issue #156 must not block startup validation of a migrated install.
+        val state = NacosSettings()
+        state.settingsSchemaVersion = SettingsSchema.CURRENT
+        state.profileMigrationCompleted = true
+        state.credentialSlotsPublished = true
+        state.activeServerId = "s_local"
+        state.migratedDefaultProfileId = "s_local"
+        state.profiles = mutableListOf(
+            com.nanyin.nacos.search.models.EnvironmentProfile(
+                id = "s_local",
+                displayName = "Local",
+                canonicalEndpoint = "http://localhost:8848",
+                authMode = AuthMode.ANONYMOUS
+            )
+        )
+        val element = com.intellij.util.xmlb.XmlSerializer.serialize(state)
+        // Inject removed-field attributes the way an older build would have written them.
+        element.addContent(
+            org.jdom.Element("option").apply {
+                setAttribute("name", "autoRefreshEnabled")
+                setAttribute("value", "true")
+            }
+        )
+        element.addContent(
+            org.jdom.Element("option").apply {
+                setAttribute("name", "rememberLastSearch")
+                setAttribute("value", "true")
+            }
+        )
+        element.addContent(
+            org.jdom.Element("option").apply {
+                setAttribute("name", "connectionTimeoutSeconds")
+                setAttribute("value", "5")
+            }
+        )
+        element.addContent(
+            org.jdom.Element("option").apply {
+                setAttribute("name", "searchResultLimit")
+                setAttribute("value", "50")
+            }
+        )
 
-    @Test
-    fun `test validate no longer checks auto refresh interval`() {
-        // Auto-refresh validation was removed — the feature is gone.
-        settings.autoRefreshIntervalMinutes = 0
-        val errors = settings.validate()
-        assertFalse(errors.contains("Auto refresh interval must be at least 1 minute"))
-    }
+        val restored = com.intellij.util.xmlb.XmlSerializer.deserialize(element, NacosSettings::class.java)
+        val loaded = NacosSettings()
+        loaded.loadState(restored)
 
-    @Test
-    fun `test validate with invalid search result limit`() {
-        settings.searchResultLimit = 0
-        val errors = settings.validate()
-        assertTrue(errors.contains("Search result limit must be at least 1"))
-    }
-
-    @Test
-    fun `test validate with invalid connection timeout`() {
-        settings.connectionTimeoutSeconds = 0
-        val errors = settings.validate()
-        assertTrue(errors.contains("Connection timeout must be at least 1 second"))
-    }
-
-    @Test
-    fun `test validate with invalid read timeout`() {
-        settings.readTimeoutSeconds = 0
-        val errors = settings.validate()
-        assertTrue(errors.contains("Read timeout must be at least 1 second"))
-    }
-
-    @Test
-    fun `test validate with negative retry attempts`() {
-        settings.retryAttempts = -1
-        val errors = settings.validate()
-        assertTrue(errors.contains("Retry attempts cannot be negative"))
-    }
-
-    @Test
-    fun `test validate with negative retry delay`() {
-        settings.retryDelaySeconds = -1
-        val errors = settings.validate()
-        assertTrue(errors.contains("Retry delay cannot be negative"))
+        assertTrue(loaded.validate().isEmpty())
+        assertTrue(loaded.isValid())
+        assertEquals("http://localhost:8848", loaded.getActiveProfile()?.canonicalEndpoint)
     }
 
     @Test
@@ -237,92 +225,9 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `test hasAuthentication`() {
-        assertFalse(settings.hasAuthentication())
-
-        settings.username = "user"
-        settings.password = "pass"
-        assertTrue(settings.hasAuthentication())
-    }
-
-    @Test
-    fun `test hasTokenAuthentication`() {
-        settings.enableTokenAuth = true
-        assertFalse(settings.hasTokenAuthentication())
-
-        settings.username = "user"
-        settings.password = "pass"
-        assertTrue(settings.hasTokenAuthentication())
-
-        settings.enableTokenAuth = false
-        assertFalse(settings.hasTokenAuthentication())
-    }
-
-    @Test
-    fun `test getTokenCacheDurationMillis`() {
-        settings.tokenCacheDurationMinutes = 30
-        assertEquals(30 * 60 * 1000L, settings.getTokenCacheDurationMillis())
-    }
-
-    @Test
     fun `test getCacheTtlMillis`() {
         settings.cacheTtlMinutes = 5
         assertEquals(5 * 60 * 1000L, settings.getCacheTtlMillis())
-    }
-
-    @Test
-    fun `test getAutoRefreshIntervalMillis`() {
-        settings.autoRefreshIntervalMinutes = 10
-        assertEquals(10 * 60 * 1000L, settings.getAutoRefreshIntervalMillis())
-    }
-
-    @Test
-    fun `test getConnectionTimeoutMillis`() {
-        settings.connectionTimeoutSeconds = 30
-        assertEquals(30000, settings.getConnectionTimeoutMillis())
-    }
-
-    @Test
-    fun `test getReadTimeoutMillis`() {
-        settings.readTimeoutSeconds = 60
-        assertEquals(60000, settings.getReadTimeoutMillis())
-    }
-
-    @Test
-    fun `test getRetryDelayMillis`() {
-        settings.retryDelaySeconds = 2
-        assertEquals(2000L, settings.getRetryDelayMillis())
-    }
-
-    @Test
-    fun `test updateLastSearch when remember enabled`() {
-        settings.rememberLastSearch = true
-        settings.updateLastSearch("query", "group", "tenant")
-
-        assertEquals("query", settings.lastSearchQuery)
-        assertEquals("group", settings.lastGroupFilter)
-        assertEquals("tenant", settings.lastTenantFilter)
-    }
-
-    @Test
-    fun `test updateLastSearch when remember disabled`() {
-        settings.rememberLastSearch = false
-        settings.updateLastSearch("query", "group", "tenant")
-
-        assertEquals("", settings.lastSearchQuery)
-        assertEquals("", settings.lastGroupFilter)
-        assertEquals("", settings.lastTenantFilter)
-    }
-
-    @Test
-    fun `test clearLastSearch`() {
-        settings.rememberLastSearch = true
-        settings.updateLastSearch("query", "group", "tenant")
-        settings.clearLastSearch()
-
-        assertEquals("", settings.lastSearchQuery)
-        assertEquals("", settings.lastGroupFilter)
-        assertEquals("", settings.lastTenantFilter)
     }
 
     @Test
@@ -349,21 +254,16 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `test active server sync updates runtime connection settings`() {
+    fun `test active server sync updates flat connection mirrors`() {
         val fast = com.nanyin.nacos.search.models.NacosServerConfig(
             id = "fast",
             displayName = "Fast Local",
-            serverUrl = "http://localhost:8848",
-            connectionTimeoutMs = 5000,
-            autoRefreshOnOpen = false
+            serverUrl = "http://localhost:8848"
         )
         settings.applyServers(listOf(fast), "fast")
 
         assertEquals("http://localhost:8848", settings.serverUrl)
-        assertEquals(5, settings.connectionTimeoutSeconds)
-        // autoRefreshEnabled is a legacy field that is no longer synced from
-        // per-server config; it defaults to false and stays false.
-        assertFalse(settings.autoRefreshEnabled)
+        assertEquals("fast", settings.activeServerId)
     }
 
     @Test
