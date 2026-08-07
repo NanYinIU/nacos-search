@@ -13,6 +13,9 @@ CI for this repo runs on the self-hosted Jenkins at `https://jenkins.gorsen.icu`
 | Live smoke V1 | Nacos `v2.5.3` + `LiveSmokeTest.V1*` | sibling Docker network |
 | Live smoke V3 | Nacos `v3.2.3` + `LiveSmokeTest.V3*` | Admin auth disabled |
 
+ADR-0031 release-gate invariants map to one authoritative suite each — see
+[`release-gate.md`](./release-gate.md).
+
 Heavy Gradle/IDE work runs in **sibling** Docker containers (host
 `docker.sock`), not inside the Jenkins 1.5G cgroup. Mounts use the **host**
 path `/opt/jenkins/home/workspace/nacos-search` (never `$WORKSPACE` alone for

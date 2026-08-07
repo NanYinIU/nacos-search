@@ -91,15 +91,19 @@ class DualStackBrowsingTest {
         )
         val v1Target = lockedTarget(NacosApiGeneration.V1, "public")
         val v3Target = lockedTarget(NacosApiGeneration.V3, "public")
+        val key = SummaryQuery().cacheKey()
 
+        // A V1 browse must not surface under the V3 identity (ADR-0031).
         gateway.listSummaries(v1Target, SummaryQuery()).getOrThrow().value
-        gateway.listSummaries(v3Target, SummaryQuery()).getOrThrow().value
+        gateway.readDetail(v1Target, ConfigurationCoordinate("app.yaml", "G")).getOrThrow().value
+        assertNotNull(cache.getSummaries(v1Target.context.identity, "public", key))
+        assertNotNull(cache.getDetail(v1Target.context.identity, "public", "app.yaml", "G"))
+        assertNull(cache.getSummaries(v3Target.context.identity, "public", key))
+        assertNull(cache.getDetail(v3Target.context.identity, "public", "app.yaml", "G"))
 
-        // Both cached but by different identities
-        val v1Key = SummaryQuery().cacheKey()
-        assertNotNull(cache.getSummaries(v1Target.context.identity, "public", v1Key))
-        assertNotNull(cache.getSummaries(v3Target.context.identity, "public", v1Key))
-        // Cross-identity is invisible
+        // Both generations may cache under their own identity in the same store.
+        gateway.listSummaries(v3Target, SummaryQuery()).getOrThrow().value
+        assertNotNull(cache.getSummaries(v3Target.context.identity, "public", key))
         assertNull(cache.getSummaries(v1Target.context.identity, "public", "wrong-key"))
     }
 

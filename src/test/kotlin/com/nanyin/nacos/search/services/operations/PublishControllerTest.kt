@@ -194,6 +194,8 @@ class PublishControllerTest {
 
         assertEquals(PublishState.ServerStateUnknown, result.state)
         assertTrue(result.isDirty)
+        // Single-write: the failed send is never replayed from this confirm (ADR-0031).
+        assertEquals(1, gateway.writeCalls)
     }
 
     @Test
