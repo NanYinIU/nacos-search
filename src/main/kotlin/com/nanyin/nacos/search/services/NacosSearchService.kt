@@ -902,23 +902,6 @@ class NacosSearchService(
         _paginationState.value = PaginationState()
         currentRequest = null
     }
-    
-    /**
-     * Checks if search is currently active
-     */
-    fun isSearching(): Boolean {
-        return _searchState.value is SearchState.Loading
-    }
-    
-    /**
-     * Gets current search results
-     */
-    fun getCurrentResults(): List<NacosConfiguration> {
-        return when (val state = _searchState.value) {
-            is SearchState.Success -> state.configurations
-            else -> emptyList()
-        }
-    }
 
     private fun SearchRequest.toApiListPageCacheKey(): String {
         return listOf(

@@ -29,9 +29,6 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
    private val logger = thisLogger()
   private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-   /** Test/inspection helper: whether the plugin coroutine scope is still active. */
-   internal fun isScopeActive(): Boolean = coroutineScope.isActive
-
     // Services
     private val settings by lazy { ApplicationManager.getApplication().getService(NacosSettings::class.java) }
     private val apiService by lazy { ApplicationManager.getApplication().getService(NacosApiService::class.java) }

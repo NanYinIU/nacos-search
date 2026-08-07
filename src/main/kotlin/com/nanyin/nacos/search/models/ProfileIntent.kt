@@ -14,9 +14,9 @@ import com.nanyin.nacos.search.settings.AuthMode
  * Avoid naming this an environment profile, draft, or settings form — it is
  * only the attributes a user chooses.
  *
- * **Scope note (issue #153):** `defaultGroup` lives on [EnvironmentPreferences]
- * via [preferences]. Global `connectionTimeoutSeconds` remains a non-environment
- * setting. `autoRefreshOnOpen` is migration-input only and is not republished.
+ * **Scope note (issue #153 / #156):** `defaultGroup` lives on [EnvironmentPreferences]
+ * via [preferences]. Retired dual-write-only fields (connection timeout,
+ * auto-refresh-on-open) are no longer part of the intent or draft surface.
  */
 data class ProfileIntent(
     /** Stable environment profile id. Empty values are rejected by the store. */

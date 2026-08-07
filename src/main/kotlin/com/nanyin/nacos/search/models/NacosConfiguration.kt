@@ -37,30 +37,7 @@ data class NacosConfiguration(
     fun getKey(): String {
         return "${dataId}:${group}:${tenantId ?: ""}"
     }
-    
-    /**
-     * Checks if this configuration matches the search query
-     */
-    fun matches(query: String, ignoreCase: Boolean = true): Boolean {
-        if (query.isBlank()) return true
-        
-        return dataId.contains(query, ignoreCase) ||
-               group.contains(query, ignoreCase) ||
-               content.contains(query, ignoreCase) ||
-               (tenantId?.contains(query, ignoreCase) == true)
-    }
-    
-    /**
-     * Returns a display name for this configuration
-     */
-    fun getDisplayName(): String {
-        return if (tenantId.isNullOrBlank()) {
-            "$dataId ($group)"
-        } else {
-            "$dataId ($group) [$tenantId]"
-        }
-    }
-    
+
     /**
      * Returns the configuration type or infers it from dataId
      */
