@@ -14,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -152,12 +153,19 @@ class NamespaceIndexRefreshServiceTest {
     @Test
     fun `Complete outcome runs afterRefresh Partial does not`() = runBlocking {
         val afterRefreshCount = java.util.concurrent.atomic.AtomicInteger(0)
-        val outcomes = java.util.ArrayDeque<IndexOutcome>()
+        val afterRefreshSignals = java.util.concurrent.ConcurrentLinkedQueue<CompletableDeferred<Unit>>()
+        val requestSignals = java.util.concurrent.ConcurrentLinkedQueue<CompletableDeferred<Unit>>()
+        val outcomes = java.util.concurrent.ConcurrentLinkedQueue<IndexOutcome>()
         val requester = object : NamespaceIndexRequester {
             override suspend fun requestIndex(
                 request: NamespaceIndexRequest,
                 trigger: IndexTrigger
-            ): IndexOutcome = outcomes.removeFirst()
+            ): IndexOutcome {
+                val outcome = outcomes.remove()
+                    ?: error("unexpected requestIndex call")
+                requestSignals.poll()?.complete(Unit)
+                return outcome
+            }
         }
         val cacheService = CacheService(InMemoryCacheStore())
         cacheService.clearAll()
@@ -168,8 +176,11 @@ class NamespaceIndexRefreshServiceTest {
         val service = NamespaceIndexRefreshService(
             requester,
             cacheService,
-            CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
-        ) { _, _ -> afterRefreshCount.incrementAndGet() }
+            CoroutineScope(Dispatchers.IO + SupervisorJob())
+        ) { _, _ ->
+            afterRefreshCount.incrementAndGet()
+            afterRefreshSignals.poll()?.complete(Unit)
+        }
         try {
             clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
             settings.applyServers(
@@ -188,6 +199,8 @@ class NamespaceIndexRefreshServiceTest {
             val profile = requireNotNull(settings.getProfile(testProfileId))
             val identity = OperationContextResolver.identityFromProfile(profile)
 
+            val partialDone = CompletableDeferred<Unit>()
+            requestSignals.add(partialDone)
             outcomes.add(
                 IndexOutcome.Partial(
                     loaded = 1,
@@ -201,9 +214,15 @@ class NamespaceIndexRefreshServiceTest {
                 )
             )
             service.requestIfNeeded(identity, "partial-ns", project = null)
-            // Unconfined runs the coroutine inline; Partial must not refresh.
+            withTimeout(2_000L) { partialDone.await() }
+            // Give a Partial→afterRefresh bug a moment to fire before asserting.
+            kotlinx.coroutines.delay(50)
             assertEquals(0, afterRefreshCount.get())
 
+            val completeRequest = CompletableDeferred<Unit>()
+            val completeRefresh = CompletableDeferred<Unit>()
+            requestSignals.add(completeRequest)
+            afterRefreshSignals.add(completeRefresh)
             outcomes.add(
                 IndexOutcome.Complete(
                     count = 1,
@@ -216,6 +235,8 @@ class NamespaceIndexRefreshServiceTest {
                 )
             )
             service.requestIfNeeded(identity, "complete-ns", project = null)
+            withTimeout(2_000L) { completeRequest.await() }
+            withTimeout(2_000L) { completeRefresh.await() }
             assertEquals(1, afterRefreshCount.get())
         } finally {
             service.dispose()
