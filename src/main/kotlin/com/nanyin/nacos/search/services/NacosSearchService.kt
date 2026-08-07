@@ -685,7 +685,12 @@ class NacosSearchService(
             }
         }
 
-        val filtered = allConfigurations.filter { it.matchesRequest(request) }
+        val filtered = configurationsForLocalMatch(
+            summaries = allConfigurations,
+            identity = indexKey.identity,
+            namespaceId = namespaceId,
+            searchContent = request.searchContent
+        ).filter { it.matchesRequest(request) }
         val fromIndex = paginate(filtered, request.pageNo, request.pageSize)
         val response = ConfigListResponse(
             totalCount = filtered.size,
@@ -917,6 +922,35 @@ class NacosSearchService(
             "pageSize=$pageSize",
             "search=${getSearchMode()}"
         ).joinToString("|")
+    }
+
+    /**
+     * Namespace-index rows are summaries (empty content). When the caller asked
+     * to search content, overlay any ordinary detail body already seeded or
+     * prefetched for that coordinate so body matches hit again (issue #146).
+     */
+    private suspend fun configurationsForLocalMatch(
+        summaries: List<NacosConfiguration>,
+        identity: AccessIdentity,
+        namespaceId: String?,
+        searchContent: Boolean
+    ): List<NacosConfiguration> {
+        if (!searchContent) return summaries
+        return summaries.map { summary ->
+            if (summary.content.isNotBlank()) return@map summary
+            val detail = cacheService.getConfigDetail(
+                identity,
+                namespaceId,
+                summary.dataId,
+                summary.group,
+                allowStale = false
+            )
+            if (detail != null && detail.content.isNotBlank()) {
+                summary.copy(content = detail.content)
+            } else {
+                summary
+            }
+        }
     }
 
     private fun NacosConfiguration.matchesRequest(request: SearchRequest): Boolean {

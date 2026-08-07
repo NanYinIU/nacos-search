@@ -50,6 +50,14 @@ class GradedCapabilitiesTest {
                 "unused"
             )
         )
+        assertEquals(
+            CapabilityCoverage.COMPLETE,
+            gateway.capabilities(NacosApiGeneration.V1)!!.listCarriesBodies
+        )
+        assertEquals(
+            CapabilityCoverage.UNAVAILABLE,
+            gateway.capabilities(NacosApiGeneration.V3)!!.listCarriesBodies
+        )
     }
 
     @Test
