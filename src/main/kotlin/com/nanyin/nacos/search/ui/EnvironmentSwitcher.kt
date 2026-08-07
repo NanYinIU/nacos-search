@@ -164,8 +164,13 @@ class EnvironmentSwitcher(
             )
         ) return
         // Project-local only — never write the application-wide migration seed
-        // or dual-write active id (issue #107 / ADR-0004).
-        projectSession?.adoptEnvironment(entry.config.id)
+        // or dual-write active id (issue #107 / ADR-0004). Pass this
+        // environment's suggested Namespace so the previous server's id is not
+        // reused against a different Nacos (configs would load empty/wrong).
+        projectSession?.adoptEnvironment(
+            entry.config.id,
+            entry.config.namespace.ifBlank { "public" }
+        )
         project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)?.bump()
         onSelectionChanged?.invoke(entry.config.id)
         refresh()

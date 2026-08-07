@@ -155,6 +155,33 @@ class ProjectLocalSelectionTest {
     }
 
     @Test
+    fun `adopting a different environment without a namespace does not keep the previous servers namespace`() {
+        val session = NacosProjectSession()
+        session.ensureInitialized(defaults(defaultProfileId = "dev", defaultNamespaceId = "ns-local-uuid"))
+        assertEquals("ns-local-uuid", session.sessionState.namespaceId)
+
+        // Switcher / settings must pass the new environment's suggested Namespace.
+        // When they omit it, public is the safe default — never the previous
+        // server's id (configs would query the wrong tenant on the new server).
+        session.adoptEnvironment("prod")
+
+        assertEquals("prod", session.sessionState.selectedProfileId)
+        assertEquals("public", session.sessionState.namespaceId)
+    }
+
+    @Test
+    fun `adopting the same environment without a namespace keeps the current Namespace`() {
+        val session = NacosProjectSession()
+        session.ensureInitialized(defaults(defaultProfileId = "dev", defaultNamespaceId = "team-a"))
+        session.select("dev", "team-custom")
+
+        session.adoptEnvironment("dev")
+
+        assertEquals("dev", session.sessionState.selectedProfileId)
+        assertEquals("team-custom", session.sessionState.namespaceId)
+    }
+
+    @Test
     fun `changing the dual-write active id does not move the migration seed used for new projects`() {
         val settings = NacosSettings().also { it.resetToDefaults() }
         settings.applyServers(

@@ -226,31 +226,61 @@ class NamespacePanel(
     }
 
     private fun updateNamespaceButton() {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
-            // Restore this project's session Namespace. If discovery omitted it,
-            // keep the stored id on the button — never adopt namespaces.first()
-            // and overwrite the project session (issue #107).
-            projectSession?.ensureInitialized(settings.migrationDefaults())
-            val storedId = projectSession?.sessionState?.namespaceId?.takeIf { it.isNotBlank() }
-            val projectSelection = storedId?.let { id -> namespaces.find { it.namespaceId == id } }
-            val toSelect: NamespaceInfo? = projectSelection
-                ?: currentNamespace
-                ?: storedId?.let { NamespaceInfo(namespaceId = it, namespaceName = it) }
-            if (toSelect != null) {
-                val matching = namespaces.find { it.namespaceId == toSelect.namespaceId }
-                if (matching != null) {
-                    selectNamespace(matching, notify = currentNamespace == null)
-                } else {
-                    currentNamespace = toSelect
-                    renderButton(toSelect)
+        // Resolve selection synchronously so refreshAndWait callers (env switch)
+        // see the session's Namespace before returning. Swing paint stays deferred
+        // via invokeOnEdt (#82). Prefer the project session over a stale panel
+        // selection left over from the previous environment.
+        projectSession?.ensureInitialized(settings.migrationDefaults())
+        val storedId = projectSession?.sessionState?.namespaceId?.takeIf { it.isNotBlank() }
+        val projectSelection = storedId?.let { id -> findLoadedNamespace(id) }
+        val toSelect: NamespaceInfo? = projectSelection
+            ?: storedId?.let { NamespaceInfo(namespaceId = it, namespaceName = it) }
+            ?: currentNamespace
+        val wasEmpty = currentNamespace == null
+        if (toSelect != null) {
+            val matching = findLoadedNamespace(toSelect.namespaceId)
+            if (matching != null) {
+                // Programmatic restore: update the field now; notify only on the
+                // first pick so env-switch restart (which opens the namespace
+                // itself) does not double-load.
+                currentNamespace = matching
+                invokeOnEdt(ModalityState.defaultModalityState()) {
+                    renderButton(matching)
+                    if (wasEmpty) onNamespaceSelected(matching)
+                    namespaceButton.isEnabled = namespaces.isNotEmpty()
+                    refreshPopupIfShowing()
                 }
-            } else if (namespaces.isNotEmpty()) {
-                selectNamespace(namespaces.first(), notify = true)
+                return
             }
-            namespaceButton.isEnabled = namespaces.isNotEmpty()
-            // Keep an open popup's list in sync after a refresh.
+            currentNamespace = toSelect
+            invokeOnEdt(ModalityState.defaultModalityState()) {
+                renderButton(toSelect)
+                namespaceButton.isEnabled = namespaces.isNotEmpty()
+                refreshPopupIfShowing()
+            }
+            return
+        }
+        if (namespaces.isNotEmpty()) {
+            val first = namespaces.first()
+            currentNamespace = first
+            invokeOnEdt(ModalityState.defaultModalityState()) {
+                renderButton(first)
+                onNamespaceSelected(first)
+                namespaceButton.isEnabled = true
+                refreshPopupIfShowing()
+            }
+            return
+        }
+        invokeOnEdt(ModalityState.defaultModalityState()) {
+            namespaceButton.isEnabled = false
             refreshPopupIfShowing()
         }
+    }
+
+    /** Match by canonical Namespace id so `public` and blank both resolve. */
+    private fun findLoadedNamespace(namespaceId: String): NamespaceInfo? {
+        val want = NamespaceInfo.canonicalId(namespaceId)
+        return namespaces.find { NamespaceInfo.canonicalId(it.namespaceId) == want }
     }
 
     /**

@@ -1232,7 +1232,10 @@ class NacosConfigurable @JvmOverloads constructor(
                 session.sessionState.selectedProfileId != requestedActive &&
                 settings.getProfile(requestedActive) != null
             ) {
-                session.adoptEnvironment(requestedActive)
+                val suggestedNs = draftServers.find { it.id == requestedActive }?.namespace
+                    ?.ifBlank { null }
+                    ?: "public"
+                session.adoptEnvironment(requestedActive, suggestedNs)
                 ctx.getService(ProjectSessionEpochs::class.java)?.bump()
             }
         }

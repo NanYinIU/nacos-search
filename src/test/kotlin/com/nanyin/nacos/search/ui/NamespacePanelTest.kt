@@ -11,6 +11,7 @@ import com.nanyin.nacos.search.services.operations.EditEnvironment
 import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.services.operations.OperationGateway
 import com.nanyin.nacos.search.services.operations.OperationTarget
+import com.nanyin.nacos.search.settings.NacosProjectSession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.reset
 import org.mockito.kotlin.timeout
@@ -137,11 +139,34 @@ class NamespacePanelTest {
         waitForNamespaceLoad()
 
         val result = namespacePanel.refreshAndWait()
-        waitForUi()
-
+        // Selection is applied synchronously before refreshAndWait returns so
+        // environment-switch restart can open the Namespace without waiting
+        // for the deferred Swing paint.
         assertEquals(testNamespaces, result.getOrNull())
         assertNotNull(namespacePanel.getSelectedNamespace())
+        waitForUi()
         verify(mockNamespaceService, timeout(1000).atLeast(2)).loadNamespacesAsync()
+    }
+
+    @Test
+    fun `refreshAndWait prefers the project session Namespace over a stale panel selection`() = runBlocking {
+        val session = NacosProjectSession()
+        session.select("qa", "staging")
+        whenever(mockProject.getService(NacosProjectSession::class.java)).thenReturn(session)
+        whenever(mockNamespaceService.loadNamespacesAsync(anyOrNull())).thenReturn(
+            CompletableDeferred(Result.success(testNamespaces))
+        )
+
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
+        waitForNamespaceLoad()
+        assertEquals("staging", namespacePanel.getSelectedNamespace()?.namespaceId)
+
+        // Env switch adopts the new environment's suggested Namespace first.
+        session.adoptEnvironment("prod", "dev")
+        val result = namespacePanel.refreshAndWait()
+
+        assertTrue(result.isSuccess)
+        assertEquals("dev", namespacePanel.getSelectedNamespace()?.namespaceId)
     }
 
     @Test
