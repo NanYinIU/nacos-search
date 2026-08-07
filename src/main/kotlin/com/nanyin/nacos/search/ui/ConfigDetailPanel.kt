@@ -1017,16 +1017,20 @@ private fun setupEventHandlers() {
                 if (!isActive) return@launch
                 setLoadingState(false)
                 render(state)
-                // Quiet confirm of an already-fresh cached body must not restart
-                // the daemon: each restart clears then redraws @NacosValue gutters
-                // (blue↔gray flicker). Publish navigation only when this load may
-                // have introduced detail the key index has not seen.
-                val mayHaveNewDetail = !keepCachedVisible || forceRefresh
-                if (mayHaveNewDetail &&
-                    state is DetailViewState.Body &&
-                    (state.overlay == DetailOverlay.None || state.overlay == DetailOverlay.Deleted)
-                ) {
+                if (state !is DetailViewState.Body) return@launch
+                if (state.overlay != DetailOverlay.None && state.overlay != DetailOverlay.Deleted) {
+                    return@launch
+                }
+                // First load / forced refresh: rebuild + daemon restart so gutters
+                // see new keys immediately.
+                // Quiet confirm of a fresh body: only schedule an async index
+                // rebuild. If the cache version moved, publish notifies a
+                // coalesced gutter pass — a synchronous DaemonCodeAnalyzer.restart
+                // here was the blue↔gray flicker.
+                if (!keepCachedVisible || forceRefresh) {
                     refreshNavigationState()
+                } else {
+                    warmKeyIndexAfterQuietConfirm()
                 }
             } catch (e: Exception) {
                 if (isActive && presentation.admitAndRecord(issued)) {
@@ -1480,6 +1484,19 @@ private fun setupEventHandlers() {
 
     private fun refreshNavigationState() {
         navigationRefresh.refresh(project.captureSelectedAccessIdentity(settings), project)
+    }
+
+    /**
+     * After a quiet confirm, the detail may already be in cache under a version
+     * the key index has not published. Schedule a rebuild; when it publishes,
+     * [NacosKeyIndexService] requests a coalesced gutter pass so hollow icons
+     * can become resolved without a synchronous daemon restart on this path.
+     */
+    private fun warmKeyIndexAfterQuietConfirm() {
+        val identity = project.captureSelectedAccessIdentity(settings)
+        ApplicationManager.getApplication()
+            .getService(com.nanyin.nacos.search.psi.NacosKeyIndexService::class.java)
+            .ensureIndexBuilt(cacheService.snapshot(identity))
     }
     
     private fun showEmptyState() {

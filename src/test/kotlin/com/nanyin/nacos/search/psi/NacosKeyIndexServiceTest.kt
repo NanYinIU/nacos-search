@@ -178,6 +178,34 @@ class NacosKeyIndexServiceTest {
     }
 
     @Test
+    fun `publishing a rebuilt index notifies so gutters can leave the hollow state`() = runBlocking {
+        val dispatcher = QueueingDispatcher()
+        val cache = loadedCache()
+        var published = 0
+        val service = NacosKeyIndexService(dispatcher) { published++ }
+
+        // Gutter-shaped path: schedule against an empty cache, then land a detail
+        // before the rebuild runs — the hollow icon was painted against the
+        // previous empty index and must be told to re-analyze.
+        service.ensureIndexBuilt(cache.snapshot(identity))
+        cache.writeDetail(identity, null, config("theme.properties", "material.video.h5.url=https://x\n"))
+        service.ensureIndexBuilt(cache.snapshot(identity))
+        assertEquals(0, published)
+
+        dispatcher.drain()
+
+        assertTrue(published >= 1)
+        assertEquals(
+            ConfigReferenceStatus.RESOLVED,
+            service.resolveCurrentState(
+                cache.snapshot(identity),
+                "material.video.h5.url",
+                preferredDataId = "theme.properties"
+            ).status
+        )
+    }
+
+    @Test
     fun `every hit in one decision is judged at the deciding snapshot's instant`() = runBlocking {
         var now = 2_000_000L
         val cache = loadedCache { now }
