@@ -748,10 +748,16 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
         coroutineScope.launch(Dispatchers.IO) {
             try {
-                // Skip the heavy full-content fetch when a fresh namespace
-                // index already exists — re-preheating on every namespace
-                // switch is the primary source of background IO saturation.
-                val existing = cacheService.getNamespaceIndex(indexRequest.key.identity, namespaceId)
+                // Skip the heavy full-content fetch when a namespace index
+                // already exists — including a persisted STALE one from a
+                // prior session (issue #147). Re-preheating on every switch
+                // is the primary source of background IO saturation; a
+                // normal refresh still replaces the index.
+                val existing = cacheService.getNamespaceIndex(
+                    indexRequest.key.identity,
+                    namespaceId,
+                    allowStale = true
+                )
                 if (existing != null) {
                     ApplicationManager.getApplication()
                         .getService(NacosKeyIndexService::class.java)

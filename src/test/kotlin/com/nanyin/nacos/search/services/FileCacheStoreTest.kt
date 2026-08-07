@@ -66,16 +66,44 @@ internal class FileCacheStoreTest : CacheStoreContractTest() {
     }
 
     @Test
-    fun `clearing empties both payload directories`() = kotlinx.coroutines.runBlocking {
+    fun `clearing empties all payload directories`() = kotlinx.coroutines.runBlocking {
         val store = FileCacheStore(baseDir, FakeLegacyCacheProperties())
         store.putDetail("d|1", detailEntry)
         store.putListPage("l|1", listEntry)
+        store.putNamespaceIndex(
+            "n|1",
+            CacheService.CacheEntry(
+                type = CacheService.CacheEntryType.NAMESPACE_INDEX,
+                data = listOf(config),
+                createdAt = 1000L,
+                ttlMs = 60000L,
+                source = CacheService.CacheSource.REMOTE
+            )
+        )
 
         store.clear()
 
         assertEquals(0, baseDir.resolve("details").toFile().listFiles()?.size ?: 0)
         assertEquals(0, baseDir.resolve("listpages").toFile().listFiles()?.size ?: 0)
+        assertEquals(0, baseDir.resolve("indexes").toFile().listFiles()?.size ?: 0)
     }
+
+    @Test
+    fun `namespace indexes survive a store reopened over the same directory`() =
+        kotlinx.coroutines.runBlocking {
+            val key = "v2|p|1|http://nacos:8848|V1|BASIC|alice|dev"
+            val indexEntry = CacheService.CacheEntry(
+                type = CacheService.CacheEntryType.NAMESPACE_INDEX,
+                data = listOf(config.copy(content = "")),
+                createdAt = 1000L,
+                ttlMs = 60000L,
+                source = CacheService.CacheSource.REMOTE
+            )
+            FileCacheStore(baseDir, FakeLegacyCacheProperties()).putNamespaceIndex(key, indexEntry)
+
+            val reopened = FileCacheStore(baseDir, FakeLegacyCacheProperties())
+            assertEquals(listOf("app.yaml"), reopened.loadNamespaceIndexes()[key]?.data?.map { it.dataId })
+        }
 
     @Test
     fun `a payload that cannot be deserialized is a miss and is reclaimed`() = kotlinx.coroutines.runBlocking {

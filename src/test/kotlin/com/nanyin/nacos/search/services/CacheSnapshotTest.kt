@@ -252,7 +252,10 @@ class CacheSnapshotTest {
         val restarted = CacheService(store)
         restarted.awaitLoadCompleted()
 
-        assertNull(restarted.snapshot(identity).namespaceIndex("dev"))
+        val restored = restarted.snapshot(identity).namespaceIndex("dev")
+        assertNotNull(restored)
+        assertEquals(setOf("app.properties"), restored!!.dataIds)
+        assertFalse(restored.authoritativeForAbsence)
     }
 }
 

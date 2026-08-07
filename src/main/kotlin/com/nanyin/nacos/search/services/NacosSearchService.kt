@@ -613,18 +613,26 @@ class NacosSearchService(
         val namespaceId = request.namespace?.namespaceId
         val indexRequest = settings.captureNamespaceIndexRequest(namespaceId, context)
         val indexKey = indexRequest.key
-        val cachedIndex = if (!request.forceRefresh && settings.cacheEnabled) {
+        // Prefer a fresh index, then a persisted/expired STALE one, before any
+        // full-namespace pagination (issue #147). forceRefresh still bypasses.
+        val freshIndex = if (!request.forceRefresh && settings.cacheEnabled) {
             cacheService.getNamespaceIndexEntry(indexKey.identity, namespaceId)
         } else {
             null
         }
+        val staleIndex = if (freshIndex == null && !request.forceRefresh && settings.cacheEnabled) {
+            cacheService.getNamespaceIndexEntry(indexKey.identity, namespaceId, allowStale = true)
+        } else {
+            null
+        }
+        val cachedIndex = freshIndex ?: staleIndex
         val source: SearchSource
         // Carried alongside [source] so the index-backed path reports age from the
         // cached entry's own timestamp, exactly like the list-page path does
         // (issue #42 / ADR-0036). Without it a stale index rendered as WITHIN_TTL.
         val indexFetchedAtMillis: Long?
         val allConfigurations = if (cachedIndex != null) {
-            source = SearchSource.CACHE
+            source = if (freshIndex != null) SearchSource.CACHE else SearchSource.STALE_CACHE
             indexFetchedAtMillis = cachedIndex.createdAtMillis
             cachedIndex.data
         } else {
