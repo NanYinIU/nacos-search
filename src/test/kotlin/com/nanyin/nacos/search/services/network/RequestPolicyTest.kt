@@ -35,7 +35,7 @@ class RequestPolicyTest {
      */
     @Test
     fun `no policy expresses a no-retry budget`() {
-        RequestPolicy.entries.forEach { policy ->
+        RequestPolicy.values().forEach { policy ->
             assertTrue("$policy must allow a retry", policy.maxAttempts >= 2)
         }
     }

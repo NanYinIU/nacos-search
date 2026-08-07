@@ -268,9 +268,9 @@ class NamespacePanelTest {
     }
 
     private fun waitForUi() {
-        UIUtil.invokeAndWaitIfNeeded {
+        UIUtil.invokeAndWaitIfNeeded(Runnable {
             PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
-        }
+        })
     }
 
     private fun waitForNamespaceLoad() {

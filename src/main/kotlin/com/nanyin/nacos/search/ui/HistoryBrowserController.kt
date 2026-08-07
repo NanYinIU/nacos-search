@@ -30,14 +30,14 @@ class HistoryBrowserController(
     private val diffPresentation: PresentationGate
 ) {
     sealed class Outcome {
-        data object Loading : Outcome()
-        data object Empty : Outcome()
+        object Loading : Outcome()
+        object Empty : Outcome()
         data class Body(val page: HistoryPage) : Outcome()
-        data object PermissionDenied : Outcome()
-        data object Unsupported : Outcome()
+        object PermissionDenied : Outcome()
+        object Unsupported : Outcome()
         data class Failed(val message: String) : Outcome()
         /** Dropped because the judgement no longer admits this result. */
-        data object Stale : Outcome()
+        object Stale : Outcome()
     }
 
     suspend fun loadPage(

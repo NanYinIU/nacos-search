@@ -201,7 +201,7 @@ class LanguageChangeSubscriptionTest {
     }
 
     private fun runOnEdt(action: () -> Unit) {
-        UIUtil.invokeAndWaitIfNeeded(action)
+        UIUtil.invokeAndWaitIfNeeded(Runnable { action() })
     }
 
     private fun waitForUi() {

@@ -46,7 +46,7 @@ sealed interface EditStart {
  */
 sealed interface DraftGuard {
     /** No draft is at stake. Proceed with no prompt. */
-    data object Proceed : DraftGuard
+    object Proceed : DraftGuard
 
     /**
      * The view is already showing this draft — either because the action names
@@ -55,7 +55,7 @@ sealed interface DraftGuard {
      * reload or clear: doing so would discard the draft as silently as
      * retargeting would.
      */
-    data object AlreadyEditing : DraftGuard
+    object AlreadyEditing : DraftGuard
 
     /**
      * A dirty draft would be lost. The caller prompts with exactly two choices:
@@ -67,7 +67,7 @@ sealed interface DraftGuard {
      * A publish is in [PublishState.Publishing] or [PublishState.Verifying].
      * Target-destroying actions are refused outright — no ordinary discard.
      */
-    data object RefuseInFlight : DraftGuard
+    object RefuseInFlight : DraftGuard
 
     /**
      * The draft is in server-state-unknown. Ordinary discard is not offered:

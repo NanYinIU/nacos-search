@@ -17,9 +17,9 @@ class PaginationPanelTest {
         // Search publication may arrive off the EDT; rendering must marshal
         // onto the EDT rather than touching components directly.
         lateinit var panel: PaginationPanel
-        UIUtil.invokeAndWaitIfNeeded {
+        UIUtil.invokeAndWaitIfNeeded(Runnable {
             panel = PaginationPanel()
-        }
+        })
         val state = NacosSearchService.PaginationState(
             currentPage = 2,
             pageSize = 10,

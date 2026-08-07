@@ -104,7 +104,7 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         refreshButton = JButton(AllIcons.Actions.Refresh).apply {
             toolTipText = NacosSearchBundle.message("config.list.refresh")
             putClientProperty("JButton.buttonType", "toolbar")
-            ui = BasicButtonUI()
+            setUI(BasicButtonUI())
             preferredSize = Dimension(28, 24)
             minimumSize = Dimension(28, 24)
             border = JBUI.Borders.empty()

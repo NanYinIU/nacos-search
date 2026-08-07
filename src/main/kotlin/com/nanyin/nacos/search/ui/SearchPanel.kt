@@ -56,7 +56,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
         // Main search field
         searchField = PlaceholderTextField().apply {
             putClientProperty("JTextField.Search.noBorderRing", true)
-            ui = BasicTextFieldUI()
+            setUI(BasicTextFieldUI())
             placeholder = NacosSearchBundle.message("search.placeholder")
             columns = 20
             font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 12)
@@ -78,7 +78,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
         // Action buttons
         clearButton = JButton(AllIcons.Actions.Close).apply {
             putClientProperty("JButton.buttonType", "toolbar")
-            ui = BasicButtonUI()
+            setUI(BasicButtonUI())
             toolTipText = NacosSearchBundle.message("search.clear.tooltip")
             preferredSize = Dimension(26, 26)
             minimumSize = Dimension(26, 26)
@@ -90,7 +90,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
         // Group filter pill — compact bordered button per design guide
         groupFilterButton = JButton(NacosSearchBundle.message("search.group.filter.label") + " " + NacosSearchBundle.message("search.group.filter.all")).apply {
             putClientProperty("JButton.buttonType", "toolbar")
-            ui = BasicButtonUI()
+            setUI(BasicButtonUI())
             toolTipText = NacosSearchBundle.message("tooltip.group.filter")
             margin = JBUI.insets(0, 9, 0, 9)
             isContentAreaFilled = false

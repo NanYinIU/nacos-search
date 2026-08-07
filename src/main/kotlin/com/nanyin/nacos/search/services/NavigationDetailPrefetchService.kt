@@ -391,7 +391,7 @@ data class PrefetchCoverage(
 )
 
 sealed interface PrefetchOutcome {
-    data object Disabled : PrefetchOutcome
+    object Disabled : PrefetchOutcome
     data class Cancelled(val attempted: Int, val fetched: Int) : PrefetchOutcome
     data class Complete(
         val requested: Int,

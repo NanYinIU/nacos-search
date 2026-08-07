@@ -35,7 +35,7 @@ enum class AccessRefusalReason {
  * and cancellation never reach this type.
  */
 sealed class ObservationOutcome {
-    data object Success : ObservationOutcome()
+    object Success : ObservationOutcome()
 
     data class RemoteFailure(val error: RemoteOperationError) : ObservationOutcome()
 }
@@ -247,7 +247,7 @@ data class AccessVisibilityRecord(
  * matching success.
  */
 sealed class ConfigurationVisibility {
-    data object Visible : ConfigurationVisibility()
+    object Visible : ConfigurationVisibility()
 
     data class Blocked(
         val reason: AccessRefusalReason,

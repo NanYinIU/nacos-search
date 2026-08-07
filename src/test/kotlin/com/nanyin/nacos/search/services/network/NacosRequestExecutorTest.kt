@@ -97,7 +97,7 @@ class NacosRequestExecutorTest {
      */
     @Test
     fun `no policy withholds an idempotent read's retry`() = runBlocking {
-        for (policy in RequestPolicy.entries) {
+        for (policy in RequestPolicy.values()) {
             val calls = AtomicInteger(0)
             val transport = NacosRequestExecutor.HttpTransport { _ ->
                 calls.incrementAndGet()

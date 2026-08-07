@@ -140,7 +140,7 @@ private boolean paymentEnabled;
 | 项目 | 版本 |
 | --- | --- |
 | 插件版本 | `1.3.8` |
-| IntelliJ IDEA | `2024.3`（build 243）至 `2026.1`（build 261.*） |
+| IntelliJ IDEA | `2022.3`（build 223）至 `2026.1`（build 261.*） |
 | Java / Gradle Toolchain | Java 17 |
 | Kotlin | 2.0.21 |
 | Gradle | 9.0.0 |
@@ -187,7 +187,7 @@ src/main/kotlin/com/nanyin/nacos/search/
 └── ui/           工具窗口及 Swing UI 组件
 ```
 
-构建平台为 IntelliJ IDEA Community `2024.3.5`。插件验证还覆盖 `2025.1` 和 `2026.1 EAP`。签名与发布分别通过 `PRIVATE_KEY`、`CERTIFICATE_CHAIN`、`PRIVATE_KEY_PASSWORD` 和 `PUBLISH_TOKEN` 环境变量配置；未提供签名凭据时会自动跳过签名任务。
+构建平台为 IntelliJ IDEA Community `2022.3.3`，插件验证首先覆盖同一最低版本。签名与发布分别通过 `PRIVATE_KEY`、`CERTIFICATE_CHAIN`、`PRIVATE_KEY_PASSWORD` 和 `PUBLISH_TOKEN` 环境变量配置；未提供签名凭据时会自动跳过签名任务。
 
 ## 许可证
 

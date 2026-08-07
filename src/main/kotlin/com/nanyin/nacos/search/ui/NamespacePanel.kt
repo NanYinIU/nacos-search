@@ -91,7 +91,7 @@ class NamespacePanel(
         namespaceButton = JButton().apply {
             putClientProperty("nacos.automation.id", "nacos.toolwindow.nsSwitcher")
             putClientProperty("JButton.buttonType", "toolbar")
-            ui = BasicButtonUI()
+            setUI(BasicButtonUI())
             isEnabled = false // Disabled until namespaces are loaded
             isContentAreaFilled = false
             isBorderPainted = false
@@ -110,7 +110,7 @@ class NamespacePanel(
         refreshButton = JButton(AllIcons.Actions.Refresh).apply {
             toolTipText = NacosSearchBundle.message("namespace.refresh")
             putClientProperty("JButton.buttonType", "toolbar")
-            ui = BasicButtonUI()
+            setUI(BasicButtonUI())
             preferredSize = Dimension(28, 24)
             minimumSize = Dimension(28, 24)
             border = JBUI.Borders.empty()
@@ -146,7 +146,7 @@ class NamespacePanel(
             }, BorderLayout.CENTER)
             add(refreshButton.apply {
                 putClientProperty("JButton.buttonType", "toolbar")
-                ui = BasicButtonUI()
+                setUI(BasicButtonUI())
                 preferredSize = Dimension(28, 24)
                 minimumSize = Dimension(28, 24)
                 border = JBUI.Borders.empty()

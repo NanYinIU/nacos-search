@@ -47,7 +47,7 @@ interface CredentialSlotStore {
 
 /** Outcome of a staged secret write. Callers must not publish a pending revision on [Failure]. */
 sealed interface CredentialStageResult {
-    data object Success : CredentialStageResult
+    object Success : CredentialStageResult
     data class Failure(val reason: String) : CredentialStageResult
 }
 
@@ -227,4 +227,3 @@ class CredentialSlotStager(private val store: CredentialSlotStore) {
 
 /** Shared production store used by settings write paths. */
 internal val DefaultCredentialSlotStore: CredentialSlotStore = PlatformCredentialSlotStore()
-
