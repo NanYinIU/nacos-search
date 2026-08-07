@@ -170,6 +170,37 @@ class NamespacePanelTest {
     }
 
     @Test
+    fun `refreshAndWait resolves a stored display name to the Namespace with a real id`() = runBlocking {
+        val qaNamespaces = listOf(
+            NamespaceInfo.createPublicNamespace(),
+            NamespaceInfo(
+                namespaceId = "427adcc2-dbf8-4086-8433-8be647a86b62",
+                namespaceName = "uxinlive",
+                configCount = 224
+            ),
+            NamespaceInfo(
+                namespaceId = "c7cd86df-aaaa-bbbb-cccc-ddddeeeeffff",
+                namespaceName = "lalala"
+            )
+        )
+        val session = NacosProjectSession()
+        // Settings "Namespace" field often stores the display name, not the UUID.
+        session.select("qa", "uxinlive")
+        whenever(mockProject.getService(NacosProjectSession::class.java)).thenReturn(session)
+        whenever(mockNamespaceService.loadNamespacesAsync(anyOrNull())).thenReturn(
+            CompletableDeferred(Result.success(qaNamespaces))
+        )
+
+        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
+        waitForNamespaceLoad()
+
+        val selected = namespacePanel.getSelectedNamespace()
+        assertEquals("427adcc2-dbf8-4086-8433-8be647a86b62", selected?.namespaceId)
+        assertEquals("uxinlive", selected?.namespaceName)
+        assertEquals("427adcc2-dbf8-4086-8433-8be647a86b62", session.sessionState.namespaceId)
+    }
+
+    @Test
     fun testErrorHandlingWhenLoadingNamespacesFails() {
         val errorMessage = "Network error"
         whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(
