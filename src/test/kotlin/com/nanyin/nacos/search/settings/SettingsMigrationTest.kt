@@ -313,6 +313,56 @@ class SettingsMigrationTest {
     }
 
     @Test
+    fun `migrated installation persists only profiles and preferences as environment config`() {
+        val slots = InMemoryCredentialSlotStore()
+        val settings = NacosSettings()
+        settings.settingsSchemaVersion = 0
+        settings.profiles = mutableListOf()
+        settings.servers = mutableListOf(
+            NacosServerConfig(
+                id = "dev",
+                displayName = "Dev",
+                serverUrl = "https://nacos.example",
+                username = "alice",
+                password = "secret",
+                namespace = "team-a",
+                defaultGroup = "APP_GROUP",
+                authMode = AuthMode.NACOS_PASSWORD
+            )
+        )
+        settings.activeServerId = "dev"
+        settings.environmentPreferences = mutableListOf()
+
+        settings.runVersionedMigration(slots) { key ->
+            if (key == "dev" || key.startsWith("dev:")) "secret" else null
+        }
+        settings.serverUrl = "https://should-not-persist.example"
+        settings.username = "alice"
+        settings.namespace = "team-a"
+        settings.authMode = AuthMode.NACOS_PASSWORD
+
+        val persisted = settings.getState()
+        assertTrue(persisted.servers.isEmpty(), "legacy server list must not be re-persisted")
+        assertEquals("", persisted.serverUrl)
+        assertEquals("", persisted.username)
+        assertEquals("public", persisted.namespace)
+        assertEquals(AuthMode.ANONYMOUS, persisted.authMode)
+        assertEquals(SettingsSchema.CURRENT, persisted.settingsSchemaVersion)
+        assertEquals(1, persisted.profiles.size)
+        assertEquals("dev", persisted.profiles.single().id)
+        val prefs = persisted.environmentPreferences.single { it.profileId == "dev" }
+        assertEquals("team-a", prefs.suggestedNamespace)
+        assertEquals("APP_GROUP", prefs.defaultGroup)
+
+        val restored = NacosSettings()
+        restored.loadState(persisted)
+        assertEquals("team-a", restored.preferencesFor("dev").suggestedNamespace)
+        assertEquals("APP_GROUP", restored.preferencesFor("dev").defaultGroup)
+        assertEquals("dev", restored.resolveDefaultProfileId())
+        assertTrue(restored.getState().servers.isEmpty())
+    }
+
+    @Test
     fun `upgrade summary actions come from migration report and are once per schema`() {
         val settings = NacosSettings()
         settings.settingsSchemaVersion = 0

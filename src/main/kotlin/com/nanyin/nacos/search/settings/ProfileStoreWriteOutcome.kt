@@ -56,8 +56,8 @@ data class ProfileStoreWriteOutcome(
     val activeProfileId: String = "",
     /**
      * Suggested namespaces after the write, keyed by profile id.
-     * Carried so the host can dual-write the legacy server list without
-     * re-deriving from intents.
+     * Carried so callers can seed project sessions and preference records
+     * without re-deriving from intents.
      */
     val suggestedNamespaces: Map<String, String> = emptyMap()
 ) {

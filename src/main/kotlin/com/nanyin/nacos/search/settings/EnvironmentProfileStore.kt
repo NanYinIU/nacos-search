@@ -25,8 +25,8 @@ import com.nanyin.nacos.search.models.ProfileIntent
  *
  * The store is pure with respect to settings persistence: it returns published
  * snapshots and a [ProfileStoreWriteOutcome]; the host ([NacosSettings]) is
- * responsible for replacing its lists and dual-writing the legacy server surface
- * **only** for successfully published ids.
+ * responsible for replacing its published profiles and preference records.
+ * Legacy server rows are never rewritten from this path (ADR-0049 / issue #153).
  *
  * Removals are **classified** here (ids present previously and absent from
  * intents) but not executed: the host runs [ProfileDeletionLifecycle] at the
@@ -52,7 +52,7 @@ class EnvironmentProfileStore(
      * @param previousPreferences currently published preference records
      * @param previousActiveId previously active profile id
      * @param previousSuggestedNamespaces last published suggested namespaces by
-     *   profile id (from the dual-write server list until intents own it alone)
+     *   profile id (from preference records; legacy server dual-write is gone)
      */
     fun applyIntents(
         intents: List<ProfileIntent>,
@@ -469,7 +469,10 @@ class EnvironmentProfileStore(
         if (!preferencesEqual(prevPrefs, nextPrefs)) {
             preferenceChanged += id
         }
-        publishedPrefs += nextPrefs
+        publishedPrefs += nextPrefs.copyPreferences().also {
+            it.profileId = id
+            it.suggestedNamespace = suggestedNs
+        }
         suggestedNamespaces[id] = suggestedNs
         if (previous != null && previousSuggestedNamespaces.containsKey(id)) {
             val previousNs = previousSuggestedNamespaces.getValue(id).trim().ifBlank { "public" }
@@ -496,9 +499,13 @@ class EnvironmentProfileStore(
     ) {
         if (previous == null) return
         published += snapshot(previous)
-        publishedPrefs += prevPrefs.copyPreferences()
+        publishedPrefs += prevPrefs.copyPreferences().also {
+            it.suggestedNamespace = previousSuggestedNamespaces[previous.id]
+                ?.trim()?.ifBlank { "public" }
+                ?: prevPrefs.suggestedNamespace.trim().ifBlank { "public" }
+        }
         val previousNs = previousSuggestedNamespaces[previous.id]?.trim()?.ifBlank { "public" }
-            ?: "public"
+            ?: prevPrefs.suggestedNamespace.trim().ifBlank { "public" }
         suggestedNamespaces[previous.id] = previousNs
     }
 
@@ -581,7 +588,11 @@ class EnvironmentProfileStore(
 
     private fun preferencesEqual(a: EnvironmentPreferences, b: EnvironmentPreferences): Boolean =
         a.allowCrossNamespaceNavigation == b.allowCrossNamespaceNavigation &&
-            a.navigationDetailPrefetchEnabled == b.navigationDetailPrefetchEnabled
+            a.navigationDetailPrefetchEnabled == b.navigationDetailPrefetchEnabled &&
+            a.defaultGroup.trim().ifBlank { "DEFAULT_GROUP" } ==
+            b.defaultGroup.trim().ifBlank { "DEFAULT_GROUP" }
+    // suggestedNamespace is compared via previousSuggestedNamespaces / namespaceChanged
+    // so a namespace-only edit stays operational (session seed) rather than preference-only.
 
     private fun snapshot(profile: EnvironmentProfile): EnvironmentProfile =
         profile.copy(cacheTombstones = profile.cacheTombstones.toMutableList())

@@ -228,33 +228,3 @@ class CredentialSlotStager(private val store: CredentialSlotStore) {
 /** Shared production store used by settings write paths. */
 internal val DefaultCredentialSlotStore: CredentialSlotStore = PlatformCredentialSlotStore()
 
-// ---------------------------------------------------------------------------
-// Compatibility surface for migration and older call sites that still address
-// slots by the opaque storage key string. Prefer [CredentialSlotStore] for new
-// code; these adapters keep legacy paths compiling until #103/#104 land.
-// ---------------------------------------------------------------------------
-
-/** @deprecated Prefer [CredentialSlotStore]; retained for migration call sites. */
-interface CredentialSlots {
-    operator fun get(slotId: String): String?
-    fun put(slotId: String, secret: String)
-}
-
-/** @deprecated Prefer [InMemoryCredentialSlotStore]. */
-class InMemoryCredentialSlots : CredentialSlots {
-    private val values = mutableMapOf<String, String>()
-    override operator fun get(slotId: String): String? = values[slotId]
-    override fun put(slotId: String, secret: String) {
-        if (secret.isNotEmpty()) values[slotId] = secret
-    }
-}
-
-internal fun credentialSlotId(profileId: String, version: Long): String =
-    CredentialSlotStore.slotKey(profileId, version)
-
-internal object PasswordSafeCredentialSlots : CredentialSlots {
-    override operator fun get(slotId: String): String? = NacosCredentialStore.get(slotId)
-    override fun put(slotId: String, secret: String) {
-        NacosCredentialStore.set(slotId, secret)
-    }
-}

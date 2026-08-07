@@ -17,7 +17,8 @@ import com.nanyin.nacos.search.models.ProfileIntent
  * Environment profiles are the sole runtime environment model (ADR-0049).
  * Legacy [servers] and flat active-server fields are deserialization inputs:
  * accepted only during versioned migration on [loadState], never consulted by
- * profile/default/identity reads after migration (issue #104).
+ * profile/default/identity reads after migration, and never re-persisted
+ * (issue #104 / #153).
  */
 @Service(Service.Level.APP)
 @State(
@@ -26,11 +27,10 @@ import com.nanyin.nacos.search.models.ProfileIntent
 )
 class NacosSettings : PersistentStateComponent<NacosSettings> {
 
-    // ---- Legacy multi-server surface (deserialization + settings dual-write) ----
+    // ---- Legacy multi-server surface (deserialization input only) ----
     // Runtime profile/default/identity paths must not read this list after
-    // migration. Apply dual-writes it so the settings dialog can map draft
-    // rows to [ProfileIntent]s and retain dual-write-only fields (timeout,
-    // default group) until those join the intent model (issue #106).
+    // migration. [getState] clears it; [loadSettingsDraft] synthesizes dialog
+    // rows from published profiles + preferences (issue #153).
     var servers: MutableList<NacosServerConfig> = mutableListOf(
         NacosServerConfig(
             id = "s_local",
@@ -140,7 +140,15 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         val sanitized = NacosSettings()
         XmlSerializerUtil.copyBean(this, sanitized)
         sanitized.password = ""
-        sanitized.servers = servers.map { it.copy(password = "") }.toMutableList()
+        // Environment configuration persists as profiles + preferences only
+        // (ADR-0049 / issue #153). Legacy servers and flat active-server mirrors
+        // remain deserialization inputs and are never rewritten.
+        sanitized.servers = mutableListOf()
+        sanitized.serverUrl = ""
+        sanitized.username = ""
+        sanitized.password = ""
+        sanitized.namespace = "public"
+        sanitized.authMode = AuthMode.ANONYMOUS
         sanitized.environmentPreferences = environmentPreferences
             .map { it.copyPreferences() }
             .toMutableList()
@@ -180,20 +188,34 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         }
 
         // Hydrate in-memory dual-write secrets from the credential store without
-        // writing — migration stages revision-pinned slots itself.
-        for (server in servers) {
-            val stored = NacosCredentialStore.get(server.id)
-            if (!stored.isNullOrEmpty()) {
-                server.password = stored
+        // writing — only when migration may still need them as upgrade input.
+        // Already-migrated installs never touch PasswordSafe here (issue #153).
+        if (settingsSchemaVersion < SettingsSchema.CURRENT || profiles.none { it.id.isNotBlank() }) {
+            for (server in servers) {
+                val stored = NacosCredentialStore.get(server.id)
+                if (!stored.isNullOrEmpty()) {
+                    server.password = stored
+                }
             }
         }
 
         runVersionedMigration(DefaultCredentialSlotStore) { key -> NacosCredentialStore.get(key) }
 
-        // Dual-write surface for the settings dialog: mirror active profile
-        // fields onto the flat legacy attributes without treating them as
-        // runtime sources of truth.
+        // Migrated installs do not keep a live server list. Rebuild an in-memory
+        // draft surface from published profiles for the settings dialog only.
+        discardPersistedServerList()
         syncFlatFieldsFromProfiles()
+    }
+
+    /**
+     * Drops legacy server rows after migration so they cannot be re-persisted.
+     * An in-memory draft for the settings dialog is rebuilt from profiles +
+     * preferences + credential slots when needed ([loadSettingsDraft]).
+     */
+    private fun discardPersistedServerList() {
+        if (settingsSchemaVersion < SettingsSchema.CURRENT) return
+        if (profiles.isEmpty()) return
+        servers = mutableListOf()
     }
 
     /**
@@ -254,18 +276,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         credentialSlotsPublished = profiles.isNotEmpty()
         lastMigrationReport = report
 
-        // Keep dual-write server rows aligned with published profiles for the
-        // settings dialog without inventing new profile identities.
-        if (servers.isEmpty() && profiles.isNotEmpty()) {
-            servers = profiles.map { profile ->
-                profileToLegacyServer(
-                    profile,
-                    report.suggestedNamespaces[profile.id] ?: "public",
-                    report.preferences.firstOrNull { it.profileId == profile.id }
-                        ?: EnvironmentPreferences.defaultsFor(profile.id)
-                )
-            }.toMutableList()
-        }
+        // Do not regenerate the legacy server list from profiles (ADR-0049).
+        // In-memory draft rows are synthesized on demand for the settings dialog.
         if (activeServerId.isBlank() || profiles.none { it.id == activeServerId }) {
             activeServerId = migratedDefaultProfileId.ifBlank {
                 profiles.firstOrNull()?.id.orEmpty()
@@ -462,7 +474,9 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 val prefs = preferencesFor(server.id)
                 server.copy(
                     allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
-                    navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled
+                    navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled,
+                    namespace = prefs.suggestedNamespace,
+                    defaultGroup = prefs.defaultGroup
                 )
             }
         }
@@ -473,8 +487,10 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 .read(profile.id, profile.credentialSlotVersion)
                 .orEmpty()
                 .ifEmpty { dual?.password.orEmpty() }
-            val ns = dual?.namespace?.takeIf { it.isNotBlank() }
-                ?: migratedDefaultNamespaceId.ifBlank { "public" }
+            val ns = prefs.suggestedNamespace.trim().ifBlank {
+                dual?.namespace?.takeIf { it.isNotBlank() }
+                    ?: migratedDefaultNamespaceId.ifBlank { "public" }
+            }
             NacosServerConfig(
                 id = profile.id,
                 displayName = profile.displayName,
@@ -485,8 +501,11 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 namespace = ns,
                 apiPolicy = profile.apiPolicy,
                 authMode = profile.authMode,
-                defaultGroup = dual?.defaultGroup ?: "DEFAULT_GROUP",
-                connectionTimeoutMs = dual?.connectionTimeoutMs ?: 30000,
+                defaultGroup = prefs.defaultGroup.trim().ifBlank {
+                    dual?.defaultGroup ?: "DEFAULT_GROUP"
+                },
+                connectionTimeoutMs = dual?.connectionTimeoutMs
+                    ?: getConnectionTimeoutMillis(),
                 autoRefreshOnOpen = dual?.autoRefreshOnOpen ?: true,
                 allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
                 navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled,
@@ -512,7 +531,9 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore,
         isEntombed: (String) -> Boolean = { isProfileEntombed(it) }
     ): ProfileIntentClassification {
-        val previousNamespaces = servers.associate { it.id to it.namespace }
+        val previousNamespaces = environmentPreferences
+            .filter { it.profileId.isNotBlank() }
+            .associate { it.profileId to it.suggestedNamespace.trim().ifBlank { "public" } }
             .ifEmpty {
                 profiles.associate { it.id to migratedDefaultNamespaceId.ifBlank { "public" } }
             }
@@ -531,19 +552,17 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     /**
-     * Dual-write-only field dirty set: timeout, default group, auto-refresh.
-     * These are not yet on [ProfileIntent]; until they join the intent model
-     * the dialog classifies them beside the store answer (issue #106 scope note).
+     * Draft-only extras that are not yet preference records: connection timeout
+     * and the retired auto-refresh-on-open toggle. Prefer preference dirty via
+     * [classifyDraft] for default group / navigation prefs (issue #153).
      */
     fun dualWriteExtrasDirtyIds(draft: List<NacosServerConfig>): Set<String> {
         val publishedById = loadSettingsDraft().associateBy { it.id }
         return draft.mapNotNull { row ->
             val published = publishedById[row.id]
             if (published == null) {
-                // New rows are already dirty via store "added".
                 null
             } else if (
-                row.defaultGroup != published.defaultGroup ||
                 row.connectionTimeoutMs != published.connectionTimeoutMs ||
                 row.autoRefreshOnOpen != published.autoRefreshOnOpen
             ) {
@@ -635,9 +654,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         val previousIds = profiles.map { it.id }.filter { it.isNotBlank() }.toSet()
             .ifEmpty { servers.map { it.id }.toSet() }
         val previousActiveId = activeServerId
-        val previousNamespaces = servers.associate { it.id to it.namespace }
+        val previousNamespaces = environmentPreferences
+            .filter { it.profileId.isNotBlank() }
+            .associate { it.profileId to it.suggestedNamespace.trim().ifBlank { "public" } }
             .ifEmpty {
-                profiles.associate { it.id to migratedDefaultNamespaceId.ifBlank { "public" } }
+                servers.associate { it.id to it.namespace.trim().ifBlank { "public" } }
+                    .ifEmpty {
+                        profiles.associate { it.id to migratedDefaultNamespaceId.ifBlank { "public" } }
+                    }
             }
         val previousPreferences = environmentPreferences.map { it.copyPreferences() }
         // Defensive copies so the store never mutates live beans while deciding.
@@ -788,7 +812,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         }.toMutableList()
 
         syncFromActiveServer()
-        persistCredentials(previousIds)
+        // Legacy server-id PasswordSafe keys are migration inputs only. Secrets
+        // live in revision-pinned credential slots (issue #153 / ADR-0035).
 
         // Preference-only / display-only / pure-reorder writes must not advance
         // the session epoch (ADR-0042). The store outcome is authoritative.
@@ -817,7 +842,9 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         val prefs = outcome.publishedPreferences
             .firstOrNull { it.profileId == profile.id }
             ?: EnvironmentPreferences.defaultsFor(profile.id)
-        val ns = outcome.suggestedNamespaces[profile.id] ?: previousServer?.namespace ?: "public"
+        val ns = prefs.suggestedNamespace.trim().ifBlank {
+            outcome.suggestedNamespaces[profile.id] ?: previousServer?.namespace ?: "public"
+        }
         val publishedSecret = credentialSlots
             .read(profile.id, profile.credentialSlotVersion)
             .orEmpty()
@@ -833,6 +860,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 apiPolicy = profile.apiPolicy,
                 authMode = profile.authMode,
                 writeIntent = profile.writeIntent,
+                defaultGroup = prefs.defaultGroup,
                 allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
                 navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled
             )
@@ -847,6 +875,9 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             apiPolicy = profile.apiPolicy,
             authMode = profile.authMode,
             writeIntent = profile.writeIntent,
+            defaultGroup = prefs.defaultGroup.trim().ifBlank {
+                base.defaultGroup.ifBlank { "DEFAULT_GROUP" }
+            },
             allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
             navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled
         )
@@ -863,6 +894,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             apiPolicy = intent.apiPolicy,
             authMode = intent.authMode,
             writeIntent = intent.writeIntent,
+            defaultGroup = intent.preferences.defaultGroup,
             allowCrossNamespaceNavigation = intent.preferences.allowCrossNamespaceNavigation,
             navigationDetailPrefetchEnabled = intent.preferences.navigationDetailPrefetchEnabled
         )
@@ -878,10 +910,11 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             serverUrl = profile.canonicalEndpoint,
             username = profile.principal,
             password = "",
-            namespace = namespace,
+            namespace = namespace.ifBlank { prefs.suggestedNamespace }.ifBlank { "public" },
             apiPolicy = profile.apiPolicy,
             authMode = profile.authMode,
             writeIntent = profile.writeIntent,
+            defaultGroup = prefs.defaultGroup,
             allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
             navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled
         )
@@ -1111,21 +1144,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     /**
-     * Writes each server's password to [NacosCredentialStore] and removes
-     * credentials for servers that no longer exist.
-     *
-     * Revision-pinned profile slots are owned by [EnvironmentProfileStore]
-     * via [CredentialSlotStore]; this only maintains the legacy server-id keys
-     * used by migration and the settings dual-write surface.
-     */
-    private fun persistCredentials(previousIds: Set<String>) {
-        val currentIds = servers.map { it.id }.toSet()
-        (previousIds - currentIds).forEach { NacosCredentialStore.remove(it) }
-        servers.forEach { NacosCredentialStore.set(it.id, it.password) }
-    }
-
-    /**
-     * Validates the current settings
+     * Validates the current settings.
      */
     fun validate(): List<String> {
         val errors = mutableListOf<String>()

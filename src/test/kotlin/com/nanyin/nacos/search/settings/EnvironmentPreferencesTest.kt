@@ -62,34 +62,27 @@ class EnvironmentPreferencesUnitTest {
                     displayName = "Dev",
                     serverUrl = "http://localhost:8848",
                     allowCrossNamespaceNavigation = true,
-                    navigationDetailPrefetchEnabled = false
+                    navigationDetailPrefetchEnabled = false,
+                    namespace = "ops",
+                    defaultGroup = "APP_GROUP"
                 )
             ),
             "dev"
         )
 
-        // Snapshot as the platform would persist it.
+        // Snapshot as the platform would persist it — no legacy server list.
         val persisted = original.getState()
-        // Simulate a future state where legacy server preference fields are gone
-        // but preference records remain (ADR-0049 deserialization-only path).
-        persisted.servers.forEach {
-            it.allowCrossNamespaceNavigation = false
-            it.navigationDetailPrefetchEnabled = true
-        }
+        assertTrue(persisted.servers.isEmpty())
 
         val restored = NacosSettings()
         restored.loadState(persisted)
-
-        // Clear dual-write fields after load so lookup cannot cheat via servers.
-        restored.servers.forEach {
-            it.allowCrossNamespaceNavigation = false
-            it.navigationDetailPrefetchEnabled = true
-        }
 
         val prefs = restored.preferencesFor("dev")
         assertEquals("dev", prefs.profileId)
         assertTrue(prefs.allowCrossNamespaceNavigation)
         assertFalse(prefs.navigationDetailPrefetchEnabled)
+        assertEquals("ops", prefs.suggestedNamespace)
+        assertEquals("APP_GROUP", prefs.defaultGroup)
         assertTrue(restored.allowCrossNamespaceNavigation("dev"))
         assertFalse(restored.navigationDetailPrefetchEnabled("dev"))
     }
