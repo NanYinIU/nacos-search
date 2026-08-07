@@ -919,11 +919,13 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         return ProfileDeletionLifecycle(writer, cleanup)
     }
 
-    private fun isLiveApplicationSettings(): Boolean = try {
-        val app = ApplicationManager.getApplication() ?: return false
-        app.getService(NacosSettings::class.java) === this
-    } catch (_: Exception) {
-        false
+    private fun isLiveApplicationSettings(): Boolean {
+        return try {
+            val app = ApplicationManager.getApplication() ?: return false
+            app.getService(NacosSettings::class.java) === this
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /** True when the shared (or injected) tombstone registry holds [profileId]. */

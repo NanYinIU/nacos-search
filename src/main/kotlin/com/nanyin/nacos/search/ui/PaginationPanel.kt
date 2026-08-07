@@ -171,7 +171,7 @@ class PaginationPanel : JPanel(BorderLayout()), NacosLanguageListener, Disposabl
                 isEnabled = false
                 toolTipText = tooltip
                 putClientProperty("JButton.buttonType", "toolbar")
-                ui = BasicButtonUI()
+                setUI(BasicButtonUI())
                 preferredSize = Dimension(24, 22)
                 minimumSize = Dimension(24, 22)
                 maximumSize = Dimension(24, 22)

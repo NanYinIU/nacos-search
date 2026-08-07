@@ -17,14 +17,14 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.startup.ProjectActivity
+import com.intellij.openapi.startup.StartupActivity
 import kotlinx.coroutines.*
 
 /**
  * Main plugin class that manages the Nacos Search plugin lifecycle
  */
 @Service(Service.Level.APP)
-class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
+class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
 
    private val logger = thisLogger()
   private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -38,7 +38,7 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
     private fun keyIndexService(): NacosKeyIndexService =
         ApplicationManager.getApplication().getService(NacosKeyIndexService::class.java)
 
-    override suspend fun execute(project: Project) {
+    override fun runActivity(project: Project) {
         logger.info("Initializing Nacos Search Plugin")
 
        try {

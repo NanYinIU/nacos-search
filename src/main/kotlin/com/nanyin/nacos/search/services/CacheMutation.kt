@@ -86,5 +86,5 @@ sealed interface CacheMutation {
      * operation started afterwards lands normally — clear-then-reload behaves
      * as the obvious gesture.
      */
-    data object Clear : CacheMutation
+    object Clear : CacheMutation
 }

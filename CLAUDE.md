@@ -8,7 +8,7 @@ This is **Nacos Search**, an IntelliJ IDEA platform plugin that lets developers 
 
 - **Plugin ID**: `com.nanyin.nacos.search`
 - **Version**: sourced from `build.gradle.kts` (currently `1.3.8`) — bump it there and update the `pluginDescription` / `changeNotes` blocks in `build.gradle.kts` (`patchPluginXml`) when releasing. Those are the single source; `META-INF/plugin.xml` does not duplicate them.
-- **Target Platform**: IntelliJ IDEA Community Edition (`sinceBuild = 243`, `untilBuild = 261.*`)
+- **Target Platform**: IntelliJ IDEA Community Edition (`sinceBuild = 223`, `untilBuild = 261.*`)
 - **JDK**: Java 17
 - **Gradle**: 9.0.0
 - **Kotlin**: 2.0.21
@@ -30,7 +30,7 @@ Use the Gradle wrapper for all build operations. AI agents and automation **must
 # Run a development instance of IntelliJ IDEA with the plugin loaded
 ./gradlew runIde
 
-# Run plugin verification against configured IDE versions (2024.3.5, 2025.1, 2026.1 EAP)
+# Run plugin verification against the configured IDE version (2022.3.3)
 ./gradlew verifyPlugin
 
 # Run all tests
@@ -57,7 +57,7 @@ Plugin signing is configured via the `intellijPlatform.signing` block and reads 
 
 ### Plugin Lifecycle
 
-`NacosSearchPlugin` is an application-level `@Service`, a `ProjectActivity` (registered via the `com.intellij.postStartupActivity` extension point), and a `Disposable`. On project startup it:
+`NacosSearchPlugin` is an application-level `@Service`, a `StartupActivity` (registered via the `com.intellij.postStartupActivity` extension point), and a `Disposable`. On project startup it:
 
 1. Validates `NacosSettings`.
 2. Kicks off background cache loading via `CacheService` (does not block the EDT).
@@ -224,8 +224,9 @@ Two actions are registered in `plugin.xml` and added to the `ToolsMenu`:
 - `NacosApiService.getConfigurationFromItem()` fetches full configuration content for each item returned by `listConfigurations`. `getAllConfigurations` now fetches these per-item contents concurrently (bounded at 8) rather than sequentially, but loading a large namespace still issues many HTTP calls.
 - `NacosSearchService.SearchRequest.isFuzzySearch()` treats `*` and `?` as wildcards. A leading `*` is stripped before calling the Nacos API in `getProcessedDataId()`. Naming a `SearchRequest` requires `@OptIn(SearchRequestAssembly::class)` — see **One held search session**.
 - Settings UI is built with **Kotlin UI DSL Version 2** (`com.intellij.ui.dsl.builder.panel`). If you modify `settings/NacosConfigurable.kt`, avoid the deprecated `com.intellij.ui.layout` DSL and `titledRow`.
-- The plugin targets **2024.3.5** as the build platform with `sinceBuild = 243` and `untilBuild = 261.*` for 2026.1 compatibility. Keep API usage limited to what's available in build 243 if you want broad compatibility.
-- `StartupActivity` has been migrated to **`ProjectActivity`** (`com.intellij.openapi.startup.projectActivity`) with a `postStartupActivity` extension in `plugin.xml`.
+- The plugin targets **2022.3.3** as the build platform with `sinceBuild = 223` and `untilBuild = 261.*` for 2026.1 compatibility. Keep API usage limited to what's available in build 223 if you want broad compatibility.
+- Searchable-options generation is disabled because IntelliJ Platform Gradle Plugin 2.16 refuses that task below build 233; this keeps `buildPlugin` and `verifyPlugin` executable against the build 223 baseline.
+- Startup uses **`StartupActivity`** with a `postStartupActivity` extension in `plugin.xml` so the entry point remains available on the minimum supported build 223.
 - Tool window icons are SVGs under `src/main/resources/icons/` (`nacosSearch.svg`, `nacosSearch_dark.svg`, `nacosSearch_20.svg`, `nacosSearch_20_dark.svg`). `plugin.xml` references `/icons/nacosSearch_20.svg`; IntelliJ automatically picks the `_dark` variant in dark themes.
 - The `.claude/settings.local.json` already allows `./gradlew:*` commands, so Gradle tasks should run without permission prompts.
 - Some UI tests in `NamespacePanelTest` have pre-existing timing/EDT issues and may fail under the newer test framework; they are not indicative of plugin runtime behavior.
