@@ -1,0 +1,75 @@
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigListPanel.kt
+  s_2c8366e65414a3::t_f248bb30f581ff 107
+src/main/kotlin/com/nanyin/nacos/search/ui/PaginationPanel.kt
+  s_2c8366e65414a3::t_f248bb30f581ff 174
+src/main/kotlin/com/nanyin/nacos/search/services/operations/PublishTypes.kt
+  s_2c8366e65414a3::t_78ef4649a4105e 45,94-96,108-112,126
+src/main/kotlin/com/nanyin/nacos/search/services/NavigationDetailPrefetchService.kt
+  s_2c8366e65414a3::t_78ef4649a4105e 394
+build.gradle.kts
+  s_2c8366e65414a3::t_e8ab5941b4c690 4,101-102
+  s_2c8366e65414a3::t_aac18cb99da378 31-34,70-71,107
+  s_2c8366e65414a3::t_a62d3339837df0 79-92
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigListViewState.kt
+  s_2c8366e65414a3::t_78ef4649a4105e 31,63
+src/main/kotlin/com/nanyin/nacos/search/settings/CredentialSlotStore.kt
+  s_2c8366e65414a3::t_78ef4649a4105e 50
+src/main/kotlin/com/nanyin/nacos/search/ui/NamespacePanel.kt
+  s_2c8366e65414a3::t_f248bb30f581ff 94,113,149
+src/main/kotlin/com/nanyin/nacos/search/NacosSearchPlugin.kt
+  s_2c8366e65414a3::t_cf5a0a125c8d13 20,27,41
+src/main/kotlin/com/nanyin/nacos/search/services/CacheMutation.kt
+  s_2c8366e65414a3::t_78ef4649a4105e 89
+src/test/kotlin/com/nanyin/nacos/search/ui/UiButtonInteractionTest.kt
+  s_2c8366e65414a3::t_df752fdcc873be 351
+src/test/kotlin/com/nanyin/nacos/search/ui/PaginationPanelTest.kt
+  s_2c8366e65414a3::t_df752fdcc873be 20,22
+src/test/kotlin/com/nanyin/nacos/search/services/network/RequestPolicyTest.kt
+  s_2c8366e65414a3::t_d161029b4227a0 38
+src/main/kotlin/com/nanyin/nacos/search/services/operations/EditSessionService.kt
+  s_2c8366e65414a3::t_78ef4649a4105e 49,58,70
+src/test/kotlin/com/nanyin/nacos/search/ui/NamespacePanelTest.kt
+  s_2c8366e65414a3::t_df752fdcc873be 271,273
+src/main/kotlin/com/nanyin/nacos/search/ui/DetailViewState.kt
+  s_2c8366e65414a3::t_78ef4649a4105e 39,41,78,80,91,110
+src/test/kotlin/com/nanyin/nacos/search/services/network/NacosRequestExecutorTest.kt
+  s_2c8366e65414a3::t_d161029b4227a0 100
+src/test/kotlin/com/nanyin/nacos/search/ui/LanguageChangeSubscriptionTest.kt
+  s_2c8366e65414a3::t_df752fdcc873be 204
+src/main/kotlin/com/nanyin/nacos/search/ui/HistoryBrowserController.kt
+  s_2c8366e65414a3::t_78ef4649a4105e 33-34,36-37,40
+src/main/kotlin/com/nanyin/nacos/search/ui/EnvironmentSwitcher.kt
+  s_2c8366e65414a3::t_f248bb30f581ff 58
+src/main/kotlin/com/nanyin/nacos/search/ui/SearchPanel.kt
+  s_2c8366e65414a3::t_f248bb30f581ff 59,81,93
+README.md
+  s_2c8366e65414a3::t_aac18cb99da378 143,190
+src/main/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibilityModels.kt
+  s_2c8366e65414a3::t_78ef4649a4105e 38,250
+CLAUDE.md
+  s_2c8366e65414a3::t_cf5a0a125c8d13 60,229
+  s_2c8366e65414a3::t_aac18cb99da378 11,33,227
+  s_2c8366e65414a3::t_a62d3339837df0 228
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosSettings.kt
+  s_2c8366e65414a3::t_f248bb30f581ff 922-928
+gradle.properties
+  s_2c8366e65414a3::t_6357636e6f9de0 7
+src/test/kotlin/com/nanyin/nacos/search/settings/NacosConfigurableInteractionTest.kt
+  s_2c8366e65414a3::t_df752fdcc873be 411
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2a24a38c6ce32d36538f5fda36304e381d2b3449",
+  "prompts": {},
+  "sessions": {
+    "s_2c8366e65414a3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fdc2a-d8ca-7bb0-86cd-37ed5b0450b3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
