@@ -124,6 +124,30 @@ class DetailControllerTest {
     }
 
     @Test
+    fun `fresh plan paints cached body immediately and keeps it while confirming`() {
+        val cached = CacheService.CachedConfiguration(
+            configuration = config("# fresh"),
+            freshness = CacheService.DetailFreshness.FRESH,
+            freshUntilMillis = 1L,
+            deepStaleAtMillis = 2L
+        )
+        val plan = controller(OperationGateway(emptyMap())).planSelection(cached)
+        assertEquals("# fresh", plan.immediate?.configuration?.content)
+        assertNull(plan.immediate?.overlay?.takeIf { it != DetailOverlay.None })
+        assertTrue(plan.shouldLoad)
+        assertFalse(plan.forceRefresh)
+        assertTrue(plan.keepCachedVisible)
+    }
+
+    @Test
+    fun `missing cache plan loads without an immediate body`() {
+        val plan = controller(OperationGateway(emptyMap())).planSelection(null)
+        assertNull(plan.immediate)
+        assertTrue(plan.shouldLoad)
+        assertFalse(plan.keepCachedVisible)
+    }
+
+    @Test
     fun `forceRefresh reaches the adapter even when cache would serve`() = runBlocking {
         val reached = AtomicBoolean(false)
         val gateway = OperationGateway(

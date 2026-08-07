@@ -57,11 +57,14 @@ class DetailController(
         }
         val confidence = DetailPresentation.confidenceFromCache(cached.freshness)
         return when (cached.freshness) {
+            // Paint the fresh cache immediately. A full Loading card here made
+            // first selection after prefetch flash (and could race) even though
+            // the body was already local; confirm with a quiet background load.
             CacheService.DetailFreshness.FRESH -> SelectionPlan(
-                immediate = null,
+                immediate = DetailPresentation.body(cached.configuration, confidence),
                 shouldLoad = true,
                 forceRefresh = false,
-                keepCachedVisible = false
+                keepCachedVisible = true
             )
             CacheService.DetailFreshness.STALE -> SelectionPlan(
                 immediate = DetailPresentation.body(cached.configuration, confidence),
