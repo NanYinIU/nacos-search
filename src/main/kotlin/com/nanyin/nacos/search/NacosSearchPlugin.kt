@@ -115,29 +115,23 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
     }
     
     /**
-     * Load initial configuration data from Nacos server
+     * Warm the key index and preheat the namespace index. A standalone first-page
+     * metadata list used to run here and was only logged before the preheat
+     * paged the same namespace again (issue #147) — dropped.
      */
     private suspend fun loadInitialData() {
         try {
-            logger.info("Loading initial configuration metadata from Nacos server")
-            
-            val result = apiService.listConfigurations(pageNo = 1, pageSize = 200, useCache = true)
-            if (result.isSuccess) {
-                val response = result.getOrThrow().value
-                logger.info("Successfully loaded metadata for ${response.pageItems.size}/${response.totalCount} configurations")
-               // Warm the @NacosValue key index from persisted/opened configs so
-               // code gutter markers appear without blocking the highlighter.
-               val identity = settings.captureAccessIdentity()
-               keyIndexService().ensureIndexBuilt(cacheService.snapshot(identity))
+            val identity = settings.captureAccessIdentity()
+            // Warm the @NacosValue key index from persisted/opened configs so
+            // code gutter markers appear without blocking the highlighter.
+            keyIndexService().ensureIndexBuilt(cacheService.snapshot(identity))
 
-                // Preheat the full namespace index in the background so the
-                // first content/regex search does not have to pull every page
-                // on demand. Best-effort: failures are logged and silently
-                // fall back to the existing on-demand pull path.
-                preheatNamespaceIndex(namespaceId = null)
-            } else {
-                logger.error("Failed to load initial data: ${result.exceptionOrNull()?.message}")
-            }
+            // Preheat the full namespace index in the background so the
+            // first content/regex search does not have to pull every page
+            // on demand. Best-effort: failures are logged and silently
+            // fall back to the existing on-demand pull path. A persisted
+            // (possibly stale) index short-circuits the pagination.
+            preheatNamespaceIndex(namespaceId = null)
         } catch (e: Exception) {
             logger.error("Error loading initial data", e)
         }
@@ -171,7 +165,13 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         coroutineScope.launch {
             try {
                 val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
-                val existing = cacheService.getNamespaceIndex(indexRequest.key.identity, namespaceId)
+                // Persisted STALE indexes count: restart must not re-page when
+                // a prior complete index is already on disk (issue #147).
+                val existing = cacheService.getNamespaceIndex(
+                    indexRequest.key.identity,
+                    namespaceId,
+                    allowStale = true
+                )
                 if (existing != null) {
                     keyIndexService().ensureIndexBuilt(cacheService.snapshot(indexRequest.key.identity))
                     return@launch
