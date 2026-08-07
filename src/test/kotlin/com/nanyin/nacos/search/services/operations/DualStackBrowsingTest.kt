@@ -53,6 +53,9 @@ class DualStackBrowsingTest {
     fun `V3 content search is complete while V1 is coverage limited`() {
         assertEquals(CapabilityCoverage.COMPLETE, ProtocolCapabilities.V3.contentSearch)
         assertEquals(CapabilityCoverage.LIMITED, ProtocolCapabilities.V1.contentSearch)
+        // Issue #146: V1 list pages carry bodies; V3 lists do not.
+        assertEquals(CapabilityCoverage.COMPLETE, ProtocolCapabilities.V1.listCarriesBodies)
+        assertEquals(CapabilityCoverage.UNAVAILABLE, ProtocolCapabilities.V3.listCarriesBodies)
         assertEquals(
             SearchCoverage.complete(100, 100),
             searchCoverageFromCapability(CapabilityCoverage.COMPLETE, 100, 100, "unused")

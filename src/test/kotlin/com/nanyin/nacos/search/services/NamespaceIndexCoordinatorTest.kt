@@ -220,6 +220,177 @@ class NamespaceIndexCoordinatorTest {
     }
 
     @Test
+    fun `complete V1 load seeds non-blank bodies into detail cache under the index observation`() = runBlocking {
+        val apiService = mock<NacosApiService>()
+        val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
+        whenever(apiService.operationGateway()).thenReturn(gateway)
+        whenever(apiService.protocolCapabilities(NacosApiGeneration.V1))
+            .thenReturn(com.nanyin.nacos.search.services.operations.ProtocolCapabilities.V1)
+        val cacheService = CacheService({ 2_000_000L }, InMemoryCacheStore())
+        cacheService.clearAll()
+
+        val withBody = NacosConfiguration(
+            dataId = "app.yaml",
+            group = "DEFAULT_GROUP",
+            tenantId = "ns-a",
+            content = "feature.enabled=true",
+            type = "yaml"
+        )
+        val blankBody = NacosConfiguration(
+            dataId = "empty.yaml",
+            group = "DEFAULT_GROUP",
+            tenantId = "ns-a",
+            content = "",
+            type = "yaml"
+        )
+        whenever(
+            apiService.loadNamespace(
+                namespaceId = "ns-a",
+                useCache = false,
+                operationContext = context
+            )
+        ).thenReturn(
+            Result.success(
+                NamespaceLoadResult(
+                    completeness = DatasetCompleteness.COMPLETE,
+                    expectedCount = 2,
+                    configurations = listOf(withBody, blankBody),
+                    failures = emptyList()
+                )
+            )
+        )
+
+        val outcome = NamespaceIndexCoordinator(apiService, cacheService)
+            .requestIndex(indexRequest(), IndexTrigger.NAMESPACE_SWITCH)
+
+        assertTrue(outcome is IndexOutcome.Complete)
+        // Index still stores summaries only (issue #52).
+        val index = cacheService.getNamespaceIndex(identity, "ns-a")
+        assertEquals(2, index?.size)
+        assertTrue(index!!.all { it.content.isEmpty() })
+        // Non-blank list-carried body lands as an ordinary detail.
+        assertEquals(
+            "feature.enabled=true",
+            cacheService.getConfigDetail(identity, "ns-a", "app.yaml", "DEFAULT_GROUP")?.content
+        )
+        // Blank bodies are not seeded.
+        assertNull(
+            cacheService.getConfigDetail(identity, "ns-a", "empty.yaml", "DEFAULT_GROUP")
+        )
+    }
+
+    @Test
+    fun `complete V3 load does not seed details even when list rows carry content`() = runBlocking {
+        val v3Identity = identity.copy(resolvedGeneration = NacosApiGeneration.V3)
+        val v3Context = context.copy(
+            identity = v3Identity,
+            resolvedGeneration = NacosApiGeneration.V3
+        )
+        val apiService = mock<NacosApiService>()
+        val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
+        whenever(apiService.operationGateway()).thenReturn(gateway)
+        whenever(apiService.protocolCapabilities(NacosApiGeneration.V3))
+            .thenReturn(com.nanyin.nacos.search.services.operations.ProtocolCapabilities.V3)
+        val cacheService = CacheService({ 2_000_000L }, InMemoryCacheStore())
+        cacheService.clearAll()
+
+        val withBody = NacosConfiguration(
+            dataId = "app.yaml",
+            group = "DEFAULT_GROUP",
+            tenantId = "ns-a",
+            content = "should-not-seed=true",
+            type = "yaml"
+        )
+        whenever(
+            apiService.loadNamespace(
+                namespaceId = "ns-a",
+                useCache = false,
+                operationContext = v3Context
+            )
+        ).thenReturn(
+            Result.success(
+                NamespaceLoadResult(
+                    completeness = DatasetCompleteness.COMPLETE,
+                    expectedCount = 1,
+                    configurations = listOf(withBody),
+                    failures = emptyList()
+                )
+            )
+        )
+
+        val outcome = NamespaceIndexCoordinator(apiService, cacheService)
+            .requestIndex(indexRequest(ctx = v3Context), IndexTrigger.NAMESPACE_SWITCH)
+
+        assertTrue(outcome is IndexOutcome.Complete)
+        assertNull(
+            "V3 lists do not declare listCarriesBodies; prefetch remains the body source",
+            cacheService.getConfigDetail(v3Identity, "ns-a", "app.yaml", "DEFAULT_GROUP")
+        )
+    }
+
+    @Test
+    fun `seeded detail loses to a later-started detail write`() = runBlocking {
+        val apiService = mock<NacosApiService>()
+        val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())
+        whenever(apiService.operationGateway()).thenReturn(gateway)
+        whenever(apiService.protocolCapabilities(NacosApiGeneration.V1))
+            .thenReturn(com.nanyin.nacos.search.services.operations.ProtocolCapabilities.V1)
+        val cacheService = CacheService({ 2_000_000L }, InMemoryCacheStore())
+        cacheService.clearAll()
+
+        val withBody = NacosConfiguration(
+            dataId = "app.yaml",
+            group = "DEFAULT_GROUP",
+            tenantId = "ns-a",
+            content = "from-list=true",
+            type = "yaml"
+        )
+        whenever(
+            apiService.loadNamespace(
+                namespaceId = "ns-a",
+                useCache = false,
+                operationContext = context
+            )
+        ).thenReturn(
+            Result.success(
+                NamespaceLoadResult(
+                    completeness = DatasetCompleteness.COMPLETE,
+                    expectedCount = 1,
+                    configurations = listOf(withBody),
+                    failures = emptyList()
+                )
+            )
+        )
+
+        NamespaceIndexCoordinator(apiService, cacheService)
+            .requestIndex(indexRequest(), IndexTrigger.NAMESPACE_SWITCH)
+
+        assertEquals(
+            "from-list=true",
+            cacheService.getConfigDetail(identity, "ns-a", "app.yaml", "DEFAULT_GROUP")?.content
+        )
+
+        val newer = NacosConfiguration(
+            dataId = "app.yaml",
+            group = "DEFAULT_GROUP",
+            tenantId = "ns-a",
+            content = "from-detail=true",
+            type = "yaml"
+        )
+        val laterObservation = gateway.beginObservation()
+        assertTrue(
+            cacheService.applyMutation(
+                CacheMutation.WriteDetail(identity, "ns-a", newer, 300_000L),
+                laterObservation
+            )
+        )
+        assertEquals(
+            "from-detail=true",
+            cacheService.getConfigDetail(identity, "ns-a", "app.yaml", "DEFAULT_GROUP")?.content
+        )
+    }
+
+    @Test
     fun `partial namespace load for an entombed profile writes nothing to the detail cache`() = runBlocking {
         val apiService = mock<NacosApiService>()
         val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(emptyMap())

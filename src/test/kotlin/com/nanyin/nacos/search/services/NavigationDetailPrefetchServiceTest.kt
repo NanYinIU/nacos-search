@@ -168,6 +168,53 @@ class NavigationDetailPrefetchServiceTest {
     }
 
     @Test
+    fun `prefetch issues zero detail requests when list-carried bodies already seeded`() = runBlocking {
+        val api = mock<NacosApiService>()
+        val cache = CacheService(InMemoryCacheStore())
+        cache.clearAll()
+        cache.replaceNamespaceIndex(
+            identity,
+            "dev",
+            listOf(
+                NacosConfiguration("common.properties", "DEFAULT_GROUP", "dev", "", "properties"),
+                NacosConfiguration("other.properties", "DEFAULT_GROUP", "dev", "", "properties")
+            )
+        )
+        // Simulate issue #146 seeding: COMPLETE V1 index load wrote ordinary details.
+        cache.writeDetail(
+            identity,
+            "dev",
+            NacosConfiguration("common.properties", "DEFAULT_GROUP", "dev", "seeded=1", "properties"),
+            ttl = 60_000L
+        )
+        cache.writeDetail(
+            identity,
+            "dev",
+            NacosConfiguration("other.properties", "DEFAULT_GROUP", "dev", "seeded=2", "properties"),
+            ttl = 60_000L
+        )
+
+        val svc = service(api, cache, setOf("common.properties", "other.properties"))
+        val outcome = withTimeout(5_000) {
+            svc.requestPrefetch(project, identity, context, "dev")!!.await()
+        }
+
+        assertTrue(outcome is PrefetchOutcome.Complete)
+        val complete = outcome as PrefetchOutcome.Complete
+        assertEquals(2, complete.requested)
+        assertEquals(2, complete.fetched)
+        verify(api, never()).getConfiguration(
+            dataId = any(),
+            group = any(),
+            namespaceId = anyOrNull(),
+            useCache = any(),
+            forceRefresh = any(),
+            operationContext = any()
+        )
+        svc.dispose()
+    }
+
+    @Test
     fun `toggle off produces no detail requests`() = runBlocking {
         val servers = settings.cloneServers().map {
             it.copy(navigationDetailPrefetchEnabled = false)
