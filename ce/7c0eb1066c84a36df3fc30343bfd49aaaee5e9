@@ -1,0 +1,49 @@
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProviderTest.kt
+  s_3e95160364fae6::t_5c8ca4b8114166 153
+src/main/kotlin/com/nanyin/nacos/search/NacosSearchPlugin.kt
+  s_3e95160364fae6::t_08d10b6b7075ce 205-206,209,214-216,220,222,233,239
+  s_3e95160364fae6::t_0e0a4acf780633 202-204,207-208
+  s_3e95160364fae6::t_7d6c4e49c6135b 16,21,217-219,221
+src/test/kotlin/com/nanyin/nacos/search/actions/RefreshCacheActionTest.kt
+  s_3e95160364fae6::t_08d10b6b7075ce 20-22
+  s_3e95160364fae6::t_98e8390ffd4e4b 1-19,23-31
+src/test/kotlin/com/nanyin/nacos/search/ui/NamespacePanelTest.kt
+  s_3e95160364fae6::t_bc0ba29b7ae62a 220-231,233-247
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchWindow.kt
+  s_3e95160364fae6::t_603f221a79639b 53,218,362,691
+src/test/kotlin/com/nanyin/nacos/search/ui/PaginationPanelTest.kt
+  s_3e95160364fae6::t_bc0ba29b7ae62a 17-18,30
+src/main/kotlin/com/nanyin/nacos/search/ui/NamespacePanel.kt
+  s_3e95160364fae6::t_603f221a79639b 55,189,197-198,564-566
+  s_3e95160364fae6::t_bb3095fd7ef7f2 194
+  s_3e95160364fae6::t_71c799d7f40c28 567
+src/main/kotlin/com/nanyin/nacos/search/ui/PaginationPanel.kt
+  s_3e95160364fae6::t_603f221a79639b 25
+src/main/kotlin/com/nanyin/nacos/search/actions/RefreshCacheAction.kt
+  s_3e95160364fae6::t_08d10b6b7075ce 15-16,18-21,23-32,52-61,93
+  s_3e95160364fae6::t_603f221a79639b 10,17,22,43
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceServiceTest.kt
+  s_3e95160364fae6::t_bc0ba29b7ae62a 8,11-14,16-19,24-25,42,45-46,48,50-53,55-56,58-59,61,63-68,70,72-78,80
+src/main/kotlin/com/nanyin/nacos/search/services/NamespaceService.kt
+  s_3e95160364fae6::t_14559031354237 3,7-15,18-22,25,27-28,30-31,34-47,49-52,55-58,60,63
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigListPanel.kt
+  s_3e95160364fae6::t_603f221a79639b 34
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProvider.kt
+  s_3e95160364fae6::t_603f221a79639b 138,216,218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ce7c0eb1066c84a36df3fc30343bfd49aaaee5e9",
+  "prompts": {},
+  "sessions": {
+    "s_3e95160364fae6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fdbc2-a01b-7200-86e0-914f6e4232ed",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
