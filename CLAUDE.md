@@ -74,7 +74,6 @@ Services are IntelliJ application- or project-level components registered with `
 - `NacosApiService` — HTTP client for the Nacos Open API (`/nacos/v1/cs/configs`, `/nacos/v1/cs/config`, `/nacos/v1/console/namespaces`). It also maintains a short-lived in-memory cache of configuration responses per namespace and handles auth headers. Requests retry transient IO failures.
 - `NacosAuthService` — Manages Nacos login tokens. Caches `accessToken` per `serverUrl+username`, refreshes before expiry, evicts stale entries on credential switch, and supports logout/validation.
 - `NacosSearchService` — Project-level search orchestrator. It **holds the session context** every search targets (see **One held search session** below), exposes search state and pagination state via Kotlin `StateFlow`, and takes intents rather than requests: `search`, `searchAsYouType`, `clearCriteria`, `reload`, `nextPage`, `previousPage`, `changePageSize`. Translates wildcard queries like `*config` into Nacos `blur`/`accurate` search modes.
-- `SearchService` — Local search over the `CacheService` store with regex, content preview, highlighting, and scoring.
 - `CacheService` — Persistent local cache. See **Cache persistence** below.
 - `NamespaceService` — Persists the selected namespace (`PersistentStateComponent`, stored in `nacos-namespace-service.xml`) and notifies `NamespaceChangeListener`s when the user switches namespaces.
 - `EditSessionService` — Project-level owner of the one configuration draft, and of publishing it. See **The edit session lives outside the tool window** below.
