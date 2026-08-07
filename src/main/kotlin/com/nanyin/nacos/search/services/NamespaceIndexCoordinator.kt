@@ -54,15 +54,22 @@ internal fun NacosSettings.captureNamespaceIndexRequest(namespaceId: String?): N
 /**
  * Builds an index request from an already-captured operation context (UI and
  * search paths that prepared the context off the EDT).
+ *
+ * An AUTO profile's captured context still carries an unresolved generation;
+ * [locator] supplies the one the hot-path freshness check already named
+ * (ADR-0053) so the index write and every locator-applied reader share one
+ * key space (issue #144). Locked V1/V3 contexts are returned untouched.
  */
 internal fun NacosSettings.captureNamespaceIndexRequest(
     namespaceId: String?,
-    operationContext: NacosOperationContext
+    operationContext: NacosOperationContext,
+    locator: ResolvedGenerationLocator = ResolvedGenerationLocator.forSelectedProfile()
 ): NamespaceIndexRequest {
+    val aligned = operationContext.locatedUnder(locator)
     return NamespaceIndexRequest(
-        key = NamespaceIndexKey(operationContext.identity, namespaceId.orEmpty()),
+        key = NamespaceIndexKey(aligned.identity, namespaceId.orEmpty()),
         cacheTtlMillis = getCacheTtlMillis(),
-        operationContext = operationContext
+        operationContext = aligned
     )
 }
 

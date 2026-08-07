@@ -5,6 +5,7 @@ import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosApiGeneration
+import com.nanyin.nacos.search.settings.NacosOperationContext
 
 /**
  * The non-secret keys an environment profile's cache is addressed by. They are
@@ -151,4 +152,18 @@ internal fun AccessIdentity.locatedUnder(
         )
     )
     return if (located.isResolved()) copy(resolvedGeneration = located) else this
+}
+
+/**
+ * Addresses [this] under the generation [locator] finds, when the profile's API
+ * policy left it unresolved. Keeps [NacosOperationContext.identity] and
+ * [NacosOperationContext.resolvedGeneration] in lockstep so a namespace-index
+ * request's key identity equals its operation-context identity (issue #144).
+ */
+internal fun NacosOperationContext.locatedUnder(
+    locator: ResolvedGenerationLocator
+): NacosOperationContext {
+    val located = identity.locatedUnder(locator, profileRevision)
+    if (located == identity) return this
+    return copy(identity = located, resolvedGeneration = located.resolvedGeneration)
 }

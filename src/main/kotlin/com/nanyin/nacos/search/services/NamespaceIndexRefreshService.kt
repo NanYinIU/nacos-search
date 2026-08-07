@@ -50,7 +50,11 @@ class NamespaceIndexRefreshService internal constructor(
      * Capture uses [identity.profileId] so the write lands under the same key
      * space the freshness check inspected. Capturing the app-wide default
      * profile instead would leave this identity never FRESH and every gutter
-     * pass would re-page the namespace.
+     * pass would re-page the namespace. [captureNamespaceIndexRequest] also
+     * applies the resolved-generation locator (ADR-0053) so an AUTO profile
+     * whose session already resolved does not write into the UNKNOWN-
+     * generation space while the freshness check looks in the resolved one
+     * (issue #144).
      *
      * [afterRefresh] runs only on [IndexOutcome.Complete]: Partial never
      * publishes a FRESH authoritative index, so restarting the daemon after
@@ -77,9 +81,14 @@ class NamespaceIndexRefreshService internal constructor(
                 val request = withContext(Dispatchers.IO) {
                     // Same profile the caller used for the freshness check —
                     // never resolveDefaultProfileId() here (multi-env mismatch).
+                    // Prefer this project's session when the gutter named one,
+                    // otherwise the app-level selected-profile locator (ADR-0053).
+                    val locator = project?.takeUnless { it.isDisposed }
+                        ?.let { ResolvedGenerationLocator.forProject(it) }
+                        ?: ResolvedGenerationLocator.forSelectedProfile()
                     val context = settings.captureOperationContext(identity.profileId)
                         .getOrElse { throw it }
-                    settings.captureNamespaceIndexRequest(namespaceId, context)
+                    settings.captureNamespaceIndexRequest(namespaceId, context, locator)
                 }
                 when (requester.requestIndex(request, IndexTrigger.PSI)) {
                     is IndexOutcome.Complete -> afterRefresh(request, project)

@@ -2,6 +2,8 @@ package com.nanyin.nacos.search.services
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.ApplicationRule
+import com.nanyin.nacos.search.models.NacosApiGeneration
+import com.nanyin.nacos.search.models.NacosApiPolicy
 import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.settings.AuthMode
@@ -14,9 +16,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicInteger
 
 class NamespaceIndexRefreshServiceTest {
     @get:Rule
@@ -149,6 +151,202 @@ class NamespaceIndexRefreshServiceTest {
             clearProfileTombstones(listOf(defaultProfileId, projectProfileId) + originalServers.map { it.id })
         }
     }
+
+    @Test
+    fun `AUTO freshness-check and index-write identities stay equal before and after resolution`() =
+        runBlocking {
+            val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+            val originalServers = settings.servers.map { it.copy() }
+            val originalActive = settings.activeServerId
+            val profileId = "s_auto_keyspace"
+            val endpoint = "http://auto-keyspace:8848"
+            val lastKnown = ApplicationManager.getApplication()
+                .getService(LastKnownGenerationStore::class.java)
+            try {
+                clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+                lastKnown.clearProfile(profileId)
+                settings.applyServers(
+                    listOf(
+                        NacosServerConfig(
+                            id = profileId,
+                            displayName = "AUTO Keyspace",
+                            serverUrl = endpoint,
+                            username = "admin",
+                            password = "secret",
+                            authMode = AuthMode.BASIC,
+                            apiPolicy = NacosApiPolicy.AUTO
+                        )
+                    ),
+                    profileId
+                )
+                val profile = requireNotNull(settings.getProfile(profileId))
+
+                // Before resolution: both sides stay UNKNOWN and equal.
+                val freshnessBefore = settings.captureAccessIdentity(profileId)
+                val requestBefore = settings.captureNamespaceIndexRequest(
+                    "dev",
+                    settings.captureOperationContext(profileId).getOrThrow()
+                )
+                assertEquals(NacosApiGeneration.UNKNOWN, freshnessBefore.resolvedGeneration)
+                assertEquals(freshnessBefore, requestBefore.key.identity)
+                assertEquals(requestBefore.operationContext.identity, requestBefore.key.identity)
+
+                // After a resolved generation is known (persisted last-known —
+                // the same credential-free source ADR-0053 uses on restart):
+                lastKnown.put(
+                    LastKnownGenerationStore.Key(
+                        profileId = profile.id,
+                        accessRevision = profile.accessRevision,
+                        canonicalEndpoint = endpoint
+                    ),
+                    NacosApiGeneration.V1
+                )
+                val freshnessAfter = settings.captureAccessIdentity(profileId)
+                val requestAfter = settings.captureNamespaceIndexRequest(
+                    "dev",
+                    settings.captureOperationContext(profileId).getOrThrow()
+                )
+                assertEquals(NacosApiGeneration.V1, freshnessAfter.resolvedGeneration)
+                assertEquals(freshnessAfter, requestAfter.key.identity)
+                assertEquals(requestAfter.operationContext.identity, requestAfter.key.identity)
+            } finally {
+                lastKnown.clearProfile(profileId)
+                clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+                settings.applyServers(originalServers, originalActive)
+                clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+            }
+        }
+
+    @Test
+    fun `locked V1 profile index request keeps the locked generation`() = runBlocking {
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val originalServers = settings.servers.map { it.copy() }
+        val originalActive = settings.activeServerId
+        val profileId = "s_locked_v1_keyspace"
+        try {
+            clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+            settings.applyServers(
+                listOf(
+                    NacosServerConfig(
+                        id = profileId,
+                        displayName = "Locked V1",
+                        serverUrl = "http://locked-v1:8848",
+                        username = "admin",
+                        password = "secret",
+                        authMode = AuthMode.BASIC,
+                        apiPolicy = NacosApiPolicy.V1
+                    )
+                ),
+                profileId
+            )
+            val freshness = settings.captureAccessIdentity(profileId)
+            val request = settings.captureNamespaceIndexRequest(
+                "dev",
+                settings.captureOperationContext(profileId).getOrThrow()
+            )
+            assertEquals(NacosApiGeneration.V1, freshness.resolvedGeneration)
+            assertEquals(freshness, request.key.identity)
+            assertEquals(request.operationContext.identity, request.key.identity)
+        } finally {
+            clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+            settings.applyServers(originalServers, originalActive)
+            clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+        }
+    }
+
+    @Test
+    fun `PSI Complete under AUTO resolved generation leaves the next gutter pass idle`() =
+        runBlocking {
+            val requestCount = AtomicInteger(0)
+            val observed = CompletableDeferred<NamespaceIndexRequest>()
+            val requester = object : NamespaceIndexRequester {
+                override suspend fun requestIndex(
+                    request: NamespaceIndexRequest,
+                    trigger: IndexTrigger
+                ): IndexOutcome {
+                    requestCount.incrementAndGet()
+                    if (!observed.isCompleted) observed.complete(request)
+                    return IndexOutcome.Complete(
+                        count = 0,
+                        state = com.nanyin.nacos.search.models.DatasetState(
+                            com.nanyin.nacos.search.models.DataSource.REMOTE,
+                            com.nanyin.nacos.search.models.DataFreshness.FRESH,
+                            com.nanyin.nacos.search.models.DatasetCompleteness.COMPLETE,
+                            System.currentTimeMillis()
+                        )
+                    )
+                }
+            }
+            val cacheService = CacheService(InMemoryCacheStore())
+            cacheService.clearAll()
+            val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+            val originalServers = settings.servers.map { it.copy() }
+            val originalActive = settings.activeServerId
+            val profileId = "s_auto_psi_fresh"
+            val endpoint = "http://auto-psi-fresh:8848"
+            val lastKnown = ApplicationManager.getApplication()
+                .getService(LastKnownGenerationStore::class.java)
+            val service = NamespaceIndexRefreshService(
+                requester,
+                cacheService,
+                CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
+            ) { _, _ -> }
+            try {
+                clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+                lastKnown.clearProfile(profileId)
+                settings.applyServers(
+                    listOf(
+                        NacosServerConfig(
+                            id = profileId,
+                            displayName = "AUTO PSI Fresh",
+                            serverUrl = endpoint,
+                            username = "admin",
+                            password = "secret",
+                            authMode = AuthMode.BASIC,
+                            apiPolicy = NacosApiPolicy.AUTO
+                        )
+                    ),
+                    profileId
+                )
+                val profile = requireNotNull(settings.getProfile(profileId))
+                lastKnown.put(
+                    LastKnownGenerationStore.Key(
+                        profileId = profile.id,
+                        accessRevision = profile.accessRevision,
+                        canonicalEndpoint = endpoint
+                    ),
+                    NacosApiGeneration.V1
+                )
+                val identity = settings.captureAccessIdentity(profileId)
+                assertEquals(NacosApiGeneration.V1, identity.resolvedGeneration)
+
+                service.requestIfNeeded(identity, "dev", project = null)
+                val request = withTimeout(2_000L) { observed.await() }
+                assertEquals(identity, request.key.identity)
+                assertEquals(1, requestCount.get())
+
+                // Simulate what a Complete coordinator write lands under the
+                // request key — the next gutter pass must see FRESH and idle.
+                @OptIn(CacheWriteAccess::class)
+                cacheService.applyMutation(
+                    CacheMutation.ReplaceNamespaceIndex(
+                        identity = request.key.identity,
+                        namespaceId = "dev",
+                        summaries = emptyList(),
+                        ttlMillis = settings.getCacheTtlMillis()
+                    ),
+                    observation = 1L
+                )
+                service.requestIfNeeded(identity, "dev", project = null)
+                assertEquals(1, requestCount.get())
+            } finally {
+                service.dispose()
+                lastKnown.clearProfile(profileId)
+                clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+                settings.applyServers(originalServers, originalActive)
+                clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+            }
+        }
 
     @Test
     fun `Complete outcome runs afterRefresh Partial does not`() = runBlocking {
