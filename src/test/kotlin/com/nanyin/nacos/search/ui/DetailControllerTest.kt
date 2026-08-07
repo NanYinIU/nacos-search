@@ -137,6 +137,9 @@ class DetailControllerTest {
         assertTrue(plan.shouldLoad)
         assertFalse(plan.forceRefresh)
         assertTrue(plan.keepCachedVisible)
+        // keepCachedVisible + !forceRefresh is the quiet-confirm signal: the
+        // panel must reuse the editor and skip DaemonCodeAnalyzer.restart so
+        // navigation caret and gutter icons are not churned.
     }
 
     @Test
