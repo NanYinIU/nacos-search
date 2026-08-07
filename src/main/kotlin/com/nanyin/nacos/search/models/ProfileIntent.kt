@@ -14,12 +14,9 @@ import com.nanyin.nacos.search.settings.AuthMode
  * Avoid naming this an environment profile, draft, or settings form — it is
  * only the attributes a user chooses.
  *
- * **Scope note (ADR-0024 follow-up under #47 / #106):** operation-affecting
- * non-security knobs that still live only on the legacy server dual-write
- * surface (`connectionTimeoutMs`, `defaultGroup`, `autoRefreshOnOpen`) are
- * **not** modeled on this intent yet. A timeout-only Apply therefore does not
- * advance the profile revision through the store; treat those fields as
- * dual-write-only until they join the intent + profile model.
+ * **Scope note (issue #153):** `defaultGroup` lives on [EnvironmentPreferences]
+ * via [preferences]. Global `connectionTimeoutSeconds` remains a non-environment
+ * setting. `autoRefreshOnOpen` is migration-input only and is not republished.
  */
 data class ProfileIntent(
     /** Stable environment profile id. Empty values are rejected by the store. */
@@ -63,6 +60,7 @@ data class ProfileIntent(
          */
         fun fromServerConfig(server: NacosServerConfig): ProfileIntent {
             val id = server.id.ifBlank { "default" }
+            val suggested = server.namespace.ifBlank { "public" }
             return ProfileIntent(
                 profileId = id,
                 displayName = server.displayName,
@@ -72,11 +70,13 @@ data class ProfileIntent(
                 principal = server.username.trim(),
                 secret = server.password,
                 writeIntent = server.writeIntent,
-                suggestedNamespace = server.namespace.ifBlank { "public" },
+                suggestedNamespace = suggested,
                 preferences = EnvironmentPreferences(
                     profileId = id,
                     allowCrossNamespaceNavigation = server.allowCrossNamespaceNavigation,
-                    navigationDetailPrefetchEnabled = server.navigationDetailPrefetchEnabled
+                    navigationDetailPrefetchEnabled = server.navigationDetailPrefetchEnabled,
+                    suggestedNamespace = suggested,
+                    defaultGroup = server.defaultGroup.trim().ifBlank { "DEFAULT_GROUP" }
                 )
             )
         }

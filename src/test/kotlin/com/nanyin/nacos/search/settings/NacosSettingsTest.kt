@@ -483,7 +483,19 @@ class NacosSettingsTest {
             ),
             "s_ok"
         )
+        // getState no longer persists servers (#153). Rebuild a legacy XML shape
+        // that still carries the server list so remigration has an upgrade input.
         val state = settings.getState()
+        state.servers = mutableListOf(
+            NacosServerConfig(
+                id = "s_ok",
+                displayName = "OK",
+                serverUrl = "http://localhost:8848",
+                username = "nacos",
+                password = "secret",
+                authMode = AuthMode.NACOS_PASSWORD
+            )
+        )
         // Simulate corrupt XML debris that Instantiator used to blow up on, or
         // partially written profile rows with an empty id under a legacy schema.
         state.profiles = mutableListOf(
