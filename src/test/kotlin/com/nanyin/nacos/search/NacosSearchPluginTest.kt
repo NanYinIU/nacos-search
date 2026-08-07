@@ -1,6 +1,7 @@
 package com.nanyin.nacos.search
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.NacosServerConfig
@@ -70,7 +71,13 @@ class NacosSearchPluginTest {
     fun `manual refresh routes through coordinator error classification`() = runBlocking {
         val plugin = NacosSearchPlugin()
         try {
-            val result = plugin.refreshCache("contract-test-ns")
+            val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+            val context = settings.captureOperationContext("s_local").getOrThrow()
+            val result = plugin.refreshCache(
+                "contract-test-ns",
+                context,
+                ProjectManager.getInstance().defaultProject
+            )
             // Without a real server, the refresh fails. After issue #122 the
             // coordinator preserves typed remote causes (e.g. Connection) rather
             // than collapsing them to NacosRequestError — that is the contract.

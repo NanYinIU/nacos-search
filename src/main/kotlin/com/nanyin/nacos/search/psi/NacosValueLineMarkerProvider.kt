@@ -14,7 +14,6 @@ import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.CacheSnapshot
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
-import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NamespaceIndexRefreshService
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.allowCrossNamespaceNavigation
@@ -135,9 +134,8 @@ class NacosValueLineMarkerProvider internal constructor(
                 if (el is com.intellij.pom.Navigatable) el.navigate(true)
             }
             results.size > 1 -> {
-                val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
                 val items = results.mapNotNull { it.element as? NacosConfigKeyElement }
-                    .map { NacosConfigChoiceItem(it, namespaceDisplayName(namespaceService, it.namespaceId)) }
+                    .map { NacosConfigChoiceItem(it, namespaceDisplayName(it.namespaceId)) }
                 JBPopupFactory.getInstance()
                     .createPopupChooserBuilder(items)
                     .setTitle("Choose Nacos configuration")
@@ -215,10 +213,9 @@ class NacosValueLineMarkerProvider internal constructor(
         }
     }
 
-    private fun namespaceDisplayName(namespaceService: NamespaceService, namespaceId: String): String {
+    private fun namespaceDisplayName(namespaceId: String): String {
         val normalized = namespaceId.takeIf { it.isNotBlank() && it != "public" } ?: ""
-        return namespaceService.findNamespaceById(normalized)?.getDisplayName()
-            ?: if (normalized.isBlank()) "public" else namespaceId
+        return if (normalized.isBlank()) "public" else namespaceId
     }
 
     companion object {

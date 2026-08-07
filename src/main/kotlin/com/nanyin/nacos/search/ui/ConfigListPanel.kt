@@ -1,10 +1,7 @@
 package com.nanyin.nacos.search.ui
 
 import com.nanyin.nacos.search.models.NacosConfiguration
-import com.nanyin.nacos.search.models.NamespaceInfo
-import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NacosLanguageListener
-import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
@@ -17,7 +14,6 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
-import kotlinx.coroutines.*
 import java.awt.*
 import javax.swing.*
 import javax.swing.plaf.basic.BasicButtonUI
@@ -35,9 +31,7 @@ import com.nanyin.nacos.search.invokeOnEdt
  * Uses a JBList with a custom cell renderer that shows the config's
  * dataId, group, and a colored file-type badge (YAML / JSON / properties).
  */
-class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), NamespaceChangeListener, NacosLanguageListener, Disposable {
-
-    private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
+class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), NacosLanguageListener, Disposable {
 
     // UI Components
     private lateinit var configList: JBList<NacosConfiguration>
@@ -61,7 +55,6 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     // Decisions about which state to show are made upstream.
     private var viewState: ConfigListViewState = ConfigListViewState.Empty()
     private var configurations: List<NacosConfiguration> = emptyList()
-    private var currentNamespace: NamespaceInfo? = null
     // Current search query for highlighting matched fragments in the list
     private var currentSearchQuery: String = ""
     // Set of config keys that have unsaved edits (for the red dot indicator)
@@ -70,8 +63,6 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     // action does not re-enter the selection handler it was cancelling.
     private var isRestoringSelection = false
 
-    private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-
     var onConfigurationSelected: ((NacosConfiguration) -> Unit)? = null
     var onRefreshRequested: (() -> Unit)? = null
 
@@ -79,10 +70,8 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
         initializeComponents()
         setupLayout()
         setupEventHandlers()
-        namespaceService.addNamespaceChangeListener(this)
         ApplicationManager.getApplication().messageBus.connect(this)
             .subscribe(NacosLanguageListener.TOPIC, this)
-        currentNamespace = namespaceService.getCurrentNamespace()
     }
 
     private fun initializeComponents() {
@@ -344,8 +333,6 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     }
 
     override fun dispose() {
-        namespaceService.removeNamespaceChangeListener(this)
-        coroutineScope.cancel()
     }
 
     // ------------------------------------------------------------------
@@ -360,13 +347,6 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     private fun showCard(cardName: String) {
         val centerPanel = getComponent(1) as? JPanel ?: return
         (centerPanel.layout as? CardLayout)?.show(centerPanel, cardName)
-    }
-
-    override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
-        // Track selection only. Clearing/reloading the list is owned by
-        // NacosSearchWindow (clearSearchUi / openNamespace) so held viewState
-        // and the model cannot diverge across language re-renders.
-        currentNamespace = newNamespace
     }
 
     // ------------------------------------------------------------------

@@ -131,7 +131,6 @@ class LanguageChangeSubscriptionTest {
     fun `namespace panel refreshes on a language change`() {
         val namespaceService = mock<NamespaceService> {
             whenever(it.loadNamespacesAsync()).thenReturn(CompletableDeferred(Result.success(emptyList())))
-            whenever(it.getCurrentNamespace()).thenReturn(null)
         }
         val panel = NamespacePanel(
             mockProject,

@@ -12,6 +12,7 @@ import com.nanyin.nacos.search.services.requestManualNamespaceRefresh
 import com.nanyin.nacos.search.services.requestStartupNamespaceIndex
 import com.nanyin.nacos.search.psi.NacosKeyIndexService
 import com.nanyin.nacos.search.settings.NacosSettings
+import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
@@ -195,33 +196,34 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
    /**
     * Refresh cache from Nacos server
      */
-    suspend fun refreshCache(namespaceId: String): Result<Int> {
+    suspend fun refreshCache(
+        namespaceId: String,
+        operationContext: NacosOperationContext,
+        project: Project
+    ): Result<Int> {
         return try {
             logger.info("Refreshing full namespace cache for '${namespaceId.ifBlank { "public" }}'")
             // captureNamespaceIndexRequest fails closed with ConfigurationRequired;
             // the surrounding catch turns it into Result.failure (issue #50).
-            val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
-            // Prefetch is independent of index completion (ADR-0043). Manual
-            // refresh carries no project, so each open project self-triggers
-            // before the index flight returns.
-            com.intellij.openapi.project.ProjectManager.getInstance().openProjects
-                .filter { !it.isDefault && !it.isDisposed }
-                .forEach { openProject ->
-                    ApplicationManager.getApplication()
-                        .getService(NavigationDetailPrefetchService::class.java)
-                        .requestIfNeeded(openProject, indexRequest.key.identity, namespaceId)
-                }
+            val indexRequest = settings.captureNamespaceIndexRequest(namespaceId, operationContext)
+            // Prefetch is independent of index completion (ADR-0043), and a
+            // manual refresh belongs only to its invoking project session.
+            if (!project.isDefault && !project.isDisposed) {
+                ApplicationManager.getApplication()
+                    .getService(NavigationDetailPrefetchService::class.java)
+                    .requestIfNeeded(project, indexRequest.key.identity, namespaceId)
+            }
             when (val outcome = indexCoordinator.requestManualNamespaceRefresh(indexRequest)) {
                 is IndexOutcome.Complete -> {
                     ApplicationManager.getApplication()
                         .getService(NavigationIndexRefreshService::class.java)
-                        .refresh(indexRequest.key.identity, null)
+                        .refresh(indexRequest.key.identity, project)
                     Result.success(outcome.count)
                 }
                 is IndexOutcome.Partial -> {
                     ApplicationManager.getApplication()
                         .getService(NavigationIndexRefreshService::class.java)
-                        .refresh(indexRequest.key.identity, null)
+                        .refresh(indexRequest.key.identity, project)
                     // Prefer the typed stopping cause (authn/authz/connection/…)
                     // so Tools → refresh surfaces the same remote error search
                     // does (issue #122), not only a generic partial-count message.
