@@ -87,8 +87,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     // seed / reset force NACOS_PASSWORD via [defaultPersistedShape].
     var authMode: AuthMode = AuthMode.ANONYMOUS
     var enableTokenAuth: Boolean = true
-    var tokenCacheDurationMinutes: Int = 30
-    var autoTokenRefresh: Boolean = true
 
     // Cache configuration
     var cacheEnabled: Boolean = true
@@ -952,10 +950,10 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             override fun invalidateAuthentication(profileId: String) {
                 try {
                     ApplicationManager.getApplication()
-                        ?.getService(com.nanyin.nacos.search.services.NacosAuthService::class.java)
+                        ?.getService(com.nanyin.nacos.search.services.AuthenticationSessionRegistry::class.java)
                         ?.invalidateProfile(profileId)
                 } catch (_: Exception) {
-                    // Outside a live IDE the auth service may be unavailable.
+                    // Outside a live IDE the session registry may be unavailable.
                 }
             }
 
@@ -1231,20 +1229,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
     
     /**
-     * 检查是否配置了token认证
-     */
-    fun hasTokenAuthentication(): Boolean {
-        return enableTokenAuth && username.isNotBlank() && password.isNotBlank()
-    }
-    
-    /**
-     * 获取token缓存时间（毫秒）
-     */
-    fun getTokenCacheDurationMillis(): Long {
-        return tokenCacheDurationMinutes * 60 * 1000L
-    }
-    
-    /**
      * Gets cache TTL in milliseconds
      */
     fun getCacheTtlMillis(): Long {
@@ -1306,8 +1290,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 "namespace='$namespace', " +
                 "authMode=$authMode, " +
                 "enableTokenAuth=$enableTokenAuth, " +
-                "tokenCacheDurationMinutes=$tokenCacheDurationMinutes, " +
-                "autoTokenRefresh=$autoTokenRefresh, " +
                 "cacheEnabled=$cacheEnabled, " +
                 "cacheTtlMinutes=$cacheTtlMinutes, " +
                 "maxCacheSize=$maxCacheSize" +

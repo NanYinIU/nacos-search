@@ -69,7 +69,8 @@ class NacosApiService(
 ) {
     private val logger = thisLogger()
     private val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-    private val authService = ApplicationManager.getApplication().getService(NacosAuthService::class.java)
+    private val authenticationSessions = ApplicationManager.getApplication()
+        .getService(AuthenticationSessionRegistry::class.java)
     private val executor = executorOverride ?: NacosRequestExecutor()
 
     private val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
@@ -83,13 +84,13 @@ class NacosApiService(
     private val v1Adapter by lazy {
         V1ProtocolAdapter(
             NacosRequestExecutorProtocolTransport(executor),
-            authService.authenticationSessions
+            authenticationSessions
         )
     }
     private val v3Adapter by lazy {
         V3ProtocolAdapter(
             NacosRequestExecutorProtocolTransport(executor),
-            authService.authenticationSessions
+            authenticationSessions
         )
     }
     private val v1Gateway by lazy {

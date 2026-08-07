@@ -338,8 +338,7 @@ class SessionGenerationIntegrationTest {
      * ADR-0022: a diagnostic runs on temporary authentication state and modifies
      * no authentication registry.
      *
-     * A NACOS_PASSWORD diagnostic used to authenticate through
-     * `NacosAuthService.getValidAccessToken` and therefore through
+     * A NACOS_PASSWORD diagnostic used to authenticate through the shared
      * `AuthenticationSessionRegistry`, which records a flight lock and an
      * invalidation epoch under the synthetic "diagnostic" identity — and does so
      * even when the login itself fails, since the lock is taken before the
@@ -357,9 +356,9 @@ class SessionGenerationIntegrationTest {
      */
     @Test
     fun `NACOS_PASSWORD diagnostics leave no state in the shared authentication registry`() = runBlocking {
-        val authService = com.intellij.openapi.application.ApplicationManager.getApplication()
-            .getService(NacosAuthService::class.java)
-        val before = authService.sessionIdentities()
+        val sessions = com.intellij.openapi.application.ApplicationManager.getApplication()
+            .getService(AuthenticationSessionRegistry::class.java)
+        val before = sessions.trackedIdentities()
 
         val report = harness.apiService.diagnoseConnection(
             DiagnosticSnapshot(
@@ -374,7 +373,7 @@ class SessionGenerationIntegrationTest {
 
         assertEquals(
             before,
-            authService.sessionIdentities(),
+            sessions.trackedIdentities(),
             "a diagnostic must leave no authentication state behind"
         )
         // It did reach V1 authentication rather than stopping earlier: the read

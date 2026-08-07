@@ -25,8 +25,6 @@ class NacosSettingsTest {
         assertEquals("public", settings.namespace)
         assertEquals(AuthMode.NACOS_PASSWORD, settings.authMode)
         assertTrue(settings.enableTokenAuth)
-        assertEquals(30, settings.tokenCacheDurationMinutes)
-        assertTrue(settings.autoTokenRefresh)
         assertTrue(settings.cacheEnabled)
         assertEquals(5, settings.cacheTtlMinutes)
         assertEquals(1000, settings.maxCacheSize)
@@ -243,25 +241,6 @@ class NacosSettingsTest {
         settings.username = "user"
         settings.password = "pass"
         assertTrue(settings.hasAuthentication())
-    }
-
-    @Test
-    fun `test hasTokenAuthentication`() {
-        settings.enableTokenAuth = true
-        assertFalse(settings.hasTokenAuthentication())
-
-        settings.username = "user"
-        settings.password = "pass"
-        assertTrue(settings.hasTokenAuthentication())
-
-        settings.enableTokenAuth = false
-        assertFalse(settings.hasTokenAuthentication())
-    }
-
-    @Test
-    fun `test getTokenCacheDurationMillis`() {
-        settings.tokenCacheDurationMinutes = 30
-        assertEquals(30 * 60 * 1000L, settings.getTokenCacheDurationMillis())
     }
 
     @Test
