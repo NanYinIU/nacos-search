@@ -1051,6 +1051,13 @@ private fun setupEventHandlers() {
            if (newEditor != null) {
               editor = newEditor
               updateEditorUI(newEditor)
+              // Content card exists only after updateEditorUI — reveal it here so
+              // CardLayout.show("content") is never a no-op on first load.
+              if (::loadingLabel.isInitialized) {
+                  loadingLabel.isVisible = false
+              }
+              val cardLayout = contentPanel.layout as CardLayout
+              cardLayout.show(contentPanel, "content")
               applyKeyGutterMarkers(configuration, newEditor, presented)
               consumePendingNavigation(configuration)
                editButton.isEnabled = true
@@ -1210,8 +1217,11 @@ private fun setupEventHandlers() {
     }
     
     private fun setLoadingState(loading: Boolean) {
+        // Gate [loadConfigurationContent] synchronously — deferring only the
+        // flag to invokeLater left a window where a second selection started
+        // another load while the first was still in flight.
+        isLoading = loading
         invokeOnEdt(ModalityState.defaultModalityState()) {
-            isLoading = loading
             updateActionsEnabled()
         }
     }
@@ -1240,6 +1250,17 @@ private fun setupEventHandlers() {
         }
     }
 
+    /** Reveal the editor card and ensure the Loading label is not left painted over it. */
+    private fun showContentCard() {
+        invokeOnEdt(ModalityState.defaultModalityState()) {
+            if (::loadingLabel.isInitialized) {
+                loadingLabel.isVisible = false
+            }
+            val cardLayout = contentPanel.layout as CardLayout
+            cardLayout.show(contentPanel, "content")
+        }
+    }
+
     private val bundleMessage: (String, Array<out Any>) -> String = { key, params ->
         if (params.isEmpty()) NacosSearchBundle.message(key)
         else NacosSearchBundle.message(key, *params)
@@ -1262,8 +1283,9 @@ private fun setupEventHandlers() {
             is DetailViewState.Loading -> {
                 if (::loadingLabel.isInitialized) {
                     loadingLabel.text = NacosSearchBundle.message("config.detail.loading")
-                    loadingLabel.isVisible = true
                 }
+                // Let CardLayout alone own visibility — setting the label visible
+                // here before showCard runs leaves it painted over the previous card.
                 showCard("loading")
                 hideFreshnessStatus()
             }
@@ -1279,9 +1301,14 @@ private fun setupEventHandlers() {
                     state.observation
                 )
                 if (!sameEditor) {
+                    // showCard("content") runs inside displayConfigurationContentSafely
+                    // only after the editor is added — showing it earlier is a no-op
+                    // when the content card does not exist yet (first load), and can
+                    // leave the Loading label painted over the editor.
                     displayConfigurationContentSafely(state.configuration, presented)
+                } else {
+                    showContentCard()
                 }
-                showCard("content")
                 val overlayText = DetailCopy.overlayMessage(state.overlay, bundleMessage)
                 if (overlayText != null) {
                     invokeOnEdt(ModalityState.defaultModalityState()) {
