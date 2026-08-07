@@ -122,10 +122,16 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
     /**
      * Project-local environment adoption (issue #107). Updates only this
      * session — never [NacosSettings.activeServerId] or the migration seed.
+     *
+     * When [namespaceId] is omitted, the current Namespace is kept only if the
+     * profile is unchanged. Switching environments must not carry the previous
+     * server's Namespace id into the new one — callers pass the new
+     * environment's suggested Namespace, otherwise public is the safe default.
      */
     fun adoptEnvironment(profileId: String, namespaceId: String? = null) {
+        val sameProfile = profileId == sessionState.selectedProfileId
         val ns = namespaceId?.takeIf { it.isNotBlank() }
-            ?: sessionState.namespaceId.takeIf { it.isNotBlank() }
+            ?: sessionState.namespaceId.takeIf { sameProfile && it.isNotBlank() }
             ?: "public"
         select(profileId, ns)
     }
