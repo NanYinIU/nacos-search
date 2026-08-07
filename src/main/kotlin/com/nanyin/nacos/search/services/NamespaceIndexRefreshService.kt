@@ -47,6 +47,16 @@ class NamespaceIndexRefreshService internal constructor(
      * which may read the credential — is captured off-EDT inside the launched
      * coroutine (design §11/§19.7).
      *
+     * Capture uses [identity.profileId] so the write lands under the same key
+     * space the freshness check inspected. Capturing the app-wide default
+     * profile instead would leave this identity never FRESH and every gutter
+     * pass would re-page the namespace.
+     *
+     * [afterRefresh] runs only on [IndexOutcome.Complete]: Partial never
+     * publishes a FRESH authoritative index, so restarting the daemon after
+     * Partial would re-enter this path and page again. Partial / Failed cool
+     * down inside the coordinator.
+     *
      * The navigation detail prefetch is always requested independently for
      * [project] with its own freshness gate (ADR-0043), so a newly declared
      * data id is fetched without waiting for the namespace index TTL.
@@ -65,11 +75,17 @@ class NamespaceIndexRefreshService internal constructor(
         scope.launch {
             try {
                 val request = withContext(Dispatchers.IO) {
-                    settings.captureNamespaceIndexRequest(namespaceId)
+                    // Same profile the caller used for the freshness check —
+                    // never resolveDefaultProfileId() here (multi-env mismatch).
+                    val context = settings.captureOperationContext(identity.profileId)
+                        .getOrElse { throw it }
+                    settings.captureNamespaceIndexRequest(namespaceId, context)
                 }
                 when (requester.requestIndex(request, IndexTrigger.PSI)) {
-                    is IndexOutcome.Complete, is IndexOutcome.Partial -> afterRefresh(request, project)
-                    is IndexOutcome.Failed, is IndexOutcome.Stale -> Unit
+                    is IndexOutcome.Complete -> afterRefresh(request, project)
+                    is IndexOutcome.Partial,
+                    is IndexOutcome.Failed,
+                    is IndexOutcome.Stale -> Unit
                 }
             } catch (e: Exception) {
                 logger.debug("Background Namespace refresh failed", e)

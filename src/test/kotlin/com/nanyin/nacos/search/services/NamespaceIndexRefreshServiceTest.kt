@@ -14,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -75,6 +76,168 @@ class NamespaceIndexRefreshServiceTest {
             assertEquals("http://localhost:8848", actualRequest.key.identity.canonicalEndpoint)
             assertEquals(AuthMode.BASIC, actualRequest.key.identity.authMode)
             assertEquals("admin", actualRequest.key.identity.principal)
+        } finally {
+            service.dispose()
+            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
+            settings.applyServers(originalServers, originalActive)
+            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
+        }
+    }
+
+    @Test
+    fun `PSI refresh captures the callers profile not the app default`() = runBlocking {
+        val observed = CompletableDeferred<NamespaceIndexRequest>()
+        val requester = object : NamespaceIndexRequester {
+            override suspend fun requestIndex(
+                request: NamespaceIndexRequest,
+                trigger: IndexTrigger
+            ): IndexOutcome {
+                observed.complete(request)
+                return IndexOutcome.Failed(NacosRequestError.Connection(RuntimeException("offline")))
+            }
+        }
+        val cacheService = CacheService(InMemoryCacheStore())
+        cacheService.clearAll()
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val originalServers = settings.servers.map { it.copy() }
+        val originalActive = settings.activeServerId
+        val defaultProfileId = "s_default"
+        val projectProfileId = "s_project"
+        val service = NamespaceIndexRefreshService(
+            requester,
+            cacheService,
+            CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
+        ) { _, _ -> }
+        try {
+            clearProfileTombstones(listOf(defaultProfileId, projectProfileId) + originalServers.map { it.id })
+            // Migration default / first profile is defaultProfileId; the gutter
+            // identity is projectProfileId — capture must follow the identity.
+            settings.applyServers(
+                listOf(
+                    NacosServerConfig(
+                        id = defaultProfileId,
+                        displayName = "Default",
+                        serverUrl = "http://default:8848",
+                        username = "default-user",
+                        password = "secret",
+                        authMode = AuthMode.BASIC
+                    ),
+                    NacosServerConfig(
+                        id = projectProfileId,
+                        displayName = "Project",
+                        serverUrl = "http://project:8848",
+                        username = "project-user",
+                        password = "secret",
+                        authMode = AuthMode.BASIC
+                    )
+                ),
+                defaultProfileId
+            )
+
+            val projectProfile = requireNotNull(settings.getProfile(projectProfileId))
+            val identity = OperationContextResolver.identityFromProfile(projectProfile)
+            service.requestIfNeeded(identity, "dev", project = null)
+
+            val actualRequest = withTimeout(2_000L) { observed.await() }
+            assertEquals(projectProfileId, actualRequest.key.identity.profileId)
+            assertEquals("http://project:8848", actualRequest.key.identity.canonicalEndpoint)
+            assertEquals("project-user", actualRequest.key.identity.principal)
+        } finally {
+            service.dispose()
+            clearProfileTombstones(listOf(defaultProfileId, projectProfileId) + originalServers.map { it.id })
+            settings.applyServers(originalServers, originalActive)
+            clearProfileTombstones(listOf(defaultProfileId, projectProfileId) + originalServers.map { it.id })
+        }
+    }
+
+    @Test
+    fun `Complete outcome runs afterRefresh Partial does not`() = runBlocking {
+        val afterRefreshCount = java.util.concurrent.atomic.AtomicInteger(0)
+        val afterRefreshSignals = java.util.concurrent.ConcurrentLinkedQueue<CompletableDeferred<Unit>>()
+        val requestSignals = java.util.concurrent.ConcurrentLinkedQueue<CompletableDeferred<Unit>>()
+        val outcomes = java.util.concurrent.ConcurrentLinkedQueue<IndexOutcome>()
+        val requester = object : NamespaceIndexRequester {
+            override suspend fun requestIndex(
+                request: NamespaceIndexRequest,
+                trigger: IndexTrigger
+            ): IndexOutcome {
+                val outcome = outcomes.remove()
+                    ?: error("unexpected requestIndex call")
+                requestSignals.poll()?.complete(Unit)
+                return outcome
+            }
+        }
+        val cacheService = CacheService(InMemoryCacheStore())
+        cacheService.clearAll()
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val originalServers = settings.servers.map { it.copy() }
+        val originalActive = settings.activeServerId
+        val testProfileId = "s_after_refresh"
+        val service = NamespaceIndexRefreshService(
+            requester,
+            cacheService,
+            CoroutineScope(Dispatchers.IO + SupervisorJob())
+        ) { _, _ ->
+            afterRefreshCount.incrementAndGet()
+            afterRefreshSignals.poll()?.complete(Unit)
+        }
+        try {
+            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
+            settings.applyServers(
+                listOf(
+                    NacosServerConfig(
+                        id = testProfileId,
+                        displayName = "After Refresh",
+                        serverUrl = "http://localhost:8848",
+                        username = "admin",
+                        password = "secret",
+                        authMode = AuthMode.BASIC
+                    )
+                ),
+                testProfileId
+            )
+            val profile = requireNotNull(settings.getProfile(testProfileId))
+            val identity = OperationContextResolver.identityFromProfile(profile)
+
+            val partialDone = CompletableDeferred<Unit>()
+            requestSignals.add(partialDone)
+            outcomes.add(
+                IndexOutcome.Partial(
+                    loaded = 1,
+                    expected = 2,
+                    state = com.nanyin.nacos.search.models.DatasetState(
+                        com.nanyin.nacos.search.models.DataSource.REMOTE,
+                        com.nanyin.nacos.search.models.DataFreshness.FRESH,
+                        com.nanyin.nacos.search.models.DatasetCompleteness.PARTIAL,
+                        System.currentTimeMillis()
+                    )
+                )
+            )
+            service.requestIfNeeded(identity, "partial-ns", project = null)
+            withTimeout(2_000L) { partialDone.await() }
+            // Give a Partial→afterRefresh bug a moment to fire before asserting.
+            kotlinx.coroutines.delay(50)
+            assertEquals(0, afterRefreshCount.get())
+
+            val completeRequest = CompletableDeferred<Unit>()
+            val completeRefresh = CompletableDeferred<Unit>()
+            requestSignals.add(completeRequest)
+            afterRefreshSignals.add(completeRefresh)
+            outcomes.add(
+                IndexOutcome.Complete(
+                    count = 1,
+                    state = com.nanyin.nacos.search.models.DatasetState(
+                        com.nanyin.nacos.search.models.DataSource.REMOTE,
+                        com.nanyin.nacos.search.models.DataFreshness.FRESH,
+                        com.nanyin.nacos.search.models.DatasetCompleteness.COMPLETE,
+                        System.currentTimeMillis()
+                    )
+                )
+            )
+            service.requestIfNeeded(identity, "complete-ns", project = null)
+            withTimeout(2_000L) { completeRequest.await() }
+            withTimeout(2_000L) { completeRefresh.await() }
+            assertEquals(1, afterRefreshCount.get())
         } finally {
             service.dispose()
             clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })

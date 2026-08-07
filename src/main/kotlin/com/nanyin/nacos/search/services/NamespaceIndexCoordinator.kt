@@ -138,7 +138,9 @@ sealed interface IndexOutcome {
  * The sole owner of full-namespace index work. Ensures that concurrent
  * requests for the same identity+namespace join a single in-flight job
  * (single-flight), that PSI triggers respect a five-minute cooldown after
- * failure, and that the latest foreground request wins.
+ * Failed **or Partial** outcomes (neither leaves a FRESH index, so without
+ * a cooldown every gutter pass would re-page), and that the latest
+ * foreground request wins.
  *
  * Every generation is dispatched through [NacosApiService.loadNamespace] with
  * the captured operation context — there is no generation branch and no
@@ -184,7 +186,7 @@ class NamespaceIndexCoordinator internal constructor(
         require(request.operationContext.identity == key.identity) {
             "Namespace index key does not match its captured operation context"
         }
-        // PSI cooldown: skip if recently failed
+        // PSI cooldown: skip if recently Failed or Partial
         if (trigger == IndexTrigger.PSI) {
             val cooldownUntil = psiCooldownUntil[key]
             if (cooldownUntil != null && System.currentTimeMillis() < cooldownUntil) {
@@ -283,7 +285,10 @@ class NamespaceIndexCoordinator internal constructor(
                     // arrive only via navigation prefetch or explicit reads.
                     // Keep the typed stopping cause so search stale-fallback
                     // policy and presentation can refuse refused-access (issue #122).
+                    // Cool down PSI like Failed: Partial never leaves FRESH, so
+                    // without this every gutter pass would re-page the namespace.
                     markNonAuthoritative(key, observation)
+                    recordPsiFailure(key)
                     IndexOutcome.Partial(
                         loaded = loadResult.configurations.size,
                         expected = loadResult.expectedCount,
