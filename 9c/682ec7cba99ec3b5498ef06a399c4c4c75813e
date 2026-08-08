@@ -1,0 +1,34 @@
+src/test/kotlin/com/nanyin/nacos/search/psi/ConfigKeyExtractorTest.kt
+  s_0e50d85b526391::t_ed89b2d1a75d56 183-187
+  s_0e50d85b526391::t_94605b379e0a26 293-301,307
+  s_0e50d85b526391::t_dc3790c9c992b4 219-240
+  s_0e50d85b526391::t_6e579c615702c7 91,98-182,188-218,241-292,302-306
+  s_0e50d85b526391::t_440de10669cdfb 308
+build.gradle.kts
+  s_0e50d85b526391::t_6e579c615702c7 47
+  s_0e50d85b526391::t_0ad75cd4d0f785 43-46
+src/main/kotlin/com/nanyin/nacos/search/psi/ConfigKeyExtractor.kt
+  s_0e50d85b526391::t_6e579c615702c7 5-12,14-15,121-182,226-246,255,258-259,263-266,268-271,276-280,283-289,293-303,305-307,311,314-317,321-326,328,338,388-389,398,415,428,438-441,452,454,457
+  s_0e50d85b526391::t_ef5cae13acf0bb 247-254,260-262
+  s_0e50d85b526391::t_bb5f62a7ad453d 304,320,331-332,334-337,339-364,366,369,372-376
+  s_0e50d85b526391::t_6f1d151dbd467e 308
+CLAUDE.md
+  s_0e50d85b526391::t_58f00fad5e973b 159-163,165-166
+  s_0e50d85b526391::t_df80a04fd6ead8 164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "9c682ec7cba99ec3b5498ef06a399c4c4c75813e",
+  "prompts": {},
+  "sessions": {
+    "s_0e50d85b526391": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "979f9e15-dfe2-4065-9995-c2af775edd85",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
