@@ -1,0 +1,22 @@
+CLAUDE.md
+  h_231225c3625e99 176
+build.gradle.kts
+  h_231225c3625e99 146-147
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosCodeContext.kt
+  h_231225c3625e99 13-18
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolver.kt
+  h_231225c3625e99 128-130,295-298,323,336-338,385-399,403-406,410-477
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolverTest.kt
+  h_231225c3625e99 400-404,424-525,1080-1084,1086-1089
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ddde0690814b5d01e4db870826b8a3e799cc9f24",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
