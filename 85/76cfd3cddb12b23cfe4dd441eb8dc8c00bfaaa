@@ -1,0 +1,65 @@
+src/main/resources/icons/nacosConfigGutterFormatNotParsed.svg
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 1-7
+src/main/resources/messages/NacosSearchBundle_zh_CN.properties
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 243-244
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolver.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 129-130,140-141,148-150,162-163,172-183,186-188,199-200,203-207,213-248,321,325-326,328,333-389
+  s_2e19bc9fcb8a38::t_2da36619c9cd32 390
+src/test/kotlin/com/nanyin/nacos/search/psi/RuntimeFormatKeyExtractionTest.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 5-6,12-13,15-17,31,37,62,78-210,213-215,225-275
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosValueReference.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 43-44
+src/test/kotlin/com/nanyin/nacos/search/psi/RuntimeFormatDecisionTest.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 15-109,125,136
+src/main/resources/icons/nacosConfigGutterFormatNotParsed_dark.svg
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 1-7
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosCodeContext.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 7,20-31,38,45-47,56-74,83-94
+src/main/kotlin/com/nanyin/nacos/search/psi/ConfigReferenceStatus.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 17-22,30-49,55-59,66-67,80-90
+.gitignore
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 15-16,21-23
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolverTest.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 17,608-1034
+src/main/kotlin/com/nanyin/nacos/search/psi/RuntimeFormatDecision.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 16-21,23-26,65-100
+  s_2e19bc9fcb8a38::t_408bf366856945 101
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProviderTest.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 632-765,798-915
+  s_2e19bc9fcb8a38::t_0a0925e6a49867 916
+src/main/kotlin/com/nanyin/nacos/search/psi/ConfigKeyExtractor.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 94-96,99-142
+  s_2e19bc9fcb8a38::t_f24efbeece1e3d 143
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProvider.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 3,79-90,96,128-129,185-188,226,244-270,272,276-290
+src/main/kotlin/com/nanyin/nacos/search/psi/RuntimeFormatKeyExtraction.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 6-7,9-15,17-100,103-104,106-108,113-137
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyIndexService.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 150-151,160-161,169-170,177-178
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosCodeContextExtractorTest.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 11,34-90
+src/main/resources/messages/NacosSearchBundle.properties
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 243-244
+CONTEXT.md
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 292,300,304
+src/main/kotlin/com/nanyin/nacos/search/NacosIcons.kt
+  s_2e19bc9fcb8a38::t_d9f38dbc102569 8-11,15-16
+CLAUDE.md
+  s_2e19bc9fcb8a38::t_a4cac04a789f8b 154,167,174-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "8576cfd3cddb12b23cfe4dd441eb8dc8c00bfaaa",
+  "prompts": {},
+  "sessions": {
+    "s_2e19bc9fcb8a38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f57ad22a-3729-466f-bc28-6294753dc3fd",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
