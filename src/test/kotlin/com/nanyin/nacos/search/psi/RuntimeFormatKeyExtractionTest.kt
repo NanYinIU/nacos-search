@@ -2,16 +2,19 @@ package com.nanyin.nacos.search.psi
 
 import com.nanyin.nacos.search.models.NacosConfiguration
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
  * What every caller of key extraction observes: the keys a configuration
- * contributes when read under the 运行时格式 its data id decides.
+ * contributes when read under its 运行时格式 — decided by the type a reference
+ * site declares about it, and otherwise by its data id.
  *
- * The declared type takes no part in any case here. The other half of this
- * bridge is still transitional — a refusal reads as "no keys" until it reaches
- * its own terminal resolution state (#166).
+ * The configuration's own 声明格式 takes no part in any case here. The other
+ * half of this bridge is still transitional — a refusal reads as "no keys"
+ * until it reaches its own terminal resolution state (#166).
  */
 class RuntimeFormatKeyExtractionTest {
 
@@ -25,13 +28,13 @@ class RuntimeFormatKeyExtractionTest {
     }
 
     @Test
-    fun `a declared non-parsing type does not stop a parseable suffix`() {
+    fun `a configuration's own non-parsing declared type does not stop a parseable suffix`() {
         val keys = keysUnderRuntimeFormat(config("app.json", """{"k":"v"}""", "text"))
         assertEquals("v", keys["k"]?.value)
     }
 
     @Test
-    fun `a declared type never decides the format`() {
+    fun `a configuration's own declared type never decides the format`() {
         // Declared JSON, but nothing about the data id says the runtime will
         // read it as JSON — so it is not extracted, body notwithstanding.
         assertTrue(keysUnderRuntimeFormat(config("service-config", """{"k":"v"}""", "json")).isEmpty())
@@ -56,7 +59,7 @@ class RuntimeFormatKeyExtractionTest {
     }
 
     @Test
-    fun `an absent declared type is not an obstacle`() {
+    fun `an absent declared type on the configuration is not an obstacle`() {
         val keys = keysUnderRuntimeFormat(config("app.yaml", "server:\n  port: 8080\n", null))
         assertEquals("8080", keys["server.port"]?.value)
     }
@@ -70,6 +73,139 @@ class RuntimeFormatKeyExtractionTest {
     @Test
     fun `a data id with no recognizable suffix contributes no keys`() {
         assertTrue(keysUnderRuntimeFormat(config("service-config", "k=v", "properties")).isEmpty())
+    }
+
+    // ---- what a reference site declares about the configuration it names ----
+
+    @Test
+    fun `a reference-site declaration decides the format for the configuration it names`() {
+        val config = config("app.properties", "server:\n  port: 8080\n", null)
+        val site = NacosCodeContext(dataId = "app.properties", declaredType = "YAML")
+
+        // Read under the suffix this is two flat properties keys; under the
+        // declaration it is one nested YAML key. Both readings are of the same
+        // body, and only one of them is what the runtime will do (#173).
+        assertEquals(setOf("server", "port"), keysUnderRuntimeFormat(config).keys)
+        assertEquals(
+            setOf("server.port"),
+            keysUnderRuntimeFormat(config, site.runtimeFormatOverride()).keys
+        )
+    }
+
+    @Test
+    fun `a declaration rescues a data id with no recognizable suffix`() {
+        val config = config("service-config", """{"k":"v"}""", null)
+        val site = NacosCodeContext(dataId = "service-config", declaredType = "JSON")
+
+        assertTrue(keysUnderRuntimeFormat(config).isEmpty())
+        assertEquals("v", keysUnderRuntimeFormat(config, site.runtimeFormatOverride())["k"]?.value)
+    }
+
+    @Test
+    fun `a declaration rescues an undetermined data id from the refusal itself`() {
+        // Stated at the extraction seam rather than through the key set, because
+        // the refusal is what reaches the terminal 格式不参与解析 state (#172):
+        // a declared type must not arrive there at all.
+        assertEquals(
+            KeyExtraction.NotExtractable(KeyExtraction.Reason.FORMAT_UNDETERMINED),
+            ConfigKeyExtractor.extract("""{"k":"v"}""", RuntimeFormatDecision.forDataId("service-config"))
+        )
+        val declared = ConfigKeyExtractor.extract(
+            """{"k":"v"}""",
+            RuntimeFormatDecision.forReference("service-config", "JSON")
+        )
+        assertEquals(
+            KeyExtraction.Extracted::class.java,
+            declared.javaClass,
+            "a declared type must reach a parse, never a refusal"
+        )
+        assertEquals(setOf("k"), (declared as KeyExtraction.Extracted).keys.keys)
+    }
+
+    @Test
+    fun `a declaration says nothing about a configuration it does not name`() {
+        // Resolution still reaches other data ids by discovery when the declared
+        // one has no hit; reading those under this site's declaration would be
+        // extracting a configuration by rules nobody wrote for it.
+        val other = config("other.properties", "server:\n  port: 8080\n", null)
+        val site = NacosCodeContext(dataId = "app.properties", declaredType = "YAML")
+
+        assertEquals(setOf("server", "port"), keysUnderRuntimeFormat(other, site.runtimeFormatOverride()).keys)
+    }
+
+    @Test
+    fun `a declared type that agrees with the suffix raises no override`() {
+        // Nothing to re-derive: the 派生 key 索引 already holds exactly these
+        // definitions, so the per-reference path stays off the hot path.
+        assertNull(NacosCodeContext(dataId = "app.json", declaredType = "JSON").runtimeFormatOverride())
+        assertNull(NacosCodeContext(dataId = "app.json", declaredType = "UNSET").runtimeFormatOverride())
+        assertNull(NacosCodeContext(dataId = "app.json").runtimeFormatOverride())
+    }
+
+    @Test
+    fun `a declaration with no data id names no configuration to override`() {
+        // The override is resolved against one configuration coordinate, and a
+        // site with no data id supplies none.
+        assertNull(NacosCodeContext(declaredType = "JSON").runtimeFormatOverride())
+        assertNull(NacosCodeContext(dataId = "  ", declaredType = "JSON").runtimeFormatOverride())
+    }
+
+    @Test
+    fun `a declaration that changes the format raises an override for that coordinate`() {
+        assertEquals(
+            ReferenceFormatOverride("app.properties", null, null, RuntimeConfigFormat.YAML),
+            NacosCodeContext(dataId = "app.properties", declaredType = "YAML").runtimeFormatOverride()
+        )
+        assertEquals(
+            ReferenceFormatOverride("service-config", "APP_GROUP", "dev", RuntimeConfigFormat.JSON),
+            NacosCodeContext(
+                dataId = "service-config",
+                group = "APP_GROUP",
+                namespaceId = "dev",
+                declaredType = "JSON"
+            ).runtimeFormatOverride()
+        )
+    }
+
+    @Test
+    fun `an override narrows to the group and Namespace the site declared`() {
+        val site = NacosCodeContext(
+            dataId = "app.properties",
+            group = "APP_GROUP",
+            namespaceId = "dev",
+            declaredType = "YAML"
+        ).runtimeFormatOverride()!!
+
+        assertTrue(site.appliesTo(NacosConfiguration("app.properties", "APP_GROUP", "dev", "", null)))
+        // Same data id, a group or Namespace this site said nothing about: the
+        // index's reading of those stands.
+        assertFalse(site.appliesTo(NacosConfiguration("app.properties", "OTHER_GROUP", "dev", "", null)))
+        assertFalse(site.appliesTo(NacosConfiguration("app.properties", "APP_GROUP", "prod", "", null)))
+        assertFalse(site.appliesTo(NacosConfiguration("other.properties", "APP_GROUP", "dev", "", null)))
+    }
+
+    @Test
+    fun `an override the site left wide reaches every copy of that data id`() {
+        // A site that declares no group or Namespace knows nothing that would
+        // narrow it, and asserting less than it wrote would leave the copy it
+        // meant read the way it is contradicting.
+        val site = NacosCodeContext(dataId = "app.properties", declaredType = "YAML").runtimeFormatOverride()!!
+
+        assertTrue(site.appliesTo(NacosConfiguration("app.properties", "APP_GROUP", "dev", "", null)))
+        assertTrue(site.appliesTo(NacosConfiguration("app.properties", "OTHER_GROUP", "prod", "", null)))
+    }
+
+    @Test
+    fun `a declared public Namespace matches the same configuration a blank one does`() {
+        val declaresPublic = NacosCodeContext(
+            dataId = "app.properties",
+            namespaceId = "public",
+            declaredType = "YAML"
+        ).runtimeFormatOverride()!!
+
+        assertTrue(declaresPublic.appliesTo(NacosConfiguration("app.properties", "g", null, "", null)))
+        assertTrue(declaresPublic.appliesTo(NacosConfiguration("app.properties", "g", "public", "", null)))
+        assertFalse(declaresPublic.appliesTo(NacosConfiguration("app.properties", "g", "dev", "", null)))
     }
 
     @Test

@@ -661,6 +661,91 @@ class NacosValueLineMarkerProviderTest {
         settings.applyServers(servers, settings.activeServerId)
     }
 
+    // ---- a reference site's own 运行时格式 (#173) ----
+
+    @Test
+    fun `a declared type at the reference site resolves an otherwise undetermined data id`() {
+        cacheAndRefresh(
+            NacosConfiguration("service-config", "DEFAULT_GROUP", null, """{"app":{"name":"demo"}}""", "json")
+        )
+
+        // Nothing about `service-config` names a format, so the derived key
+        // index holds no definition for it at all...
+        assertEquals(
+            NacosIcons.GutterConfigUnresolved,
+            markerFor(
+                """
+                @NacosPropertySource(dataId = "service-config")
+                class Demo {
+                    @NacosValue("${'$'}{app.name}")
+                    private String name;
+                }
+                """.trimIndent()
+            )?.createGutterRenderer()?.icon
+        )
+
+        // ...until the site declares what the runtime will read it as.
+        assertEquals(
+            NacosIcons.GutterConfig,
+            markerFor(
+                """
+                @NacosPropertySource(dataId = "service-config", type = ConfigType.JSON)
+                class Demo {
+                    @NacosValue("${'$'}{app.name}")
+                    private String name;
+                }
+                """.trimIndent()
+            )?.createGutterRenderer()?.icon
+        )
+    }
+
+    @Test
+    fun `two classes declaring different types for one data id each get their own answer`() {
+        cacheAndRefresh(
+            NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "server:\n  port: 8080\n", "properties")
+        )
+
+        // Read as properties — what the data id decides — this body defines
+        // `port`; read as the YAML one class declares, it defines `server.port`.
+        // Each class's gutter tells the truth for the runtime it declares.
+        assertEquals(
+            NacosIcons.GutterConfig,
+            markerFor(
+                """
+                @NacosPropertySource(dataId = "app.properties")
+                class ReadsProperties {
+                    @NacosValue("${'$'}{port}")
+                    private String port;
+                }
+                """.trimIndent()
+            )?.createGutterRenderer()?.icon
+        )
+        assertEquals(
+            NacosIcons.GutterConfig,
+            markerFor(
+                """
+                @NacosPropertySource(dataId = "app.properties", type = ConfigType.YAML)
+                class ReadsYaml {
+                    @NacosValue("${'$'}{server.port}")
+                    private String port;
+                }
+                """.trimIndent()
+            )?.createGutterRenderer()?.icon
+        )
+        assertEquals(
+            NacosIcons.GutterConfigUnresolved,
+            markerFor(
+                """
+                @NacosPropertySource(dataId = "app.properties", type = ConfigType.YAML)
+                class ReadsYaml {
+                    @NacosValue("${'$'}{port}")
+                    private String port;
+                }
+                """.trimIndent()
+            )?.createGutterRenderer()?.icon
+        )
+    }
+
     private fun markerFor(
         javaText: String,
         provider: NacosValueLineMarkerProvider = NacosValueLineMarkerProvider { _, _ -> }

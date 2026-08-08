@@ -114,7 +114,8 @@ class NacosValueLineMarkerProvider internal constructor(
             key,
             preferredDataId = codeContext.dataId,
             allowCrossNamespace = project.allowCrossNamespaceNavigation(),
-            activeNamespaceId = project.selectedNacosNamespaceId()
+            activeNamespaceId = project.selectedNacosNamespaceId(),
+            formatOverride = codeContext.runtimeFormatOverride()
         )
 
     private fun keyIndexService(): NacosKeyIndexService =
@@ -170,7 +171,10 @@ class NacosValueLineMarkerProvider internal constructor(
                 )
             }
             if (cached != null) {
-                val lineIndex = keysUnderRuntimeFormat(cached)[key]?.lineIndex
+                // The same reading the gutter decided with: a caret placed by
+                // the data id's format while the marker resolved by the site's
+                // declaration would land on a line for a key that never matched.
+                val lineIndex = keysUnderRuntimeFormat(cached, codeContext.runtimeFormatOverride())[key]?.lineIndex
                     ?: ConfigKeyExtractor.LINE_NOT_FOUND
                 NacosConfigNavigator.navigate(project, cached, lineIndex)
                 return@executeOnPooledThread
@@ -208,7 +212,7 @@ class NacosValueLineMarkerProvider internal constructor(
                 .getService(NavigationIndexRefreshService::class.java)
                 .refresh(resolvedIdentity, project)
 
-            val lineIndex = keysUnderRuntimeFormat(config)[key]?.lineIndex
+            val lineIndex = keysUnderRuntimeFormat(config, codeContext.runtimeFormatOverride())[key]?.lineIndex
                 ?: ConfigKeyExtractor.LINE_NOT_FOUND
             NacosConfigNavigator.navigate(project, config, lineIndex)
 

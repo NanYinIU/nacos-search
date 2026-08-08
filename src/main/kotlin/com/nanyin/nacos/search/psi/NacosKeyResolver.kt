@@ -126,6 +126,8 @@ object NacosKeyResolver {
      * @param activeNamespaceId when non-null, hits in this namespace sort first
      * @param preferredDataId when present and any hit matches, hard-filter to those
      *   hits (typical `@NacosPropertySource`); otherwise soft-rank that dataId first
+     * @param formatOverride when present, the 运行时格式 the reference site
+     *   declared for the one configuration it names — see [scopedDefinitions]
      */
     fun resolve(
         key: String,
@@ -135,14 +137,17 @@ object NacosKeyResolver {
         preferredGroup: String? = null,
         preferredNamespaceId: String? = null,
         preferredDataId: String? = null,
-        allowCrossNamespace: Boolean = true
+        allowCrossNamespace: Boolean = true,
+        formatOverride: ReferenceFormatOverride? = null
     ): List<KeyHit> {
         if (key.isBlank() || index == null) return emptyList()
         // A blocked identity hides every cached definition; an index derived
         // under a different visibility state may hold definitions the snapshot
         // hides and must not serve them (issue #126).
         if (snapshot.isAccessBlocked || !index.visibilityCompatibleWith(snapshot)) return emptyList()
-        val scoped = scopedDefinitions(index, key, activeNamespaceId, allowCrossNamespace, preferredDataId)
+        val scoped = scopedDefinitions(
+            index, snapshot, key, activeNamespaceId, allowCrossNamespace, preferredDataId, formatOverride
+        )
         return scoped
             .sortedWith(definitionComparator(activeNamespaceId, preferredGroup, preferredNamespaceId, preferredDataId))
             .map { it.judgedAt(snapshot.asOfMillis) }
@@ -154,7 +159,8 @@ object NacosKeyResolver {
         snapshot: CacheSnapshot,
         activeNamespaceId: String? = null,
         preferredDataId: String? = null,
-        allowCrossNamespace: Boolean = true
+        allowCrossNamespace: Boolean = true,
+        formatOverride: ReferenceFormatOverride? = null
     ): ConfigResolution {
         if (key.isBlank()) return ConfigResolution(ConfigReferenceStatus.UNRESOLVED, emptyList())
         // A blocked identity returns no cached key hits, and absence is
@@ -171,8 +177,9 @@ object NacosKeyResolver {
         if (!index.visibilityCompatibleWith(snapshot)) {
             return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
         }
-        val hits = scopedDefinitions(index, key, activeNamespaceId, allowCrossNamespace, preferredDataId)
-            .map { it.judgedAt(snapshot.asOfMillis) }
+        val hits = scopedDefinitions(
+            index, snapshot, key, activeNamespaceId, allowCrossNamespace, preferredDataId, formatOverride
+        ).map { it.judgedAt(snapshot.asOfMillis) }
         if (hits.isNotEmpty()) return resolutionFromHits(hits)
 
         // No detail hit for the key. A Namespace-scoped block hides that
@@ -265,16 +272,75 @@ object NacosKeyResolver {
 
     private fun scopedDefinitions(
         index: KeyIndex,
+        snapshot: CacheSnapshot,
         key: String,
         activeNamespaceId: String?,
         allowCrossNamespace: Boolean,
-        preferredDataId: String?
+        preferredDataId: String?,
+        formatOverride: ReferenceFormatOverride?
     ): List<KeyDefinition> {
-        val scoped = index.definitionsByKey[key]
-            .orEmpty()
+        val scoped = definitionsFor(index, snapshot, key, formatOverride)
             .filter { allowCrossNamespace || sameNamespace(it.namespaceId, activeNamespaceId) }
         return preferDataIdDefinitions(scoped, preferredDataId)
     }
+
+    /**
+     * Every definition of [key] this reference may see.
+     *
+     * Without an override that is what the 派生 key 索引 holds. With one, the
+     * definitions of the coordinate the site named are *replaced* rather than
+     * added to: the index read that configuration under the format its data id
+     * decides, and a site that declares another is asserting the index's
+     * reading is not what the runtime will do. Everything the override does not
+     * name keeps what the index holds — including another copy of the same data
+     * id in a group or Namespace the site said nothing about — so a declaration
+     * that finds nothing still degrades to the same soft discovery as a stale
+     * `@NacosPropertySource`, and discovery reaches those configurations under
+     * their own data ids, never under this site's declaration (#173).
+     */
+    private fun definitionsFor(
+        index: KeyIndex,
+        snapshot: CacheSnapshot,
+        key: String,
+        formatOverride: ReferenceFormatOverride?
+    ): List<KeyDefinition> {
+        val indexed = index.definitionsByKey[key].orEmpty()
+        if (formatOverride == null) return indexed
+        return indexed.filterNot { formatOverride.appliesTo(it.config) } +
+            overrideDefinitions(snapshot, formatOverride, key)
+    }
+
+    /**
+     * Definitions of [key] in the configuration [override] names, re-derived
+     * from the snapshot under the format its reference site declared.
+     *
+     * Computed on demand and deliberately not cached (#173). It reaches the
+     * snapshot's own cached details rather than resolving through the index,
+     * because the index holds this configuration read the wrong way; the walk is
+     * bounded by the cache's entry limit, and a declaration that agrees with the
+     * data id raises no override at all, so the ordinary gutter pass never
+     * arrives here. If it ever measures as a cost, key a cache by data id plus
+     * 运行时格式 — do not build one up front.
+     *
+     * It reads the snapshot and writes nothing, so it takes no observation
+     * sequence and needs none (ADR-0052).
+     */
+    private fun overrideDefinitions(
+        snapshot: CacheSnapshot,
+        override: ReferenceFormatOverride,
+        key: String
+    ): List<KeyDefinition> = snapshot.configurations
+        .filter { override.appliesTo(it.configuration) }
+        .mapNotNull { cached ->
+            keysUnderRuntimeFormat(cached.configuration, override)[key]?.let { location ->
+                KeyDefinition(
+                    cached.configuration,
+                    location,
+                    cached.freshUntilMillis,
+                    cached.deepStaleAtMillis
+                )
+            }
+        }
 
     /**
      * Declared dataId with cache hits → hard constraint; otherwise keep all hits
