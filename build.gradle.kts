@@ -54,6 +54,18 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.1.0")
+    // Test-only: the runtime's own property source loaders, so extraction
+    // correctness is asserted against what Spring will resolve rather than
+    // against cases we thought of (#170). Never on the production classpath.
+    testImplementation("org.springframework.boot:spring-boot:3.2.12")
+    // Spring Cloud Alibaba's own JSON PropertySourceLoader — Spring Boot ships
+    // none, and this is the one a Nacos JSON configuration is actually read by.
+    // Transitives excluded: only its parser package is wanted, not nacos-client
+    // or spring-cloud-context.
+    testImplementation("com.alibaba.cloud:spring-alibaba-nacos-config:2023.0.3.4") {
+        isTransitive = false
+    }
+    testImplementation("com.fasterxml.jackson.core:jackson-databind:2.15.4")
     // Note: kotlinx-coroutines-test is provided by IntelliJ Platform
 }
 

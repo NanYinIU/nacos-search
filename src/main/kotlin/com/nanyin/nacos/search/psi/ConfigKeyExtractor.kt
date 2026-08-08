@@ -140,9 +140,10 @@ object ConfigKeyExtractor {
      * Records a leaf at [path] under both the bracket form (`list[0].n`) and
      * the dot form (`list.0.n`), so either placeholder style resolves.
      *
-     * Only a scalar reaches here. A container contributes no key of its own: a
-     * runtime property source flattens to leaves, and `${list}` resolves
-     * against none of them.
+     * A container with contents contributes no key of its own: a runtime property
+     * source flattens to leaves, and `${list}` resolves against none of them. An
+     * *empty* container is a different matter and follows whichever runtime reads
+     * the format — see the two empty-container branches in [readYamlNode].
      */
     private fun emitLeaf(
         path: ArrayDeque<PathSeg>,
@@ -392,8 +393,41 @@ object ConfigKeyExtractor {
         result: LinkedHashMap<String, KeyLocation>
     ) {
         when (node) {
-            is MappingNode -> readYamlMapping(node, path, onPath, result)
-            is SequenceNode -> readYamlSequence(node, path, onPath, result)
+            // An *empty* container is a leaf, because Spring Boot's flattening
+            // stops at one: `list: []` resolves `${list}`, and `a: {b: {}}`
+            // resolves `${a.b}`. The value emitted is the runtime's own rendering
+            // of it, which keeps an empty container tellable apart in a navigation
+            // hint from a genuinely valueless key (`enabled:`), whose value is the
+            // empty string.
+            //
+            // This is the one place the two formats' key spaces legitimately
+            // differ, and the difference is not ours to smooth over — each format
+            // follows the loader that reads it (#166). Spring Cloud Alibaba's JSON
+            // loader drops an empty container instead of terminating on it, so
+            // `{"a":[]}` contributes no `a`, and the JSON walk below deliberately
+            // has no counterpart to these two branches. The differential oracle
+            // holds both directions, so neither can be "tidied" into the other
+            // without the build saying so.
+            //
+            // Emptiness is read off the node, not off the entries a merge resolves
+            // to — a mapping whose every entry is a `<<` merge of empty mappings
+            // looks non-empty here and contributes no key. That agrees with the
+            // runtime, which drops such a mapping rather than terminating on it
+            // (only a literal `{}` gets a key), so reading emptiness off the node
+            // is not merely the cheap answer. The corpus pins it, because it is
+            // the sort of thing that reads like a bug and gets "fixed".
+            is MappingNode ->
+                if (node.value.isEmpty()) {
+                    emitLeaf(path, "{}", declarationLine, result)
+                } else {
+                    readYamlMapping(node, path, onPath, result)
+                }
+            is SequenceNode ->
+                if (node.value.isEmpty()) {
+                    emitLeaf(path, "[]", declarationLine, result)
+                } else {
+                    readYamlSequence(node, path, onPath, result)
+                }
             // A block scalar's body arrives here as one value, which is the
             // whole reason it can no longer contribute keys of its own.
             is ScalarNode -> emitLeaf(path, node.value, declarationLine, result)

@@ -365,12 +365,42 @@ class ConfigKeyExtractorTest {
     }
 
     @Test
-    fun `yaml containers contribute no key of their own`() {
-        val map = keys("app:\n  name: svc\nempty: {}\nlist: []\n", RuntimeConfigFormat.YAML)
+    fun `yaml containers with contents contribute no key of their own`() {
+        val map = keys("app:\n  name: svc\nlist:\n  - one\n", RuntimeConfigFormat.YAML)
         assertNull(map["app"])
-        assertNull(map["empty"])
         assertNull(map["list"])
         assertEquals("svc", map["app.name"]?.value)
+        assertEquals("one", map["list[0]"]?.value)
+    }
+
+    @Test
+    fun `yaml empty containers are leaves`() {
+        // Spring Boot's flattening stops at an empty container, so `${empty}` and
+        // `${list}` do resolve at runtime. The plugin claimed otherwise until the
+        // differential oracle in ExtractionDifferentialTest said so — the value is
+        // the runtime's own rendering, which keeps an empty container tellable
+        // apart from a genuinely valueless key.
+        val map = keys("empty: {}\nlist: []\nnothing:\n", RuntimeConfigFormat.YAML)
+        assertEquals("{}", map["empty"]?.value)
+        assertEquals("[]", map["list"]?.value)
+        assertEquals("", map["nothing"]?.value)
+    }
+
+    @Test
+    fun `yaml empty containers are leaves at every depth`() {
+        val map = keys("a:\n  b: {}\n  c: []\ns:\n  - {}\n  - x\n", RuntimeConfigFormat.YAML)
+        assertEquals("{}", map["a.b"]?.value)
+        assertEquals("[]", map["a.c"]?.value)
+        assertEquals("{}", map["s[0]"]?.value)
+        assertEquals("{}", map["s.0"]?.value)
+        assertEquals("x", map["s[1]"]?.value)
+    }
+
+    @Test
+    fun `yaml empty containers take the line of their own key`() {
+        val map = keys("a:\n  b: {}\nafter: 1\n", RuntimeConfigFormat.YAML)
+        assertEquals(1, map["a.b"]?.lineIndex)
+        assertEquals(2, map["after"]?.lineIndex)
     }
 
     @Test
@@ -556,12 +586,19 @@ class ConfigKeyExtractorTest {
     }
 
     @Test
-    fun `json containers contribute no key of their own`() {
+    fun `json containers contribute no key of their own even when empty`() {
         // A runtime property source flattens to leaves, so `${a}` and `${b}`
         // resolve against nothing at runtime and must not appear here either.
-        val map = keys("""{"a":[],"b":{},"c":1}""", RuntimeConfigFormat.JSON)
+        //
+        // Deliberately not the YAML answer above: Spring Cloud Alibaba's JSON
+        // loader drops an empty container where Spring Boot's YAML flattening
+        // terminates on one. Each format follows the loader that reads it
+        // (#166), and the differential oracle holds both directions, so
+        // making the two agree would fail the build rather than tidy anything.
+        val map = keys("""{"a":[],"b":{},"c":1,"d":{"e":[]}}""", RuntimeConfigFormat.JSON)
         assertNull(map["a"])
         assertNull(map["b"])
+        assertNull(map["d.e"])
         assertEquals("1", map["c"]?.value)
     }
 
