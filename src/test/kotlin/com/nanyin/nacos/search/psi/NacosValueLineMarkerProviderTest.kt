@@ -900,8 +900,9 @@ class NacosValueLineMarkerProviderTest {
                 """.trimIndent()
             )?.createGutterRenderer()?.icon
         )
-        assertEquals(
-            NacosIcons.GutterConfigUnresolved,
+        // Declared dataId + YAML reading: body has server.port, not port → hard
+        // miss under the named source. No gutter icon (not a soft-fall gray).
+        assertNull(
             markerFor(
                 """
                 @NacosPropertySource(dataId = "app.properties", type = ConfigType.YAML)
@@ -910,7 +911,7 @@ class NacosValueLineMarkerProviderTest {
                     private String port;
                 }
                 """.trimIndent()
-            )?.createGutterRenderer()?.icon
+            )
         )
     }
 

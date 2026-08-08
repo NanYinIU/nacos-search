@@ -106,6 +106,10 @@ class NacosValueLineMarkerProvider internal constructor(
         codeContext: NacosCodeContext
     ): Boolean {
         if (resolution.hits.isNotEmpty()) return true
+        // Hard declared-Data-ID miss: key proven absent from the named source
+        // (or the source itself proven absent). No icon — do not paint gray
+        // noise or invite a click that would soft-navigate elsewhere.
+        if (resolution.status == ConfigReferenceStatus.UNRESOLVED) return false
         val dataId = codeContext.dataId ?: return false
         return keyIndexService().isDataIdKnown(
             snapshot,
