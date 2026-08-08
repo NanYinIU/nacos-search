@@ -1,0 +1,58 @@
+src/test/kotlin/com/nanyin/nacos/search/services/NacosApiServiceTest.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 341
+src/test/kotlin/com/nanyin/nacos/search/psi/ExtractionDifferentialTest.kt
+  s_79e49c8f84722d::t_38c7541bb09238 13
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProvider.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 173,211
+src/main/kotlin/com/nanyin/nacos/search/psi/RuntimeFormatDecision.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 1-64
+src/main/kotlin/com/nanyin/nacos/search/psi/ConfigKeyExtractor.kt
+  s_79e49c8f84722d::t_38c7541bb09238 405
+src/main/kotlin/com/nanyin/nacos/search/psi/RuntimeFormatKeyExtraction.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 1-29
+src/test/kotlin/com/nanyin/nacos/search/models/NacosConfigurationTest.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 75,83,87,94,98,110-111,115,122,126,133,137,144
+src/test/kotlin/com/nanyin/nacos/search/psi/RuntimeKeyOracle.kt
+  s_79e49c8f84722d::t_38c7541bb09238 14
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanel.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 22,771,930-935,942,946
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolver.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 102
+src/test/kotlin/com/nanyin/nacos/search/psi/PerformanceBenchmarkTest.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 70
+src/main/kotlin/com/nanyin/nacos/search/psi/RuntimeConfigFormat.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 16-18,33
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigListPanel.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 417
+docs/adr/0055-let-the-runtime-decide-what-a-placeholder-resolves-to.md
+  s_79e49c8f84722d::t_dfbec2a41ef845 1-15
+src/test/kotlin/com/nanyin/nacos/search/psi/RuntimeFormatDecisionTest.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 1-70
+src/test/kotlin/com/nanyin/nacos/search/psi/ConfigKeyExtractorTest.kt
+  s_79e49c8f84722d::t_38c7541bb09238 596
+  s_79e49c8f84722d::t_dfbec2a41ef845 675-677
+CONTEXT.md
+  s_79e49c8f84722d::t_dfbec2a41ef845 296,300
+src/main/kotlin/com/nanyin/nacos/search/models/NacosConfiguration.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 42-55,57
+src/test/kotlin/com/nanyin/nacos/search/psi/RuntimeFormatKeyExtractionTest.kt
+  s_79e49c8f84722d::t_dfbec2a41ef845 1-89
+CLAUDE.md
+  s_79e49c8f84722d::t_ca3dfcb291482e 166-167,174,208-209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "5738278920795e01fd359596a2586dd62eb9b9f6",
+  "prompts": {},
+  "sessions": {
+    "s_79e49c8f84722d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a1124da6-a1ea-47e3-b81e-dacdcf5df960",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
