@@ -1,0 +1,24 @@
+build.gradle.kts
+  h_231225c3625e99 146
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyIndexService.kt
+  h_231225c3625e99 192-207
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolver.kt
+  h_231225c3625e99 460-525
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProvider.kt
+  h_231225c3625e99 110-112,115-127,130
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolverTest.kt
+  h_231225c3625e99 708-748
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProviderTest.kt
+  h_231225c3625e99 275-313
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "6855ae9fa6f32d3043ae2aac3c670f5a9b4fa005",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
