@@ -426,11 +426,11 @@ class NacosKeyResolverTest {
     }
 
     @Test
-    fun `preferred dataId soft-falls back when its cached body lacks the key`() = runBlocking {
+    fun `preferred dataId is a hard filter when its cached body lacks the key`() = runBlocking {
         // Body of the declared source is in the 配置详情缓存 and was read: the key
-        // is genuinely absent from it, so a stale or incomplete PropertySource
-        // still degrades to soft discovery across the other cached definitions
-        // (issue #192 — the body-cached arm of the three-way filter).
+        // is genuinely absent from it. Other cached configurations still define
+        // the same key, but the declaration is a hard constraint — do not soft
+        // to a substitute (user: @NacosPropertySource dataId = es.properties).
         seedConfigurations(
             listOf(
                 cfg("common.properties", "DEFAULT_GROUP", null, "other.key=1\n", "properties"),
@@ -445,10 +445,8 @@ class NacosKeyResolverTest {
             preferredDataId = "common.properties"
         )
 
-        assertEquals(ConfigReferenceStatus.RESOLVED, resolution.status)
-        assertEquals(2, resolution.hits.size)
-        assertEquals("klive.common.properties", resolution.hits[0].config.dataId)
-        assertEquals("shared.properties", resolution.hits[1].config.dataId)
+        assertEquals(ConfigReferenceStatus.UNRESOLVED, resolution.status)
+        assertTrue(resolution.hits.isEmpty())
     }
 
     @Test
@@ -548,10 +546,10 @@ class NacosKeyResolverTest {
         }
 
     @Test
-    fun `preferred dataId proven absent soft-falls back to discovery`() = runBlocking {
+    fun `preferred dataId proven absent does not soft-fall to another dataId`() = runBlocking {
         // A fresh complete Namespace 索引 that does not list the declared Data ID
-        // proves it is gone (stale or mistyped PropertySource). Soft discovery
-        // across the other cached configurations still stands (issue #192).
+        // proves the source itself is gone. Still a hard miss — do not paint
+        // another configuration as 已解析 for a site that named a different dataId.
         cache.replaceNamespaceIndex(
             identity,
             "dev",
@@ -579,9 +577,8 @@ class NacosKeyResolverTest {
             activeNamespaceId = "dev"
         )
 
-        assertEquals(ConfigReferenceStatus.RESOLVED, resolution.status)
-        assertEquals(1, resolution.hits.size)
-        assertEquals("other.properties", resolution.hits.single().config.dataId)
+        assertEquals(ConfigReferenceStatus.UNRESOLVED, resolution.status)
+        assertTrue(resolution.hits.isEmpty())
     }
 
     @Test
@@ -680,10 +677,10 @@ class NacosKeyResolverTest {
         }
 
     @Test
-    fun `body-cached declared dataId with no discovery hits is unresolved not undecidable`() = runBlocking {
-        // Declared body is in this Namespace's 配置详情缓存 and lacks the key;
-        // soft discovery finds nothing else. Re-asking Namespace presence would
-        // claim "body not loaded" (UNDECIDABLE) even though the body was read.
+    fun `body-cached declared dataId with no key hit is unresolved not undecidable`() = runBlocking {
+        // Declared body is in this Namespace's 配置详情缓存 and lacks the key.
+        // Re-asking Namespace presence would claim "body not loaded"
+        // (UNDECIDABLE) even though the body was read.
         seedConfigurations(
             listOf(
                 cfg("declared.properties", "DEFAULT_GROUP", "dev", "other.key=1\n", "properties")
@@ -1027,7 +1024,7 @@ class NacosKeyResolverTest {
     }
 
     @Test
-    fun `a declaration says nothing about the other data ids discovery reaches`() = runBlocking {
+    fun `a declaration hard-filters out other data ids even when they hold the key`() = runBlocking {
         seedConfigurations(
             listOf(
                 cfg("app.properties", "DEFAULT_GROUP", null, "unrelated=1\n", "properties"),
@@ -1037,17 +1034,15 @@ class NacosKeyResolverTest {
         val snapshot = cache.snapshot(identity)
         val site = NacosCodeContext(dataId = "app.properties", declaredType = "YAML")
 
-        // The declared data id defines no `port`, so resolution degrades to
-        // discovery — and the configuration it reaches is read by its own data
-        // id, not by a declaration written about a different one.
+        // The declared data id defines no `port` (under the site's YAML reading
+        // either). Hard filter must not soft-fall to other.properties.
         val hits = indexService.resolve(
             snapshot,
             "port",
             preferredDataId = site.dataId,
             formatOverride = site.runtimeFormatOverride()
         )
-        assertEquals(1, hits.size)
-        assertEquals("other.properties", hits.single().config.dataId)
+        assertTrue(hits.isEmpty())
     }
 
     @Test
@@ -1261,12 +1256,10 @@ class NacosKeyResolverTest {
     }
 
     @Test
-    fun `a key hit outranks the terminal format conclusion`() = runBlocking {
-        // The declared data id's body is cached and contributes nothing (xml is
-        // 格式不参与解析), but the placeholder does resolve elsewhere. Once the
-        // declared body is known to lack the key, soft discovery is allowed and
-        // a refusal the runtime would not make must not cost navigation that
-        // would have worked (ADR-0055 / issue #192).
+    fun `declared format-not-parsed dataId does not soft-fall to another configuration`() = runBlocking {
+        // The site declared beans.xml (格式不参与解析). Another cached file holds
+        // the key, but the Data ID is a hard constraint — terminal format
+        // conclusion for the declared source, no substitute navigation.
         seedConfigurations(
             listOf(
                 cfg("beans.xml", "DEFAULT_GROUP", "dev", "<beans><x>1</x></beans>", "xml"),
@@ -1279,8 +1272,8 @@ class NacosKeyResolverTest {
             preferredDataId = "beans.xml",
             activeNamespaceId = "dev"
         )
-        assertEquals(ConfigReferenceStatus.RESOLVED, resolution.status)
-        assertEquals("app.properties", resolution.hits.single().config.dataId)
+        assertEquals(ConfigReferenceStatus.FORMAT_NOT_PARSED, resolution.status)
+        assertTrue(resolution.hits.isEmpty())
     }
 
     @Test

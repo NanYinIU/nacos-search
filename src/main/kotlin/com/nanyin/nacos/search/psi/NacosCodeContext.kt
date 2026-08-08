@@ -11,11 +11,11 @@ import com.intellij.psi.PsiReferenceExpression
  * (typically `@NacosPropertySource`).
  *
  * [group] / [namespaceId] remain soft ranking hints. [dataId] is the
- * 已声明配置来源 hard filter: matching key hits stay constrained to it; when it
- * yields zero key-index hits the three-way rule in
- * [NacosKeyResolver.preferDataIdDefinitions] decides soft discovery (body
- * cached without the key, or Data ID proven absent) vs no hits (listed but
- * unfetched → 不可判定, or absence unproven → do not substitute) — issue #192.
+ * 已声明配置来源 **hard filter**: key hits are constrained to that Data ID alone.
+ * Zero matches never soft-fall to another configuration; [NacosKeyResolver]
+ * classifies the miss (body cached without the key → 未解析 and no gutter icon;
+ * listed but unfetched → 不可判定 so a click can lazy-load the declared body;
+ * absence unproven → 不可用).
  */
 data class NacosCodeContext(
     val dataId: String? = null,
