@@ -30,15 +30,27 @@ data class ReferenceFormatOverride(
     /**
      * True when [config] is the configuration this site named.
      *
-     * The one place that question is answered, because a site that overrode a
+     * The one place *that* question is answered, because a site that overrode a
      * configuration it did not name would extract it by rules nobody wrote for
      * it — and a site whose override silently missed the one it did name would
      * fall back to the very reading it is contradicting.
      */
     fun appliesTo(config: NacosConfiguration): Boolean =
-        config.dataId == dataId &&
+        namesDataId(config.dataId) &&
             (group == null || config.group == group) &&
             (namespaceId == null || canonicalNamespace(config.tenantId) == canonicalNamespace(namespaceId))
+
+    /**
+     * True when this site's declaration is about [dataId].
+     *
+     * Deliberately weaker than [appliesTo], and the difference is the whole
+     * distinction #172 drew. [appliesTo] chooses which cached *body* to re-read,
+     * so it needs the full coordinate. This one answers the question that needs
+     * no body at all — whether any body under this data id's 运行时格式 could
+     * ever make a placeholder resolve — where the group and Namespace have
+     * nothing to narrow.
+     */
+    fun namesDataId(dataId: String): Boolean = dataId == this.dataId
 
     private fun canonicalNamespace(namespaceId: String?): String =
         namespaceId?.takeIf { it.isNotBlank() && it != "public" } ?: ""
@@ -67,21 +79,21 @@ internal fun NacosCodeContext.runtimeFormatOverride(): ReferenceFormatOverride? 
 
 /**
  * The keys [config] contributes, read under its 运行时格式 — [override]'s where
- * this is the configuration that override names, and otherwise the one its data
- * id decides.
+ * this is the configuration that override names (#173), and otherwise the one
+ * its data id decides (#171). The configuration's own 声明格式 takes no part in
+ * either, because no runtime consults it.
  *
- * Half of what was transitional here is settled: the format no longer comes
- * from the configuration's 声明格式, which no runtime consults, but from
- * [RuntimeFormatDecision] (#171), and a reference site may now decide it
- * instead (#173).
+ * A refusal no longer has to read as "no keys" here, because the caller that
+ * would have been misled by that reading now asks [runtimeFormatRefusal] first
+ * and reaches 格式不参与解析 without ever looking at a body (#172).
  *
- * The other half is not. A refusal still reads as "no keys" — the reading
- * [KeyExtraction] exists to prevent — until it reaches its own terminal
- * resolution state, which, unlike an empty key set, never asks for a background
- * Namespace index refresh (#166). This stays one function so that when it does,
- * there is one place to change rather than one per caller; it is the module's
- * only flattening of a refusal, and there is deliberately no general
- * `keysOrEmpty(content, format)` beside it.
+ * What is left flattens deliberately. Every caller of this one has a body in
+ * hand and wants the keys in it, and none of them turns the empty map into an
+ * absence claim: the 派生 key 索引 contributes nothing for a refusal, the detail
+ * panel's own gutter markers have no lines to mark, and the marker's lazy-load
+ * navigation asks only where to put the caret and already answers
+ * [ConfigKeyExtractor.LINE_NOT_FOUND] when it does not know — a position it
+ * degrades on, never a claim about the key.
  *
  * Per-reference extraction is computed on demand and never cached (#173). If it
  * ever measures as a cost, key a cache by data id plus 运行时格式 — do not build
@@ -98,3 +110,28 @@ internal fun keysUnderRuntimeFormat(
         is KeyExtraction.NotExtractable -> emptyMap()
     }
 }
+
+/**
+ * Why a configuration named [dataId] contributes no keys, or null when its
+ * 运行时格式 is one the plugin parses.
+ *
+ * Answered without a body. That is not a shortcut: whether the body is cached,
+ * listed, or has never been fetched changes nothing about whether a placeholder
+ * could ever resolve against it, and waiting for a body before saying so is
+ * exactly what kept the plugin sweeping the server forever for a format it will
+ * never parse (#172).
+ *
+ * [override] is what keeps the two slices from contradicting each other. A
+ * reference site that declares a type is naming the 运行时格式 the runtime will
+ * read its configuration under, so it decides this refusal too — which is how a
+ * data id with no recognizable suffix stops reaching the terminal state once a
+ * site declares one, the whole reason a developer writes the declaration (#173).
+ * It is matched on the data id alone: the question has no body for a group or
+ * Namespace to select between.
+ */
+internal fun runtimeFormatRefusal(
+    dataId: String,
+    override: ReferenceFormatOverride? = null
+): KeyExtraction.Reason? = ConfigKeyExtractor.refusalFor(
+    override?.takeIf { it.namesDataId(dataId) }?.format ?: RuntimeFormatDecision.forDataId(dataId)
+)

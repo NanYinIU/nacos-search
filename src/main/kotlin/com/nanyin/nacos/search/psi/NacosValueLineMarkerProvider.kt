@@ -1,5 +1,6 @@
 package com.nanyin.nacos.search.psi
 
+import com.intellij.codeInsight.daemon.GutterIconNavigationHandler
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.nanyin.nacos.search.NacosIcons
@@ -75,14 +76,24 @@ class NacosValueLineMarkerProvider internal constructor(
         if (!shouldShowMarker(project, snapshot, resolution, codeContext)) return null
 
         val presentation = markerPresentation(resolution)
+        // The icon for 格式不参与解析 is the one member of the family drawn
+        // without a jump arrow, and that has to be true of the marker and not
+        // only of the picture: a click that fetched the body anyway would reopen
+        // the very leak the terminal state closes (issue #172).
+        val navigationHandler: GutterIconNavigationHandler<PsiElement>? =
+            if (resolution.status == ConfigReferenceStatus.FORMAT_NOT_PARSED) {
+                null
+            } else {
+                GutterIconNavigationHandler { _, _ ->
+                    navigateFromCode(anchor, literal, placeholder.key, codeContext)
+                }
+            }
         return LineMarkerInfo(
             anchor,
             anchor.textRange,
             presentation.icon,
             { NacosSearchBundle.message(presentation.tooltipKey) },
-            { _, _ ->
-                navigateFromCode(anchor, literal, placeholder.key, codeContext)
-            },
+            navigationHandler,
             GutterIconRenderer.Alignment.RIGHT,
             { "nacos.value.${placeholder.key}" }
         )
@@ -230,36 +241,53 @@ class NacosValueLineMarkerProvider internal constructor(
             val tooltipKey: String
         )
 
-        private fun markerPresentation(resolution: ConfigResolution): MarkerPresentation {
-            // A block hides the identity or the evaluation Namespace: the
-            // undecidable tooltip must say why, or it would claim the data id
-            // is known when it may merely be hidden (issue #126).
-            if (resolution.status == ConfigReferenceStatus.UNDECIDABLE && resolution.visibilityBlocked) {
-                return MarkerPresentation(
+        private fun markerPresentation(resolution: ConfigResolution): MarkerPresentation =
+            when (resolution.status) {
+                ConfigReferenceStatus.RESOLVED -> MarkerPresentation(
+                    NacosIcons.GutterConfig,
+                    "nacosvalue.marker.tooltip.resolved"
+                )
+                ConfigReferenceStatus.STALE -> MarkerPresentation(
+                    NacosIcons.GutterConfigStale,
+                    "nacosvalue.marker.tooltip.stale"
+                )
+                ConfigReferenceStatus.FORMAT_NOT_PARSED -> MarkerPresentation(
+                    NacosIcons.GutterConfigFormatNotParsed,
+                    formatNotParsedTooltipKey(resolution.formatRefusal)
+                )
+                ConfigReferenceStatus.UNDECIDABLE -> MarkerPresentation(
                     NacosIcons.GutterConfigUnresolved,
-                    "nacosvalue.marker.tooltip.undecidable.blocked"
+                    // A block hides the identity or the evaluation Namespace:
+                    // the undecidable tooltip must say why, or it would claim
+                    // the data id is known when it may merely be hidden
+                    // (issue #126).
+                    if (resolution.visibilityBlocked) {
+                        "nacosvalue.marker.tooltip.undecidable.blocked"
+                    } else {
+                        "nacosvalue.marker.tooltip.undecidable"
+                    }
+                )
+                ConfigReferenceStatus.UNRESOLVED, ConfigReferenceStatus.UNAVAILABLE -> MarkerPresentation(
+                    NacosIcons.GutterConfigUnresolved,
+                    "nacosvalue.marker.tooltip.unresolved"
                 )
             }
-            return markerPresentation(resolution.status)
-        }
 
-        private fun markerPresentation(status: ConfigReferenceStatus): MarkerPresentation = when (status) {
-            ConfigReferenceStatus.RESOLVED -> MarkerPresentation(
-                NacosIcons.GutterConfig,
-                "nacosvalue.marker.tooltip.resolved"
-            )
-            ConfigReferenceStatus.STALE -> MarkerPresentation(
-                NacosIcons.GutterConfigStale,
-                "nacosvalue.marker.tooltip.stale"
-            )
-            ConfigReferenceStatus.UNDECIDABLE -> MarkerPresentation(
-                NacosIcons.GutterConfigUnresolved,
-                "nacosvalue.marker.tooltip.undecidable"
-            )
-            ConfigReferenceStatus.UNRESOLVED, ConfigReferenceStatus.UNAVAILABLE -> MarkerPresentation(
-                NacosIcons.GutterConfigUnresolved,
-                "nacosvalue.marker.tooltip.unresolved"
-            )
+        /**
+         * One icon for 格式不参与解析, two explanations: the outcome is the same
+         * either way, but the user's next action is not. A suffix no runtime
+         * reads for keys leaves nothing to do; a data id that names no format
+         * at all can be renamed. The two reasons that leave nothing to do share
+         * a string — a fourth gray variant would be indistinguishable at gutter
+         * size, and "we do not parse XML yet" is not a next action either
+         * (issue #172).
+         */
+        private fun formatNotParsedTooltipKey(reason: KeyExtraction.Reason?): String = when (reason) {
+            KeyExtraction.Reason.FORMAT_UNDETERMINED ->
+                "nacosvalue.marker.tooltip.formatNotParsed.undetermined"
+            KeyExtraction.Reason.KNOWN_NON_PARSING_FORMAT,
+            KeyExtraction.Reason.PARSER_NOT_IMPLEMENTED,
+            null -> "nacosvalue.marker.tooltip.formatNotParsed"
         }
 
         private fun effectiveNamespaceId(project: Project, codeContext: NacosCodeContext): String? =
