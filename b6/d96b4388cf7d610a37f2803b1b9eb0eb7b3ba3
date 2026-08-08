@@ -1,0 +1,39 @@
+src/test/kotlin/com/nanyin/nacos/search/psi/ExtractionCorpus.kt
+  s_2e19bc9fcb8a38::t_27d66c1f06366d 232-233
+  s_2e19bc9fcb8a38::t_b39668bd6554dc 206-228,230,235-240,242,244,247-275,277-280
+  s_2e19bc9fcb8a38::t_4cc6721ddd3799 82,84-92,94-99
+src/main/kotlin/com/nanyin/nacos/search/psi/ConfigKeyExtractor.kt
+  s_2e19bc9fcb8a38::t_332a0dcf96e747 151-152,154-163,173,185-192,219
+  s_2e19bc9fcb8a38::t_1289fd42883cc1 5,14-15,20
+  s_2e19bc9fcb8a38::t_d32100339bb6a5 215-218
+  s_2e19bc9fcb8a38::t_40cb8e6537b351 139-149
+  s_2e19bc9fcb8a38::t_ebab57ecef32b4 392-422,433-458,460-463,467-470,472-477,480-521,524-606,608-617,629-630,635,638,640-644,646-666
+  s_2e19bc9fcb8a38::t_733286d7c796ec 464,607
+  s_2e19bc9fcb8a38::t_c337b08169503d 618-628
+  s_2e19bc9fcb8a38::t_05110785a7646d 459
+src/test/kotlin/com/nanyin/nacos/search/psi/ConfigKeyExtractorTest.kt
+  s_2e19bc9fcb8a38::t_b5eefae17a0726 397-410,417
+  s_2e19bc9fcb8a38::t_ee0e195d4cff5b 303-305,313-396,411-416
+  s_2e19bc9fcb8a38::t_bf3e277c7df4e2 418
+src/test/kotlin/com/nanyin/nacos/search/psi/KeyForms.kt
+  s_2e19bc9fcb8a38::t_21ea3657a4c07b 48-55
+CLAUDE.md
+  s_2e19bc9fcb8a38::t_0c046a7d814b88 166
+  s_2e19bc9fcb8a38::t_3d7a405a8469a4 164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "b6d96b4388cf7d610a37f2803b1b9eb0eb7b3ba3",
+  "prompts": {},
+  "sessions": {
+    "s_2e19bc9fcb8a38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f57ad22a-3729-466f-bc28-6294753dc3fd",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
