@@ -509,6 +509,43 @@ class ConfigKeyExtractorTest {
     }
 
     @Test
+    fun `yaml reports no line for a mapping key that is an alias`() {
+        // snakeyaml's composer returns the *same* node instance for an alias as
+        // for its anchor, so the key node's mark is the anchor's — line 0 here,
+        // which is where a different key is declared. The key itself is real and
+        // must stay in the key space; only the line is unknown, and the sentinel
+        // is the honest answer. Taking the value node's line instead would read
+        // right on this body and wrong on one whose anchor sits in the same
+        // mapping, because the detection below is deliberately partial.
+        val map = keys("n: &n name\ns:\n  *n : v\n", RuntimeConfigFormat.YAML)
+        assertEquals("v", map["s.name"]?.value)
+        assertEquals(ConfigKeyExtractor.LINE_NOT_FOUND, map["s.name"]?.lineIndex)
+        // The anchor's own entry is unaffected.
+        assertEquals(0, map["n"]?.lineIndex)
+    }
+
+    @Test
+    fun `yaml keeps the anchor's line for a sequence element that is an alias`() {
+        // Not the same case, and deliberately not "fixed": Spring's own origin
+        // tracking reports the anchor's line here too, because the element *is*
+        // the aliased node and neither side has anything else to report. Pinned
+        // so the mapping-key rule above is not generalised onto it.
+        val map = keys("n: &n name\ns:\n  - *n\n", RuntimeConfigFormat.YAML)
+        assertEquals("name", map["s[0]"]?.value)
+        assertEquals(0, map["s[0]"]?.lineIndex)
+    }
+
+    @Test
+    fun `yaml keeps real lines for keys beneath an aliased mapping`() {
+        // The alias is at the *ancestor*, so every key below it is still written
+        // exactly once and its mark is the only line there is. A rule that
+        // blamed the alias for its whole subtree would throw these away.
+        val map = keys("d: &d\n  x: 1\ns:\n  k: *d\n", RuntimeConfigFormat.YAML)
+        assertEquals(1, map["d.x"]?.lineIndex)
+        assertEquals(1, map["s.k.x"]?.lineIndex)
+    }
+
+    @Test
     fun `yaml contributes nothing for a mapping key with no stable spelling`() {
         // `!!binary` constructs a byte[], and the runtime spells the key from its
         // identity hash — a different key on every parse, on both sides. This is

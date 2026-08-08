@@ -648,7 +648,7 @@ object ConfigKeyExtractor {
             val ordered = LinkedHashMap<Any, MappingEntry>()
             for (tuple in node.value) {
                 if (tuple.keyNode.tag != Tag.MERGE) {
-                    resolveEntry(tuple)?.let { ordered[it.constructedKey] = it }
+                    resolveEntry(tuple, node)?.let { ordered[it.constructedKey] = it }
                     continue
                 }
                 for (source in yamlMergeSources(tuple.valueNode)) {
@@ -667,8 +667,15 @@ object ConfigKeyExtractor {
             return ordered.values.toList()
         }
 
-        /** One entry resolved into both identities, or null where it has none. */
-        private fun resolveEntry(tuple: NodeTuple): MappingEntry? {
+        /**
+         * One entry resolved into both identities, or null where it has none.
+         *
+         * [mapping] is the mapping the tuple belongs to, and is needed only to
+         * judge the declaration line — see [declarationLineOf]. For a merged
+         * entry that is the *source* mapping, not the one merging it in, which
+         * is what keeps a merge from looking like an alias.
+         */
+        private fun resolveEntry(tuple: NodeTuple, mapping: MappingNode): MappingEntry? {
             // A complex key (`? [a, b]`) names nothing a placeholder can spell.
             val keyNode = tuple.keyNode as? ScalarNode ?: return null
             val constructed = try {
@@ -679,8 +686,53 @@ object ConfigKeyExtractor {
                 return null
             } ?: return null
             val segment = segmentFor(constructed) ?: return null
-            return MappingEntry(constructed, segment, keyNode.startMark.line, tuple.valueNode)
+            return MappingEntry(
+                constructed,
+                segment,
+                declarationLineOf(keyNode, mapping),
+                tuple.valueNode
+            )
         }
+
+        /**
+         * The line [keyNode] declares its entry on, or [LINE_NOT_FOUND] where
+         * that cannot be known.
+         *
+         * An alias used as a mapping key (`*n : v`) is the case that cannot.
+         * Composing returns the **same node instance** for an alias as for its
+         * anchor — verified, not assumed — so `startMark` is the anchor's, and
+         * there is no per-use mark anywhere on the composed graph. Reporting it
+         * would send the caret to a line where a different key is declared, and
+         * this file's whole reason for deriving the line separately from the key
+         * set is that a wrong line must not be the answer.
+         *
+         * The test is that the key sits **before the mapping that contains it**,
+         * which no key written in place ever does — a mapping's start mark is at
+         * or before its first key. So it never fires on an honest key, and it is
+         * the containing mapping that is passed rather than the one merging it
+         * in, or every merged entry would look like an alias.
+         *
+         * It is deliberately partial: an anchor declared earlier *within* the
+         * same mapping is not caught, and keeps today's answer. That is also why
+         * the value node's line is not substituted here even though Spring's own
+         * origin happens to report it — Spring is reporting the value's position
+         * and not resolving the alias at all, and a substitution would make the
+         * same construct answer two different ways depending on where its anchor
+         * sits. One unknown line is a sentinel every consumer already handles;
+         * two plausible-but-different lines is a defect nobody can see.
+         *
+         * Only a mapping *key* is judged. An alias as a sequence element keeps
+         * the anchor's line, because Spring reports the anchor's line there too
+         * — the element is the aliased node and neither side has anything else
+         * to say. An alias as a *value* never reaches this at all: an entry's
+         * line is its key's, so the value cannot move it.
+         */
+        private fun declarationLineOf(keyNode: ScalarNode, mapping: MappingNode): Int =
+            if (keyNode.startMark.line < mapping.startMark.line) {
+                LINE_NOT_FOUND
+            } else {
+                keyNode.startMark.line
+            }
 
         /**
          * The path segment a constructed key contributes, or null where it
