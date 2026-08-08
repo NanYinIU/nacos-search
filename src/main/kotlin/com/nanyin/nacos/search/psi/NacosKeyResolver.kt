@@ -126,6 +126,8 @@ object NacosKeyResolver {
      * @param activeNamespaceId when non-null, hits in this namespace sort first
      * @param preferredDataId when present and any hit matches, hard-filter to those
      *   hits (typical `@NacosPropertySource`); otherwise soft-rank that dataId first
+     * @param formatOverride when present, the 运行时格式 the reference site
+     *   declared for the one configuration it names — see [scopedDefinitions]
      */
     fun resolve(
         key: String,
@@ -135,14 +137,17 @@ object NacosKeyResolver {
         preferredGroup: String? = null,
         preferredNamespaceId: String? = null,
         preferredDataId: String? = null,
-        allowCrossNamespace: Boolean = true
+        allowCrossNamespace: Boolean = true,
+        formatOverride: ReferenceFormatOverride? = null
     ): List<KeyHit> {
         if (key.isBlank() || index == null) return emptyList()
         // A blocked identity hides every cached definition; an index derived
         // under a different visibility state may hold definitions the snapshot
         // hides and must not serve them (issue #126).
         if (snapshot.isAccessBlocked || !index.visibilityCompatibleWith(snapshot)) return emptyList()
-        val scoped = scopedDefinitions(index, key, activeNamespaceId, allowCrossNamespace, preferredDataId)
+        val scoped = scopedDefinitions(
+            index, snapshot, key, activeNamespaceId, allowCrossNamespace, preferredDataId, formatOverride
+        )
         return scoped
             .sortedWith(definitionComparator(activeNamespaceId, preferredGroup, preferredNamespaceId, preferredDataId))
             .map { it.judgedAt(snapshot.asOfMillis) }
@@ -154,7 +159,8 @@ object NacosKeyResolver {
         snapshot: CacheSnapshot,
         activeNamespaceId: String? = null,
         preferredDataId: String? = null,
-        allowCrossNamespace: Boolean = true
+        allowCrossNamespace: Boolean = true,
+        formatOverride: ReferenceFormatOverride? = null
     ): ConfigResolution {
         if (key.isBlank()) return ConfigResolution(ConfigReferenceStatus.UNRESOLVED, emptyList())
         // A blocked identity returns no cached key hits, and absence is
@@ -163,16 +169,23 @@ object NacosKeyResolver {
         if (snapshot.isAccessBlocked) {
             return ConfigResolution(ConfigReferenceStatus.UNDECIDABLE, emptyList(), visibilityBlocked = true)
         }
-        if (index == null) return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
-        // An index derived under a different visibility state may hold hidden
-        // definitions; do not serve it. Identity gating stays the service's job
-        // (the service never hands an index for another identity), so this
-        // guard only has to decide visibility-state mismatches.
-        if (!index.visibilityCompatibleWith(snapshot)) {
+        // No index, or one derived under a different visibility state — the
+        // latter may hold hidden definitions and must not be served. Identity
+        // gating stays the service's job (the service never hands an index for
+        // another identity), so this guard only has to decide visibility-state
+        // mismatches.
+        if (index == null || !index.visibilityCompatibleWith(snapshot)) {
+            // Neither can serve a hit, so concluding here takes nothing from
+            // the user — and the terminal format conclusion needs neither of
+            // them. Deferring it to a later pass would spend a sweep on a
+            // format no sweep can help, which is the cold-start half of the
+            // leak this state closes (issue #172).
+            terminalFormatResolution(preferredDataId, formatOverride)?.let { return it }
             return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
         }
-        val hits = scopedDefinitions(index, key, activeNamespaceId, allowCrossNamespace, preferredDataId)
-            .map { it.judgedAt(snapshot.asOfMillis) }
+        val hits = scopedDefinitions(
+            index, snapshot, key, activeNamespaceId, allowCrossNamespace, preferredDataId, formatOverride
+        ).map { it.judgedAt(snapshot.asOfMillis) }
         if (hits.isNotEmpty()) return resolutionFromHits(hits)
 
         // No detail hit for the key. A Namespace-scoped block hides that
@@ -183,14 +196,54 @@ object NacosKeyResolver {
             return ConfigResolution(ConfigReferenceStatus.UNDECIDABLE, emptyList(), visibilityBlocked = true)
         }
 
-        // When a preferred data id is declared, the complete namespace summary
-        // index decides absence (UNRESOLVED) vs "exists but body not loaded"
-        // (UNDECIDABLE) — issue #52 / ADR-0041.
+        // A declared data id is what makes a miss attributable, and it decides
+        // two different questions in this order.
         val dataId = preferredDataId?.takeIf { it.isNotBlank() }
         if (dataId != null) {
+            // First, whether any body could have helped.
+            terminalFormatResolution(dataId, formatOverride)?.let { return it }
+            // Then, whether it is there at all: the complete namespace summary
+            // index decides absence (UNRESOLVED) vs "exists but body not
+            // loaded" (UNDECIDABLE) — issue #52 / ADR-0041.
             return dataIdPresenceResolution(dataId, snapshot, activeNamespaceId)
         }
         return resolutionFromHits(hits)
+    }
+
+    /**
+     * The terminal 格式不参与解析 conclusion for [preferredDataId], or null when
+     * its 运行时格式 is one the plugin reads keys from — or when there is no data
+     * id to attribute the miss to.
+     *
+     * Settled without a body, so it needs neither one nor an index:
+     * cached, listed, or never fetched, no body under this 运行时格式 makes the
+     * placeholder resolve. Answering "exists but body not loaded" instead was a
+     * lie about a body already in hand, and the lie is what kept a sweep pending
+     * for the life of the IDE (issue #172).
+     *
+     * Two things outrank it, and only two. A **key hit** does: a placeholder
+     * that resolves somewhere is resolved whatever its declared data id says,
+     * and a refusal the runtime would not make costs navigation that would have
+     * worked (ADR-0055). A **visibility block** does: the plugin never converts
+     * "cannot see" into a conclusion (issue #126). Presence does not — whether
+     * the configuration exists changes nothing about whether a placeholder could
+     * resolve against it, so proving absence here would buy nothing and cost the
+     * sweep that proves it.
+     *
+     * [formatOverride] is not a third thing that outranks the conclusion — it
+     * changes what the conclusion is drawn from. A site that declares a type is
+     * naming the 运行时格式 its configuration will actually be read under, so a
+     * data id with no recognizable suffix stops arriving here once a site
+     * declares one; rescuing it from this state is the whole reason a developer
+     * writes the declaration (#173).
+     */
+    private fun terminalFormatResolution(
+        preferredDataId: String?,
+        formatOverride: ReferenceFormatOverride?
+    ): ConfigResolution? {
+        val dataId = preferredDataId?.takeIf { it.isNotBlank() } ?: return null
+        val reason = runtimeFormatRefusal(dataId, formatOverride) ?: return null
+        return ConfigResolution(ConfigReferenceStatus.FORMAT_NOT_PARSED, emptyList(), formatRefusal = reason)
     }
 
     private fun isNamespaceBlocked(snapshot: CacheSnapshot, namespaceId: String?): Boolean =
@@ -265,16 +318,75 @@ object NacosKeyResolver {
 
     private fun scopedDefinitions(
         index: KeyIndex,
+        snapshot: CacheSnapshot,
         key: String,
         activeNamespaceId: String?,
         allowCrossNamespace: Boolean,
-        preferredDataId: String?
+        preferredDataId: String?,
+        formatOverride: ReferenceFormatOverride?
     ): List<KeyDefinition> {
-        val scoped = index.definitionsByKey[key]
-            .orEmpty()
+        val scoped = definitionsFor(index, snapshot, key, formatOverride)
             .filter { allowCrossNamespace || sameNamespace(it.namespaceId, activeNamespaceId) }
         return preferDataIdDefinitions(scoped, preferredDataId)
     }
+
+    /**
+     * Every definition of [key] this reference may see.
+     *
+     * Without an override that is what the 派生 key 索引 holds. With one, the
+     * definitions of the coordinate the site named are *replaced* rather than
+     * added to: the index read that configuration under the format its data id
+     * decides, and a site that declares another is asserting the index's
+     * reading is not what the runtime will do. Everything the override does not
+     * name keeps what the index holds — including another copy of the same data
+     * id in a group or Namespace the site said nothing about — so a declaration
+     * that finds nothing still degrades to the same soft discovery as a stale
+     * `@NacosPropertySource`, and discovery reaches those configurations under
+     * their own data ids, never under this site's declaration (#173).
+     */
+    private fun definitionsFor(
+        index: KeyIndex,
+        snapshot: CacheSnapshot,
+        key: String,
+        formatOverride: ReferenceFormatOverride?
+    ): List<KeyDefinition> {
+        val indexed = index.definitionsByKey[key].orEmpty()
+        if (formatOverride == null) return indexed
+        return indexed.filterNot { formatOverride.appliesTo(it.config) } +
+            overrideDefinitions(snapshot, formatOverride, key)
+    }
+
+    /**
+     * Definitions of [key] in the configuration [override] names, re-derived
+     * from the snapshot under the format its reference site declared.
+     *
+     * Computed on demand and deliberately not cached (#173). It reaches the
+     * snapshot's own cached details rather than resolving through the index,
+     * because the index holds this configuration read the wrong way; the walk is
+     * bounded by the cache's entry limit, and a declaration that agrees with the
+     * data id raises no override at all, so the ordinary gutter pass never
+     * arrives here. If it ever measures as a cost, key a cache by data id plus
+     * 运行时格式 — do not build one up front.
+     *
+     * It reads the snapshot and writes nothing, so it takes no observation
+     * sequence and needs none (ADR-0052).
+     */
+    private fun overrideDefinitions(
+        snapshot: CacheSnapshot,
+        override: ReferenceFormatOverride,
+        key: String
+    ): List<KeyDefinition> = snapshot.configurations
+        .filter { override.appliesTo(it.configuration) }
+        .mapNotNull { cached ->
+            keysUnderRuntimeFormat(cached.configuration, override)[key]?.let { location ->
+                KeyDefinition(
+                    cached.configuration,
+                    location,
+                    cached.freshUntilMillis,
+                    cached.deepStaleAtMillis
+                )
+            }
+        }
 
     /**
      * Declared dataId with cache hits → hard constraint; otherwise keep all hits

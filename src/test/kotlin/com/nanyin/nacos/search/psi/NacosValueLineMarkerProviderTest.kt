@@ -629,6 +629,140 @@ class NacosValueLineMarkerProviderTest {
         assertEquals(NacosIcons.GutterConfig, visibleMarker?.createGutterRenderer()?.icon)
     }
 
+    // ── 格式不参与解析 (issue #172) ──
+
+    @Test
+    fun `a cached configuration no parse produces keys from renders the terminal marker`() {
+        cacheAndRefresh(
+            NacosConfiguration("beans.xml", "DEFAULT_GROUP", null, "<beans><a>1</a></beans>", "xml")
+        )
+        var swept = false
+        val provider = NacosValueLineMarkerProvider { _, _ -> swept = true }
+
+        val marker = markerFor(
+            """
+            @NacosPropertySource(dataId = "beans.xml")
+            class Demo {
+                @NacosValue(value = "${'$'}{a}")
+                private String value;
+            }
+            """.trimIndent(),
+            provider
+        )
+
+        assertNotNull(marker)
+        assertEquals(NacosIcons.GutterConfigFormatNotParsed, marker?.createGutterRenderer()?.icon)
+        val tooltip = ApplicationManager.getApplication().runReadAction<String?> { marker?.lineMarkerTooltip }
+        // "not read from this format", never "no runtime parses it": both
+        // runtimes parse xml and this plugin does not yet, so the string has to
+        // be about what the plugin reads (ADR-0055).
+        assertTrue("tooltip was: $tooltip", tooltip?.contains("not read from this format") == true)
+        // The behavioural point of the state: a format the plugin will never
+        // parse must stop asking the server about itself (issue #172).
+        assertFalse("格式不参与解析 is terminal and must never sweep", swept)
+        // The absent jump arrow is a promise the marker has to keep: every
+        // other state is clickable, this one has nowhere to go and must not
+        // fetch a body on click either.
+        assertNull("nowhere to jump", marker?.navigationHandler)
+    }
+
+    @Test
+    fun `a data id naming no format explains itself differently`() {
+        cacheAndRefresh(NacosConfiguration("service-config", "DEFAULT_GROUP", null, "a=1\n", "properties"))
+        var swept = false
+        val provider = NacosValueLineMarkerProvider { _, _ -> swept = true }
+
+        val marker = markerFor(
+            """
+            @NacosPropertySource(dataId = "service-config")
+            class Demo {
+                @NacosValue(value = "${'$'}{a}")
+                private String value;
+            }
+            """.trimIndent(),
+            provider
+        )
+
+        assertNotNull(marker)
+        assertEquals(NacosIcons.GutterConfigFormatNotParsed, marker?.createGutterRenderer()?.icon)
+        // One icon, but the only reason the user can act on says so.
+        val tooltip = ApplicationManager.getApplication().runReadAction<String?> { marker?.lineMarkerTooltip }
+        assertTrue("tooltip was: $tooltip", tooltip?.contains("names no format") == true)
+        assertFalse("格式不参与解析 is terminal and must never sweep", swept)
+    }
+
+    @Test
+    fun `a placeholder with no data id context keeps its current behaviour`() {
+        cacheAndRefresh(
+            NacosConfiguration("beans.xml", "DEFAULT_GROUP", null, "<beans><a>1</a></beans>", "xml")
+        )
+
+        // No @NacosPropertySource: the miss is attributable to nothing, so the
+        // marker is hidden exactly as it was before this state existed.
+        assertNull(
+            markerFor(
+                """
+                class Demo {
+                    @NacosValue(value = "${'$'}{a}")
+                    private String value;
+                }
+                """.trimIndent()
+            )
+        )
+    }
+
+    @Test
+    fun `a data id that does not exist stays unmarked whatever its format says`() {
+        // The terminal conclusion is reached before presence is asked about,
+        // which is right — presence changes nothing about whether a placeholder
+        // could resolve. But the user is never shown a format explanation for a
+        // configuration that is not there: a fresh complete index proves the
+        // data id absent, and `shouldShowMarker` hides the marker outright.
+        runBlocking {
+            val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+            val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+            cache.replaceNamespaceIndex(
+                settings.captureAccessIdentity(),
+                null,
+                listOf(NacosConfiguration("other.properties", "DEFAULT_GROUP", null, "other.key=v\n", "properties"))
+            )
+            refreshKeyIndex(cache, settings.captureAccessIdentity())
+        }
+
+        assertNull(
+            markerFor(
+                """
+                @NacosPropertySource(dataId = "service-config")
+                class Demo {
+                    @NacosValue(value = "${'$'}{a}")
+                    private String value;
+                }
+                """.trimIndent()
+            )
+        )
+    }
+
+    @Test
+    fun `a configuration that still extracts keeps its resolved marker`() {
+        cacheAndRefresh(
+            NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "app.name=demo\n", "properties")
+        )
+
+        val marker = markerFor(
+            """
+            @NacosPropertySource(dataId = "app.properties")
+            class Demo {
+                @NacosValue(value = "${'$'}{app.name}")
+                private String name;
+            }
+            """.trimIndent()
+        )
+
+        assertNotNull(marker)
+        assertEquals(NacosIcons.GutterConfig, marker?.createGutterRenderer()?.icon)
+        assertNotNull("a resolvable placeholder stays clickable", marker?.navigationHandler)
+    }
+
     private fun cacheKeyInOtherNamespaceForActive(activeNamespaceId: String, allowCrossNamespace: Boolean) {
         setAllowCrossNamespaceNavigation(allowCrossNamespace)
         selectProjectNamespace(activeNamespaceId)
@@ -659,6 +793,125 @@ class NacosValueLineMarkerProviderTest {
             }
         }
         settings.applyServers(servers, settings.activeServerId)
+    }
+
+    // ---- a reference site's own 运行时格式 (#173) ----
+
+    @Test
+    fun `a declared type at the reference site rescues an otherwise undetermined data id`() {
+        cacheAndRefresh(
+            NacosConfiguration("service-config", "DEFAULT_GROUP", null, """{"app":{"name":"demo"}}""", "json")
+        )
+
+        // Nothing about `service-config` names a format, so this placeholder
+        // reaches the terminal 格式不参与解析 conclusion (#172) — the body is
+        // cached and complete, and no sweep can change the answer.
+        val undeclared = markerFor(
+            """
+            @NacosPropertySource(dataId = "service-config")
+            class Demo {
+                @NacosValue("${'$'}{app.name}")
+                private String name;
+            }
+            """.trimIndent()
+        )
+        assertEquals(NacosIcons.GutterConfigFormatNotParsed, undeclared?.createGutterRenderer()?.icon)
+
+        // ...until the site declares what the runtime will read it as. This is
+        // #173's whole point: the declaration is the developer's way out of a
+        // terminal state, so it has to be consulted before the conclusion is
+        // drawn, not after.
+        val declared = markerFor(
+            """
+            @NacosPropertySource(dataId = "service-config", type = ConfigType.JSON)
+            class Demo {
+                @NacosValue("${'$'}{app.name}")
+                private String name;
+            }
+            """.trimIndent()
+        )
+        assertEquals(NacosIcons.GutterConfig, declared?.createGutterRenderer()?.icon)
+    }
+
+    @Test
+    fun `a declared type restores the click the terminal state takes away`() {
+        // #172 hands the terminal state a null navigation handler, because its
+        // icon carries no jump arrow and a click that fetched the body anyway
+        // would reopen the sweep leak. A declaration means there *is* somewhere
+        // to jump, so the handler has to come back with it.
+        cacheAndRefresh(
+            NacosConfiguration("service-config", "DEFAULT_GROUP", null, """{"app":{"name":"demo"}}""", "json")
+        )
+
+        assertNull(
+            markerFor(
+                """
+                @NacosPropertySource(dataId = "service-config")
+                class Demo {
+                    @NacosValue("${'$'}{app.name}")
+                    private String name;
+                }
+                """.trimIndent()
+            )?.navigationHandler
+        )
+        assertNotNull(
+            markerFor(
+                """
+                @NacosPropertySource(dataId = "service-config", type = ConfigType.JSON)
+                class Demo {
+                    @NacosValue("${'$'}{app.name}")
+                    private String name;
+                }
+                """.trimIndent()
+            )?.navigationHandler
+        )
+    }
+
+    @Test
+    fun `two classes declaring different types for one data id each get their own answer`() {
+        cacheAndRefresh(
+            NacosConfiguration("app.properties", "DEFAULT_GROUP", null, "server:\n  port: 8080\n", "properties")
+        )
+
+        // Read as properties — what the data id decides — this body defines
+        // `port`; read as the YAML one class declares, it defines `server.port`.
+        // Each class's gutter tells the truth for the runtime it declares.
+        assertEquals(
+            NacosIcons.GutterConfig,
+            markerFor(
+                """
+                @NacosPropertySource(dataId = "app.properties")
+                class ReadsProperties {
+                    @NacosValue("${'$'}{port}")
+                    private String port;
+                }
+                """.trimIndent()
+            )?.createGutterRenderer()?.icon
+        )
+        assertEquals(
+            NacosIcons.GutterConfig,
+            markerFor(
+                """
+                @NacosPropertySource(dataId = "app.properties", type = ConfigType.YAML)
+                class ReadsYaml {
+                    @NacosValue("${'$'}{server.port}")
+                    private String port;
+                }
+                """.trimIndent()
+            )?.createGutterRenderer()?.icon
+        )
+        assertEquals(
+            NacosIcons.GutterConfigUnresolved,
+            markerFor(
+                """
+                @NacosPropertySource(dataId = "app.properties", type = ConfigType.YAML)
+                class ReadsYaml {
+                    @NacosValue("${'$'}{port}")
+                    private String port;
+                }
+                """.trimIndent()
+            )?.createGutterRenderer()?.icon
+        )
     }
 
     private fun markerFor(
