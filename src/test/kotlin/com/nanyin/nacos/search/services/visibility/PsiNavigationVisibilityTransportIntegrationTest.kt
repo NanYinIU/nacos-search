@@ -240,8 +240,7 @@ class PsiNavigationVisibilityTransportIntegrationTest {
         val protocolTransport =
             com.nanyin.nacos.search.services.operations.NacosRequestExecutorProtocolTransport(executor)
         val sessions = ApplicationManager.getApplication()
-            .getService(com.nanyin.nacos.search.services.NacosAuthService::class.java)
-            .authenticationSessions
+            .getService(com.nanyin.nacos.search.services.AuthenticationSessionRegistry::class.java)
         val v1 = com.nanyin.nacos.search.services.operations.V1ProtocolAdapter(protocolTransport, sessions)
         val v3 = com.nanyin.nacos.search.services.operations.V3ProtocolAdapter(protocolTransport, sessions)
         val gateway = com.nanyin.nacos.search.services.operations.OperationGateway(

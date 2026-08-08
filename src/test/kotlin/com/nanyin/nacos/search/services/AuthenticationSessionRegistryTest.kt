@@ -1,18 +1,37 @@
 package com.nanyin.nacos.search.services
 
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.V1AuthenticationStrategy
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
+@TestApplication
 class AuthenticationSessionRegistryTest {
+
+    @Test
+    fun `application owns one authentication session registry`() {
+        val first = ApplicationManager.getApplication().getService(AuthenticationSessionRegistry::class.java)
+        val second = ApplicationManager.getApplication().getService(AuthenticationSessionRegistry::class.java)
+
+        assertNotNull(first)
+        assertSame(first, second)
+    }
 
     @Test
     fun `completed tokens are isolated by the complete access identity`() = runBlocking {
@@ -101,30 +120,92 @@ class AuthenticationSessionRegistryTest {
     }
 
     @Test
-    fun `invalidateProfile retains epoch fence so in-flight login cannot publish`() = runBlocking {
+    fun `invalidateProfile rejects active and queued in-flight login callers`() = runBlocking {
         val registry = AuthenticationSessionRegistry()
         val key = executionKey("alice", accessRevision = 2, profileRevision = 3)
+        val sibling = executionKey(
+            "bob",
+            accessRevision = 2,
+            profileRevision = 3,
+            profileId = "sibling"
+        )
         val loginStarted = CompletableDeferred<Unit>()
         val releaseLogin = CompletableDeferred<Unit>()
+        val logins = AtomicInteger()
+
+        registry.getOrLogin(sibling) { token("sibling") }
 
         val flight = async {
             registry.getOrLogin(key) {
+                logins.incrementAndGet()
                 loginStarted.complete(Unit)
                 releaseLogin.await()
                 token("after-delete")
             }
         }
         loginStarted.await()
+        // UNDISPATCHED runs until the mutex suspension, so this caller is
+        // definitely attached to the old flight before deletion begins.
+        val queued = async(start = CoroutineStart.UNDISPATCHED) {
+            registry.getOrLogin(key) {
+                logins.incrementAndGet()
+                token("queued-after-delete")
+            }
+        }
         // Profile deletion cleanup: bump epochs and drop tokens/locks, but keep
-        // the epoch fence so the flight that sampled 0 cannot store.
+        // the epoch fence so neither active nor queued old-flight callers can
+        // serve, store, or start a login after deletion.
         registry.invalidateProfile("dev")
         releaseLogin.complete(Unit)
-        flight.await()
+        val lateToken = flight.await()
 
+        assertNull(lateToken)
+        assertNull(queued.await())
+        assertEquals(1, logins.get())
         assertNull(registry.completedToken(key.identity))
-        // A fresh login after invalidation must still work (new epoch sample).
+        assertEquals("sibling", registry.completedToken(sibling.identity)?.value)
+        // A deleted profile id stays fenced for the application lifetime.
         val next = registry.getOrLogin(key) { token("fresh") }
-        assertEquals("fresh", next?.value)
+        assertNull(next)
+    }
+
+    @Test
+    fun `invalidateProfile rejects a captured caller that has not joined a login flight`() = runBlocking {
+        val registry = AuthenticationSessionRegistry()
+        val key = executionKey("alice", accessRevision = 2, profileRevision = 3)
+        val logins = AtomicInteger()
+
+        registry.invalidateProfile("dev")
+        val rejected = registry.getOrLogin(key) {
+            logins.incrementAndGet()
+            token("after-delete")
+        }
+
+        assertNull(rejected)
+        assertEquals(0, logins.get())
+        assertNull(registry.completedToken(key.identity))
+    }
+
+    @Test
+    fun `profile invalidation wins at the final token publication seam`() = runBlocking {
+        val publicationPaused = CountDownLatch(1)
+        val releasePublication = CountDownLatch(1)
+        val registry = AuthenticationSessionRegistry {
+            publicationPaused.countDown()
+            assertTrue(releasePublication.await(5, TimeUnit.SECONDS))
+            System.currentTimeMillis()
+        }
+        val key = executionKey("alice", accessRevision = 2, profileRevision = 3)
+
+        val flight = async(Dispatchers.Default) {
+            registry.getOrLogin(key) { token("late-publication") }
+        }
+        assertTrue(publicationPaused.await(5, TimeUnit.SECONDS))
+        registry.invalidateProfile("dev")
+        releasePublication.countDown()
+
+        assertNull(flight.await())
+        assertNull(registry.completedToken(key.identity))
     }
 
     private fun executionKey(
@@ -132,11 +213,12 @@ class AuthenticationSessionRegistryTest {
         accessRevision: Long,
         profileRevision: Long,
         authMode: AuthMode = AuthMode.TOKEN,
-        generation: NacosApiGeneration = NacosApiGeneration.V1
+        generation: NacosApiGeneration = NacosApiGeneration.V1,
+        profileId: String = "dev"
     ): AuthenticationExecutionKey =
         AuthenticationExecutionKey(
             identity = AccessIdentity.ofProfile(
-                profileId = "dev",
+                profileId = profileId,
                 accessRevision = accessRevision,
                 canonicalEndpoint = "https://nacos.example",
                 resolvedGeneration = generation,

@@ -889,10 +889,10 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             override fun invalidateAuthentication(profileId: String) {
                 try {
                     ApplicationManager.getApplication()
-                        ?.getService(com.nanyin.nacos.search.services.NacosAuthService::class.java)
+                        ?.getService(com.nanyin.nacos.search.services.AuthenticationSessionRegistry::class.java)
                         ?.invalidateProfile(profileId)
                 } catch (_: Exception) {
-                    // Outside a live IDE the auth service may be unavailable.
+                    // Outside a live IDE the session registry may be unavailable.
                 }
             }
 

@@ -72,7 +72,7 @@ Plugin signing is configured via the `intellijPlatform.signing` block and reads 
 Services are IntelliJ application- or project-level components registered with `@Service`. Important ones:
 
 - `NacosApiService` — HTTP client for the Nacos Open API (`/nacos/v1/cs/configs`, `/nacos/v1/cs/config`, `/nacos/v1/console/namespaces`). It also maintains a short-lived in-memory cache of configuration responses per namespace and handles auth headers. Requests retry transient IO failures.
-- `NacosAuthService` — Manages Nacos login tokens. Caches `accessToken` per `serverUrl+username`, refreshes before expiry, evicts stale entries on credential switch, and supports logout/validation.
+- `AuthenticationSessionRegistry` — Application-level owner of Nacos-password authentication sessions shared by the V1 and V3 protocol adapters. Completed tokens are keyed by the full access identity, while concurrent login flights also pin execution-policy inputs.
 - `NacosSearchService` — Project-level search orchestrator. It **holds the session context** every search targets (see **One held search session** below), exposes search state and pagination state via Kotlin `StateFlow`, and takes intents rather than requests: `search`, `searchAsYouType`, `clearCriteria`, `reload`, `nextPage`, `previousPage`, `changePageSize`. Translates wildcard queries like `*config` into Nacos `blur`/`accurate` search modes.
 - `CacheService` — Persistent local cache. See **Cache persistence** below.
 - `NamespaceService` — Fetches Namespace discovery options for a supplied project operation context. Each `NacosProjectSession` owns its selected Namespace; discovery keeps options in the invoking project’s panel and publishes no application-wide selection events.
@@ -166,7 +166,7 @@ The `psi/` package (registered in `plugin.xml` for `language="JAVA"`) is the plu
 - `BASIC` — Send an `Authorization: Basic ...` header with the configured username/password.
 - `HYBRID` — Try token auth first; fall back to Basic auth if no token is available.
 
-Login form credentials are URL-encoded. Token auth is cached in `NacosAuthService` and refreshed before expiration.
+Login form credentials are URL-encoded by the protocol adapters. Nacos-password tokens are cached in the application `AuthenticationSessionRegistry` and refreshed before expiration.
 
 ### Multi-Server Environments & Credentials
 
