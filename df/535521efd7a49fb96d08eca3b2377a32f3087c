@@ -1,0 +1,26 @@
+src/main/kotlin/com/nanyin/nacos/search/psi/CodeUsageNavigation.kt
+  h_231225c3625e99 1-29
+src/main/kotlin/com/nanyin/nacos/search/services/NavigationIndexRefreshService.kt
+  h_231225c3625e99 19-22,25-37,56-58,73,83,90
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanel.kt
+  h_231225c3625e99 27,848-851,858-860
+src/main/kotlin/com/nanyin/nacos/search/ui/NacosSearchWindow.kt
+  h_231225c3625e99 303-304,308,338-340,344-355,390-396,786-789,798-799
+src/test/kotlin/com/nanyin/nacos/search/psi/CodeUsageNavigationTest.kt
+  h_231225c3625e99 1-55
+src/test/kotlin/com/nanyin/nacos/search/services/MarkerInputGutterPassWiringTest.kt
+  h_231225c3625e99 1-117
+src/test/kotlin/com/nanyin/nacos/search/services/NavigationIndexRefreshServiceTest.kt
+  h_231225c3625e99 1-157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "df535521efd7a49fb96d08eca3b2377a32f3087c",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
