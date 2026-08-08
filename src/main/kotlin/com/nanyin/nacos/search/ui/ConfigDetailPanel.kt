@@ -19,7 +19,7 @@ import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.nanyin.nacos.search.NacosIcons
 import com.nanyin.nacos.search.psi.NacosCodeContextExtractor
-import com.nanyin.nacos.search.psi.keysUnderDeclaredType
+import com.nanyin.nacos.search.psi.keysUnderRuntimeFormat
 import com.nanyin.nacos.search.psi.NacosConfigKeyElement
 import com.nanyin.nacos.search.psi.NacosConfigKeyReferenceSearcher
 import com.nanyin.nacos.search.psi.NacosUsageChoiceItem
@@ -768,7 +768,7 @@ private fun setupEventHandlers() {
         ed: EditorEx,
         presented: PresentedResult
     ) {
-        val keys = keysUnderDeclaredType(configuration)
+        val keys = keysUnderRuntimeFormat(configuration)
         if (keys.isEmpty()) return
 
         // Skip during dumb mode — the FileBasedIndex is not available, so
@@ -927,18 +927,23 @@ private fun setupEventHandlers() {
             if (!presentation.admitAndRecord(presented)) return@invokeOnEdt
             dataIdLabel.text = configuration.dataId
             val nsDisplay = configuration.tenantId?.takeIf { it.isNotBlank() } ?: "public"
-            val typeDisplay = configuration.type ?: "text"
+            // Both surfaces read the one 声明格式 derivation, so this panel
+            // cannot print two different format names for one configuration.
+            // Neither is the 运行时格式: the gutter markers below may extract
+            // this body under different rules entirely, and that is not a
+            // contradiction (ADR-0055).
+            val declaredFormat = configuration.declaredFormat()
             // Inline metadata: Group · namespace · type (compact, machine-readable values)
             if (::inlineMetaLabel.isInitialized) {
                 inlineMetaLabel.text = NacosSearchBundle.message(
                     "config.detail.metadata.inline.format",
                     configuration.group,
                     nsDisplay,
-                    typeDisplay
+                    declaredFormat
                 )
             }
             sizeLabel.text = NacosSearchBundle.message("config.detail.loading.size")
-            formatTagLabel.text = configuration.getConfigType().uppercase()
+            formatTagLabel.text = declaredFormat.uppercase()
             renderedDirty = false
             dirtyLabel.isVisible = false
             editButton.isEnabled = true

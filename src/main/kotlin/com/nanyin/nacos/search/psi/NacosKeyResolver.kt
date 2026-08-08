@@ -99,7 +99,7 @@ object NacosKeyResolver {
             definitionsByKey = cached
                 .asSequence()
                 .flatMap { cachedConfig ->
-                    keysUnderDeclaredType(cachedConfig.configuration).values.asSequence().map { loc ->
+                    keysUnderRuntimeFormat(cachedConfig.configuration).values.asSequence().map { loc ->
                         loc.key to KeyDefinition(
                             cachedConfig.configuration,
                             loc,

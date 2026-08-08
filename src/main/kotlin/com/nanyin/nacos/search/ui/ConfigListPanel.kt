@@ -414,7 +414,7 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
           // dataId correctly (Swing misreports text from composite JPanel renderers)
           accessibleContext?.accessibleName = "${value.dataId} | ${value.group}"
 
-            val configType = value.getConfigType().lowercase()
+            val configType = value.declaredFormat().lowercase()
             val (shortLabel, bg) = getBadgeForType(configType)
             badgeLabel.text = shortLabel
             badgeLabel.background = bg

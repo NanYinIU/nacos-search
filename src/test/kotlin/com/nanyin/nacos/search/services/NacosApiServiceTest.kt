@@ -338,7 +338,7 @@ class NacosApiServiceTest {
             type = null
         )
 
-        assertEquals("yaml", yamlConfig.getConfigType())
+        assertEquals("yaml", yamlConfig.declaredFormat())
     }
 
    @Test
