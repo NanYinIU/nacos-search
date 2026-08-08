@@ -1,0 +1,14 @@
+src/main/kotlin/com/nanyin/nacos/search/services/AuthenticationSessionRegistry.kt
+  h_231225c3625e99 67-70,75-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0e614aeeeaf98b03ffa280744c6b2c00b808733e",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
