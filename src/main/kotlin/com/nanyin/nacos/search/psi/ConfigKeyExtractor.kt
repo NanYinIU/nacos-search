@@ -2,7 +2,17 @@ package com.nanyin.nacos.search.psi
 
 import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonToken
+import org.yaml.snakeyaml.LoaderOptions
+import org.yaml.snakeyaml.Yaml
+import org.yaml.snakeyaml.constructor.SafeConstructor
+import org.yaml.snakeyaml.nodes.MappingNode
+import org.yaml.snakeyaml.nodes.Node
+import org.yaml.snakeyaml.nodes.ScalarNode
+import org.yaml.snakeyaml.nodes.SequenceNode
+import org.yaml.snakeyaml.nodes.Tag
 import java.io.StringReader
+import java.util.Collections
+import java.util.IdentityHashMap
 import java.util.Properties
 
 /**
@@ -108,6 +118,68 @@ object ConfigKeyExtractor {
         } else {
             KeyExtraction.Extracted(parse(content))
         }
+
+    // ----- key paths --------------------------------------------------------
+
+    /**
+     * One segment of the path from a document's root to a leaf.
+     *
+     * YAML and JSON share it because they flatten the same shape — a tree of
+     * mappings and sequences — onto the same dotted key space. They did not
+     * share it while the YAML reader was hand-written, because that reader's
+     * bracket form omitted the separator after an index (`items[0]name.first`),
+     * a shape Spring's relaxed binding can never match; unifying them then
+     * would only have carried the defect into JSON.
+     */
+    private sealed class PathSeg {
+        data class Name(val name: String) : PathSeg()
+        data class Index(val n: Int) : PathSeg()
+    }
+
+    /**
+     * Records a leaf at [path] under both the bracket form (`list[0].n`) and
+     * the dot form (`list.0.n`), so either placeholder style resolves.
+     *
+     * Only a scalar reaches here. A container contributes no key of its own: a
+     * runtime property source flattens to leaves, and `${list}` resolves
+     * against none of them.
+     */
+    private fun emitLeaf(
+        path: ArrayDeque<PathSeg>,
+        value: String,
+        declarationLine: Int,
+        result: LinkedHashMap<String, KeyLocation>
+    ) {
+        // A scalar at the document root belongs to no key.
+        if (path.isEmpty()) return
+        val bracket = renderKey(path, bracketIndexes = true)
+        result[bracket] = KeyLocation(bracket, declarationLine, value)
+        val dot = renderKey(path, bracketIndexes = false)
+        if (dot != bracket) {
+            result[dot] = KeyLocation(dot, declarationLine, value)
+        }
+    }
+
+    private fun renderKey(path: ArrayDeque<PathSeg>, bracketIndexes: Boolean): String {
+        val sb = StringBuilder()
+        for (seg in path) {
+            when (seg) {
+                is PathSeg.Name -> {
+                    if (sb.isNotEmpty()) sb.append(".")
+                    sb.append(seg.name)
+                }
+                is PathSeg.Index -> {
+                    if (bracketIndexes) {
+                        sb.append("[").append(seg.n).append("]")
+                    } else {
+                        if (sb.isNotEmpty()) sb.append(".")
+                        sb.append(seg.n)
+                    }
+                }
+            }
+        }
+        return sb.toString()
+    }
 
     // ----- properties -------------------------------------------------------
 
@@ -261,176 +333,161 @@ object ConfigKeyExtractor {
 
     // ----- yaml -------------------------------------------------------------
 
-    private val yamlKeyValue = Regex("""^(\s*)([A-Za-z_][\w.\-]*)\s*:\s*(.*)$""")
-    private val yamlListItem = Regex("""^(\s*)-\s+(.*)$""")
-
-    private sealed class YamlSeg {
-        abstract val indent: Int
-        data class Key(override val indent: Int, val name: String) : YamlSeg()
-        data class Index(override val indent: Int, val n: Int) : YamlSeg()
-    }
-
     /**
-    * Minimal YAML mapping reader: maintains an indentation stack so that
-    * arbitrarily deep nesting flattens to dot-paths
-    * (`sys:` / `  audit:` / `    switch: true` -> `sys.audit.switch`).
-    * Sequence items (`- id: 1`) are indexed and emitted in both
-    * `parent.0.child` and `parent[0].child` forms (plan 7.3).
-    */
+     * Reads the key space out of a YAML body with snakeyaml — the library
+     * Spring Boot's own YAML property source loader uses, so the plugin and the
+     * runtime cannot disagree about YAML syntax. Block scalars, multi-document
+     * streams, anchors and flow style are the library's problem rather than
+     * ours; what remains ours is only the derivation of a key path from the
+     * node tree it composes.
+     *
+     * It replaces a hand-written indentation-stack reader that read a block
+     * scalar's body back as keys, collapsed a sequence of nested mappings onto
+     * index zero, attributed an anchored mapping's children to the document
+     * root, kept only the last document of a stream, saw neither flow style nor
+     * a quoted or digit-leading key, and read an inline comment as part of the
+     * value it followed.
+     *
+     * `composeAll`, not `load`: composing builds the node tree without
+     * constructing a single Java object out of the body, and each node carries
+     * the mark this takes its line from — so YAML needs none of the permissive
+     * locator JSON does. Every document contributes, because a multi-document
+     * body is the ordinary Spring profile idiom and keeping only the last one
+     * silently discards the first.
+     *
+     * A syntax error keeps the documents already composed, for the same reason
+     * the JSON reader keeps what it read: a partial key space is strictly
+     * better than none for navigation. It keeps no less and no more than that —
+     * the granularity is a whole document, because composing yields one only
+     * once it is complete, and it ends the stream, so a malformed document
+     * costs every document after it as well. A body that trips one of the
+     * loader's limits (its 3 MB code-point ceiling, its alias budget) therefore
+     * contributes nothing at all; Nacos caps a configuration far below that.
+     */
     private fun extractYaml(content: String): Map<String, KeyLocation> {
         val result = LinkedHashMap<String, KeyLocation>()
-        val path = ArrayDeque<YamlSeg>()
-        // Per-indent running index for sequence items at that indentation.
-        val listIndex = HashMap<Int, Int>()
-        content.lineSequence().forEachIndexed { index, rawLine ->
-            val trimmed = rawLine.trim()
-            if (trimmed.isEmpty() || trimmed.startsWith("#")) return@forEachIndexed
-
-            val listItem = yamlListItem.matchEntire(rawLine)
-            if (listItem != null) {
-                handleYamlListItem(listItem, index, path, listIndex, result)
-                return@forEachIndexed
+        val path = ArrayDeque<PathSeg>()
+        val onPath = Collections.newSetFromMap(IdentityHashMap<Node, Boolean>())
+        // Composing never invokes a constructor, so the body cannot instantiate
+        // anything whichever constructor this names. Naming the safe one says so
+        // outright, and carries the loader's limits into the composer.
+        val yaml = Yaml(SafeConstructor(LoaderOptions()))
+        try {
+            for (document in yaml.composeAll(StringReader(content))) {
+                readYamlNode(document, path, onPath, LINE_NOT_FOUND, result)
             }
-
-            val match = yamlKeyValue.matchEntire(rawLine) ?: return@forEachIndexed
-            val indent = match.groupValues[1].length
-            val key = match.groupValues[2]
-            val rawValue = match.groupValues[3].trim().trimEnd(',')
-
-            popYaml(path, indent)
-            // A mapping key at this indent closes any same-level sequence.
-            listIndex.remove(indent)
-
-            if (rawValue.isEmpty() || rawValue == "|") {
-                // Mapping parent: push onto path, no leaf produced here.
-                path.addLast(YamlSeg.Key(indent, key))
-                return@forEachIndexed
-            }
-            emitYamlLeaf(path, key, rawValue, index, result)
+        } catch (_: Exception) {
+            // A malformed body. snakeyaml reports it as a YAMLException, and
+            // composeAll parses lazily, so `result` holds every document read
+            // before the one that gave out.
         }
         return result
     }
 
-    private fun handleYamlListItem(
-        match: MatchResult,
-        lineIndex: Int,
-        path: ArrayDeque<YamlSeg>,
-        listIndex: HashMap<Int, Int>,
+    private fun readYamlNode(
+        node: Node,
+        path: ArrayDeque<PathSeg>,
+        onPath: MutableSet<Node>,
+        declarationLine: Int,
         result: LinkedHashMap<String, KeyLocation>
     ) {
-        val dashIndent = match.groupValues[1].length
-        popYaml(path, dashIndent)
-        // Deeper sequences are finished once we return to a shallower dash.
-        listIndex.keys.filter { it > dashIndent }.forEach { listIndex.remove(it) }
-        val n = listIndex.getOrPut(dashIndent) { 0 }
-        listIndex[dashIndent] = n + 1
-        // The index segment carries the list indent so subsequent siblings pop it.
-        path.addLast(YamlSeg.Index(dashIndent, n))
-
-        val rest = match.groupValues[2].trim()
-        val inline = parseInlineMapEntry(rest)
-        if (inline != null) {
-            val (childKey, childValue) = inline
-            if (childValue != null) {
-                emitYamlLeaf(path, childKey, childValue, lineIndex, result)
-            } else {
-                // "- child:" opens a nested mapping under this index.
-                path.addLast(YamlSeg.Key(dashIndent + 1, childKey))
-                listIndex.remove(dashIndent)
-            }
+        when (node) {
+            is MappingNode -> readYamlMapping(node, path, onPath, result)
+            is SequenceNode -> readYamlSequence(node, path, onPath, result)
+            // A block scalar's body arrives here as one value, which is the
+            // whole reason it can no longer contribute keys of its own.
+            is ScalarNode -> emitLeaf(path, node.value, declarationLine, result)
+            else -> Unit
         }
-        // A bare scalar item ("- bare") produces no keyed location.
     }
 
-    /** Parses "id: 1" -> (id, 1); "id:" -> (id, null); returns null when not a map entry. */
-    private fun parseInlineMapEntry(rest: String): Pair<String, String?>? {
-        val colon = rest.indexOf(':')
-        if (colon <= 0) return null
-        val key = rest.substring(0, colon).trim()
-        if (!key.matches(Regex("[A-Za-z_][\\w.\\-]*"))) return null
-        val value = rest.substring(colon + 1).trim().trimEnd(',').ifEmpty { null }
-        return key to value
-    }
-
-    private fun popYaml(path: ArrayDeque<YamlSeg>, indent: Int) {
-        while (path.isNotEmpty() && path.last().indent >= indent) {
+    private fun readYamlMapping(
+        node: MappingNode,
+        path: ArrayDeque<PathSeg>,
+        onPath: MutableSet<Node>,
+        result: LinkedHashMap<String, KeyLocation>
+    ) {
+        // An alias may reference a mapping that contains it, which composes a
+        // cyclic node graph. That mapping's keys are already on the path, so
+        // stopping here loses nothing and is what keeps the walk off the stack
+        // limit.
+        if (!onPath.add(node)) return
+        for ((name, entry) in yamlEntries(node, onPath)) {
+            path.addLast(PathSeg.Name(name))
+            // The line is the key's own, so a value spanning many lines cannot
+            // drag the key's line along with it.
+            readYamlNode(entry.valueNode, path, onPath, entry.keyNode.startMark.line, result)
             path.removeLast()
         }
+        onPath.remove(node)
     }
 
-    /**
-     * Emits a leaf key. When the path contains index segments, both the
-     * bracket form (`tabs[0].id`) and the dot form (`tabs.0.id`) are stored
-     * so either placeholder style resolves.
-     */
-    private fun emitYamlLeaf(
-        path: ArrayDeque<YamlSeg>,
-        key: String,
-        rawValue: String,
-        lineIndex: Int,
+    private fun readYamlSequence(
+        node: SequenceNode,
+        path: ArrayDeque<PathSeg>,
+        onPath: MutableSet<Node>,
         result: LinkedHashMap<String, KeyLocation>
     ) {
-        val bracket = yamlBracketKey(path, key)
-        result[bracket] = KeyLocation(bracket, lineIndex, stripYamlValue(rawValue))
-        val dot = yamlDotKey(path, key)
-        if (dot != bracket) {
-            result[dot] = KeyLocation(dot, lineIndex, stripYamlValue(rawValue))
+        // The same cyclic-anchor guard the mapping walk explains.
+        if (!onPath.add(node)) return
+        node.value.forEachIndexed { index, item ->
+            path.addLast(PathSeg.Index(index))
+            // An element declares no key, so it is its own declaration.
+            readYamlNode(item, path, onPath, item.startMark.line, result)
+            path.removeLast()
         }
+        onPath.remove(node)
     }
 
-    private fun yamlBracketKey(path: ArrayDeque<YamlSeg>, key: String): String {
-        val sb = StringBuilder()
-        for (seg in path) {
-            when (seg) {
-                is YamlSeg.Key -> {
-                    if (sb.isNotEmpty() && !sb.endsWith("]")) sb.append(".")
-                    sb.append(seg.name)
+    /** One entry of a mapping, after its `<<` merges are resolved. */
+    private class YamlEntry(val keyNode: ScalarNode, val valueNode: Node)
+
+    /**
+     * The entries a mapping contributes once its `<<` merges are resolved: its
+     * own, then those of each mapping it merges in that no earlier source and
+     * the mapping itself did not already name.
+     *
+     * The merge is resolved here rather than by walking `<<` as a path segment,
+     * because a segment would invent a `service.<<.timeout` no runtime produces
+     * and lose the `service.timeout` every runtime does. It is resolved *before*
+     * the walk rather than by letting a later write win, because YAML merge is
+     * shallow: a mapping's own `db: {port: 1}` discards a merged `db` outright,
+     * where a per-leaf overwrite would keep the merged `db.url` underneath it
+     * and invent a key.
+     */
+    private fun yamlEntries(
+        node: MappingNode,
+        onPath: MutableSet<Node>
+    ): Map<String, YamlEntry> {
+        val entries = LinkedHashMap<String, YamlEntry>()
+        for (tuple in node.value) {
+            if (tuple.keyNode.tag == Tag.MERGE) continue
+            // A complex key (`? [a, b]`) names nothing a placeholder can spell.
+            val key = tuple.keyNode as? ScalarNode ?: continue
+            entries[key.value] = YamlEntry(key, tuple.valueNode)
+        }
+        for (tuple in node.value) {
+            if (tuple.keyNode.tag != Tag.MERGE) continue
+            for (source in yamlMergeSources(tuple.valueNode)) {
+                // A mapping that merges itself, directly or through a chain.
+                if (!onPath.add(source)) continue
+                yamlEntries(source, onPath).forEach { (name, entry) ->
+                    if (name !in entries) entries[name] = entry
                 }
-                is YamlSeg.Index -> sb.append("[").append(seg.n).append("]")
+                onPath.remove(source)
             }
         }
-        return if (sb.isEmpty()) key else "$sb.$key"
+        return entries
     }
 
-    private fun yamlDotKey(path: ArrayDeque<YamlSeg>, key: String): String {
-        val sb = StringBuilder()
-        for (seg in path) {
-            when (seg) {
-                is YamlSeg.Key -> {
-                    if (sb.isNotEmpty()) sb.append(".")
-                    sb.append(seg.name)
-                }
-                is YamlSeg.Index -> {
-                    if (sb.isNotEmpty()) sb.append(".")
-                    sb.append(seg.n)
-                }
-            }
-        }
-        return if (sb.isEmpty()) key else "$sb.$key"
-    }
-
-    private fun stripYamlValue(value: String): String {
-        var v = value.trim()
-        if ((v.startsWith("\"") && v.endsWith("\"")) || (v.startsWith("'") && v.endsWith("'"))) {
-            v = v.substring(1, v.length - 1)
-        }
-        return v
+    /** `<<: *a` names one source; `<<: [*a, *b]` names several, `*a` winning. */
+    private fun yamlMergeSources(node: Node): List<MappingNode> = when (node) {
+        is MappingNode -> listOf(node)
+        is SequenceNode -> node.value.filterIsInstance<MappingNode>()
+        else -> emptyList()
     }
 
     // ----- json -------------------------------------------------------------
-
-    /**
-     * Deliberately not shared with [YamlSeg] and its key rendering, which look
-     * like the same thing and are not: `yamlBracketKey` omits the separator
-     * after an index (`items[0]name.first`), a shape Spring's relaxed binding
-     * can never match. Unifying them now would either carry that defect into
-     * JSON or fix YAML's key space as a side effect of a JSON change. The YAML
-     * reader is replaced wholesale by snakeyaml (#166); the two converge then.
-     */
-    private sealed class JsonSeg {
-        data class Name(val name: String) : JsonSeg()
-        data class Index(val n: Int) : JsonSeg()
-    }
 
     /**
      * Reads the key space out of a JSON body with Gson's streaming reader.
@@ -439,11 +496,8 @@ object ConfigKeyExtractor {
      * hand-written scanner lost every key declared after an array whose last
      * element was a string, and never descended into arrays at all.
      *
-     * Nesting flattens to dot paths, and array elements are addressed by index
-     * in both the bracket and the dot form (`list[0].n` and `list.0.n`), the
-     * same pair the YAML reader emits, so either placeholder style resolves.
-     * A container contributes no key of its own — a runtime property source
-     * flattens to leaves, and `${list}` resolves against none of them.
+     * Nesting flattens to dot paths through the same [PathSeg] the YAML reader
+     * uses, so the two formats cannot drift into different key shapes.
      *
      * A syntax error ends the read and keeps the keys already parsed: a partial
      * key space is what the scanner it replaces would have produced, and it is
@@ -452,7 +506,7 @@ object ConfigKeyExtractor {
     private fun extractJson(content: String): Map<String, KeyLocation> {
         val result = LinkedHashMap<String, KeyLocation>()
         val locator = JsonDeclarationLocator(content)
-        val path = ArrayDeque<JsonSeg>()
+        val path = ArrayDeque<PathSeg>()
         try {
             JsonReader(StringReader(content)).use { reader ->
                 readJsonValue(reader, locator, path, LINE_NOT_FOUND, result)
@@ -469,7 +523,7 @@ object ConfigKeyExtractor {
     private fun readJsonValue(
         reader: JsonReader,
         locator: JsonDeclarationLocator,
-        path: ArrayDeque<JsonSeg>,
+        path: ArrayDeque<PathSeg>,
         declarationLine: Int,
         result: LinkedHashMap<String, KeyLocation>
     ) {
@@ -482,7 +536,7 @@ object ConfigKeyExtractor {
                     // value spanning many lines cannot drag the key's line along
                     // with it.
                     val line = locator.lineOf(name)
-                    path.addLast(JsonSeg.Name(name))
+                    path.addLast(PathSeg.Name(name))
                     readJsonValue(reader, locator, path, line, result)
                     path.removeLast()
                 }
@@ -492,9 +546,10 @@ object ConfigKeyExtractor {
                 reader.beginArray()
                 var index = 0
                 while (reader.hasNext()) {
-                    path.addLast(JsonSeg.Index(index))
-                    // An element declares no name of its own, so it keeps the
-                    // line of the key that opened the array.
+                    path.addLast(PathSeg.Index(index))
+                    // An element declares no name of its own, and Gson supplies
+                    // no mark, so it keeps the line of the key that opened the
+                    // array. YAML answers this from the element's own mark.
                     readJsonValue(reader, locator, path, declarationLine, result)
                     path.removeLast()
                     index++
@@ -505,52 +560,15 @@ object ConfigKeyExtractor {
             // as, which is what the previous scanner reported and what a value
             // hint should show.
             JsonToken.STRING, JsonToken.NUMBER ->
-                emitJsonLeaf(path, reader.nextString(), declarationLine, result)
+                emitLeaf(path, reader.nextString(), declarationLine, result)
             JsonToken.BOOLEAN ->
-                emitJsonLeaf(path, reader.nextBoolean().toString(), declarationLine, result)
+                emitLeaf(path, reader.nextBoolean().toString(), declarationLine, result)
             JsonToken.NULL -> {
                 reader.nextNull()
-                emitJsonLeaf(path, "null", declarationLine, result)
+                emitLeaf(path, "null", declarationLine, result)
             }
             else -> reader.skipValue()
         }
-    }
-
-    private fun emitJsonLeaf(
-        path: ArrayDeque<JsonSeg>,
-        value: String,
-        declarationLine: Int,
-        result: LinkedHashMap<String, KeyLocation>
-    ) {
-        // A scalar at the document root belongs to no key.
-        if (path.isEmpty()) return
-        val bracket = jsonKey(path, bracketIndexes = true)
-        result[bracket] = KeyLocation(bracket, declarationLine, value)
-        val dot = jsonKey(path, bracketIndexes = false)
-        if (dot != bracket) {
-            result[dot] = KeyLocation(dot, declarationLine, value)
-        }
-    }
-
-    private fun jsonKey(path: ArrayDeque<JsonSeg>, bracketIndexes: Boolean): String {
-        val sb = StringBuilder()
-        for (seg in path) {
-            when (seg) {
-                is JsonSeg.Name -> {
-                    if (sb.isNotEmpty()) sb.append(".")
-                    sb.append(seg.name)
-                }
-                is JsonSeg.Index -> {
-                    if (bracketIndexes) {
-                        sb.append("[").append(seg.n).append("]")
-                    } else {
-                        if (sb.isNotEmpty()) sb.append(".")
-                        sb.append(seg.n)
-                    }
-                }
-            }
-        }
-        return sb.toString()
     }
 
     /**

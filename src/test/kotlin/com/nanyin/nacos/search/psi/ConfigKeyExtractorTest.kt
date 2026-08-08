@@ -193,13 +193,6 @@ class ConfigKeyExtractorTest {
     }
 
     @Test
-    fun `yaml skips list items`() {
-        val map = keys("items:\n  - one\n  - two\nreal: yes\n", RuntimeConfigFormat.YAML)
-        assertNull(map["items.-"])
-        assertEquals("yes", map["real"]?.value)
-    }
-
-    @Test
     fun `yaml three level nesting flattens`() {
         val map = keys("sys:\n  audit:\n    switch: true\n", RuntimeConfigFormat.YAML)
         assertEquals("true", map["sys.audit.switch"]?.value)
@@ -215,11 +208,222 @@ class ConfigKeyExtractorTest {
     @Test
     fun `yaml list items flatten with both index forms`() {
         val map = keys("tabs:\n  - id: 1\n  - id: 2\n", RuntimeConfigFormat.YAML)
-        // Plan 7.3: list keys produce both forms to maximize match rate.
+        // List keys produce both forms so either placeholder style resolves.
         assertEquals("1", map["tabs.0.id"]?.value)
         assertEquals("1", map["tabs[0].id"]?.value)
         assertEquals("2", map["tabs.1.id"]?.value)
         assertEquals("2", map["tabs[1].id"]?.value)
+    }
+
+    @Test
+    fun `yaml scalar sequence elements are addressable by index`() {
+        val map = keys("items:\n  - one\n  - two\nreal: yes\n", RuntimeConfigFormat.YAML)
+        assertEquals("one", map["items[0]"]?.value)
+        assertEquals("one", map["items.0"]?.value)
+        assertEquals("two", map["items[1]"]?.value)
+        assertEquals("two", map["items.1"]?.value)
+        assertEquals("yes", map["real"]?.value)
+    }
+
+    @Test
+    fun `yaml contributes the keys of every document in a multi-document stream`() {
+        // The ordinary Spring profile idiom. The indentation scanner merged the
+        // documents and kept only the last, so the first one's keys vanished.
+        val content = "spring:\n  profiles: dev\ndb:\n  url: dev-url\n---\nspring:\n  profiles: prod\nextra: true\n"
+        val map = keys(content, RuntimeConfigFormat.YAML)
+        assertEquals("dev-url", map["db.url"]?.value)
+        assertEquals("true", map["extra"]?.value)
+        // A repeated key still resolves to its last occurrence in the stream.
+        assertEquals("prod", map["spring.profiles"]?.value)
+    }
+
+    @Test
+    fun `yaml block scalars contribute no keys from their body in any chomping form`() {
+        for (indicator in listOf("|", "|-", "|+", ">", ">-", ">+")) {
+            val map = keys(
+                "script: $indicator\n  phantom: 1\n  other: 2\nafter: x\n",
+                RuntimeConfigFormat.YAML
+            )
+            assertNull(map["phantom"], "$indicator leaked a key from the block body")
+            assertNull(map["other"], "$indicator leaked a key from the block body")
+            assertNull(map["script.phantom"], "$indicator leaked a key from the block body")
+            assertNotNull(map["script"], "$indicator lost the block's own key")
+            assertEquals("x", map["after"]?.value, "$indicator lost the key after the block")
+        }
+    }
+
+    @Test
+    fun `yaml sequence elements that each open a nested mapping keep their own index`() {
+        // The indentation scanner closed the running index when an element
+        // opened a mapping, so every element collapsed onto index zero and the
+        // last one overwrote the rest.
+        val map = keys(
+            "items:\n  - meta:\n      id: 1\n  - meta:\n      id: 2\n",
+            RuntimeConfigFormat.YAML
+        )
+        assertEquals("1", map["items[0].meta.id"]?.value)
+        assertEquals("1", map["items.0.meta.id"]?.value)
+        assertEquals("2", map["items[1].meta.id"]?.value)
+        assertEquals("2", map["items.1.meta.id"]?.value)
+    }
+
+    @Test
+    fun `yaml attributes a sibling of a nested mapping to its sequence element`() {
+        val map = keys(
+            "items:\n  - name: first\n    nested:\n      x: 1\n    other: last\n",
+            RuntimeConfigFormat.YAML
+        )
+        assertEquals("first", map["items[0].name"]?.value)
+        assertEquals("1", map["items[0].nested.x"]?.value)
+        assertEquals("last", map["items[0].other"]?.value)
+        assertNull(map["items[0].nested.other"])
+    }
+
+    @Test
+    fun `yaml bracket form separates the index from the segment that follows it`() {
+        // `items[0]name.first` is a shape Spring's relaxed binding can never match.
+        val map = keys("items:\n  - name:\n      first: a\n", RuntimeConfigFormat.YAML)
+        assertEquals("a", map["items[0].name.first"]?.value)
+        assertNull(map["items[0]name.first"])
+    }
+
+    @Test
+    fun `yaml flow style contributes its nested keys`() {
+        val map = keys("server: {port: 8080, host: localhost}\nhosts: [a, b]\n", RuntimeConfigFormat.YAML)
+        assertEquals("8080", map["server.port"]?.value)
+        assertEquals("localhost", map["server.host"]?.value)
+        assertEquals("a", map["hosts[0]"]?.value)
+        assertEquals("a", map["hosts.0"]?.value)
+        assertEquals("b", map["hosts[1]"]?.value)
+        assertEquals("b", map["hosts.1"]?.value)
+    }
+
+    @Test
+    fun `yaml extracts quoted keys and keys beginning with a digit`() {
+        // A purely numeric or boolean-ish key (`0:`, `on:`) is deliberately not
+        // asserted here: those are not string keys, and the shape the runtime
+        // gives them is a fidelity question for #166's differential oracle, not
+        // something to pin to a guess.
+        val content = "\"spring.datasource.url\": jdbc:h2:mem\n'single': q\n2fa: enabled\n"
+        val map = keys(content, RuntimeConfigFormat.YAML)
+        assertEquals("jdbc:h2:mem", map["spring.datasource.url"]?.value)
+        assertEquals("q", map["single"]?.value)
+        assertEquals("enabled", map["2fa"]?.value)
+    }
+
+    @Test
+    fun `yaml keeps an anchored mapping's children beneath it`() {
+        // The scanner read `&defaults` as the value of `defaults`, so the
+        // children below it were attributed to the document root instead.
+        val map = keys(
+            "defaults: &defaults\n  timeout: 30\nservice: *defaults\n",
+            RuntimeConfigFormat.YAML
+        )
+        assertEquals("30", map["defaults.timeout"]?.value)
+        assertNull(map["timeout"])
+        assertEquals("30", map["service.timeout"]?.value)
+    }
+
+    @Test
+    fun `yaml splices a merge key into the mapping that declares it`() {
+        // `<<` is not a key path segment: the runtime's constructor merges the
+        // referenced mapping into this one, and the mapping's own entries win.
+        val content = "defaults: &d\n  timeout: 30\n  retries: 3\nservice:\n  <<: *d\n  timeout: 60\n"
+        val map = keys(content, RuntimeConfigFormat.YAML)
+        assertEquals("3", map["service.retries"]?.value)
+        assertEquals("60", map["service.timeout"]?.value)
+        assertNull(map["service.<<.timeout"])
+    }
+
+    @Test
+    fun `yaml merge is shallow so an own container discards the merged one`() {
+        // The merge must be resolved before the walk, not by letting a later
+        // leaf overwrite an earlier one: `service.db` is replaced whole, so the
+        // merged `url` underneath it is gone rather than surviving as a key no
+        // runtime produces.
+        val content = "defaults: &d\n  db:\n    url: from-defaults\nservice:\n  <<: *d\n  db:\n    port: 5432\n"
+        val map = keys(content, RuntimeConfigFormat.YAML)
+        assertEquals("5432", map["service.db.port"]?.value)
+        assertNull(map["service.db.url"])
+        // The source mapping still contributes its own keys under its own path.
+        assertEquals("from-defaults", map["defaults.db.url"]?.value)
+    }
+
+    @Test
+    fun `yaml merges a sequence of sources with the earliest winning`() {
+        val content = "a: &a\n  k: from-a\nb: &b\n  k: from-b\n  only-b: 1\nc:\n  <<: [*a, *b]\n"
+        val map = keys(content, RuntimeConfigFormat.YAML)
+        assertEquals("from-a", map["c.k"]?.value)
+        assertEquals("1", map["c.only-b"]?.value)
+    }
+
+    @Test
+    fun `yaml inline comments do not appear in values`() {
+        val map = keys("app:\n  name: svc # the service name\n  port: 8080\n", RuntimeConfigFormat.YAML)
+        assertEquals("svc", map["app.name"]?.value)
+        assertEquals("8080", map["app.port"]?.value)
+    }
+
+    @Test
+    fun `yaml containers contribute no key of their own`() {
+        val map = keys("app:\n  name: svc\nempty: {}\nlist: []\n", RuntimeConfigFormat.YAML)
+        assertNull(map["app"])
+        assertNull(map["empty"])
+        assertNull(map["list"])
+        assertEquals("svc", map["app.name"]?.value)
+    }
+
+    @Test
+    fun `yaml keeps a key whose value is null`() {
+        // The runtime's flattening emits the key with an empty value, so a
+        // `${enabled}` placeholder resolves against it.
+        val map = keys("enabled:\nafter: 1\n", RuntimeConfigFormat.YAML)
+        assertEquals("", map["enabled"]?.value)
+        assertEquals("1", map["after"]?.value)
+    }
+
+    @Test
+    fun `yaml lines come from the parser's node marks`() {
+        val content = "app:\n  name: svc\nscript: |\n  not: a key\nafter: 1\n"
+        val map = keys(content, RuntimeConfigFormat.YAML)
+        assertEquals(1, map["app.name"]?.lineIndex)
+        assertEquals(2, map["script"]?.lineIndex)
+        // A multi-line block scalar must not drag the next key's line with it.
+        assertEquals(4, map["after"]?.lineIndex)
+    }
+
+    @Test
+    fun `yaml sequence elements carry their own line`() {
+        val map = keys("items:\n  - one\n  - two\n", RuntimeConfigFormat.YAML)
+        assertEquals(1, map["items[0]"]?.lineIndex)
+        assertEquals(2, map["items[1]"]?.lineIndex)
+    }
+
+    @Test
+    fun `yaml keeps the documents it composed before a malformed one`() {
+        // Composing builds a whole document before yielding it, so a syntax
+        // error costs that document — but not the ones already read. Unlike the
+        // JSON reader, it cannot keep a half-document.
+        val map = keys("a: 1\n---\nb: [unterminated\n", RuntimeConfigFormat.YAML)
+        assertEquals("1", map["a"]?.value)
+        assertNull(map["b[0]"])
+    }
+
+    @Test
+    fun `yaml stops the stream at a malformed document`() {
+        // The other direction, so the limit is pinned rather than assumed: the
+        // error ends the read, so a document after the malformed one is never
+        // composed.
+        val map = keys("a: [unterminated\n---\nb: 1\n", RuntimeConfigFormat.YAML)
+        assertTrue(map.isEmpty(), "expected no keys, got ${map.keys}")
+    }
+
+    @Test
+    fun `yaml terminates on a recursive anchor`() {
+        // A self-referencing anchor composes a cyclic node graph; walking it
+        // must stop rather than overflow the stack.
+        val map = keys("root: &r\n  child: *r\n  leaf: 1\n", RuntimeConfigFormat.YAML)
+        assertEquals("1", map["root.leaf"]?.value)
     }
 
     // ---- json ----
