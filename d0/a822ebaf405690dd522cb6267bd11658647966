@@ -1,0 +1,29 @@
+src/main/kotlin/com/nanyin/nacos/search/psi/ConfigKeyExtractor.kt
+  s_2059772cb5b8e9::t_73f71f9c52085f 6
+  s_2059772cb5b8e9::t_a64298f28273c2 163-166
+  s_2059772cb5b8e9::t_2541bb685c3aa7 168-176,179-182,203,217,219-224,226,230-231,234-235,238-239
+  s_2059772cb5b8e9::t_29e97a551d0219 114-132,134-140,142-150,155-162,167,177-178,183-186,188-190,193-199,202,204-207,252-259
+  s_2059772cb5b8e9::t_2d40c3c482bd65 187,192,200-201,210-216,218,225,227-229,232,240-250
+  s_2059772cb5b8e9::t_36fe80b1c83b20 191,251
+src/test/kotlin/com/nanyin/nacos/search/psi/ConfigKeyExtractorTest.kt
+  s_2059772cb5b8e9::t_255acd4f899b87 49-67,72-151,165,169-170
+  s_2059772cb5b8e9::t_11d6a567eb915c 48,152-164,166-168,171
+CLAUDE.md
+  s_2059772cb5b8e9::t_608837f68670de 159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "d0a822ebaf405690dd522cb6267bd11658647966",
+  "prompts": {},
+  "sessions": {
+    "s_2059772cb5b8e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "996c201b-163b-4bdd-b2de-7595ba24f946",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
