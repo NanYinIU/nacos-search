@@ -182,6 +182,34 @@ class ProjectLocalSelectionTest {
     }
 
     @Test
+    fun `adopting public via blank namespace id leaves public on the session`() {
+        // NamespaceInfo.createPublicNamespace spells public as ""; the panel
+        // passes that into adoptEnvironment on a same-profile switch. Blank
+        // must not be treated as "omitted" or the previous tenant sticks and
+        // gutter ranking stays on the old Namespace (#193).
+        val session = NacosProjectSession()
+        session.ensureInitialized(defaults(defaultProfileId = "dev", defaultNamespaceId = "team-a"))
+        session.select("dev", "team-a")
+
+        session.adoptEnvironment("dev", "")
+
+        assertEquals("dev", session.sessionState.selectedProfileId)
+        assertEquals("public", session.sessionState.namespaceId)
+    }
+
+    @Test
+    fun `adopting public via literal public id leaves public on the session`() {
+        val session = NacosProjectSession()
+        session.ensureInitialized(defaults(defaultProfileId = "dev", defaultNamespaceId = "team-a"))
+        session.select("dev", "team-a")
+
+        session.adoptEnvironment("dev", "public")
+
+        assertEquals("dev", session.sessionState.selectedProfileId)
+        assertEquals("public", session.sessionState.namespaceId)
+    }
+
+    @Test
     fun `changing the dual-write active id does not move the migration seed used for new projects`() {
         val settings = NacosSettings().also { it.resetToDefaults() }
         settings.applyServers(
