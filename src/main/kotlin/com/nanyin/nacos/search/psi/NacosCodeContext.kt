@@ -10,9 +10,12 @@ import com.intellij.psi.PsiReferenceExpression
  * Lightweight context extracted near a Nacos placeholder usage
  * (typically `@NacosPropertySource`).
  *
- * [group] / [namespaceId] remain soft ranking hints. [dataId] is a hard
- * constraint when the cache has matching hits for that key; otherwise it
- * soft-ranks first so a stale PropertySource still falls back to discovery.
+ * [group] / [namespaceId] remain soft ranking hints. [dataId] is the
+ * 已声明配置来源 hard filter: matching key hits stay constrained to it; when it
+ * yields zero key-index hits the three-way rule in
+ * [NacosKeyResolver.preferDataIdDefinitions] decides soft discovery (body
+ * cached without the key, or Data ID proven absent) vs no hits (listed but
+ * unfetched → 不可判定, or absence unproven → do not substitute) — issue #192.
  */
 data class NacosCodeContext(
     val dataId: String? = null,

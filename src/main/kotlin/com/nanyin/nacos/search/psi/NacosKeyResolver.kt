@@ -125,7 +125,9 @@ object NacosKeyResolver {
      *
      * @param activeNamespaceId when non-null, hits in this namespace sort first
      * @param preferredDataId when present and any hit matches, hard-filter to those
-     *   hits (typical `@NacosPropertySource`); otherwise soft-rank that dataId first
+     *   hits (typical `@NacosPropertySource`); when it yields zero matches the
+     *   three-way declared-Data-ID filter decides soft discovery vs no hits
+     *   (issue #192) — see [preferDataIdDefinitions]
      * @param formatOverride when present, the 运行时格式 the reference site
      *   declared for the one configuration it names — see [scopedDefinitions]
      */
@@ -290,19 +292,10 @@ object NacosKeyResolver {
         dataId: String,
         snapshot: CacheSnapshot,
         activeNamespaceId: String?
-    ): ConfigResolution {
-        val namespaceState = snapshot.namespaceIndex(activeNamespaceId)
-            ?: return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
-        if (namespaceState.freshness != CacheService.DetailFreshness.FRESH ||
-            !namespaceState.authoritativeForAbsence
-        ) {
-            return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
-        }
-        return if (dataId in namespaceState.dataIds) {
-            ConfigResolution(ConfigReferenceStatus.UNDECIDABLE, emptyList())
-        } else {
-            ConfigResolution(ConfigReferenceStatus.UNRESOLVED, emptyList())
-        }
+    ): ConfigResolution = when (dataIdPresence(dataId, snapshot, activeNamespaceId)) {
+        DataIdPresence.PRESENT -> ConfigResolution(ConfigReferenceStatus.UNDECIDABLE, emptyList())
+        DataIdPresence.ABSENT -> ConfigResolution(ConfigReferenceStatus.UNRESOLVED, emptyList())
+        DataIdPresence.UNKNOWN -> ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
     }
 
     internal fun resolutionFromHits(hits: List<KeyHit>): ConfigResolution {
@@ -327,7 +320,7 @@ object NacosKeyResolver {
     ): List<KeyDefinition> {
         val scoped = definitionsFor(index, snapshot, key, formatOverride)
             .filter { allowCrossNamespace || sameNamespace(it.namespaceId, activeNamespaceId) }
-        return preferDataIdDefinitions(scoped, preferredDataId)
+        return preferDataIdDefinitions(scoped, preferredDataId, index, snapshot, activeNamespaceId)
     }
 
     /**
@@ -340,9 +333,9 @@ object NacosKeyResolver {
      * reading is not what the runtime will do. Everything the override does not
      * name keeps what the index holds — including another copy of the same data
      * id in a group or Namespace the site said nothing about — so a declaration
-     * that finds nothing still degrades to the same soft discovery as a stale
-     * `@NacosPropertySource`, and discovery reaches those configurations under
-     * their own data ids, never under this site's declaration (#173).
+     * that finds nothing still degrades to soft discovery when the three-way
+     * filter allows it (issue #192), and discovery reaches those configurations
+     * under their own data ids, never under this site's declaration (#173).
      */
     private fun definitionsFor(
         index: KeyIndex,
@@ -389,16 +382,99 @@ object NacosKeyResolver {
         }
 
     /**
-     * Declared dataId with cache hits → hard constraint; otherwise keep all hits
-     * so a stale/wrong PropertySource still degrades to soft discovery.
+     * Three-way declared-Data-ID filter for 已声明配置来源 (issue #192).
+     *
+     * - Hits under the declared Data ID → hard constraint (those hits alone).
+     * - Zero key-index hits and the declared body's detail is cached → soft
+     *   discovery: the body was read and genuinely lacks the key, so a stale or
+     *   incomplete PropertySource still degrades across the other definitions.
+     * - Zero key-index hits and a fresh complete Namespace 索引 proves the
+     *   Data ID absent → soft discovery for the same reason (mistyped source).
+     * - Zero key-index hits and the Data ID is present in a fresh authoritative
+     *   Namespace 索引 but absent from the 配置详情缓存 → no hits, so
+     *   [resolveCurrentState] reports 不可判定配置引用 and the gutter can
+     *   lazy-load the declared body instead of navigating to a substitute.
+     * - Zero key-index hits and absence cannot be proven (no index, stale, or
+     *   not authoritative for absence) → no hits; do not silently substitute
+     *   another Data ID.
      */
     internal fun preferDataIdDefinitions(
         definitions: List<KeyDefinition>,
-        preferredDataId: String?
+        preferredDataId: String?,
+        index: KeyIndex,
+        snapshot: CacheSnapshot,
+        activeNamespaceId: String?
     ): List<KeyDefinition> {
         val dataId = preferredDataId?.takeIf { it.isNotBlank() } ?: return definitions
         val matched = definitions.filter { it.config.dataId == dataId }
-        return matched.ifEmpty { definitions }
+        if (matched.isNotEmpty()) return matched
+        return if (maySoftFallBackForDeclaredDataId(dataId, index, snapshot, activeNamespaceId)) {
+            definitions
+        } else {
+            emptyList()
+        }
+    }
+
+    /**
+     * Whether zero key-index hits for [dataId] may soft-fall to the other
+     * definitions. True only when the declared source has been read (body in
+     * the 配置详情缓存, so the key is proven absent from it) or a fresh complete
+     * Namespace 索引 proves the Data ID itself is absent. A listed-but-unfetched
+     * Data ID, or one whose absence cannot be proven, must not substitute
+     * another configuration (issue #192).
+     */
+    internal fun maySoftFallBackForDeclaredDataId(
+        dataId: String,
+        index: KeyIndex,
+        snapshot: CacheSnapshot,
+        activeNamespaceId: String?
+    ): Boolean {
+        if (isDetailCachedForDataId(dataId, index)) return true
+        return when (dataIdPresence(dataId, snapshot, activeNamespaceId)) {
+            DataIdPresence.ABSENT -> true
+            DataIdPresence.PRESENT, DataIdPresence.UNKNOWN -> false
+        }
+    }
+
+    /**
+     * True when the 派生 key 索引 was built from at least one detail-cached
+     * configuration with [dataId] — i.e. the body has been fetched for this
+     * access identity (somewhere visibility still shows).
+     */
+    private fun isDetailCachedForDataId(dataId: String, index: KeyIndex): Boolean =
+        index.dataIdsByNamespace.values.any { dataId in it }
+
+    /**
+     * Presence of [dataId] against the Namespace 索引 only. Does not consult
+     * the detail cache — that is [isDetailCachedForDataId]'s job.
+     */
+    internal fun dataIdPresence(
+        dataId: String,
+        snapshot: CacheSnapshot,
+        activeNamespaceId: String?
+    ): DataIdPresence {
+        val namespaceState = snapshot.namespaceIndex(activeNamespaceId)
+            ?: return DataIdPresence.UNKNOWN
+        if (namespaceState.freshness != CacheService.DetailFreshness.FRESH ||
+            !namespaceState.authoritativeForAbsence
+        ) {
+            return DataIdPresence.UNKNOWN
+        }
+        return if (dataId in namespaceState.dataIds) DataIdPresence.PRESENT else DataIdPresence.ABSENT
+    }
+
+    /**
+     * How a declared Data ID sits in the Namespace 索引 when no key hit exists.
+     * Distinct from [ConfigReferenceStatus]: presence is an input to the
+     * three-way filter, not a gutter conclusion (issue #192).
+     */
+    enum class DataIdPresence {
+        /** Listed by a fresh authoritative Namespace 索引. */
+        PRESENT,
+        /** Proven absent by a fresh complete Namespace 索引. */
+        ABSENT,
+        /** No index, stale index, or one not authoritative for absence. */
+        UNKNOWN
     }
 
     /**
