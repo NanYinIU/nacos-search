@@ -13,16 +13,17 @@ package com.nanyin.nacos.search.psi
  *
  * The table, in resolution order:
  *
- * | data id                                              | 运行时格式                        |
- * | ---------------------------------------------------- | -------------------------------- |
- * | `*.properties` `*.yaml` `*.yml` `*.json` `*.xml`     | from the suffix                  |
- * | `*.txt` `*.text` `*.html` `*.htm` `*.toml`           | a known non-parsing format       |
- * | no recognizable suffix                               | [RuntimeConfigFormat.UNDETERMINED] |
+ * | data id                                              | type declared at the reference site | 运行时格式                        |
+ * | ---------------------------------------------------- | ----------------------------------- | -------------------------------- |
+ * | any                                                  | `properties` `yaml` `json` `xml`    | that format                      |
+ * | `*.properties` `*.yaml` `*.yml` `*.json` `*.xml`     | absent or `UNSET`                   | from the suffix                  |
+ * | `*.txt` `*.text` `*.html` `*.htm` `*.toml`           | absent or `UNSET`                   | a known non-parsing format       |
+ * | no recognizable suffix                               | absent or `UNSET`                   | [RuntimeConfigFormat.UNDETERMINED] |
  *
- * The reference-site declaration (`@NacosPropertySource(type = ...)`) takes a
- * row above these when it lands; it needs a code context, which a data id
- * alone does not carry, so it is an override resolved per reference rather
- * than something the 派生 key 索引 can hold.
+ * The first row needs a code context, which a data id alone does not carry, so
+ * it is reached through [forReference] only — an override resolved per
+ * reference against the one configuration coordinate the site names, never
+ * something the 派生 key 索引 can hold (#173).
  *
  * Its own unit with its own test so that changing one row cannot silently
  * change another, and pure so that the table can be verified without a body.
@@ -60,5 +61,42 @@ object RuntimeFormatDecision {
             "html", "htm" -> RuntimeConfigFormat.HTML
             "toml" -> RuntimeConfigFormat.TOML
             else -> RuntimeConfigFormat.UNDETERMINED
+        }
+
+    /**
+     * The 运行时格式 for [dataId] at a reference site that declares
+     * [declaredType] — `@NacosPropertySource(type = ConfigType.JSON)`.
+     *
+     * `nacos-spring-context` reads that declaration before anything else and
+     * falls back to the data id suffix only when it is unset, so under
+     * ADR-0055's authority the declaration takes the table's first row.
+     *
+     * It is also the one thing that rescues a data id with no recognizable
+     * suffix from [RuntimeConfigFormat.UNDETERMINED], which is the whole reason
+     * a developer would write one.
+     *
+     * Only the four formats a runtime parses are read off a declaration. A
+     * declared `TEXT` / `HTML` / `TOML` falls through to the suffix rows
+     * instead, and deliberately: the plugin has not verified that either
+     * runtime refuses to parse under one — `nacos-spring-context` has no parser
+     * registered for them and is understood to fall back to properties — and
+     * this table may not be more conservative than the runtime anywhere but its
+     * one recorded departure (ADR-0055). Falling through can only widen what
+     * resolves, so it cannot cost navigation that would have worked. If the
+     * runtime is ever shown to honour such a declaration strictly, this is the
+     * row to change, and it will be a change of fact rather than of taste.
+     */
+    fun forReference(dataId: String, declaredType: String?): RuntimeConfigFormat =
+        // `UNSET` is the annotation attribute's own default, so it and an
+        // absent declaration are the same answer: this site declares nothing.
+        // So is a name no `ConfigType` carries — PSI hands back whatever is
+        // written, and reading it as a refusal would cost navigation the suffix
+        // already earns.
+        when (declaredType?.trim()?.lowercase()) {
+            "properties" -> RuntimeConfigFormat.PROPERTIES
+            "yaml" -> RuntimeConfigFormat.YAML
+            "json" -> RuntimeConfigFormat.JSON
+            "xml" -> RuntimeConfigFormat.XML
+            else -> forDataId(dataId)
         }
 }

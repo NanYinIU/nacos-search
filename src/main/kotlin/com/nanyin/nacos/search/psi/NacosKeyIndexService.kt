@@ -147,7 +147,8 @@ class NacosKeyIndexService internal constructor(
         preferredGroup: String? = null,
         preferredNamespaceId: String? = null,
         preferredDataId: String? = null,
-        allowCrossNamespace: Boolean = true
+        allowCrossNamespace: Boolean = true,
+        formatOverride: ReferenceFormatOverride? = null
     ): List<NacosKeyResolver.KeyHit> = NacosKeyResolver.resolve(
         key = key,
         index = currentIndex(snapshot),
@@ -156,7 +157,8 @@ class NacosKeyIndexService internal constructor(
         preferredGroup = preferredGroup,
         preferredNamespaceId = preferredNamespaceId,
         preferredDataId = preferredDataId,
-        allowCrossNamespace = allowCrossNamespace
+        allowCrossNamespace = allowCrossNamespace,
+        formatOverride = formatOverride
     )
 
     fun resolveCurrentState(
@@ -164,14 +166,16 @@ class NacosKeyIndexService internal constructor(
         key: String,
         activeNamespaceId: String? = null,
         preferredDataId: String? = null,
-        allowCrossNamespace: Boolean = true
+        allowCrossNamespace: Boolean = true,
+        formatOverride: ReferenceFormatOverride? = null
     ): ConfigResolution = NacosKeyResolver.resolveCurrentState(
         key = key,
         index = currentIndex(snapshot),
         snapshot = snapshot,
         activeNamespaceId = activeNamespaceId,
         preferredDataId = preferredDataId,
-        allowCrossNamespace = allowCrossNamespace
+        allowCrossNamespace = allowCrossNamespace,
+        formatOverride = formatOverride
     )
 
     fun isDataIdKnown(

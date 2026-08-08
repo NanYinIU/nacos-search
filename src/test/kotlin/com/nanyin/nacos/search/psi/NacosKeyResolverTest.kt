@@ -14,6 +14,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -603,6 +604,260 @@ class NacosKeyResolverTest {
         val resolution = NacosKeyResolver.resolveCurrentState("timeout", staleIndex, blockedSnapshot)
         assertEquals(ConfigReferenceStatus.UNDECIDABLE, resolution.status)
         assertTrue(resolution.hits.isEmpty())
+    }
+
+    // ---- a reference site's own 运行时格式 (#173) ----
+
+    /** A body two formats read as two different key spaces. */
+    private val nestedBody = "server:\n  port: 8080\n"
+
+    @Test
+    fun `a declaration resolves the configuration it names under the declared format`() = runBlocking {
+        seedConfigurations(listOf(cfg("app.properties", "DEFAULT_GROUP", null, nestedBody, "properties")))
+        val snapshot = cache.snapshot(identity)
+        val site = NacosCodeContext(dataId = "app.properties", declaredType = "YAML")
+
+        // Under the suffix the index holds `server` and `port`; under this
+        // site's declaration the same body is one nested key.
+        assertEquals(
+            ConfigReferenceStatus.RESOLVED,
+            indexService.resolveCurrentState(
+                snapshot,
+                "server.port",
+                preferredDataId = site.dataId,
+                formatOverride = site.runtimeFormatOverride()
+            ).status
+        )
+        assertEquals(
+            "8080",
+            indexService.resolve(
+                snapshot,
+                "server.port",
+                preferredDataId = site.dataId,
+                formatOverride = site.runtimeFormatOverride()
+            ).single().location.value
+        )
+    }
+
+    @Test
+    fun `a declaration replaces what the suffix read, it does not add to it`() = runBlocking {
+        seedConfigurations(listOf(cfg("app.properties", "DEFAULT_GROUP", null, nestedBody, "properties")))
+        val snapshot = cache.snapshot(identity)
+        val site = NacosCodeContext(dataId = "app.properties", declaredType = "YAML")
+
+        // `port` is what reading this body as properties yields. The runtime
+        // this site declares will never define it, so the gutter must not.
+        assertTrue(
+            indexService.resolve(
+                snapshot,
+                "port",
+                preferredDataId = site.dataId,
+                formatOverride = site.runtimeFormatOverride()
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `two sites declaring different types for one data id resolve by their own declaration`() = runBlocking {
+        seedConfigurations(listOf(cfg("app.properties", "DEFAULT_GROUP", null, nestedBody, "properties")))
+        val snapshot = cache.snapshot(identity)
+
+        val declaresYaml = NacosCodeContext(dataId = "app.properties", declaredType = "YAML")
+        val declaresNothing = NacosCodeContext(dataId = "app.properties")
+
+        assertEquals(
+            1,
+            indexService.resolve(
+                snapshot,
+                "server.port",
+                preferredDataId = declaresYaml.dataId,
+                formatOverride = declaresYaml.runtimeFormatOverride()
+            ).size
+        )
+        assertTrue(
+            indexService.resolve(
+                snapshot,
+                "server.port",
+                preferredDataId = declaresNothing.dataId,
+                formatOverride = declaresNothing.runtimeFormatOverride()
+            ).isEmpty()
+        )
+        assertEquals(
+            1,
+            indexService.resolve(
+                snapshot,
+                "port",
+                preferredDataId = declaresNothing.dataId,
+                formatOverride = declaresNothing.runtimeFormatOverride()
+            ).size
+        )
+    }
+
+    @Test
+    fun `a declaration makes an otherwise undetermined data id resolvable`() = runBlocking {
+        seedConfigurations(listOf(cfg("service-config", "DEFAULT_GROUP", null, """{"k":"v"}""", "json")))
+        val snapshot = cache.snapshot(identity)
+        val site = NacosCodeContext(dataId = "service-config", declaredType = "JSON")
+
+        // Without the declaration nothing about the data id names a format, so
+        // the index holds no definition at all for it.
+        assertTrue(indexService.resolve(snapshot, "k", preferredDataId = "service-config").isEmpty())
+        assertEquals(
+            ConfigReferenceStatus.RESOLVED,
+            indexService.resolveCurrentState(
+                snapshot,
+                "k",
+                preferredDataId = site.dataId,
+                formatOverride = site.runtimeFormatOverride()
+            ).status
+        )
+    }
+
+    @Test
+    fun `a reference-site declaration leaves the derived key index unchanged`() = runBlocking {
+        seedConfigurations(listOf(cfg("app.properties", "DEFAULT_GROUP", null, nestedBody, "properties")))
+        val snapshot = cache.snapshot(identity)
+        val before = indexService.currentIndex(snapshot)!!
+
+        val site = NacosCodeContext(dataId = "app.properties", declaredType = "YAML")
+        indexService.resolve(
+            snapshot,
+            "server.port",
+            preferredDataId = site.dataId,
+            formatOverride = site.runtimeFormatOverride()
+        )
+
+        // The index is built once per 缓存快照 over every cached configuration
+        // and has no code context; the override is resolved per reference and
+        // never enters it.
+        val after = indexService.currentIndex(snapshot)!!
+        assertEquals(before.version, after.version)
+        assertEquals(setOf("server", "port"), after.definitionsByKey.keys)
+    }
+
+    @Test
+    fun `a declaration says nothing about the other data ids discovery reaches`() = runBlocking {
+        seedConfigurations(
+            listOf(
+                cfg("app.properties", "DEFAULT_GROUP", null, "unrelated=1\n", "properties"),
+                cfg("other.properties", "DEFAULT_GROUP", null, nestedBody, "properties")
+            )
+        )
+        val snapshot = cache.snapshot(identity)
+        val site = NacosCodeContext(dataId = "app.properties", declaredType = "YAML")
+
+        // The declared data id defines no `port`, so resolution degrades to
+        // discovery — and the configuration it reaches is read by its own data
+        // id, not by a declaration written about a different one.
+        val hits = indexService.resolve(
+            snapshot,
+            "port",
+            preferredDataId = site.dataId,
+            formatOverride = site.runtimeFormatOverride()
+        )
+        assertEquals(1, hits.size)
+        assertEquals("other.properties", hits.single().config.dataId)
+    }
+
+    @Test
+    fun `a declaration leaves another Namespace's copy of the same data id alone`() = runBlocking {
+        seedConfigurations(
+            listOf(
+                cfg("app.properties", "DEFAULT_GROUP", "dev", nestedBody, "properties"),
+                cfg("app.properties", "DEFAULT_GROUP", "prod", nestedBody, "properties")
+            )
+        )
+        val snapshot = cache.snapshot(identity)
+        val site = NacosCodeContext(
+            dataId = "app.properties",
+            namespaceId = "dev",
+            declaredType = "YAML"
+        )
+
+        // Only dev's copy is the one this site named, so only dev's reading
+        // changes. Prod's stays what the data id decided — the site said
+        // nothing about it, and dropping its keys would be this declaration
+        // reaching a configuration it never claimed.
+        val nested = indexService.resolve(
+            snapshot,
+            "server.port",
+            preferredDataId = site.dataId,
+            formatOverride = site.runtimeFormatOverride()
+        )
+        assertEquals(1, nested.size)
+        assertEquals("dev", nested.single().namespaceId)
+
+        val flat = indexService.resolve(
+            snapshot,
+            "port",
+            preferredDataId = site.dataId,
+            formatOverride = site.runtimeFormatOverride()
+        )
+        assertEquals(1, flat.size)
+        assertEquals("prod", flat.single().namespaceId)
+    }
+
+    @Test
+    fun `a declaration keeps an undetermined data id out of the terminal state`() = runBlocking {
+        // Where #172 and #173 meet. Without a declaration this data id names no
+        // format, so it reaches 格式不参与解析 — terminal, and correctly so. The
+        // declaration is the developer's documented way out of that state, so
+        // it has to be consulted before the conclusion is drawn.
+        seedConfigurations(listOf(cfg("service-config", "DEFAULT_GROUP", null, """{"k":"v"}""", "json")))
+        val snapshot = cache.snapshot(identity)
+
+        val undeclared = indexService.resolveCurrentState(snapshot, "k", preferredDataId = "service-config")
+        assertEquals(ConfigReferenceStatus.FORMAT_NOT_PARSED, undeclared.status)
+        assertEquals(KeyExtraction.Reason.FORMAT_UNDETERMINED, undeclared.formatRefusal)
+
+        val site = NacosCodeContext(dataId = "service-config", declaredType = "JSON")
+        val declared = indexService.resolveCurrentState(
+            snapshot,
+            "k",
+            preferredDataId = site.dataId,
+            formatOverride = site.runtimeFormatOverride()
+        )
+        assertEquals(ConfigReferenceStatus.RESOLVED, declared.status)
+        assertNull(declared.formatRefusal)
+    }
+
+    @Test
+    fun `a declared format the plugin cannot parse still reaches the terminal state`() = runBlocking {
+        // The declaration decides the 运行时格式; it does not promise the plugin
+        // reads keys from it. A site declaring XML for a data id that would
+        // otherwise be undetermined is still terminal — and for XML's own
+        // reason, so the tooltip explains the right thing.
+        seedConfigurations(listOf(cfg("service-config", "DEFAULT_GROUP", null, "<beans/>", "xml")))
+        val site = NacosCodeContext(dataId = "service-config", declaredType = "XML")
+
+        val resolution = indexService.resolveCurrentState(
+            cache.snapshot(identity),
+            "k",
+            preferredDataId = site.dataId,
+            formatOverride = site.runtimeFormatOverride()
+        )
+        assertEquals(ConfigReferenceStatus.FORMAT_NOT_PARSED, resolution.status)
+        assertEquals(KeyExtraction.Reason.PARSER_NOT_IMPLEMENTED, resolution.formatRefusal)
+        assertFalse(
+            "the sweep leak #172 closed must stay closed whatever named the format",
+            resolution.status.mayRequestBackgroundRefresh()
+        )
+    }
+
+    @Test
+    fun `a declaration naming an uncached configuration resolves nothing of its own`() = runBlocking {
+        seedConfigurations(listOf(cfg("other.properties", "DEFAULT_GROUP", null, nestedBody, "properties")))
+        val snapshot = cache.snapshot(identity)
+        val site = NacosCodeContext(dataId = "service-config", declaredType = "JSON")
+
+        assertTrue(
+            indexService.resolve(
+                snapshot,
+                "k",
+                preferredDataId = site.dataId,
+                formatOverride = site.runtimeFormatOverride()
+            ).isEmpty()
+        )
     }
 
     // ── 格式不参与解析 (issue #172) ──
