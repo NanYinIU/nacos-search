@@ -40,6 +40,11 @@ dependencies {
     }
 
     implementation("com.google.code.gson:gson:2.10.1")
+    // The library Spring Boot's own YAML property source loader uses. Bundled
+    // as a standalone jar under the distribution's lib/, the same arrangement
+    // as Gson and deliberately not the platform's own copy; CLAUDE.md records
+    // why under ConfigKeyExtractor.
+    implementation("org.yaml:snakeyaml:2.6")
     // Note: kotlinx-coroutines-core is provided by IntelliJ Platform
     // Note: SLF4J is provided by IntelliJ Platform (version 1.x)
 
