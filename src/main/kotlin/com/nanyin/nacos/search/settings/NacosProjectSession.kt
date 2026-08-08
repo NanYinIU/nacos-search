@@ -123,16 +123,25 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
      * Project-local environment adoption (issue #107). Updates only this
      * session — never [NacosSettings.activeServerId] or the migration seed.
      *
-     * When [namespaceId] is omitted, the current Namespace is kept only if the
-     * profile is unchanged. Switching environments must not carry the previous
-     * server's Namespace id into the new one — callers pass the new
-     * environment's suggested Namespace, otherwise public is the safe default.
+     * [namespaceId] semantics (ADR-0015 / public spelling):
+     * - **null (omitted)** — keep the current Namespace when the profile is
+     *   unchanged; otherwise public. Callers that switch environments without
+     *   a suggested Namespace must not carry the previous server's tenant.
+     * - **blank or `"public"`** — the public Namespace. Blank is how
+     *   [NamespaceInfo.createPublicNamespace] spells the id; it is an explicit
+     *   selection, not an omission. Treating blank as omit left the previous
+     *   non-public Namespace on the session after a UI switch to public, so
+     *   gutters re-ranked under the wrong input (issue #193 follow-up).
+     * - **any other non-blank id** — that Namespace.
      */
     fun adoptEnvironment(profileId: String, namespaceId: String? = null) {
         val sameProfile = profileId == sessionState.selectedProfileId
-        val ns = namespaceId?.takeIf { it.isNotBlank() }
-            ?: sessionState.namespaceId.takeIf { sameProfile && it.isNotBlank() }
-            ?: "public"
+        val ns = when {
+            // Explicit argument, including blank/"public" for the public Namespace.
+            namespaceId != null -> namespaceId.ifBlank { NamespaceInfo.PUBLIC }
+            sameProfile && sessionState.namespaceId.isNotBlank() -> sessionState.namespaceId
+            else -> NamespaceInfo.PUBLIC
+        }
         select(profileId, ns)
     }
 
