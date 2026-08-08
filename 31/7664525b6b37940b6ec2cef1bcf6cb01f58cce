@@ -1,0 +1,131 @@
+src/main/kotlin/com/nanyin/nacos/search/psi/RuntimeFormatKeyExtraction.kt
+  s_68ff1df47820d9::t_1a917a03f84fc3 6-71,82-88,91-92,94-96
+  s_68ff1df47820d9::t_d7a59e66fd5b86 75-76
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolverTest.kt
+  s_68ff1df47820d9::t_217e338b917c50 613,616,629,638-639,641,644,656-657,659,662,675,683,692-693,695,698,712-713,715,718,723-727,735,737,739-740,743-745,752-756,759,761-799,802,812-813
+  s_68ff1df47820d9::t_4b18cb4d0e5e1a 610-612
+  s_68ff1df47820d9::t_0670376df4d8a1 614-615
+  s_68ff1df47820d9::t_4af2899d0654b6 617-619,626-628
+  s_68ff1df47820d9::t_82c757974e222b 630-632,635-637
+  s_68ff1df47820d9::t_51b5fb57f64fee 640
+  s_68ff1df47820d9::t_48e9754f7c7ab9 642-643
+  s_68ff1df47820d9::t_5f936e12665f71 645-647,653-655
+  s_68ff1df47820d9::t_ef603031ae0852 658
+  s_68ff1df47820d9::t_40c9992488160a 660-661
+  s_68ff1df47820d9::t_fb4fc83ec8d9e3 663-665,672-674
+  s_68ff1df47820d9::t_918c47a30097ec 676-678,680-682
+  s_68ff1df47820d9::t_d149be4538e402 684-686,689-691
+  s_68ff1df47820d9::t_39386a5ff5d762 694
+  s_68ff1df47820d9::t_76dc367cfc8794 696-697
+  s_68ff1df47820d9::t_0b2be0f92adc8b 699-701,709-711
+  s_68ff1df47820d9::t_8f311042d5d1fe 714
+  s_68ff1df47820d9::t_3419a321beb804 716-717
+  s_68ff1df47820d9::t_d3d4c12efde7a3 719-722
+  s_68ff1df47820d9::t_6df6b5ece5d6df 728-730,732-734
+  s_68ff1df47820d9::t_594a9dddd646c6 736
+  s_68ff1df47820d9::t_54433a1e5eb079 738
+  s_68ff1df47820d9::t_098bf3a21ce801 741-742
+  s_68ff1df47820d9::t_1ece442fc3c238 746-751
+  s_68ff1df47820d9::t_5914e0af91449f 757-758
+  s_68ff1df47820d9::t_5666bec17dbc83 760
+  s_68ff1df47820d9::t_54ee3e82223852 800-801
+  s_68ff1df47820d9::t_90dff1caab7d4a 803-805,809-811
+  s_68ff1df47820d9::t_012104f3b4f0d4 607-609,620-625,633-634,648-652,666-671,679,687-688,702-708,731,806-808
+src/test/kotlin/com/nanyin/nacos/search/psi/RuntimeFormatKeyExtractionTest.kt
+  s_68ff1df47820d9::t_6c87a6883ff287 89-101,109,112,116-117,121
+  s_68ff1df47820d9::t_22c4a2c1725a6d 5
+  s_68ff1df47820d9::t_47ea7224e03a05 102,123,209-210
+  s_68ff1df47820d9::t_e8bff9654f43d2 80,104,125,133-208
+  s_68ff1df47820d9::t_7ca4657f0c0b42 6
+  s_68ff1df47820d9::t_4bfc1f938cd881 78-79
+  s_68ff1df47820d9::t_91da0e65f473e9 81-83,86-88
+  s_68ff1df47820d9::t_417264f8c327cc 103
+  s_68ff1df47820d9::t_c83aee264df637 105-108
+  s_68ff1df47820d9::t_b743e698bee10a 110-111
+  s_68ff1df47820d9::t_9b842795d69c4d 113-115
+  s_68ff1df47820d9::t_017ca84a4e9ebe 118-120
+  s_68ff1df47820d9::t_b1de6755667eb7 122
+  s_68ff1df47820d9::t_7a526f1d6904ef 124
+  s_68ff1df47820d9::t_8a522de99bc056 126-128,130-132
+  s_68ff1df47820d9::t_4f412c3964c9c0 12-13,15-17,31,37,62,84-85,129
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolver.kt
+  s_68ff1df47820d9::t_8f07f81455ffc4 291-309,314-335
+  s_68ff1df47820d9::t_65a17443cafb21 148,150,180,182
+  s_68ff1df47820d9::t_785ef3e343f064 311
+  s_68ff1df47820d9::t_84872b53ddd0c4 149
+  s_68ff1df47820d9::t_573005e5046a97 181
+  s_68ff1df47820d9::t_75683af84db772 288-290
+  s_68ff1df47820d9::t_e453e31ac4e1b1 310
+  s_68ff1df47820d9::t_eb63b912a40d25 312-313
+  s_68ff1df47820d9::t_d35fef8b52a633 336-338
+  s_68ff1df47820d9::t_778872eabe0f74 129-130,140-141,162-163,275,279-280,282,287,339-344
+CLAUDE.md
+  s_68ff1df47820d9::t_7874372c22382c 175
+  s_68ff1df47820d9::t_4ab3e811739abb 167
+  s_68ff1df47820d9::t_7bf1185e317852 174,176
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProvider.kt
+  s_68ff1df47820d9::t_9058b2692d688c 177,215
+  s_68ff1df47820d9::t_6cae6af30f86b3 117-118,174-176
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosCodeContext.kt
+  s_68ff1df47820d9::t_1f1b9fe6488b0f 38
+  s_68ff1df47820d9::t_65a17443cafb21 68-70
+  s_68ff1df47820d9::t_d4c4c19c4b7a07 72
+  s_68ff1df47820d9::t_964b92e98581e5 91-94
+  s_2e19bc9fcb8a38::t_86ff16566f3247 7,20-31,45-47,56-67,71,73-74,83-90
+src/main/kotlin/com/nanyin/nacos/search/psi/RuntimeFormatDecision.kt
+  s_68ff1df47820d9::t_79cc04cfa84fd6 78-87
+  s_68ff1df47820d9::t_2cead6da7085e2 18
+  s_68ff1df47820d9::t_89b13f4e8cec86 101
+  s_68ff1df47820d9::t_bd92d78f326e0c 16-17
+  s_68ff1df47820d9::t_406f3de1fc899c 19-21
+  s_68ff1df47820d9::t_2bc13b3d92345d 75-77
+  s_68ff1df47820d9::t_075caa53a099c9 88-90,98-100
+  s_68ff1df47820d9::t_a5959adc83ea8b 23-26,65-74,91-97
+src/test/kotlin/com/nanyin/nacos/search/psi/RuntimeFormatDecisionTest.kt
+  s_68ff1df47820d9::t_3485edc8c0e181 16-17,28,40,54,75,88,100
+  s_68ff1df47820d9::t_2790d8659c63bf 19-20,22,30,33-34,37,44-45,47-48,51,55-72,82-83,85,94-95,97
+  s_2e19bc9fcb8a38::t_527c753b741527 15,18,21,23-27,29,31-32,35-36,38-39,41-43,46,49-50,52-53,73-74,76-81,84,86-87,89-93,96,98-99,101-109,125,136
+CONTEXT.md
+  s_68ff1df47820d9::t_8b16ba32ce37fa 300
+  s_68ff1df47820d9::t_0b77597765d24e 292
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyIndexService.kt
+  s_0f967f973e0a35::t_9a07191674db38 150-151,160-161,169-170,177-178
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosValueReference.kt
+  s_0f967f973e0a35::t_5a98b00e25d99f 43-44
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosCodeContextExtractorTest.kt
+  s_0f967f973e0a35::t_db41e2410e61bb 11,34-90
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosValueLineMarkerProviderTest.kt
+  s_0f967f973e0a35::t_29324a536e861b 664-748
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "317664525b6b37940b6ec2cef1bcf6cb01f58cce",
+  "prompts": {},
+  "sessions": {
+    "s_0f967f973e0a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-aec826fefbca68329",
+        "model": "unknown"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_2e19bc9fcb8a38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f57ad22a-3729-466f-bc28-6294753dc3fd",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_68ff1df47820d9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c2b7dac4-858f-47ba-b951-9076ccbf4266",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
