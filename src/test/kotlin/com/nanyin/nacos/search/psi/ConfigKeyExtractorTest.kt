@@ -46,9 +46,129 @@ class ConfigKeyExtractorTest {
     }
 
     @Test
+    fun `properties honours a value that itself contains a colon`() {
+        val content = "url=jdbc:mysql://host:3306/db\nhost:localhost:8080\n"
+        val map = keys(content, RuntimeConfigFormat.PROPERTIES)
+        assertEquals("jdbc:mysql://host:3306/db", map["url"]?.value)
+        assertEquals("localhost:8080", map["host"]?.value)
+    }
+
+    @Test
+    fun `properties honours an escaped separator inside a key`() {
+        val map = keys("a\\:b=c\n", RuntimeConfigFormat.PROPERTIES)
+        assertEquals("c", map["a:b"]?.value)
+    }
+
+    @Test
+    fun `properties treats whitespace as a separator`() {
+        val map = keys("app.name my-service\n", RuntimeConfigFormat.PROPERTIES)
+        assertEquals("my-service", map["app.name"]?.value)
+    }
+
+    @Test
     fun `properties later key overrides earlier`() {
         val map = keys("k=1\nk=2\n", RuntimeConfigFormat.PROPERTIES)
         assertEquals("2", map["k"]?.value)
+        assertEquals(1, map["k"]?.lineIndex)
+    }
+
+    @Test
+    fun `properties joins a continuation line into its value`() {
+        val content = "urls=http://a,\\\n     http://b\nnext=1\n"
+        val map = keys(content, RuntimeConfigFormat.PROPERTIES)
+        assertEquals("http://a,http://b", map["urls"]?.value)
+        assertEquals(0, map["urls"]?.lineIndex)
+        assertEquals("1", map["next"]?.value)
+        assertEquals(2, map["next"]?.lineIndex)
+    }
+
+    @Test
+    fun `properties continuation line contributes no phantom key`() {
+        // The hand-written reader read the continued line on its own and found
+        // a separator in it, inventing `http` out of an indented `http://b`.
+        val map = keys("urls=http://a,\\\n     http://b\n", RuntimeConfigFormat.PROPERTIES)
+        assertEquals(setOf("urls"), map.keys)
+    }
+
+    @Test
+    fun `properties decodes unicode escapes in keys and values`() {
+        val map = keys("caf\\u00e9.name=caf\\u00e9\n", RuntimeConfigFormat.PROPERTIES)
+        assertEquals("café", map["café.name"]?.value)
+    }
+
+    @Test
+    fun `properties decodes character escapes in keys and values`() {
+        val map = keys("k=a\\tb\nwith\\ space=v\n", RuntimeConfigFormat.PROPERTIES)
+        assertEquals("a\tb", map["k"]?.value)
+        assertEquals("v", map["with space"]?.value)
+    }
+
+    @Test
+    fun `properties keeps a url fragment in its value`() {
+        val map = keys("home=https://example.com/app#dashboard\n", RuntimeConfigFormat.PROPERTIES)
+        assertEquals("https://example.com/app#dashboard", map["home"]?.value)
+    }
+
+    @Test
+    fun `properties keeps a value containing whitespace followed by a hash`() {
+        // A deliberate behaviour change: java.util.Properties has no inline
+        // comments, and the runtime reads these bodies with that loader. The
+        // hand-written reader truncated the value here.
+        val map = keys("motd=hello # not a comment\n", RuntimeConfigFormat.PROPERTIES)
+        assertEquals("hello # not a comment", map["motd"]?.value)
+    }
+
+    @Test
+    fun `properties does not continue a comment line`() {
+        val map = keys("# trailing backslash \\\nk=1\n", RuntimeConfigFormat.PROPERTIES)
+        assertEquals("1", map["k"]?.value)
+        assertEquals(1, map["k"]?.lineIndex)
+    }
+
+    @Test
+    fun `properties reports the not-found sentinel when a key is split across a continuation`() {
+        // The key set is authoritative and comes from the loader; the line comes
+        // from a permissive locator, which reports a line only for a natural
+        // line that declares the whole key. Neither half of a split name is that
+        // line, so the sentinel every consumer already handles stands in for it.
+        val map = keys("long\\\nkey=v\n", RuntimeConfigFormat.PROPERTIES)
+        assertEquals(setOf("longkey"), map.keys)
+        assertEquals("v", map["longkey"]?.value)
+        assertEquals(-1, map["longkey"]?.lineIndex)
+    }
+
+    @Test
+    fun `properties does not let a continuation line claim a key's declaration line`() {
+        // Line 2 spells `b=2`, but it is the tail of the value on line 1. The
+        // locator must not blame it for `b`, which is declared on line 0.
+        val map = keys("b=9\na=1\\\nb=2\n", RuntimeConfigFormat.PROPERTIES)
+        assertEquals("9", map["b"]?.value)
+        assertEquals(0, map["b"]?.lineIndex)
+        assertEquals("1b=2", map["a"]?.value)
+        assertEquals(1, map["a"]?.lineIndex)
+    }
+
+    @Test
+    fun `properties does not let half a split name claim the line of a real key`() {
+        // The loader reads this as `a` = 2 and `ab` = 1. Line 1 spells `a`, but
+        // it declares the first half of `ab` — so it is nobody's declaration
+        // line, least of all the `a` declared on line 0.
+        val map = keys("a=2\na\\\nb=1\n", RuntimeConfigFormat.PROPERTIES)
+        assertEquals("2", map["a"]?.value)
+        assertEquals(0, map["a"]?.lineIndex)
+        assertEquals("1", map["ab"]?.value)
+        assertEquals(-1, map["ab"]?.lineIndex)
+    }
+
+    @Test
+    fun `properties keeps the keys it read before a malformed escape and loses the rest`() {
+        // The loader gives out on `\uZZ` and keeps what it had, the same partial
+        // key space a malformed JSON body yields. A body the loader refuses is
+        // one the runtime refuses too, so navigation past the fault is a promise
+        // the plugin cannot keep.
+        val map = keys("a=1\nb=\\uZZ\nc=3\n", RuntimeConfigFormat.PROPERTIES)
+        assertEquals("1", map["a"]?.value)
+        assertEquals(setOf("a"), map.keys)
     }
 
     // ---- yaml ----
