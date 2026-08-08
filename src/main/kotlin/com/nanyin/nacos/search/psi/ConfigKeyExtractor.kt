@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.psi
 import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonToken
 import java.io.StringReader
+import java.util.Properties
 
 /**
  * The outcome of asking [ConfigKeyExtractor] for a configuration's keys.
@@ -110,42 +111,152 @@ object ConfigKeyExtractor {
 
     // ----- properties -------------------------------------------------------
 
+    /**
+     * Reads the key space out of a properties body with the JDK's own loader.
+     *
+     * Structure comes from [Properties] because that is the loader both runtimes
+     * use, so the two cannot disagree about properties syntax. The hand-written
+     * reader it replaces got three things wrong: it read a continuation line on
+     * its own and invented a key out of it, it decoded no escape it had not been
+     * told about, and it split on the first `=` or `:` in the line even where
+     * that one was escaped into the key.
+     *
+     * One behaviour change comes with it. `java.util.Properties` has no inline
+     * comments, so a value containing whitespace followed by a hash keeps its
+     * full text rather than being truncated. Following the loader here is the
+     * point: the runtime reads these bodies with it.
+     *
+     * A malformed escape ends the load and keeps the keys read up to it — the
+     * same partial key space a malformed JSON body yields, and strictly better
+     * than none for navigation.
+     */
     private fun extractProperties(content: String): Map<String, KeyLocation> {
+        val loaded = Properties()
+        try {
+            loaded.load(StringReader(content))
+        } catch (_: Exception) {
+            // IllegalArgumentException for a malformed \uxxxx escape; the loader
+            // keeps everything it put before giving out.
+        }
         val result = LinkedHashMap<String, KeyLocation>()
-        content.lineSequence().forEachIndexed { index, rawLine ->
-            val line = stripInlineComment(rawLine).trim()
-            if (line.isEmpty() || line.startsWith("#") || line.startsWith("!")) return@forEachIndexed
-            val eq = firstAssignmentIndex(line)
-            if (eq <= 0) return@forEachIndexed
-            val key = unescapeKey(line.substring(0, eq).trim())
-            if (key.isEmpty()) return@forEachIndexed
-            val value = line.substring(eq + 1).trim()
-            result[key] = KeyLocation(key, index, value)
+        // Document order where the locator could establish it, so the key space
+        // reads in the order the body declares it.
+        for ((key, lineIndex) in propertiesDeclarationLines(content)) {
+            val value = loaded.getProperty(key) ?: continue
+            result[key] = KeyLocation(key, lineIndex, value)
+        }
+        for (key in loaded.stringPropertyNames()) {
+            if (result.containsKey(key)) continue
+            result[key] = KeyLocation(key, LINE_NOT_FOUND, loaded.getProperty(key).orEmpty())
         }
         return result
     }
 
-    /** `#` starts an inline comment only when preceded by whitespace. */
-    private fun stripInlineComment(line: String): String {
-        val hash = line.indexOf('#')
-        if (hash <= 0) return line
-        // Allow '#' inside keys that are already escaped (\#), otherwise cut.
-        return if (line[hash - 1] == ' ' || line[hash - 1] == '\t') line.substring(0, hash) else line
-    }
+    /**
+     * Reports the line each properties key is declared on, best-effort.
+     *
+     * Kept deliberately apart from the parse: the loader supplies no line
+     * number, and deriving one inside the parse would tie the key space to a
+     * positioning defect.
+     *
+     * It does not search the text for a name — a name whose document spelling is
+     * escaped (`café`) appears nowhere to search for. It reads each natural line
+     * where that line declares its name, and decodes nothing itself: a spelling
+     * that needs decoding goes to the loader that produced the key set (see
+     * [declaredKeyOf]).
+     *
+     * Neither line of a continuation may be trusted to name a key. The second
+     * one declares nothing — it is the tail of a value, however much it looks
+     * like an assignment — and the first names a key only where a separator on
+     * it ends the name, since otherwise the rest of the name is on the line
+     * after. A key split that way keeps [LINE_NOT_FOUND] rather than being
+     * blamed on a line that plausibly spells something else, and so does the
+     * unrelated key that half happens to spell. Joining the halves would mean
+     * re-implementing the loader's line rules, which is what this change exists
+     * to stop doing.
+     *
+     * A key the locator names but the loader does not is dropped by the caller,
+     * so nothing here can widen the key space — only place it. That is why it
+     * is a map over the whole body rather than the stream [JsonDeclarationLocator]
+     * is: the loader hands back an unordered set of names, not names in document
+     * order, so there is no parse to walk in step with.
+     */
+    private fun propertiesDeclarationLines(content: String): Map<String, Int> {
+        val declaredAt = LinkedHashMap<String, Int>()
+        var continuing = false
+        content.lineSequence().forEachIndexed { index, line ->
+            val isContinuation = continuing
+            continuing = endsWithOddBackslashRun(line)
+            if (isContinuation) return@forEachIndexed
 
-    private fun firstAssignmentIndex(line: String): Int {
-        val eq = line.indexOf('=')
-        val colon = line.indexOf(':')
-        return when {
-            eq >= 0 && colon >= 0 -> minOf(eq, colon)
-            eq >= 0 -> eq
-            colon >= 0 -> colon
-            else -> -1
+            val start = line.indexOfFirst { !isPropertiesSpace(it) }
+            if (start < 0) return@forEachIndexed
+            if (line[start] == '#' || line[start] == '!') {
+                // A comment ends at its line terminator whatever it ends with.
+                continuing = false
+                return@forEachIndexed
+            }
+
+            // The trailing backslash announces the join with the next natural
+            // line; it is not part of what this one declares.
+            val declaration = if (continuing) line.dropLast(1) else line
+            val key = declaredKeyOf(declaration, start, continuing) ?: return@forEachIndexed
+            // The loader lets a later assignment win, so the line follows it.
+            declaredAt[key] = index
         }
+        return declaredAt
     }
 
-    private fun unescapeKey(key: String): String {
-        return key.replace("\\ ", " ").replace("\\:", ":").replace("\\=", "=")
+    /**
+     * The name [declaration] declares from [start], or null when this line
+     * declares none the locator can be sure of.
+     *
+     * A spelling with no backslash ahead of the separator passes through the
+     * loader's escape decoding unchanged, so it already is the name. One with a
+     * backslash goes to the loader rather than being decoded here — this locator
+     * re-implements none of the loader's decoding — and that path is rare enough
+     * that the loader's per-call buffers stay off the key index rebuild.
+     *
+     * [continues] is what makes an unterminated name a refusal instead of a
+     * name. `a\` followed by `b=1` declares `ab`, not `a`, and answering `a`
+     * there would hand the line of half a name to whatever real key happens to
+     * be spelled by it. The loader cannot help: given the half it decodes the
+     * half.
+     */
+    private fun declaredKeyOf(declaration: String, start: Int, continues: Boolean): String? {
+        var i = start
+        while (i < declaration.length) {
+            val c = declaration[i]
+            if (c == '\\') return if (continues) null else decodedKeyOf(declaration)
+            if (c == '=' || c == ':' || isPropertiesSpace(c)) return declaration.substring(start, i)
+            i++
+        }
+        // Nothing on this line ended the name.
+        return if (continues) null else declaration.substring(start, i)
+    }
+
+    /** The name as the loader spells it, for a line that escapes its own. */
+    private fun decodedKeyOf(declaration: String): String? =
+        try {
+            Properties()
+                .apply { load(StringReader(declaration)) }
+                .stringPropertyNames()
+                .singleOrNull()
+        } catch (_: Exception) {
+            null
+        }
+
+    /** What the loader skips ahead of a key, and also accepts as a separator. */
+    private fun isPropertiesSpace(c: Char): Boolean = c == ' ' || c == '\t' || c == '\u000C'
+
+    private fun endsWithOddBackslashRun(line: String): Boolean {
+        var count = 0
+        var i = line.length - 1
+        while (i >= 0 && line[i] == '\\') {
+            count++
+            i--
+        }
+        return count % 2 == 1
     }
 
     // ----- yaml -------------------------------------------------------------
