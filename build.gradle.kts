@@ -143,6 +143,8 @@ tasks {
             <ul>
                 <li><b>Access visibility</b>: cached configurations the server has refused to serve are now hidden and reappear automatically once access returns. An authentication refusal hides the whole environment; a configuration-read permission denial hides only the affected Namespace. Publish, Namespace-discovery, and history refusals never hide readable configuration data. Visibility blocks survive IDE restarts and are removed together with the cached data by <code>Tools &gt; Clear Cache</code>.</li>
                 <li><b>访问可见性</b>：当服务器拒绝提供数据后（认证失败或读取权限被收回），插件不再显示之前缓存的配置，访问恢复后会自动重新显示。认证失败会隐藏该环境下的全部配置；配置读取权限被拒只隐藏对应命名空间；发布、命名空间发现、历史记录等权限拒绝不会隐藏仍可读取的配置数据。可见性屏蔽在 IDE 重启后仍然生效，执行 <code>Tools &gt; Clear Cache</code> 清除缓存时随缓存数据一并移除。</li>
+                <li><b>Navigation</b>: a declared <code>@NacosPropertySource</code> dataId that is listed by a fresh authoritative Namespace index but whose body is not yet in the detail cache resolves as undecidable (hollow marker; click lazy-loads that dataId) instead of soft-falling to another cached configuration. Soft discovery remains when the declared body is cached and lacks the key, or when a fresh complete index proves the dataId absent. When absence cannot be proven, resolution no longer substitutes another dataId (issue #192).</li>
+                <li><b>导航</b>：已声明配置来源的 Data ID 出现在新鲜且权威的 Namespace 索引中、但其正文尚未进入配置详情缓存时，解析为不可判定配置引用（空心标记；点击会懒加载该 Data ID），不再静默回退到其他已缓存配置。声明正文已缓存且不含该 key、或新鲜完整索引证明该 Data ID 不存在时，仍可软发现；无法证明缺席时不再替换为其他 Data ID（issue #192）。</li>
             </ul>
             <h3>1.3.7</h3>
             <ul>
