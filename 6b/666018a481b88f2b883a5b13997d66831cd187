@@ -1,0 +1,16 @@
+src/main/kotlin/com/nanyin/nacos/search/settings/NacosProjectSession.kt
+  h_231225c3625e99 126-135,139-144
+src/test/kotlin/com/nanyin/nacos/search/settings/ProjectLocalSelectionTest.kt
+  h_231225c3625e99 182-209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "6b666018a481b88f2b883a5b13997d66831cd187",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
