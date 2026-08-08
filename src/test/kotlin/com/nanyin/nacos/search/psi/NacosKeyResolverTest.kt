@@ -410,15 +410,16 @@ class NacosKeyResolverTest {
             )
         )
 
-        val hits = indexService.resolve(
+        val resolution = indexService.resolveCurrentState(
             snapshot = cache.snapshot(identity),
             key = "timeout",
             preferredDataId = "common.properties"
         )
 
-        assertEquals(2, hits.size)
-        assertEquals("klive.common.properties", hits[0].config.dataId)
-        assertEquals("shared.properties", hits[1].config.dataId)
+        assertEquals(ConfigReferenceStatus.RESOLVED, resolution.status)
+        assertEquals(2, resolution.hits.size)
+        assertEquals("klive.common.properties", resolution.hits[0].config.dataId)
+        assertEquals("shared.properties", resolution.hits[1].config.dataId)
     }
 
     @Test
@@ -465,6 +466,59 @@ class NacosKeyResolverTest {
         }
 
     @Test
+    fun `detail cached in another namespace does not soft-fall for a listed unfetched declared source`() =
+        runBlocking {
+            // Cross-Namespace twist of #192: the same dataId name has a detail
+            // in prod (key absent there) while dev's Namespace 索引 lists it
+            // without a body. Soft-fallback must not treat prod's body as proof
+            // that dev's declared source was read.
+            cache.writeDetail(
+                identity = identity,
+                namespaceId = "prod",
+                configuration = cfg(
+                    "declared.properties",
+                    "DEFAULT_GROUP",
+                    "prod",
+                    "other.key=1\n",
+                    "properties"
+                ),
+                ttl = 60_000L
+            )
+            cache.replaceNamespaceIndex(
+                identity,
+                "dev",
+                listOf(
+                    cfg("declared.properties", "DEFAULT_GROUP", "dev", "", "properties"),
+                    cfg("other.properties", "DEFAULT_GROUP", "dev", "", "properties")
+                ),
+                ttl = 60_000L
+            )
+            cache.writeDetail(
+                identity = identity,
+                namespaceId = "dev",
+                configuration = cfg(
+                    "other.properties",
+                    "DEFAULT_GROUP",
+                    "dev",
+                    "feature.enabled=true\n",
+                    "properties"
+                ),
+                ttl = 60_000L
+            )
+            indexService.refreshIndex(cache.snapshot(identity))
+
+            val resolution = indexService.resolveCurrentState(
+                snapshot = cache.snapshot(identity),
+                key = "feature.enabled",
+                preferredDataId = "declared.properties",
+                activeNamespaceId = "dev"
+            )
+
+            assertEquals(ConfigReferenceStatus.UNDECIDABLE, resolution.status)
+            assertTrue(resolution.hits.isEmpty())
+        }
+
+    @Test
     fun `preferred dataId proven absent soft-falls back to discovery`() = runBlocking {
         // A fresh complete Namespace 索引 that does not list the declared Data ID
         // proves it is gone (stale or mistyped PropertySource). Soft discovery
@@ -503,9 +557,9 @@ class NacosKeyResolverTest {
 
     @Test
     fun `preferred dataId whose absence is unproven does not substitute another dataId`() = runBlocking {
-        // No Namespace 索引 (or one not authoritative for absence) and the
-        // declared body is not in the 配置详情缓存: zero key-index hits must not
-        // soft-fall to every other definition (issue #192).
+        // No Namespace 索引 and the declared body is not in the 配置详情缓存:
+        // zero key-index hits must not soft-fall to every other definition
+        // (issue #192).
         seedConfigurations(
             listOf(
                 cfg("other.properties", "DEFAULT_GROUP", "dev", "feature.enabled=true\n", "properties")
@@ -521,6 +575,108 @@ class NacosKeyResolverTest {
 
         assertTrue(resolution.hits.isEmpty())
         assertEquals(ConfigReferenceStatus.UNAVAILABLE, resolution.status)
+    }
+
+    @Test
+    fun `stale namespace index does not unlock soft discovery for an unfetched declared dataId`() = runBlocking {
+        var now = 6_000_000L
+        val timedCache = CacheService({ now }, InMemoryCacheStore())
+        timedCache.clearAll()
+        timedCache.replaceNamespaceIndex(
+            identity,
+            "dev",
+            // Index that does not list the declared id — would be ABSENT if fresh.
+            listOf(cfg("other.properties", "DEFAULT_GROUP", "dev", "", "properties")),
+            ttl = 100L
+        )
+        timedCache.writeDetail(
+            identity = identity,
+            namespaceId = "dev",
+            configuration = cfg(
+                "other.properties",
+                "DEFAULT_GROUP",
+                "dev",
+                "feature.enabled=true\n",
+                "properties"
+            ),
+            ttl = 60_000L
+        )
+        indexService.refreshIndex(timedCache.snapshot(identity))
+        now += 101L
+
+        val resolution = indexService.resolveCurrentState(
+            snapshot = timedCache.snapshot(identity),
+            key = "feature.enabled",
+            preferredDataId = "declared.properties",
+            activeNamespaceId = "dev"
+        )
+
+        assertTrue(resolution.hits.isEmpty())
+        assertEquals(ConfigReferenceStatus.UNAVAILABLE, resolution.status)
+    }
+
+    @Test
+    fun `non-authoritative namespace index does not unlock soft discovery for an unfetched declared dataId`() =
+        runBlocking {
+            cache.replaceNamespaceIndex(
+                identity,
+                "dev",
+                listOf(cfg("other.properties", "DEFAULT_GROUP", "dev", "", "properties")),
+                ttl = 60_000L
+            )
+            cache.writeDetail(
+                identity = identity,
+                namespaceId = "dev",
+                configuration = cfg(
+                    "other.properties",
+                    "DEFAULT_GROUP",
+                    "dev",
+                    "feature.enabled=true\n",
+                    "properties"
+                ),
+                ttl = 60_000L
+            )
+            cache.markNamespaceIndexNonAuthoritative(identity, "dev")
+            indexService.refreshIndex(cache.snapshot(identity))
+
+            val resolution = indexService.resolveCurrentState(
+                snapshot = cache.snapshot(identity),
+                key = "feature.enabled",
+                preferredDataId = "declared.properties",
+                activeNamespaceId = "dev"
+            )
+
+            assertTrue(resolution.hits.isEmpty())
+            assertEquals(ConfigReferenceStatus.UNAVAILABLE, resolution.status)
+        }
+
+    @Test
+    fun `body-cached declared dataId with no discovery hits is unresolved not undecidable`() = runBlocking {
+        // Declared body is in this Namespace's 配置详情缓存 and lacks the key;
+        // soft discovery finds nothing else. Re-asking Namespace presence would
+        // claim "body not loaded" (UNDECIDABLE) even though the body was read.
+        seedConfigurations(
+            listOf(
+                cfg("declared.properties", "DEFAULT_GROUP", "dev", "other.key=1\n", "properties")
+            )
+        )
+        cache.replaceNamespaceIndex(
+            identity,
+            "dev",
+            listOf(cfg("declared.properties", "DEFAULT_GROUP", "dev", "", "properties")),
+            ttl = 60_000L
+        )
+        indexService.refreshIndex(cache.snapshot(identity))
+
+        val resolution = indexService.resolveCurrentState(
+            snapshot = cache.snapshot(identity),
+            key = "feature.enabled",
+            preferredDataId = "declared.properties",
+            activeNamespaceId = "dev"
+        )
+
+        assertEquals(ConfigReferenceStatus.UNRESOLVED, resolution.status)
+        assertTrue(resolution.hits.isEmpty())
     }
 
     @Test

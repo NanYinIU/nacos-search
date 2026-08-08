@@ -199,11 +199,18 @@ object NacosKeyResolver {
         }
 
         // A declared data id is what makes a miss attributable, and it decides
-        // two different questions in this order.
+        // these questions in order.
         val dataId = preferredDataId?.takeIf { it.isNotBlank() }
         if (dataId != null) {
             // First, whether any body could have helped.
             terminalFormatResolution(dataId, formatOverride)?.let { return it }
+            // The declared body's detail is already in this Namespace's
+            // 配置详情缓存: soft discovery found nothing else, so the key is
+            // genuinely absent — not "body not loaded" (issue #192 follow-up to
+            // the pre-existing empty-hit path that re-asked presence).
+            if (isDetailCachedForDataId(dataId, index, activeNamespaceId)) {
+                return ConfigResolution(ConfigReferenceStatus.UNRESOLVED, emptyList())
+            }
             // Then, whether it is there at all: the complete namespace summary
             // index decides absence (UNRESOLVED) vs "exists but body not
             // loaded" (UNDECIDABLE) — issue #52 / ADR-0041.
@@ -429,7 +436,7 @@ object NacosKeyResolver {
         snapshot: CacheSnapshot,
         activeNamespaceId: String?
     ): Boolean {
-        if (isDetailCachedForDataId(dataId, index)) return true
+        if (isDetailCachedForDataId(dataId, index, activeNamespaceId)) return true
         return when (dataIdPresence(dataId, snapshot, activeNamespaceId)) {
             DataIdPresence.ABSENT -> true
             DataIdPresence.PRESENT, DataIdPresence.UNKNOWN -> false
@@ -437,12 +444,20 @@ object NacosKeyResolver {
     }
 
     /**
-     * True when the 派生 key 索引 was built from at least one detail-cached
-     * configuration with [dataId] — i.e. the body has been fetched for this
-     * access identity (somewhere visibility still shows).
+     * True when the 派生 key 索引 was built from a detail-cached configuration
+     * with [dataId] in the same Namespace that presence is judged under
+     * ([activeNamespaceId], blank/public normalized as in [isDataIdKnown]).
+     * A same-named body in another Namespace must not unlock soft discovery
+     * for this one — that reopens the #192 substitute (cross-Namespace twist).
      */
-    private fun isDetailCachedForDataId(dataId: String, index: KeyIndex): Boolean =
-        index.dataIdsByNamespace.values.any { dataId in it }
+    private fun isDetailCachedForDataId(
+        dataId: String,
+        index: KeyIndex,
+        activeNamespaceId: String?
+    ): Boolean {
+        val ns = normalizeNamespaceId(activeNamespaceId)
+        return dataId in index.dataIdsByNamespace[ns].orEmpty()
+    }
 
     /**
      * Presence of [dataId] against the Namespace 索引 only. Does not consult
