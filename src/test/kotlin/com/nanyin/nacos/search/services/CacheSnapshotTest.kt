@@ -257,6 +257,50 @@ class CacheSnapshotTest {
         assertEquals(setOf("app.properties"), restored!!.dataIds)
         assertFalse(restored.authoritativeForAbsence)
     }
+
+    // ── Coordinate Namespace (issue #190) ──
+
+    @Test
+    fun `a cached detail exposes the coordinate Namespace not the payload tenant`() = runBlocking {
+        val cacheService = loadedCache()
+        // Written under coordinate "team-a"; body omits tenant (common server response).
+        cacheService.writeDetail(
+            identity,
+            "team-a",
+            config("app.properties", "k=v", tenantId = null)
+        )
+
+        val cached = cacheService.snapshot(identity).configurations.single()
+        assertEquals("team-a", cached.namespaceId)
+        assertNull(cached.configuration.tenantId)
+
+        val byCoordinate = cacheService.snapshot(identity).detail("team-a", "app.properties", "DEFAULT_GROUP")
+        assertNotNull(byCoordinate)
+        assertEquals("team-a", byCoordinate!!.namespaceId)
+    }
+
+    @Test
+    fun `snapshot keeps two Namespaces holding the same Data ID with tenant-less payloads`() = runBlocking {
+        val cacheService = loadedCache()
+        cacheService.writeDetail(
+            identity,
+            "ns-a",
+            config("app.properties", "from-a", tenantId = null)
+        )
+        cacheService.writeDetail(
+            identity,
+            "ns-b",
+            config("app.properties", "from-b", tenantId = null)
+        )
+
+        val configs = cacheService.snapshot(identity).configurations
+        assertEquals(2, configs.size)
+        assertEquals(setOf("ns-a", "ns-b"), configs.map { it.namespaceId }.toSet())
+        assertEquals(
+            setOf("from-a", "from-b"),
+            configs.map { it.configuration.content }.toSet()
+        )
+    }
 }
 
 /**

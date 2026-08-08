@@ -52,7 +52,11 @@ class NacosValueReference(
                         key,
                         hit.location.value,
                         hit.location.lineIndex,
-                        contextElement = this@NacosValueReference.element
+                        contextElement = this@NacosValueReference.element,
+                        // Coordinate Namespace from the key hit — not payload
+                        // tenant — so chooser labels and go-to routing stay
+                        // correct when the body omits tenant (issue #190).
+                        coordinateNamespaceId = hit.namespaceId
                     )
                 override fun isValidResult(): Boolean = true
             }

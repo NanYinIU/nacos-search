@@ -645,8 +645,17 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      * currently shown, the namespace is switched first (same connection only).
      * The config/line is stashed and consumed once the new namespace's config
      * list finishes loading.
+     *
+     * @param namespaceId coordinate Namespace for switching (issue #190). Prefer
+     *   this over the payload tenant so a tenant-less body still lands in the
+     *   Namespace it was cached under. When null, falls back to
+     *   [com.nanyin.nacos.search.models.NacosConfiguration.tenantId].
      */
-    fun navigateToConfig(config: com.nanyin.nacos.search.models.NacosConfiguration, lineIndex: Int) {
+    fun navigateToConfig(
+        config: com.nanyin.nacos.search.models.NacosConfiguration,
+        lineIndex: Int,
+        namespaceId: String? = null
+    ) {
         invokeOnEdt(ModalityState.defaultModalityState()) {
             val guard = retargetGuard(config)
             if (guard == DraftGuard.AlreadyEditing) {
@@ -656,7 +665,9 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                 return@invokeOnEdt
             }
             if (!admitRetarget(guard, "config.detail.draft.discard.retarget")) return@invokeOnEdt
-            val targetNsId = normalizeNamespaceId(config.tenantId)
+            // Coordinate Namespace is authority for routing; payload tenant is
+            // display-only and may be omitted by the server (issue #190).
+            val targetNsId = normalizeNamespaceId(namespaceId ?: config.tenantId)
             val currentNsId = normalizeNamespaceId(currentNamespace?.namespaceId)
 
             if (targetNsId == currentNsId) {

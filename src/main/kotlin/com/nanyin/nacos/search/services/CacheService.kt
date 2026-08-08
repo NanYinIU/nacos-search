@@ -932,11 +932,24 @@ class CacheService internal constructor(
         fun isDeepStale(now: Long = System.currentTimeMillis()): Boolean = freshness(now) == DetailFreshness.DEEP_STALE
     }
 
+    /**
+     * A configuration detail as a [CacheSnapshot] exposes it.
+     *
+     * [namespaceId] is the canonical Namespace 标识 of the 配置坐标 the detail was
+     * written under (issue #190). The payload's [NacosConfiguration.tenantId]
+     * remains a display value and is not a routing decision.
+     *
+     * The default [namespaceId] is [NamespaceInfo.PUBLIC] for test/legacy
+     * constructions that only care about freshness and body (e.g. detail-panel
+     * plan tests). Snapshot builders always pass the coordinate Namespace
+     * explicitly — do not treat the default as a routing source of truth.
+     */
     data class CachedConfiguration(
         val configuration: NacosConfiguration,
         val freshness: DetailFreshness,
         val freshUntilMillis: Long,
-        val deepStaleAtMillis: Long
+        val deepStaleAtMillis: Long,
+        val namespaceId: String = com.nanyin.nacos.search.models.NamespaceInfo.PUBLIC
     )
 
     data class NamespaceIndexState(

@@ -8,6 +8,7 @@ import com.intellij.psi.PsiManager
 import com.intellij.psi.impl.FakePsiElement
 import com.nanyin.nacos.search.NacosIcons
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.NamespaceInfo
 import javax.swing.Icon
 
 /**
@@ -29,10 +30,24 @@ class NacosConfigKeyElement(
     val key: String,
     val value: String,
     val lineIndex: Int,
-    private val contextElement: PsiElement? = null
+    private val contextElement: PsiElement? = null,
+    /**
+     * Canonical Namespace of the 配置坐标 this definition was resolved under
+     * (issue #190). Prefer this over [NacosConfiguration.tenantId] for routing
+     * and display; when omitted (detail-panel Find Usages anchors that only
+     * hold a body), falls back to the payload tenant.
+     */
+    private val coordinateNamespaceId: String? = null
 ) : FakePsiElement() {
 
-    val namespaceId: String get() = config.tenantId ?: ""
+    /**
+     * Coordinate Namespace when known, else payload tenant, always canonical
+     * (`"public"` or a concrete id) so chooser labels and tool-window
+     * navigation agree with the derived key index.
+     */
+    val namespaceId: String
+        get() = NamespaceInfo.canonicalId(coordinateNamespaceId ?: config.tenantId)
+
     val namespaceDisplayName: String get() = namespaceDisplay()
     override fun getProject(): Project = project
     override fun getParent(): PsiElement? = null
@@ -58,7 +73,7 @@ class NacosConfigKeyElement(
     override fun isValid(): Boolean = true
 
     override fun navigate(requestFocus: Boolean) {
-        NacosConfigNavigator.navigate(project, config, lineIndex)
+        NacosConfigNavigator.navigate(project, config, lineIndex, namespaceId)
     }
 
     override fun getPresentation(): ItemPresentation {
@@ -75,6 +90,5 @@ class NacosConfigKeyElement(
     override fun toString(): String =
         "NacosConfigKeyElement($key in ${namespaceDisplay()} / ${config.group} / ${config.dataId})"
 
-    private fun namespaceDisplay(): String =
-        config.tenantId?.takeIf { it.isNotBlank() } ?: "public"
+    private fun namespaceDisplay(): String = namespaceId
 }
