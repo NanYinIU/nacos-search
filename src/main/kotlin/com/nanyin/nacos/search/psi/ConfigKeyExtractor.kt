@@ -2,6 +2,7 @@ package com.nanyin.nacos.search.psi
 
 import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonToken
+import org.yaml.snakeyaml.DumperOptions
 import org.yaml.snakeyaml.LoaderOptions
 import org.yaml.snakeyaml.Yaml
 import org.yaml.snakeyaml.constructor.SafeConstructor
@@ -10,10 +11,13 @@ import org.yaml.snakeyaml.nodes.Node
 import org.yaml.snakeyaml.nodes.ScalarNode
 import org.yaml.snakeyaml.nodes.SequenceNode
 import org.yaml.snakeyaml.nodes.Tag
+import org.yaml.snakeyaml.representer.Representer
+import org.yaml.snakeyaml.resolver.Resolver
 import java.io.StringReader
 import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.Properties
+import java.util.regex.Pattern
 
 /**
  * The outcome of asking [ConfigKeyExtractor] for a configuration's keys.
@@ -160,8 +164,31 @@ object ConfigKeyExtractor {
      * would only have carried the defect into JSON.
      */
     private sealed class PathSeg {
+        /**
+         * A mapping key the runtime resolves to a `CharSequence`, and the only
+         * segment that takes a separator.
+         *
+         * The runtime decides that from the key's *text* rather than its type —
+         * its `key.startsWith("[")` branch joins without one — so a string key
+         * spelled `"[0]"` renders `a.[0]` here and `a[0]` there. That difference
+         * predates #178 and is not what [Bracketed] is about: it is reached by
+         * a key whose text begins with a bracket, not by a key whose resolved
+         * value is not a string. No corpus entry pins it yet.
+         */
         data class Name(val name: String) : PathSeg()
+
+        /** A sequence position. */
         data class Index(val n: Int) : PathSeg()
+
+        /**
+         * A YAML mapping key the runtime resolves to something that is *not* a
+         * `CharSequence`, already spelled from that resolved value — `on:` is
+         * [rendered] `true` (#178). Separate from [Index] because it has no dot
+         * spelling and separate from [Name] because it takes no separator, and
+         * separate from both as an *identity*: `0:` and `"0":` are two
+         * declarations the runtime resolves to two different keys.
+         */
+        data class Bracketed(val rendered: String) : PathSeg()
     }
 
     /**
@@ -171,7 +198,7 @@ object ConfigKeyExtractor {
      * A container with contents contributes no key of its own: a runtime property
      * source flattens to leaves, and `${list}` resolves against none of them. An
      * *empty* container is a different matter and follows whichever runtime reads
-     * the format — see the two empty-container branches in [readYamlNode].
+     * the format — see the two empty-container branches in [YamlWalk.readNode].
      */
     private fun emitLeaf(
         path: ArrayDeque<PathSeg>,
@@ -183,6 +210,14 @@ object ConfigKeyExtractor {
         if (path.isEmpty()) return
         val bracket = renderKey(path, bracketIndexes = true)
         result[bracket] = KeyLocation(bracket, declarationLine, value)
+        // The dot spelling is a widening made for sequence indexes, where the
+        // runtime resolves the bracket form and `${list.0.n}` is the style a
+        // developer is as likely to write. A [PathSeg.Bracketed] segment is not
+        // that case: no runtime resolves any dot spelling of it, so the alias
+        // would promise a placeholder that fails. It is suppressed for the whole
+        // key rather than for that one segment, because a half-aliased `a.0[0]`
+        // is a spelling nothing resolves either.
+        if (path.any { it is PathSeg.Bracketed }) return
         val dot = renderKey(path, bracketIndexes = false)
         if (dot != bracket) {
             result[dot] = KeyLocation(dot, declarationLine, value)
@@ -205,6 +240,11 @@ object ConfigKeyExtractor {
                         sb.append(seg.n)
                     }
                 }
+                // No separator ahead of it and no second spelling: the runtime
+                // bracketed this key, and its `key.startsWith("[")` branch then
+                // joins it as `path + key`. That branch tests the text, so it
+                // catches one case this does not — see [PathSeg.Name].
+                is PathSeg.Bracketed -> sb.append("[").append(seg.rendered).append("]")
             }
         }
         return sb.toString()
@@ -377,12 +417,37 @@ object ConfigKeyExtractor {
      * a quoted or digit-leading key, and read an inline comment as part of the
      * value it followed.
      *
-     * `composeAll`, not `load`: composing builds the node tree without
-     * constructing a single Java object out of the body, and each node carries
-     * the mark this takes its line from — so YAML needs none of the permissive
-     * locator JSON does. Every document contributes, because a multi-document
-     * body is the ordinary Spring profile idiom and keeping only the last one
-     * silently discards the first.
+     * `composeAll`, not `load`: composing builds the node tree this walks, and
+     * each node carries the mark this takes its line from — so YAML needs none
+     * of the permissive locator JSON does. Every document contributes, because
+     * a multi-document body is the ordinary Spring profile idiom and keeping
+     * only the last one silently discards the first.
+     *
+     * ### One thing is constructed after all (#178)
+     *
+     * The original note here said composing constructs no Java object out of
+     * the body at all. That is no longer quite true, and the exception was a
+     * decision rather than a slip. Spring's flattening brackets any mapping key
+     * that is not a `CharSequence` and spells it from the key's **resolved**
+     * value, so `on:` resolves to `[true]` and `0x10:` to `[16]` — keys the
+     * plugin cannot name from the document spelling alone. The two ways to know
+     * the resolved value are to construct the key node, or to read its tag and
+     * render the value ourselves; this constructs it, because a second
+     * implementation of snakeyaml's scalar resolution is the mistake #168
+     * removed and it would have to agree with the first about `1:30` being
+     * ninety.
+     *
+     * What that costs is bounded to what it buys. Only mapping **key** scalars
+     * are constructed — never a value, never a container — and only ever by a
+     * [SafeConstructor], which is the family Spring's own loader extends. So no
+     * body instantiates anything the runtime would not, which is the property
+     * `composeAll` was chosen for. A key whose tag that constructor refuses
+     * contributes nothing rather than falling back to its document spelling:
+     * the runtime fails the whole load over such a key, and inventing a name
+     * for it is how a marker comes to promise a placeholder that fails.
+     *
+     * Composing uses [RuntimeResolver] rather than snakeyaml's default for the
+     * same fidelity reason — see there.
      *
      * A syntax error keeps the documents already composed, for the same reason
      * the JSON reader keeps what it read: a partial key space is strictly
@@ -393,153 +458,241 @@ object ConfigKeyExtractor {
      * loader's limits (its 3 MB code-point ceiling, its alias budget) therefore
      * contributes nothing at all; Nacos caps a configuration far below that.
      */
-    private fun extractYaml(content: String): Map<String, KeyLocation> {
-        val result = LinkedHashMap<String, KeyLocation>()
-        val path = ArrayDeque<PathSeg>()
-        val onPath = Collections.newSetFromMap(IdentityHashMap<Node, Boolean>())
-        // Composing never invokes a constructor, so the body cannot instantiate
-        // anything whichever constructor this names. Naming the safe one says so
-        // outright, and carries the loader's limits into the composer.
-        val yaml = Yaml(SafeConstructor(LoaderOptions()))
-        try {
-            for (document in yaml.composeAll(StringReader(content))) {
-                readYamlNode(document, path, onPath, LINE_NOT_FOUND, result)
+    private fun extractYaml(content: String): Map<String, KeyLocation> = YamlWalk().read(content)
+
+    /**
+     * One YAML body's walk: the state a single [extractYaml] call accumulates,
+     * and the snakeyaml collaborators that produce it.
+     *
+     * A class rather than a parameter list because none of this may be shared.
+     * [ConfigKeyExtractor] is an object, and its callers rebuild key indexes off
+     * several threads; the constructor that resolves a mapping key caches every
+     * node it has built, so hoisting it to a field would be a data race rather
+     * than a saved allocation.
+     */
+    private class YamlWalk {
+
+        private val result = LinkedHashMap<String, KeyLocation>()
+        private val path = ArrayDeque<PathSeg>()
+        private val onPath = Collections.newSetFromMap(IdentityHashMap<Node, Boolean>())
+        private val options = LoaderOptions()
+
+        /**
+         * Resolves a mapping key exactly as the runtime's loader does.
+         *
+         * It is the same instance the [Yaml] below is built with, so there is no
+         * second set of construction rules to drift from the first — composing
+         * never invokes it, and this walk invokes it for nothing but a key.
+         */
+        private val keyConstructor = KeyConstructor(options)
+
+        private val yaml: Yaml = DumperOptions().let { dumping ->
+            // The dumping half is never used; it is the price of the overload
+            // that accepts a resolver.
+            Yaml(keyConstructor, Representer(dumping), dumping, options, RuntimeResolver())
+        }
+
+        fun read(content: String): Map<String, KeyLocation> {
+            try {
+                for (document in yaml.composeAll(StringReader(content))) {
+                    readNode(document, LINE_NOT_FOUND)
+                }
+            } catch (_: Exception) {
+                // A malformed body. snakeyaml reports it as a YAMLException, and
+                // composeAll parses lazily, so `result` holds every document read
+                // before the one that gave out.
             }
-        } catch (_: Exception) {
-            // A malformed body. snakeyaml reports it as a YAMLException, and
-            // composeAll parses lazily, so `result` holds every document read
-            // before the one that gave out.
+            return result
         }
-        return result
-    }
 
-    private fun readYamlNode(
-        node: Node,
-        path: ArrayDeque<PathSeg>,
-        onPath: MutableSet<Node>,
-        declarationLine: Int,
-        result: LinkedHashMap<String, KeyLocation>
-    ) {
-        when (node) {
-            // An *empty* container is a leaf, because Spring Boot's flattening
-            // stops at one: `list: []` resolves `${list}`, and `a: {b: {}}`
-            // resolves `${a.b}`. The value emitted is the runtime's own rendering
-            // of it, which keeps an empty container tellable apart in a navigation
-            // hint from a genuinely valueless key (`enabled:`), whose value is the
-            // empty string.
-            //
-            // This is the one place the two formats' key spaces legitimately
-            // differ, and the difference is not ours to smooth over — each format
-            // follows the loader that reads it (ADR-0055). Spring Cloud Alibaba's JSON
-            // loader drops an empty container instead of terminating on it, so
-            // `{"a":[]}` contributes no `a`, and the JSON walk below deliberately
-            // has no counterpart to these two branches. The differential oracle
-            // holds both directions, so neither can be "tidied" into the other
-            // without the build saying so.
-            //
-            // Emptiness is read off the node, not off the entries a merge resolves
-            // to — a mapping whose every entry is a `<<` merge of empty mappings
-            // looks non-empty here and contributes no key. That agrees with the
-            // runtime, which drops such a mapping rather than terminating on it
-            // (only a literal `{}` gets a key), so reading emptiness off the node
-            // is not merely the cheap answer. The corpus pins it, because it is
-            // the sort of thing that reads like a bug and gets "fixed".
-            is MappingNode ->
-                if (node.value.isEmpty()) {
-                    emitLeaf(path, "{}", declarationLine, result)
-                } else {
-                    readYamlMapping(node, path, onPath, result)
+        private fun readNode(node: Node, declarationLine: Int) {
+            when (node) {
+                // An *empty* container is a leaf, because Spring Boot's flattening
+                // stops at one: `list: []` resolves `${list}`, and `a: {b: {}}`
+                // resolves `${a.b}`. The value emitted is the runtime's own rendering
+                // of it, which keeps an empty container tellable apart in a navigation
+                // hint from a genuinely valueless key (`enabled:`), whose value is the
+                // empty string.
+                //
+                // This is the one place the two formats' key spaces legitimately
+                // differ, and the difference is not ours to smooth over — each format
+                // follows the loader that reads it (ADR-0055). Spring Cloud Alibaba's JSON
+                // loader drops an empty container instead of terminating on it, so
+                // `{"a":[]}` contributes no `a`, and the JSON walk below deliberately
+                // has no counterpart to these two branches. The differential oracle
+                // holds both directions, so neither can be "tidied" into the other
+                // without the build saying so.
+                //
+                // Emptiness is read off the node, not off the entries a merge resolves
+                // to — a mapping whose every entry is a `<<` merge of empty mappings
+                // looks non-empty here and contributes no key. That agrees with the
+                // runtime, which drops such a mapping rather than terminating on it
+                // (only a literal `{}` gets a key), so reading emptiness off the node
+                // is not merely the cheap answer. The corpus pins it, because it is
+                // the sort of thing that reads like a bug and gets "fixed".
+                is MappingNode ->
+                    if (node.value.isEmpty()) {
+                        emitLeaf(path, "{}", declarationLine, result)
+                    } else {
+                        readMapping(node)
+                    }
+                is SequenceNode ->
+                    if (node.value.isEmpty()) {
+                        emitLeaf(path, "[]", declarationLine, result)
+                    } else {
+                        readSequence(node)
+                    }
+                // A block scalar's body arrives here as one value, which is the
+                // whole reason it can no longer contribute keys of its own.
+                is ScalarNode -> emitLeaf(path, node.value, declarationLine, result)
+                else -> Unit
+            }
+        }
+
+        private fun readMapping(node: MappingNode) {
+            // An alias may reference a mapping that contains it, which composes a
+            // cyclic node graph. That mapping's keys are already on the path, so
+            // stopping here loses nothing and is what keeps the walk off the stack
+            // limit.
+            if (!onPath.add(node)) return
+            for ((segment, entry) in entriesOf(node)) {
+                path.addLast(segment)
+                // The line is the key's own, so a value spanning many lines cannot
+                // drag the key's line along with it.
+                readNode(entry.valueNode, entry.declarationLine)
+                path.removeLast()
+            }
+            onPath.remove(node)
+        }
+
+        private fun readSequence(node: SequenceNode) {
+            // The same cyclic-anchor guard the mapping walk explains.
+            if (!onPath.add(node)) return
+            node.value.forEachIndexed { index, item ->
+                path.addLast(PathSeg.Index(index))
+                // An element declares no key, so it is its own declaration.
+                readNode(item, item.startMark.line)
+                path.removeLast()
+            }
+            onPath.remove(node)
+        }
+
+        /**
+         * The entries a mapping contributes once its `<<` merges are resolved: its
+         * own, then those of each mapping it merges in that no earlier source and
+         * the mapping itself did not already name.
+         *
+         * The merge is resolved here rather than by walking `<<` as a path segment,
+         * because a segment would invent a `service.<<.timeout` no runtime produces
+         * and lose the `service.timeout` every runtime does. It is resolved *before*
+         * the walk rather than by letting a later write win, because YAML merge is
+         * shallow: a mapping's own `db: {port: 1}` discards a merged `db` outright,
+         * where a per-leaf overwrite would keep the merged `db.url` underneath it
+         * and invent a key.
+         *
+         * An entry is identified by the [PathSeg] it contributes, not by its
+         * document spelling. That is what tells `0:` and `"0":` apart — the same
+         * spelling, two keys the runtime resolves separately — and it is also how
+         * the runtime's own merge resolution dedupes, by constructed key rather
+         * than by text.
+         */
+        private fun entriesOf(node: MappingNode): Map<PathSeg, YamlEntry> {
+            val entries = LinkedHashMap<PathSeg, YamlEntry>()
+            for (tuple in node.value) {
+                if (tuple.keyNode.tag == Tag.MERGE) continue
+                // A complex key (`? [a, b]`) names nothing a placeholder can spell.
+                val key = tuple.keyNode as? ScalarNode ?: continue
+                val segment = segmentFor(key) ?: continue
+                entries[segment] = YamlEntry(key.startMark.line, tuple.valueNode)
+            }
+            for (tuple in node.value) {
+                if (tuple.keyNode.tag != Tag.MERGE) continue
+                for (source in yamlMergeSources(tuple.valueNode)) {
+                    // A mapping that merges itself, directly or through a chain.
+                    if (!onPath.add(source)) continue
+                    entriesOf(source).forEach { (segment, entry) ->
+                        if (segment !in entries) entries[segment] = entry
+                    }
+                    onPath.remove(source)
                 }
-            is SequenceNode ->
-                if (node.value.isEmpty()) {
-                    emitLeaf(path, "[]", declarationLine, result)
-                } else {
-                    readYamlSequence(node, path, onPath, result)
-                }
-            // A block scalar's body arrives here as one value, which is the
-            // whole reason it can no longer contribute keys of its own.
-            is ScalarNode -> emitLeaf(path, node.value, declarationLine, result)
-            else -> Unit
+            }
+            return entries
         }
-    }
 
-    private fun readYamlMapping(
-        node: MappingNode,
-        path: ArrayDeque<PathSeg>,
-        onPath: MutableSet<Node>,
-        result: LinkedHashMap<String, KeyLocation>
-    ) {
-        // An alias may reference a mapping that contains it, which composes a
-        // cyclic node graph. That mapping's keys are already on the path, so
-        // stopping here loses nothing and is what keeps the walk off the stack
-        // limit.
-        if (!onPath.add(node)) return
-        for ((name, entry) in yamlEntries(node, onPath)) {
-            path.addLast(PathSeg.Name(name))
-            // The line is the key's own, so a value spanning many lines cannot
-            // drag the key's line along with it.
-            readYamlNode(entry.valueNode, path, onPath, entry.keyNode.startMark.line, result)
-            path.removeLast()
+        /**
+         * The path segment [keyNode] contributes, or null where it contributes
+         * none — which is also every case the runtime gives out on rather than
+         * resolving a key of its own.
+         *
+         * Spring's `asMap` decides on the constructed key's type: a `CharSequence`
+         * is a name and takes a separator, anything else is bracketed and spelled
+         * by its `toString`. Both refusals below follow the runtime failing the
+         * whole load, so contributing nothing is the closest the plugin can get
+         * while still keeping the rest of the body's keys (#178).
+         */
+        private fun segmentFor(keyNode: ScalarNode): PathSeg? {
+            val constructed = try {
+                keyConstructor.constructKey(keyNode)
+            } catch (_: Exception) {
+                // A tag no SafeConstructor knows. Spring's loader uses one too,
+                // so the runtime resolves nothing at all from this body.
+                return null
+            }
+            return when (constructed) {
+                // Spring spells a non-CharSequence key with `key.toString()`,
+                // which for a null key throws inside Spring itself.
+                null -> null
+                is CharSequence -> PathSeg.Name(constructed.toString())
+                // `!!binary` constructs a `ByteArray`, whose `toString` is an
+                // identity hash: a different spelling on every parse, matching
+                // neither the runtime's own `[[B@…]` nor its previous self. It is
+                // the one construction whose key is not a function of the body,
+                // and letting it through would put a fresh phantom into the key
+                // index on every rebuild and make this extraction impure. No
+                // placeholder can spell it either way, so it contributes nothing
+                // — the same answer as the two refusals around it.
+                is ByteArray -> null
+                // Otherwise `toString` is the runtime's own spelling, whatever it
+                // renders: `[16]` for `0x10`, `[Infinity]` for `.inf`.
+                else -> PathSeg.Bracketed(constructed.toString())
+            }
         }
-        onPath.remove(node)
-    }
-
-    private fun readYamlSequence(
-        node: SequenceNode,
-        path: ArrayDeque<PathSeg>,
-        onPath: MutableSet<Node>,
-        result: LinkedHashMap<String, KeyLocation>
-    ) {
-        // The same cyclic-anchor guard the mapping walk explains.
-        if (!onPath.add(node)) return
-        node.value.forEachIndexed { index, item ->
-            path.addLast(PathSeg.Index(index))
-            // An element declares no key, so it is its own declaration.
-            readYamlNode(item, path, onPath, item.startMark.line, result)
-            path.removeLast()
-        }
-        onPath.remove(node)
     }
 
     /** One entry of a mapping, after its `<<` merges are resolved. */
-    private class YamlEntry(val keyNode: ScalarNode, val valueNode: Node)
+    private class YamlEntry(val declarationLine: Int, val valueNode: Node)
 
     /**
-     * The entries a mapping contributes once its `<<` merges are resolved: its
-     * own, then those of each mapping it merges in that no earlier source and
-     * the mapping itself did not already name.
+     * Reaches [SafeConstructor]'s own construction of one scalar node.
      *
-     * The merge is resolved here rather than by walking `<<` as a path segment,
-     * because a segment would invent a `service.<<.timeout` no runtime produces
-     * and lose the `service.timeout` every runtime does. It is resolved *before*
-     * the walk rather than by letting a later write win, because YAML merge is
-     * shallow: a mapping's own `db: {port: 1}` discards a merged `db` outright,
-     * where a per-leaf overwrite would keep the merged `db.url` underneath it
-     * and invent a key.
+     * The subclass exists only to widen `constructObject`'s visibility; it adds
+     * no rule of its own, which is the point. `SafeConstructor` is the family
+     * Spring Boot's YAML loader extends, so a tag it refuses is a tag the
+     * runtime refuses, and a value it builds is the value the runtime spells the
+     * key from.
      */
-    private fun yamlEntries(
-        node: MappingNode,
-        onPath: MutableSet<Node>
-    ): Map<String, YamlEntry> {
-        val entries = LinkedHashMap<String, YamlEntry>()
-        for (tuple in node.value) {
-            if (tuple.keyNode.tag == Tag.MERGE) continue
-            // A complex key (`? [a, b]`) names nothing a placeholder can spell.
-            val key = tuple.keyNode as? ScalarNode ?: continue
-            entries[key.value] = YamlEntry(key, tuple.valueNode)
+    private class KeyConstructor(options: LoaderOptions) : SafeConstructor(options) {
+        fun constructKey(node: ScalarNode): Any? = constructObject(node)
+    }
+
+    /**
+     * snakeyaml's resolver minus the implicit timestamp tag — the resolver
+     * Spring Boot's YAML property source loader composes with.
+     *
+     * It matters only now that a mapping key is constructed. Under snakeyaml's
+     * default, `2020-01-01:` resolves to `Tag.TIMESTAMP` and constructs to a
+     * `Date`, which is not a `CharSequence`, so the key would be bracketed and
+     * spelled from `Date.toString()` — a key the runtime never resolves, and one
+     * whose text would depend on the reading JVM's time zone. Spring drops that
+     * resolver, so such a key stays an ordinary string key; matching the runtime
+     * means dropping it here too rather than deciding separately what a date
+     * looks like.
+     */
+    private class RuntimeResolver : Resolver() {
+        override fun addImplicitResolver(tag: Tag, regexp: Pattern, first: String?, limit: Int) {
+            if (tag == Tag.TIMESTAMP) return
+            super.addImplicitResolver(tag, regexp, first, limit)
         }
-        for (tuple in node.value) {
-            if (tuple.keyNode.tag != Tag.MERGE) continue
-            for (source in yamlMergeSources(tuple.valueNode)) {
-                // A mapping that merges itself, directly or through a chain.
-                if (!onPath.add(source)) continue
-                yamlEntries(source, onPath).forEach { (name, entry) ->
-                    if (name !in entries) entries[name] = entry
-                }
-                onPath.remove(source)
-            }
-        }
-        return entries
     }
 
     /** `<<: *a` names one source; `<<: [*a, *b]` names several, `*a` winning. */

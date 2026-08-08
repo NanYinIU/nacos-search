@@ -45,11 +45,14 @@ fun pluginKeys(body: String, format: RuntimeConfigFormat, label: String): Set<St
  *
  * The allowance has one blind spot, stated so it is not mistaken for coverage: a
  * phantom key whose last segment is an integer is indistinguishable from the dot
- * alias of a sequence index, so the differential relation permits it. A YAML
- * mapping key `0:` is exactly that case — the runtime resolves `[0]` and the
- * plugin's `0` is a key nothing resolves, but it looks like `dotForm("[0]")`.
- * Widening the alias to non-integers would be worse: it would permit far more
- * than the plugin actually emits.
+ * alias of a sequence index, so the differential relation permits it. The case
+ * that made that concrete was a YAML mapping key `0:` — the runtime resolves
+ * `[0]`, and the plugin used to emit a `0` that nothing resolves but that reads
+ * here as `dotForm("[0]")`. #178 stopped the emission: a non-string mapping key
+ * now contributes the bracket form alone, and the enumerated oracle pins it by
+ * asserting the whole key set, which is what this relation cannot do. The blind
+ * spot itself is still open for the next such key. Widening the alias to
+ * non-integers would be worse: it would permit far more than the plugin emits.
  */
 object KeyForms {
 

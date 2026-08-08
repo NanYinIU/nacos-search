@@ -79,28 +79,24 @@ object ExtractionCorpus {
     )
 
     /**
-     * The defect this oracle found on its first run: Spring's flattening brackets
-     * any mapping key that is not a `CharSequence` and spells it from the key's
-     * *resolved* value, so `0:` is `[0]` and `on:` is `[true]`. The plugin emits
-     * the document spelling in dot form, which both loses the key the runtime
-     * resolves and invents one it does not.
+     * A key the runtime gives out on, taking the whole body's key space with it.
      *
-     * Pinned rather than deleted, and marked a defect rather than a divergence:
-     * matching it means constructing the key scalar, which is a design decision
-     * about the `composeAll`-not-`load` choice rather than a patch, so it is
-     * tracked as #178 and lands there.
+     * Spring resolves a mapping key by constructing it and then spelling it, and
+     * either step can fail: a tag no `SafeConstructor` knows fails the
+     * construction, a null key makes `key.toString()` an NPE inside Spring
+     * itself, and a non-string key inside a sequence reaches a cast the
+     * flattening cannot make. Each of those fails the application start outright.
+     *
+     * The plugin drops the offending key alone and keeps the rest of the body,
+     * for the reason [partialParse] states: a marker vanishing from the file the
+     * user is halfway through editing is the worse answer.
      */
-    private fun nonStringMappingKey(
-        onlyRuntime: Set<String> = emptySet(),
-        onlyPlugin: Set<String> = emptySet()
-    ) = Divergence(
-        kind = Kind.KNOWN_DEFECT,
-        why = "a non-string YAML mapping key is spelled by the runtime in bracket form " +
-            "from its resolved value (`0` → `[0]`, `on` → `[true]`); the plugin emits the " +
-            "document spelling in dot form, losing the runtime's key and inventing one of " +
-            "its own. Tracked as #178",
-        onlyRuntime = onlyRuntime,
-        onlyPlugin = onlyPlugin
+    private fun runtimeGivesOutOverOneKey(what: String, vararg pluginKeys: String) = Divergence(
+        kind = Kind.INTENDED,
+        why = "$what, which fails the runtime's whole load; the plugin drops that key " +
+            "alone and keeps the rest of the body, because a partial key space still navigates",
+        onlyPlugin = pluginKeys.toSet(),
+        runtimeRefuses = true
     )
 
     val entries: List<Entry> = properties() + yaml() + json()
@@ -207,34 +203,81 @@ object ExtractionCorpus {
         // than off the merged entry set looks like a shortcut and is not one.
         Entry("yaml/merge-of-an-empty-mapping", RuntimeConfigFormat.YAML, "base: &b {}\nservice:\n  <<: *b\n"),
         // The enumerated tests deliberately left these to this oracle rather than
-        // pinning them to a guess. The oracle's answer was that the plugin is
-        // wrong twice over — see #178.
-        Entry(
-            "yaml/numeric-keys",
-            RuntimeConfigFormat.YAML,
-            "0: zero\n1.5: half\n",
-            // `1.5` is listed as invented but `0` is not: the plugin's `0` is
-            // equally a phantom, and the dot-form allowance cannot tell it from
-            // the alias of a sequence index. See the relation's blind spot in
-            // [KeyForms].
-            nonStringMappingKey(onlyRuntime = setOf("[0]", "[1.5]"), onlyPlugin = setOf("1.5"))
-        ),
-        Entry(
-            "yaml/boolean-like-key",
-            RuntimeConfigFormat.YAML,
-            "on: switched\n",
-            nonStringMappingKey(onlyRuntime = setOf("[true]"), onlyPlugin = setOf("on"))
-        ),
-        // The one that costs a real placeholder: `${a[0]}` is ordinary, and the
-        // plugin holds no key for it. The quoted `"0"` stays a string key, so
-        // `a.0` is the runtime's answer for that one and not for the plain `0`.
+        // pinning them to a guess, and the oracle's answer was that the plugin was
+        // wrong twice over: it lost the `[0]` the runtime resolves and invented an
+        // `on` no runtime does. Fixed in #178 by spelling a non-string mapping key
+        // the way Spring's flattening does — bracketed, from the key's *resolved*
+        // value. They agree now, and the entries stay so that a change to the
+        // key-scalar construction says so.
+        Entry("yaml/numeric-keys", RuntimeConfigFormat.YAML, "0: zero\n1.5: half\n"),
+        Entry("yaml/boolean-like-key", RuntimeConfigFormat.YAML, "on: switched\n"),
+        // The one that used to cost a real placeholder: `${a[0]}` is ordinary. The
+        // quoted `"0"` stays a string key, so `a.0` is the runtime's answer for
+        // that one and not for the plain `0` — two declarations, two keys, which
+        // the plugin only tells apart because a mapping's entries are identified
+        // by the segment they contribute rather than by their document spelling.
         Entry(
             "yaml/non-string-mapping-keys-nested",
             RuntimeConfigFormat.YAML,
-            "a:\n  0: x\n  on: y\n  \"0\": q\n",
-            nonStringMappingKey(
-                onlyRuntime = setOf("a[0]", "a[true]"),
-                onlyPlugin = setOf("a.on")
+            "a:\n  0: x\n  on: y\n  \"0\": q\n"
+        ),
+        // The resolved value, not the document spelling: hex and sexagesimal are
+        // renumbered, every YAML 1.1 boolean spelling collapses onto two keys, and
+        // a float keeps Java's rendering of it. `0o14` is here for the other
+        // direction — YAML 1.2 octal is no integer to snakeyaml, so it stays a
+        // string key and keeps the dot form.
+        Entry(
+            "yaml/non-string-key-spellings",
+            RuntimeConfigFormat.YAML,
+            "0x10: hex\n1:30: sexagesimal\nyes: y\noff: n\n.inf: infinite\n-1: negative\n" +
+                "0o14: not-an-int\n123456789012345678901234567890: big\n"
+        ),
+        // Spring Boot's YAML loader composes with a resolver that drops
+        // snakeyaml's implicit timestamp tag. The plugin uses the same one, so a
+        // date-shaped key stays a string instead of becoming a `Date` whose
+        // bracketed `toString` no placeholder could spell — and whose rendering
+        // would depend on the reading JVM's time zone.
+        Entry("yaml/timestamp-shaped-key", RuntimeConfigFormat.YAML, "2020-01-01: v\nafter: 1\n"),
+        Entry(
+            "yaml/non-string-key-with-a-nested-mapping",
+            RuntimeConfigFormat.YAML,
+            "a:\n  0:\n    b: 1\n"
+        ),
+        Entry(
+            "yaml/non-string-key-with-an-empty-container",
+            RuntimeConfigFormat.YAML,
+            "a:\n  0: {}\n"
+        ),
+        // Spring's `asMap` brackets a non-string key only for a mapping it
+        // descends into, and it does not descend into a mapping held by a
+        // sequence — so the flattening reaches that mapping with an Integer key
+        // still in it and fails the cast to String.
+        Entry(
+            "yaml/non-string-key-inside-a-sequence",
+            RuntimeConfigFormat.YAML,
+            "a:\n  - 0: x\n",
+            runtimeGivesOutOverOneKey(
+                "a non-string mapping key inside a sequence reaches a `Map<String, Object>` " +
+                    "cast the runtime's flattening cannot make",
+                "a[0][0]"
+            )
+        ),
+        Entry(
+            "yaml/null-mapping-key",
+            RuntimeConfigFormat.YAML,
+            "~: v\nafter: 1\n",
+            runtimeGivesOutOverOneKey(
+                "a null mapping key makes the runtime's own `key.toString()` an NPE",
+                "after"
+            )
+        ),
+        Entry(
+            "yaml/mapping-key-with-an-unknown-tag",
+            RuntimeConfigFormat.YAML,
+            "!foo bar: v\nafter: 1\n",
+            runtimeGivesOutOverOneKey(
+                "no `SafeConstructor` knows the tag `!foo`, so constructing the key fails",
+                "after"
             )
         ),
         Entry("yaml/inline-comment", RuntimeConfigFormat.YAML, "app:\n  name: svc # the service name\n  port: 8080\n"),
