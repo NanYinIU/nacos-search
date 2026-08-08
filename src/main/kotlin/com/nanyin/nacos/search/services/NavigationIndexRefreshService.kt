@@ -16,10 +16,25 @@ import com.nanyin.nacos.search.psi.NacosKeyIndexService
  * Daemon restarts are coalesced: detail confirm, namespace-index completion and
  * prefetch completion often finish within the same second, and each
  * [DaemonCodeAnalyzer.restart] clears then redraws `@NacosValue` gutters
- * (blue↔gray flicker).
+ * (blue↔gray flicker). The same entry is used when a marker input changes
+ * without a cache mutation — selected Namespace, environment, or Find Usages
+ * navigation into code — so those paths share the coalescing rather than
+ * restarting the analyzer synchronously (issue #193).
  */
 @Service(Service.Level.APP)
-class NavigationIndexRefreshService {
+class NavigationIndexRefreshService internal constructor(
+    private val scheduleOnEdt: (() -> Unit) -> Unit,
+    private val restartDaemon: (Project) -> Unit,
+    private val openProjects: () -> Array<Project>
+) {
+    constructor() : this(
+        scheduleOnEdt = { action ->
+            invokeOnEdt(ModalityState.defaultModalityState(), action)
+        },
+        restartDaemon = { target -> DaemonCodeAnalyzer.getInstance(target).restart() },
+        openProjects = { ProjectManager.getInstance().openProjects }
+    )
+
     private val scheduleLock = Any()
     private val pendingProjects = linkedSetOf<Project?>()
     @Volatile
@@ -38,7 +53,9 @@ class NavigationIndexRefreshService {
      * Coalesced [DaemonCodeAnalyzer.restart] without rebuilding the key index.
      * Used when an async index rebuild has already published — gutters that
      * analyzed against the previous empty/stale index would otherwise stay gray
-     * until the next manual edit.
+     * until the next manual edit — and when a non-cache marker input changes
+     * (Namespace / environment / Find Usages navigation) so open files re-rank
+     * against the new inputs without a remote read (issue #193).
      */
     fun requestGutterPass(project: Project? = null) {
         queueDaemonRestart(project)
@@ -53,7 +70,7 @@ class NavigationIndexRefreshService {
         }
         if (!shouldSchedule) return
 
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        scheduleOnEdt {
             val batch: List<Project?>
             synchronized(scheduleLock) {
                 batch = pendingProjects.toList()
@@ -63,14 +80,14 @@ class NavigationIndexRefreshService {
             val targets = linkedSetOf<Project>()
             for (requested in batch) {
                 if (requested == null) {
-                    ProjectManager.getInstance().openProjects.forEach { targets.add(it) }
+                    openProjects().forEach { targets.add(it) }
                 } else {
                     targets.add(requested)
                 }
             }
             targets.forEach { target ->
                 if (!target.isDefault && !target.isDisposed) {
-                    DaemonCodeAnalyzer.getInstance(target).restart()
+                    restartDaemon(target)
                 }
             }
         }
