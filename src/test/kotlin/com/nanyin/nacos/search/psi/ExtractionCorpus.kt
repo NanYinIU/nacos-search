@@ -280,6 +280,78 @@ object ExtractionCorpus {
                 "after"
             )
         ),
+        // The join is decided by the flattened key's *text*, not by what produced
+        // it, so a string key a user spelled `"[0]"` joins exactly as a bracketed
+        // non-string key does. `[abc]` and the unclosed `[` are here because the
+        // rule really is `startsWith("[")` and not "looks like an index" — the
+        // sort of thing a reader tightens into a regex without the oracle
+        // objecting.
+        Entry(
+            "yaml/bracket-spelled-string-key",
+            RuntimeConfigFormat.YAML,
+            "a:\n  \"[0]\": v\n  \"[abc]\": w\n  \"[\": u\n"
+        ),
+        // The negative, so the rule is bounded on both sides.
+        Entry("yaml/bracket-later-in-a-key", RuntimeConfigFormat.YAML, "a:\n  \"x[0]\": v\n"),
+        Entry(
+            "yaml/bracket-spelled-key-with-a-sequence",
+            RuntimeConfigFormat.YAML,
+            "a:\n  \"[0]\":\n    - p\n    - q\n"
+        ),
+        Entry(
+            "yaml/bracket-spelled-key-inside-a-sequence",
+            RuntimeConfigFormat.YAML,
+            "a:\n  - \"[0]\": v\n    n: 1\n"
+        ),
+        // A bracket-spelled string key and a non-string key reach the flattening
+        // as one and the same text, so the runtime holds one entry and the later
+        // declaration takes it — subtree and all. The key sets alone say it: the
+        // discarded subtree's keys are absent from both sides.
+        Entry(
+            "yaml/bracket-spelled-key-colliding-with-a-non-string-key",
+            RuntimeConfigFormat.YAML,
+            "a:\n  0:\n    b: 1\n  \"[0]\":\n    c: 2\n"
+        ),
+        Entry(
+            "yaml/bracket-spelled-key-colliding-the-other-way",
+            RuntimeConfigFormat.YAML,
+            "a:\n  \"[0]\":\n    c: 2\n  0:\n    b: 1\n"
+        ),
+        // Both orderings of the same collision, because they answer differently
+        // and the key sets alone cannot say so — a keys-only oracle sees one key
+        // either way. They are here for the *other* thing the corpus is good for:
+        // holding a body whose two entries survive snakeyaml's merge (they are an
+        // Integer and a String) and then collapse in Spring's flattening (both
+        // spell `[0]`), so a change to either level has a body to fail on.
+        Entry(
+            "yaml/merged-bracket-spelled-key-with-the-merge-first",
+            RuntimeConfigFormat.YAML,
+            "d: &d\n  \"[0]\": from-d\ns:\n  <<: *d\n  0: own\n"
+        ),
+        Entry(
+            "yaml/merged-bracket-spelled-key-with-the-merge-last",
+            RuntimeConfigFormat.YAML,
+            "d: &d\n  \"[0]\": from-d\ns:\n  0: own\n  <<: *d\n"
+        ),
+        // The mirror: same spelling, different constructed keys, so the merge
+        // keeps both and they flatten apart instead of colliding. This one the
+        // key set *does* see — two keys, not one.
+        Entry(
+            "yaml/merged-key-sharing-only-a-spelling",
+            RuntimeConfigFormat.YAML,
+            "d: &d\n  \"0\": from-d\ns:\n  0: own\n  <<: *d\n"
+        ),
+        // An own key that overrides a merged one takes the *merged* entry's slot,
+        // not its own document position, so the text-level twin declared between
+        // the two lands after it and wins. Reading own-beats-merged as "the own
+        // entry goes where it is written" loses `str-side` and invents
+        // `int-side`, which is a key set — so this entry fails the oracle rather
+        // than only shifting a value.
+        Entry(
+            "yaml/own-key-inherits-the-slot-of-the-merged-key-it-overrides",
+            RuntimeConfigFormat.YAML,
+            "d: &d\n  0:\n    from-d: 1\ns:\n  <<: *d\n  \"[0]\":\n    str-side: 2\n  0:\n    int-side: 3\n"
+        ),
         Entry("yaml/inline-comment", RuntimeConfigFormat.YAML, "app:\n  name: svc # the service name\n  port: 8080\n"),
         // Spring Boot's flattening terminates on an empty container, so these are
         // resolvable keys. The plugin claimed otherwise until this oracle said so.
@@ -341,6 +413,15 @@ object ExtractionCorpus {
         Entry("json/empty-containers", RuntimeConfigFormat.JSON, """{"a":[],"b":{},"c":1}"""),
         Entry("json/empty-containers-nested", RuntimeConfigFormat.JSON, """{"o":{"a":[],"b":{}},"c":1}"""),
         Entry("json/empty-containers-in-an-array", RuntimeConfigFormat.JSON, """{"s":[{},[],"x"]}"""),
+        // The one place the two formats agree where they might not have: Spring
+        // Cloud Alibaba's JSON loader applies the same textual `startsWith("[")`
+        // join Spring Boot's YAML one does. Held here per format against its own
+        // loader — the renderer is shared, so if either runtime ever changes its
+        // mind these are what says so rather than the shared enumerated case.
+        Entry("json/bracket-spelled-key", RuntimeConfigFormat.JSON, """{"a":{"[0]":"v","[abc]":"w"}}"""),
+        Entry("json/bracket-later-in-a-key", RuntimeConfigFormat.JSON, """{"a":{"x[0]":"v"}}"""),
+        Entry("json/bracket-spelled-key-with-an-array", RuntimeConfigFormat.JSON, """{"a":{"[0]":["p","q"]}}"""),
+        Entry("json/bracket-spelled-key-inside-an-array", RuntimeConfigFormat.JSON, """{"a":[{"[0]":"v"}]}"""),
         Entry("json/null-value", RuntimeConfigFormat.JSON, """{"a":null,"b":1}"""),
         Entry("json/booleans", RuntimeConfigFormat.JSON, """{"on":true,"off":false}"""),
         Entry("json/nested-array-of-arrays", RuntimeConfigFormat.JSON, """{"m":[[1,2],[3]]}"""),

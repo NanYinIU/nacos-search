@@ -8,6 +8,7 @@ import org.yaml.snakeyaml.Yaml
 import org.yaml.snakeyaml.constructor.SafeConstructor
 import org.yaml.snakeyaml.nodes.MappingNode
 import org.yaml.snakeyaml.nodes.Node
+import org.yaml.snakeyaml.nodes.NodeTuple
 import org.yaml.snakeyaml.nodes.ScalarNode
 import org.yaml.snakeyaml.nodes.SequenceNode
 import org.yaml.snakeyaml.nodes.Tag
@@ -137,30 +138,39 @@ object ConfigKeyExtractor {
      */
     private sealed class PathSeg {
         /**
-         * A mapping key the runtime resolves to a `CharSequence`, and the only
-         * segment that takes a separator.
+         * A mapping entry, spelled the way the runtime's flattening sees it.
          *
-         * The runtime decides that from the key's *text* rather than its type —
-         * its `key.startsWith("[")` branch joins without one — so a string key
-         * spelled `"[0]"` renders `a.[0]` here and `a[0]` there. That difference
-         * predates #178 and is not what [Bracketed] is about: it is reached by
-         * a key whose text begins with a bracket, not by a key whose resolved
-         * value is not a string. No corpus entry pins it yet.
+         * [text] is what Spring's `asMap` put into the map it then flattens: the
+         * key itself where it resolved to a `CharSequence`, and `[` + the
+         * resolved value + `]` where it did not (#178).
+         *
+         * Holding the *spelling* rather than the two cases that produce it is
+         * what makes a non-string key `0:` and a string key `"[0]":` one and the
+         * same segment — which is what the runtime makes of them: one entry in
+         * one map, the later declaration winning, subtree and all. Modelling
+         * them apart kept a subtree the runtime discards and invented a second
+         * spelling beside it.
          */
-        data class Name(val name: String) : PathSeg()
-
-        /** A sequence position. */
-        data class Index(val n: Int) : PathSeg()
+        data class MapKey(val text: String) : PathSeg() {
+            /**
+             * The runtime's own test — `key.startsWith("[")` — which decides two
+             * things: this segment joins to the path ahead of it without a
+             * separator, and the key it belongs to has no dot spelling at all
+             * (see [emitLeaf]).
+             *
+             * Textual, not structural. `[abc]`, and even an unclosed `[`, take
+             * this branch as surely as `[0]` does; narrowing it to something that
+             * only matches an index would part company with the runtime for the
+             * sake of looking tidier.
+             */
+            val isBracketed: Boolean get() = text.startsWith("[")
+        }
 
         /**
-         * A YAML mapping key the runtime resolves to something that is *not* a
-         * `CharSequence`, already spelled from that resolved value — `on:` is
-         * [rendered] `true` (#178). Separate from [Index] because it has no dot
-         * spelling and separate from [Name] because it takes no separator, and
-         * separate from both as an *identity*: `0:` and `"0":` are two
-         * declarations the runtime resolves to two different keys.
+         * A sequence position — the one segment with two spellings, `[0]` and
+         * the `.0` alias the plugin widens to on purpose.
          */
-        data class Bracketed(val rendered: String) : PathSeg()
+        data class Index(val n: Int) : PathSeg()
     }
 
     /**
@@ -184,12 +194,12 @@ object ConfigKeyExtractor {
         result[bracket] = KeyLocation(bracket, declarationLine, value)
         // The dot spelling is a widening made for sequence indexes, where the
         // runtime resolves the bracket form and `${list.0.n}` is the style a
-        // developer is as likely to write. A [PathSeg.Bracketed] segment is not
-        // that case: no runtime resolves any dot spelling of it, so the alias
-        // would promise a placeholder that fails. It is suppressed for the whole
-        // key rather than for that one segment, because a half-aliased `a.0[0]`
-        // is a spelling nothing resolves either.
-        if (path.any { it is PathSeg.Bracketed }) return
+        // developer is as likely to write. A bracketed mapping key is not that
+        // case: no runtime resolves any dot spelling of one, so the alias would
+        // promise a placeholder that fails. It is suppressed for the whole key
+        // rather than for that one segment, because a half-aliased `a[0].0` is a
+        // spelling nothing resolves either.
+        if (path.any { it is PathSeg.MapKey && it.isBracketed }) return
         val dot = renderKey(path, bracketIndexes = false)
         if (dot != bracket) {
             result[dot] = KeyLocation(dot, declarationLine, value)
@@ -200,9 +210,11 @@ object ConfigKeyExtractor {
         val sb = StringBuilder()
         for (seg in path) {
             when (seg) {
-                is PathSeg.Name -> {
-                    if (sb.isNotEmpty()) sb.append(".")
-                    sb.append(seg.name)
+                // The runtime's join, verbatim: a bracketed key is appended as
+                // `path + key`, anything else as `path + '.' + key`.
+                is PathSeg.MapKey -> {
+                    if (sb.isNotEmpty() && !seg.isBracketed) sb.append(".")
+                    sb.append(seg.text)
                 }
                 is PathSeg.Index -> {
                     if (bracketIndexes) {
@@ -212,11 +224,6 @@ object ConfigKeyExtractor {
                         sb.append(seg.n)
                     }
                 }
-                // No separator ahead of it and no second spelling: the runtime
-                // bracketed this key, and its `key.startsWith("[")` branch then
-                // joins it as `path + key`. That branch tests the text, so it
-                // catches one case this does not — see [PathSeg.Name].
-                is PathSeg.Bracketed -> sb.append("[").append(seg.rendered).append("]")
             }
         }
         return sb.toString()
@@ -550,71 +557,119 @@ object ConfigKeyExtractor {
         }
 
         /**
-         * The entries a mapping contributes once its `<<` merges are resolved: its
-         * own, then those of each mapping it merges in that no earlier source and
-         * the mapping itself did not already name.
+         * The entries a mapping contributes, keyed by the segment each one adds
+         * to the path.
          *
-         * The merge is resolved here rather than by walking `<<` as a path segment,
-         * because a segment would invent a `service.<<.timeout` no runtime produces
-         * and lose the `service.timeout` every runtime does. It is resolved *before*
-         * the walk rather than by letting a later write win, because YAML merge is
-         * shallow: a mapping's own `db: {port: 1}` discards a merged `db` outright,
-         * where a per-leaf overwrite would keep the merged `db.url` underneath it
-         * and invent a key.
+         * A mapping's entries pass through **two** identities on their way to a
+         * flattened key, and the plugin has to keep them apart because they can
+         * disagree:
          *
-         * An entry is identified by the [PathSeg] it contributes, not by its
-         * document spelling. That is what tells `0:` and `"0":` apart — the same
-         * spelling, two keys the runtime resolves separately — and it is also how
-         * the runtime's own merge resolution dedupes, by constructed key rather
-         * than by text.
+         * 1. snakeyaml resolves `<<` against the **constructed key**. `0:` and
+         *    `"0":` are `Integer 0` and `String "0"`, so both survive a merge.
+         * 2. Spring's `asMap` then keys on the **text** — `[0]` and `0` here, but
+         *    `0:` and `"[0]":` both spell `[0]` and collapse onto one entry.
+         *
+         * Collapsing at step 2 is what [PathSeg.MapKey] does, and doing it in one
+         * pass — treating step 1 as if it deduped on the text too — got the
+         * *winner* wrong: it made a mapping's own key beat a merged one that
+         * collides with it only at step 2, where the runtime lets whichever sits
+         * later win. Hence the ordered list, then the fold.
+         *
+         * The merge is resolved here rather than by walking `<<` as a path
+         * segment, because a segment would invent a `service.<<.timeout` no
+         * runtime produces and lose the `service.timeout` every runtime does. It
+         * is resolved *before* the walk rather than by letting a later leaf
+         * overwrite an earlier one, because YAML merge is shallow: a mapping's
+         * own `db: {port: 1}` discards a merged `db` outright, where a per-leaf
+         * overwrite would keep the merged `db.url` underneath it and invent a key.
          */
-        private fun entriesOf(node: MappingNode): Map<PathSeg, YamlEntry> {
-            val entries = LinkedHashMap<PathSeg, YamlEntry>()
-            for (tuple in node.value) {
-                if (tuple.keyNode.tag == Tag.MERGE) continue
-                // A complex key (`? [a, b]`) names nothing a placeholder can spell.
-                val key = tuple.keyNode as? ScalarNode ?: continue
-                val segment = segmentFor(key) ?: continue
-                entries[segment] = YamlEntry(key.startMark.line, tuple.valueNode)
-            }
-            for (tuple in node.value) {
-                if (tuple.keyNode.tag != Tag.MERGE) continue
-                for (source in yamlMergeSources(tuple.valueNode)) {
-                    // A mapping that merges itself, directly or through a chain.
-                    if (!onPath.add(source)) continue
-                    entriesOf(source).forEach { (segment, entry) ->
-                        if (segment !in entries) entries[segment] = entry
-                    }
-                    onPath.remove(source)
-                }
+        private fun entriesOf(node: MappingNode): Map<PathSeg, MappingEntry> {
+            val entries = LinkedHashMap<PathSeg, MappingEntry>()
+            // Step 2, verbatim: last one to land on a text wins.
+            for (entry in mergeResolved(node)) {
+                entries[entry.segment] = entry
             }
             return entries
         }
 
         /**
-         * The path segment [keyNode] contributes, or null where it contributes
-         * none — which is also every case the runtime gives out on rather than
-         * resolving a key of its own.
+         * Step 1: the mapping's entries in the order snakeyaml leaves them, once
+         * `<<` is resolved.
          *
-         * Spring's `asMap` decides on the constructed key's type: a `CharSequence`
-         * is a name and takes a separator, anything else is bracketed and spelled
-         * by its `toString`. Both refusals below follow the runtime failing the
-         * whole load, so contributing nothing is the closest the plugin can get
-         * while still keeping the rest of the body's keys (#178).
+         * One rule does all of it, and it is about **slots** rather than about
+         * own-versus-merged: an entry takes the position of the one it overrides.
+         * snakeyaml walks the tuples in document order keeping a key-to-index
+         * map, and where a key is already present it *replaces that index*
+         * instead of appending. So a `<<` above an own key supplies the slot the
+         * own key then fills, and a `<<` below one finds the key taken and skips
+         * it — own beats merged in both directions, which is the familiar rule,
+         * but the *position* is the merged entry's whenever the merge came first.
+         *
+         * A `LinkedHashMap` is that behaviour exactly: `put` on a present key
+         * replaces the value and keeps the original position. Nothing here needs
+         * to know which entries are the mapping's own, and an earlier attempt
+         * that did — collecting the own keys in a pass up front and suppressing
+         * merged ones against them — put the own entry at its own document
+         * position instead, which flipped the winner for anything declared
+         * between the `<<` and it.
+         *
+         * Position is invisible until two entries collapse onto one text at
+         * step 2, and then it is the whole answer.
          */
-        private fun segmentFor(keyNode: ScalarNode): PathSeg? {
+        private fun mergeResolved(node: MappingNode): List<MappingEntry> {
+            val ordered = LinkedHashMap<Any, MappingEntry>()
+            for (tuple in node.value) {
+                if (tuple.keyNode.tag != Tag.MERGE) {
+                    resolveEntry(tuple)?.let { ordered[it.constructedKey] = it }
+                    continue
+                }
+                for (source in yamlMergeSources(tuple.valueNode)) {
+                    // A mapping that merges itself, directly or through a chain.
+                    if (!onPath.add(source)) continue
+                    for (merged in mergeResolved(source)) {
+                        // `<<: *a` before `<<: *b`, and `*a` before `*b` within
+                        // one sequence: the first source to claim a key keeps it.
+                        if (merged.constructedKey !in ordered) {
+                            ordered[merged.constructedKey] = merged
+                        }
+                    }
+                    onPath.remove(source)
+                }
+            }
+            return ordered.values.toList()
+        }
+
+        /** One entry resolved into both identities, or null where it has none. */
+        private fun resolveEntry(tuple: NodeTuple): MappingEntry? {
+            // A complex key (`? [a, b]`) names nothing a placeholder can spell.
+            val keyNode = tuple.keyNode as? ScalarNode ?: return null
             val constructed = try {
                 keyConstructor.constructKey(keyNode)
             } catch (_: Exception) {
                 // A tag no SafeConstructor knows. Spring's loader uses one too,
                 // so the runtime resolves nothing at all from this body.
                 return null
-            }
+            } ?: return null
+            val segment = segmentFor(constructed) ?: return null
+            return MappingEntry(constructed, segment, keyNode.startMark.line, tuple.valueNode)
+        }
+
+        /**
+         * The path segment a constructed key contributes, or null where it
+         * contributes none — which is also every case the runtime gives out on
+         * rather than resolving a key of its own.
+         *
+         * Spring's `asMap` decides on the constructed key's type: a `CharSequence`
+         * is a name and takes a separator, anything else is bracketed and spelled
+         * by its `toString`. The refusals here and in [resolveEntry] follow the
+         * runtime failing the whole load, so contributing nothing is the closest
+         * the plugin can get while still keeping the rest of the body's keys
+         * (#178). A null key is one of them: Spring spells a non-`CharSequence`
+         * key with `key.toString()`, which for null throws inside Spring itself.
+         */
+        private fun segmentFor(constructed: Any): PathSeg.MapKey? {
             return when (constructed) {
-                // Spring spells a non-CharSequence key with `key.toString()`,
-                // which for a null key throws inside Spring itself.
-                null -> null
-                is CharSequence -> PathSeg.Name(constructed.toString())
+                is CharSequence -> PathSeg.MapKey(constructed.toString())
                 // `!!binary` constructs a `ByteArray`, whose `toString` is an
                 // identity hash: a different spelling on every parse, matching
                 // neither the runtime's own `[[B@…]` nor its previous self. It is
@@ -625,14 +680,28 @@ object ConfigKeyExtractor {
                 // — the same answer as the two refusals around it.
                 is ByteArray -> null
                 // Otherwise `toString` is the runtime's own spelling, whatever it
-                // renders: `[16]` for `0x10`, `[Infinity]` for `.inf`.
-                else -> PathSeg.Bracketed(constructed.toString())
+                // renders: `[16]` for `0x10`, `[Infinity]` for `.inf`. The
+                // brackets go on here rather than in the renderer because this is
+                // where the runtime adds them, and because from here on such a
+                // key is indistinguishable from one a user spelled that way —
+                // which is exactly what the runtime does with it.
+                else -> PathSeg.MapKey("[$constructed]")
             }
         }
     }
 
-    /** One entry of a mapping, after its `<<` merges are resolved. */
-    private class YamlEntry(val declarationLine: Int, val valueNode: Node)
+    /**
+     * One entry of a mapping, resolved into both of the identities it travels
+     * under: [constructedKey] is what snakeyaml's `<<` resolution dedupes on, and
+     * [segment] is the text Spring's flattening keys on. They are not the same
+     * relation — see [YamlWalk.entriesOf].
+     */
+    private class MappingEntry(
+        val constructedKey: Any,
+        val segment: PathSeg.MapKey,
+        val declarationLine: Int,
+        val valueNode: Node
+    )
 
     /**
      * Reaches [SafeConstructor]'s own construction of one scalar node.
@@ -723,7 +792,13 @@ object ConfigKeyExtractor {
                     // value spanning many lines cannot drag the key's line along
                     // with it.
                     val line = locator.lineOf(name)
-                    path.addLast(PathSeg.Name(name))
+                    // A JSON key is always a string, so it is already the text
+                    // its loader flattens — including the bracket join, which
+                    // Spring Cloud Alibaba's loader applies exactly as Spring
+                    // Boot's YAML one does. The corpus asserts each against its
+                    // own loader, so a future divergence is caught rather than
+                    // assumed away by the shared renderer.
+                    path.addLast(PathSeg.MapKey(name))
                     readJsonValue(reader, locator, path, line, result)
                     path.removeLast()
                 }

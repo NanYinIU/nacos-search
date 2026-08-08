@@ -394,6 +394,121 @@ class ConfigKeyExtractorTest {
     }
 
     @Test
+    fun `yaml joins a bracket-spelled key without a separator`() {
+        // The runtime decides the separator from the flattened key's *text*, not
+        // from what produced it: `key.startsWith("[")` selects `path + key`. So a
+        // string key a user spelled `"[0]"` joins exactly as a bracketed
+        // non-string key does. The test is textual, not "looks like an index" —
+        // `[abc]` and even an unclosed `[` take the same branch.
+        val map = keys("a:\n  \"[0]\": v\n  \"[abc]\": w\n  \"[\": u\n", RuntimeConfigFormat.YAML)
+        assertEquals("v", map["a[0]"]?.value)
+        assertEquals("w", map["a[abc]"]?.value)
+        assertEquals("u", map["a["]?.value)
+        assertNull(map["a.[0]"])
+    }
+
+    @Test
+    fun `yaml keeps the separator and the dot form for a bracket later in a key`() {
+        // The negative of the rule above: only a *leading* bracket joins without
+        // a separator, so this key keeps both spellings it always had.
+        val map = keys("a:\n  \"x[0]\": v\n", RuntimeConfigFormat.YAML)
+        assertEquals("v", map["a.x[0]"]?.value)
+        assertNull(map["ax[0]"])
+    }
+
+    @Test
+    fun `yaml emits no dot form for a key beneath a bracket-spelled key`() {
+        // Same reason a non-string key suppresses it: `a[0].0` is half in the
+        // alias form and half in the only form the runtime accepts, so it
+        // resolves nowhere.
+        val map = keys("a:\n  \"[0]\":\n    - p\n    - q\n", RuntimeConfigFormat.YAML)
+        assertEquals("p", map["a[0][0]"]?.value)
+        assertEquals("q", map["a[0][1]"]?.value)
+        assertNull(map["a[0].0"])
+        assertNull(map["a.[0][0]"])
+    }
+
+    @Test
+    fun `yaml treats a bracket-spelled key and a non-string key as one key`() {
+        // Both reach the runtime's flattening as the text `[0]`, so they are one
+        // entry in its map and the later declaration wins — subtree and all. The
+        // plugin identifies a mapping's entries by that same text, so it neither
+        // keeps the discarded subtree nor invents a second spelling for it.
+        val later = keys("a:\n  0:\n    b: 1\n  \"[0]\":\n    c: 2\n", RuntimeConfigFormat.YAML)
+        assertEquals(setOf("a[0].c"), later.keys)
+
+        // The other order, so the rule is pinned rather than the example.
+        val earlier = keys("a:\n  \"[0]\":\n    c: 2\n  0:\n    b: 1\n", RuntimeConfigFormat.YAML)
+        assertEquals(setOf("a[0].b"), earlier.keys)
+    }
+
+    @Test
+    fun `yaml lets the later of two keys colliding at flattening win, merge included`() {
+        // A mapping's entries carry two identities and they disagree here.
+        // snakeyaml resolves `<<` on the *constructed* key, where `0:` is an
+        // Integer and `"[0]":` a String, so neither discards the other and both
+        // survive the merge. Spring's flattening then keys on the *text*, where
+        // both spell `[0]` — and there the later one wins. So the position of
+        // the `<<` decides, which is the opposite of the ordinary merge rule.
+        val mergeFirst = keys(
+            "d: &d\n  \"[0]\": from-d\ns:\n  <<: *d\n  0: own\n",
+            RuntimeConfigFormat.YAML
+        )
+        assertEquals("own", mergeFirst["s[0]"]?.value)
+        assertNull(mergeFirst["s.[0]"])
+
+        // `<<` last, so the merged entry lands after the own one and takes it.
+        val mergeLast = keys(
+            "d: &d\n  \"[0]\": from-d\ns:\n  0: own\n  <<: *d\n",
+            RuntimeConfigFormat.YAML
+        )
+        assertEquals("from-d", mergeLast["s[0]"]?.value)
+    }
+
+    @Test
+    fun `yaml keeps an own key ahead of a merged one wherever the merge sits`() {
+        // The contrast that makes the case above a genuine exception rather than
+        // a reordering: where the two keys are equal to snakeyaml as well, the
+        // ordinary rule applies and the mapping's own entry wins from either
+        // position. Pinned in both orders so neither rule can absorb the other.
+        val mergeFirst = keys("d: &d\n  t: 30\ns:\n  <<: *d\n  t: 60\n", RuntimeConfigFormat.YAML)
+        assertEquals("60", mergeFirst["s.t"]?.value)
+
+        val mergeLast = keys("d: &d\n  t: 30\ns:\n  t: 60\n  <<: *d\n", RuntimeConfigFormat.YAML)
+        assertEquals("60", mergeLast["s.t"]?.value)
+    }
+
+    @Test
+    fun `yaml gives an overriding own key the slot of the merged key it replaces`() {
+        // snakeyaml replaces the merged entry *in place* rather than appending
+        // the own one, so `0:` sits where the `<<` put it — above the `"[0]"`
+        // declared between them, which therefore wins the flattening collision.
+        // Reading own-beats-merged as "the own entry goes where it is written"
+        // gets this backwards, and it costs a key rather than only a value.
+        val map = keys(
+            "d: &d\n  0:\n    from-d: 1\n" +
+                "s:\n  <<: *d\n  \"[0]\":\n    str-side: 2\n  0:\n    int-side: 3\n",
+            RuntimeConfigFormat.YAML
+        )
+        assertEquals("2", map["s[0].str-side"]?.value)
+        assertNull(map["s[0].int-side"])
+    }
+
+    @Test
+    fun `yaml keeps a merged key that only shares a spelling with an own key`() {
+        // `0:` and `"0":` look alike and are not: Integer and String, so the
+        // merge keeps both, and they flatten to two different keys rather than
+        // colliding. The mirror of the collision case — same-looking keys, no
+        // collision; different-looking keys, a collision.
+        val map = keys(
+            "d: &d\n  \"0\": from-d\ns:\n  0: own\n  <<: *d\n",
+            RuntimeConfigFormat.YAML
+        )
+        assertEquals("own", map["s[0]"]?.value)
+        assertEquals("from-d", map["s.0"]?.value)
+    }
+
+    @Test
     fun `yaml contributes nothing for a mapping key with no stable spelling`() {
         // `!!binary` constructs a byte[], and the runtime spells the key from its
         // identity hash — a different key on every parse, on both sides. This is
@@ -636,6 +751,28 @@ class ConfigKeyExtractorTest {
         // resolves against.
         val map = keys("{\"na\\u006de\":\"v\"}", RuntimeConfigFormat.JSON)
         assertEquals("v", map["name"]?.value)
+    }
+
+    @Test
+    fun `json joins a bracket-spelled key without a separator`() {
+        // The two formats' key spaces are allowed to differ and must not be
+        // forced to agree — but here they genuinely do: Spring Cloud Alibaba's
+        // JSON loader applies the same textual `startsWith("[")` join as Spring
+        // Boot's YAML one, which is why the renderer is shared rather than
+        // special-cased per format. The corpus asserts both against their own
+        // loader, so a future divergence surfaces there rather than here.
+        val map = keys("""{"a":{"[0]":"v","x[0]":"w"}}""", RuntimeConfigFormat.JSON)
+        assertEquals("v", map["a[0]"]?.value)
+        assertNull(map["a.[0]"])
+        // Only a leading bracket; this one keeps its separator.
+        assertEquals("w", map["a.x[0]"]?.value)
+    }
+
+    @Test
+    fun `json emits no dot form for a key beneath a bracket-spelled key`() {
+        val map = keys("""{"a":{"[0]":["p","q"]}}""", RuntimeConfigFormat.JSON)
+        assertEquals("p", map["a[0][0]"]?.value)
+        assertNull(map["a[0].0"])
     }
 
     @Test
