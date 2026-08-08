@@ -92,27 +92,55 @@ object ConfigKeyExtractor {
      * occurrence wins (matches properties/yaml override semantics).
      */
     fun extract(content: String?, format: RuntimeConfigFormat): KeyExtraction =
-        // One switch over the closed set, with no `else`: adding a format the
-        // plugin learns to parse must not compile until this decides what it
-        // means. A branch that quietly answered `Extracted(emptyMap())` would
-        // reintroduce the very confusion [KeyExtraction] exists to prevent.
-        //
-        // A refusal is a property of the format alone, so the body is never
-        // consulted for one: an empty XML body is no more extractable than a
-        // full one.
-        when (format) {
-            RuntimeConfigFormat.TEXT,
-            RuntimeConfigFormat.HTML,
-            RuntimeConfigFormat.TOML ->
-                KeyExtraction.NotExtractable(KeyExtraction.Reason.KNOWN_NON_PARSING_FORMAT)
-            RuntimeConfigFormat.UNDETERMINED ->
-                KeyExtraction.NotExtractable(KeyExtraction.Reason.FORMAT_UNDETERMINED)
-            RuntimeConfigFormat.XML ->
-                KeyExtraction.NotExtractable(KeyExtraction.Reason.PARSER_NOT_IMPLEMENTED)
-            RuntimeConfigFormat.PROPERTIES -> parsed(content, ::extractProperties)
-            RuntimeConfigFormat.YAML -> parsed(content, ::extractYaml)
-            RuntimeConfigFormat.JSON -> parsed(content, ::extractJson)
+        when (val handling = handlingOf(format)) {
+            is FormatHandling.Refuse -> KeyExtraction.NotExtractable(handling.reason)
+            is FormatHandling.Parse -> parsed(content, handling.parse)
         }
+
+    /**
+     * Why [format] contributes no keys, or null when the plugin parses it.
+     *
+     * A refusal is a property of the format alone, so the body is never
+     * consulted for one — an empty XML body is no more extractable than a full
+     * one. That is what lets a caller holding a data id and no body at all ask
+     * the question, which is how a placeholder reaches its terminal
+     * 格式不参与解析 conclusion instead of waiting on a body that would change
+     * nothing (issue #172).
+     *
+     * It reads the same table [extract] does rather than a second copy of it,
+     * so the answer given to a caller with a body and to a caller without one
+     * cannot disagree.
+     */
+    fun refusalFor(format: RuntimeConfigFormat): KeyExtraction.Reason? =
+        (handlingOf(format) as? FormatHandling.Refuse)?.reason
+
+    /** What the plugin does with a body under one 运行时格式: parse it, or not. */
+    private sealed interface FormatHandling {
+        class Parse(val parse: (String) -> Map<String, KeyLocation>) : FormatHandling
+        data class Refuse(val reason: KeyExtraction.Reason) : FormatHandling
+    }
+
+    /**
+     * The one table from 运行时格式 to what the plugin does under it.
+     *
+     * One switch over the closed set, with no `else`: adding a format the
+     * plugin learns to parse must not compile until this decides what it
+     * means. A branch that quietly answered `Extracted(emptyMap())` would
+     * reintroduce the very confusion [KeyExtraction] exists to prevent.
+     */
+    private fun handlingOf(format: RuntimeConfigFormat): FormatHandling = when (format) {
+        RuntimeConfigFormat.TEXT,
+        RuntimeConfigFormat.HTML,
+        RuntimeConfigFormat.TOML ->
+            FormatHandling.Refuse(KeyExtraction.Reason.KNOWN_NON_PARSING_FORMAT)
+        RuntimeConfigFormat.UNDETERMINED ->
+            FormatHandling.Refuse(KeyExtraction.Reason.FORMAT_UNDETERMINED)
+        RuntimeConfigFormat.XML ->
+            FormatHandling.Refuse(KeyExtraction.Reason.PARSER_NOT_IMPLEMENTED)
+        RuntimeConfigFormat.PROPERTIES -> FormatHandling.Parse(::extractProperties)
+        RuntimeConfigFormat.YAML -> FormatHandling.Parse(::extractYaml)
+        RuntimeConfigFormat.JSON -> FormatHandling.Parse(::extractJson)
+    }
 
     private fun parsed(
         content: String?,

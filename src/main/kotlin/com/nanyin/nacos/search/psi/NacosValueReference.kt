@@ -40,7 +40,8 @@ class NacosValueReference(
             preferredNamespaceId = codeContext.namespaceId,
             preferredDataId = codeContext.dataId,
             allowCrossNamespace = allowCrossNamespace,
-            activeNamespaceId = project.selectedNacosNamespaceId()
+            activeNamespaceId = project.selectedNacosNamespaceId(),
+            formatOverride = codeContext.runtimeFormatOverride()
         )
         return hits.map { hit ->
             object : ResolveResult {
