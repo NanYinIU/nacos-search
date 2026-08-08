@@ -1,0 +1,22 @@
+build.gradle.kts
+  h_231225c3625e99 146
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosConfigKeyReferenceSearcher.kt
+  h_231225c3625e99 21-28,43-45,53-55,60,70-72,77-78,96-98,106-107,112,118-119,125,131,138-142,151-153,163-164,169-170,181-188,190,196-214
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosDeclaredSourceIndex.kt
+  h_231225c3625e99 20-22
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanel.kt
+  h_231225c3625e99 784-788,841-845,876,878,882-886
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosConfigKeyReferenceSearcherTest.kt
+  h_231225c3625e99 9,56-106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "fe3d851b09597336220a015f267c11ad75e8bf46",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
