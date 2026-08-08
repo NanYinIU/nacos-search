@@ -17,8 +17,9 @@ import java.io.DataOutput
  * files that declare them.
  *
  * Powers the navigation detail prefetch work set (ADR-0041) and is the same
- * signal that hard-filters code-reference resolution. Reverse Find Usages that
- * applies this filter is out of scope for the index's first consumer.
+ * signal that hard-filters code-reference resolution. Reverse Find Usages
+ * applies the same hard filter per usage-site [NacosCodeContext] (extracted at
+ * query time), not by re-querying this index.
  *
  * The [DeclaredSourceIndexer] uses a lightweight regex rather than PSI (which
  * would be too slow during indexing). Version bumps force a one-time full
