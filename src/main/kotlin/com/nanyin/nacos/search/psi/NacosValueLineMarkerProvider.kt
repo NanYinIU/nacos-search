@@ -107,14 +107,27 @@ class NacosValueLineMarkerProvider internal constructor(
     ): Boolean {
         if (resolution.hits.isNotEmpty()) return true
         // Hard declared-Data-ID miss: key proven absent from the named source
-        // (or the source itself proven absent). No icon — do not paint gray
-        // noise or invite a click that would soft-navigate elsewhere.
+        // (or the source itself proven absent in this Namespace). No icon —
+        // do not paint gray noise or invite a click that would soft-navigate
+        // elsewhere.
         if (resolution.status == ConfigReferenceStatus.UNRESOLVED) return false
         val dataId = codeContext.dataId ?: return false
-        return keyIndexService().isDataIdKnown(
+        // Visibility block is undecidable, not a miss — keep the hollow icon
+        // and access-refused tooltip for a declared source even when the same
+        // dataId is cached under another Namespace. Without a declared dataId
+        // there is still nothing to show (identity-wide block + no context).
+        if (resolution.visibilityBlocked) return true
+        // Hollow / terminal markers only when the declared Data ID is
+        // actionable under the *session-selected* Namespace. A source that
+        // exists only in another Namespace (es.properties in uxinlive while
+        // public is selected) must not paint gray under the current one —
+        // background refresh can still warm the active Namespace index without
+        // an icon. Cold start with no multi-Namespace evidence still shows a
+        // hollow marker so the first load can be driven from the gutter.
+        return keyIndexService().isDeclaredSourceActionableInActiveNamespace(
             snapshot,
             dataId,
-            activeNamespaceId = effectiveNamespaceId(project, codeContext)
+            activeNamespaceId = project.selectedNacosNamespaceId()
         )
     }
 
