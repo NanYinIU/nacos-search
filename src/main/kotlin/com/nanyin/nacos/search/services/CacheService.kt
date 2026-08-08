@@ -938,6 +938,11 @@ class CacheService internal constructor(
      * [namespaceId] is the canonical Namespace 标识 of the 配置坐标 the detail was
      * written under (issue #190). The payload's [NacosConfiguration.tenantId]
      * remains a display value and is not a routing decision.
+     *
+     * The default [namespaceId] is [NamespaceInfo.PUBLIC] for test/legacy
+     * constructions that only care about freshness and body (e.g. detail-panel
+     * plan tests). Snapshot builders always pass the coordinate Namespace
+     * explicitly — do not treat the default as a routing source of truth.
      */
     data class CachedConfiguration(
         val configuration: NacosConfiguration,

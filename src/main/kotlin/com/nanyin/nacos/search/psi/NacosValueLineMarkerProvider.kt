@@ -185,9 +185,17 @@ class NacosValueLineMarkerProvider internal constructor(
                 // The same reading the gutter decided with: a caret placed by
                 // the data id's format while the marker resolved by the site's
                 // declaration would land on a line for a key that never matched.
-                val lineIndex = keysUnderRuntimeFormat(cached, codeContext.runtimeFormatOverride())[key]?.lineIndex
+                val lineIndex = keysUnderRuntimeFormat(
+                    cached,
+                    codeContext.runtimeFormatOverride(),
+                    coordinateNamespaceId = namespaceId
+                )[key]?.lineIndex
                     ?: ConfigKeyExtractor.LINE_NOT_FOUND
-                NacosConfigNavigator.navigate(project, cached, lineIndex)
+                // Lazy-load already chose [namespaceId] as the coordinate to
+                // fetch under — pass it through so go-to does not fall back to
+                // a missing payload tenant and switch the tool window to public
+                // (issue #190).
+                NacosConfigNavigator.navigate(project, cached, lineIndex, namespaceId)
                 return@executeOnPooledThread
             }
             val observed = runBlocking {
@@ -223,9 +231,13 @@ class NacosValueLineMarkerProvider internal constructor(
                 .getService(NavigationIndexRefreshService::class.java)
                 .refresh(resolvedIdentity, project)
 
-            val lineIndex = keysUnderRuntimeFormat(config, codeContext.runtimeFormatOverride())[key]?.lineIndex
+            val lineIndex = keysUnderRuntimeFormat(
+                config,
+                codeContext.runtimeFormatOverride(),
+                coordinateNamespaceId = namespaceId
+            )[key]?.lineIndex
                 ?: ConfigKeyExtractor.LINE_NOT_FOUND
-            NacosConfigNavigator.navigate(project, config, lineIndex)
+            NacosConfigNavigator.navigate(project, config, lineIndex, namespaceId)
 
         }
     }

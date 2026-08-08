@@ -1175,4 +1175,92 @@ class NacosKeyResolverTest {
         assertTrue("only-on-coord.properties" in index.dataIdsByNamespace["team-x"].orEmpty())
         assertFalse("only-on-coord.properties" in index.dataIdsByNamespace[""].orEmpty())
     }
+
+    @Test
+    fun `PSI element and chooser labels use coordinate Namespace when payload tenant is absent`() = runBlocking {
+        // End-to-end navigability seam: hit.namespaceId → NacosConfigKeyElement
+        // → chooser secondary text, without falling back to public (issue #190).
+        seedDetails(
+            listOf(
+                seed(
+                    dataId = "app.properties",
+                    group = "DEFAULT_GROUP",
+                    payloadTenant = null,
+                    content = "shared=from-a\n",
+                    coordinateNamespaceId = "ns-a"
+                ),
+                seed(
+                    dataId = "app.properties",
+                    group = "DEFAULT_GROUP",
+                    payloadTenant = null,
+                    content = "shared=from-b\n",
+                    coordinateNamespaceId = "ns-b"
+                )
+            )
+        )
+        val hits = indexService.resolve(
+            snapshot = cache.snapshot(identity),
+            key = "shared",
+            allowCrossNamespace = true
+        )
+        assertEquals(2, hits.size)
+
+        val project = com.intellij.openapi.project.ProjectManager.getInstance().defaultProject
+        val elements = hits.map { hit ->
+            NacosConfigKeyElement(
+                project = project,
+                config = hit.config,
+                key = "shared",
+                value = hit.location.value,
+                lineIndex = hit.location.lineIndex,
+                coordinateNamespaceId = hit.namespaceId
+            )
+        }
+        assertEquals(setOf("ns-a", "ns-b"), elements.map { it.namespaceId }.toSet())
+        // Payload tenant is still null — display/routing must not invent public.
+        assertTrue(elements.all { it.config.tenantId == null })
+
+        val chooserLabels = elements.map { el ->
+            NacosConfigChoiceItem(el, namespaceDisplayName = el.namespaceId).secondaryText
+        }
+        assertTrue(chooserLabels.any { it.startsWith("ns-a /") })
+        assertTrue(chooserLabels.any { it.startsWith("ns-b /") })
+        assertFalse(chooserLabels.any { it.startsWith("public /") })
+    }
+
+    @Test
+    fun `format override re-derives a tenant-less body under its coordinate Namespace`() = runBlocking {
+        // Site declares YAML for a data id with no suffix; body is under coordinate
+        // "dev" with a null payload tenant. Matching must use the coordinate or the
+        // override silently misses and falls back to the undetermined suffix.
+        seedDetails(
+            listOf(
+                seed(
+                    dataId = "service-config",
+                    group = "DEFAULT_GROUP",
+                    payloadTenant = null,
+                    content = "k: v\n",
+                    type = "yaml",
+                    coordinateNamespaceId = "dev"
+                )
+            )
+        )
+        val override = ReferenceFormatOverride(
+            dataId = "service-config",
+            group = "DEFAULT_GROUP",
+            namespaceId = "dev",
+            format = RuntimeConfigFormat.YAML
+        )
+        val hits = NacosKeyResolver.resolve(
+            key = "k",
+            index = indexService.currentIndex(cache.snapshot(identity)),
+            snapshot = cache.snapshot(identity),
+            preferredDataId = "service-config",
+            preferredNamespaceId = "dev",
+            formatOverride = override
+        )
+        assertEquals(1, hits.size)
+        assertEquals("v", hits.single().location.value)
+        assertEquals("dev", hits.single().namespaceId)
+    }
 }

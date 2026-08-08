@@ -29,15 +29,18 @@ object NacosKeyResolver {
      * boundaries are absolute instants, so an index built once stays usable as
      * the clock moves and nothing in it can report a freshness of its own.
      *
-     * [namespaceId] is the canonical Namespace of the 配置坐标 the detail was
-     * written under, not the payload tenant (issue #190).
+     * [namespaceId] is required and is the canonical Namespace of the 配置坐标
+     * the detail was written under, not the payload tenant (issue #190). Callers
+     * take it from [CacheService.CachedConfiguration.namespaceId]; there is no
+     * payload-tenant default so a forgotten argument cannot reintroduce that
+     * routing class.
      */
     data class KeyDefinition(
         val config: NacosConfiguration,
         val location: ConfigKeyExtractor.KeyLocation,
         val freshUntilMillis: Long = Long.MAX_VALUE,
         val deepStaleAtMillis: Long = Long.MAX_VALUE,
-        val namespaceId: String = config.tenantId ?: ""
+        val namespaceId: String
     ) {
         fun judgedAt(asOfMillis: Long): KeyHit = KeyHit(
             config,
@@ -56,15 +59,15 @@ object NacosKeyResolver {
      * without one, which is what keeps every hit in a single decision from
      * straddling a freshness boundary.
      *
-     * [namespaceId] is the coordinate Namespace (issue #190), not the payload
-     * tenant — so cross-Namespace filtering and ranking stay correct when the
-     * response body omits tenant.
+     * [namespaceId] is required: the coordinate Namespace (issue #190), not the
+     * payload tenant — so cross-Namespace filtering, ranking, and navigation
+     * stay correct when the response body omits tenant.
      */
     data class KeyHit(
         val config: NacosConfiguration,
         val location: ConfigKeyExtractor.KeyLocation,
         val freshness: CacheService.DetailFreshness,
-        val namespaceId: String = config.tenantId ?: ""
+        val namespaceId: String
     )
 
     /**
@@ -359,7 +362,9 @@ object NacosKeyResolver {
     ): List<KeyDefinition> {
         val indexed = index.definitionsByKey[key].orEmpty()
         if (formatOverride == null) return indexed
-        return indexed.filterNot { formatOverride.appliesTo(it.config) } +
+        // Coordinate Namespace is authority for which definition the site named
+        // (issue #190); do not match the override against payload tenant.
+        return indexed.filterNot { formatOverride.appliesTo(it.config, it.namespaceId) } +
             overrideDefinitions(snapshot, formatOverride, key)
     }
 
@@ -383,9 +388,13 @@ object NacosKeyResolver {
         override: ReferenceFormatOverride,
         key: String
     ): List<KeyDefinition> = snapshot.configurations
-        .filter { override.appliesTo(it.configuration) }
+        .filter { override.appliesTo(it.configuration, it.namespaceId) }
         .mapNotNull { cached ->
-            keysUnderRuntimeFormat(cached.configuration, override)[key]?.let { location ->
+            keysUnderRuntimeFormat(
+                cached.configuration,
+                override,
+                coordinateNamespaceId = cached.namespaceId
+            )[key]?.let { location ->
                 KeyDefinition(
                     cached.configuration,
                     location,

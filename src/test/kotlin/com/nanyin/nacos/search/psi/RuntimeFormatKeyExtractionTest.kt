@@ -209,6 +209,33 @@ class RuntimeFormatKeyExtractionTest {
     }
 
     @Test
+    fun `appliesTo matches coordinate Namespace when payload tenant is absent`() {
+        // Issue #190: a site that names Namespace "dev" must re-derive a body
+        // written under coordinate "dev" even when the response omits tenant.
+        val site = ReferenceFormatOverride(
+            dataId = "service-config",
+            group = "DEFAULT_GROUP",
+            namespaceId = "dev",
+            format = RuntimeConfigFormat.YAML
+        )
+        val body = NacosConfiguration("service-config", "DEFAULT_GROUP", null, "k: v\n", "yaml")
+
+        // Payload-only path cannot see the coordinate → miss (documented limit).
+        assertFalse(site.appliesTo(body))
+        // Coordinate path matches.
+        assertTrue(site.appliesTo(body, coordinateNamespaceId = "dev"))
+        assertFalse(site.appliesTo(body, coordinateNamespaceId = "prod"))
+
+        // keysUnderRuntimeFormat must use the coordinate so the override format
+        // is applied rather than the undetermined suffix refusal.
+        assertEquals(
+            "v",
+            keysUnderRuntimeFormat(body, site, coordinateNamespaceId = "dev")["k"]?.value
+        )
+        assertTrue(keysUnderRuntimeFormat(body, site).isEmpty())
+    }
+
+    @Test
     fun `the two refusals stay distinguishable at the extraction seam`() {
         // The reason has to survive the flattening above, because the terminal
         // resolution state explains the two differently: the user's next action

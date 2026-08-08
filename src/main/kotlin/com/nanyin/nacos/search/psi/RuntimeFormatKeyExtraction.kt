@@ -30,15 +30,25 @@ data class ReferenceFormatOverride(
     /**
      * True when [config] is the configuration this site named.
      *
+     * [coordinateNamespaceId] is the Namespace of the 配置坐标 when the caller
+     * holds one (issue #190). Defaults to the payload tenant only for call
+     * sites that have a body and no coordinate — that path cannot distinguish
+     * tenant-less non-public entries; prefer the overload that takes a
+     * coordinate whenever one is available.
+     *
      * The one place *that* question is answered, because a site that overrode a
      * configuration it did not name would extract it by rules nobody wrote for
      * it — and a site whose override silently missed the one it did name would
      * fall back to the very reading it is contradicting.
      */
-    fun appliesTo(config: NacosConfiguration): Boolean =
+    fun appliesTo(
+        config: NacosConfiguration,
+        coordinateNamespaceId: String? = config.tenantId
+    ): Boolean =
         namesDataId(config.dataId) &&
             (group == null || config.group == group) &&
-            (namespaceId == null || canonicalNamespace(config.tenantId) == canonicalNamespace(namespaceId))
+            (namespaceId == null ||
+                canonicalNamespace(coordinateNamespaceId) == canonicalNamespace(namespaceId))
 
     /**
      * True when this site's declaration is about [dataId].
@@ -101,9 +111,15 @@ internal fun NacosCodeContext.runtimeFormatOverride(): ReferenceFormatOverride? 
  */
 internal fun keysUnderRuntimeFormat(
     config: NacosConfiguration,
-    override: ReferenceFormatOverride? = null
+    override: ReferenceFormatOverride? = null,
+    /**
+     * Coordinate Namespace when the caller holds one (issue #190). Passed
+     * through to [ReferenceFormatOverride.appliesTo] so a tenant-less body
+     * still re-reads under the site's declared format for its coordinate.
+     */
+    coordinateNamespaceId: String? = config.tenantId
 ): Map<String, ConfigKeyExtractor.KeyLocation> {
-    val format = override?.takeIf { it.appliesTo(config) }?.format
+    val format = override?.takeIf { it.appliesTo(config, coordinateNamespaceId) }?.format
         ?: RuntimeFormatDecision.forDataId(config.dataId)
     return when (val extraction = ConfigKeyExtractor.extract(config.content, format)) {
         is KeyExtraction.Extracted -> extraction.keys

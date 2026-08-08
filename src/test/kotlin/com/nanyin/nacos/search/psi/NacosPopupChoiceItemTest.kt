@@ -4,6 +4,7 @@ import com.intellij.openapi.project.ProjectManager
 import com.intellij.psi.PsiElement
 import com.intellij.testFramework.ApplicationRule
 import com.nanyin.nacos.search.models.NacosConfiguration
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -54,5 +55,43 @@ class NacosPopupChoiceItemTest {
 
         assertTrue(item.secondaryText.startsWith("public / DEFAULT_GROUP / roombiz.properties"))
         assertFalse(item.secondaryText.contains("fc765465-e05f-44b0-b953-8ceefc8a0d1c"))
+    }
+
+    @Test
+    fun `element namespace prefers coordinate over absent payload tenant`() {
+        // Go-to / chooser routing seam for issue #190: a tenant-less body under
+        // a non-public coordinate must not label or route as public.
+        val element = NacosConfigKeyElement(
+            project = ProjectManager.getInstance().defaultProject,
+            config = NacosConfiguration(
+                dataId = "app.properties",
+                group = "DEFAULT_GROUP",
+                tenantId = null,
+                content = "k=v\n"
+            ),
+            key = "k",
+            value = "v",
+            lineIndex = 0,
+            coordinateNamespaceId = "team-a"
+        )
+
+        assertEquals("team-a", element.namespaceId)
+        assertEquals("team-a", element.namespaceDisplayName)
+        assertTrue(element.presentation.locationString.orEmpty().startsWith("team-a /"))
+
+        val withoutCoordinate = NacosConfigKeyElement(
+            project = ProjectManager.getInstance().defaultProject,
+            config = NacosConfiguration(
+                dataId = "app.properties",
+                group = "DEFAULT_GROUP",
+                tenantId = null,
+                content = "k=v\n"
+            ),
+            key = "k",
+            value = "v",
+            lineIndex = 0
+        )
+        // No coordinate → payload tenant (null) → canonical public.
+        assertEquals("public", withoutCoordinate.namespaceId)
     }
 }
