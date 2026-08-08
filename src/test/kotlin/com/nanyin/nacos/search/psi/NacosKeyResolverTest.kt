@@ -43,15 +43,44 @@ class NacosKeyResolverTest {
     private fun cfg(dataId: String, group: String, tenant: String?, content: String, type: String) =
         NacosConfiguration(dataId, group, tenant, content, type)
 
+    /**
+     * Seeds a detail under a 配置坐标 whose Namespace may differ from the
+     * payload tenant (issue #190). When [coordinateNamespaceId] is omitted the
+     * coordinate follows the payload tenant, matching the historical helper.
+     */
+    private data class SeedDetail(
+        val configuration: NacosConfiguration,
+        val coordinateNamespaceId: String? = configuration.tenantId
+    )
+
+    private fun seed(
+        dataId: String,
+        group: String,
+        payloadTenant: String?,
+        content: String,
+        type: String = "properties",
+        coordinateNamespaceId: String? = payloadTenant
+    ) = SeedDetail(
+        configuration = cfg(dataId, group, payloadTenant, content, type),
+        coordinateNamespaceId = coordinateNamespaceId
+    )
+
     private suspend fun seedConfigurations(
         configurations: List<NacosConfiguration>,
         forIdentity: com.nanyin.nacos.search.models.AccessIdentity = identity
     ) {
-        configurations.forEach { config ->
+        seedDetails(configurations.map { SeedDetail(it) }, forIdentity)
+    }
+
+    private suspend fun seedDetails(
+        details: List<SeedDetail>,
+        forIdentity: com.nanyin.nacos.search.models.AccessIdentity = identity
+    ) {
+        details.forEach { detail ->
             cache.writeDetail(
                 identity = forIdentity,
-                namespaceId = config.tenantId,
-                configuration = config,
+                namespaceId = detail.coordinateNamespaceId,
+                configuration = detail.configuration,
                 ttl = 60_000L
             )
         }
@@ -1031,5 +1060,119 @@ class NacosKeyResolverTest {
         )
         assertEquals(ConfigReferenceStatus.UNDECIDABLE, resolution.status)
         assertTrue(resolution.status.mayRequestBackgroundRefresh())
+    }
+
+    // ── Issue #190: coordinate Namespace is authority, not payload tenant ──
+
+    @Test
+    fun `cross namespace off filters a non-public coordinate even when payload tenant is absent`() = runBlocking {
+        // Written under coordinate "team-a" but the response body carries no tenant.
+        // When cross-Namespace navigation is off and the session is on public, the
+        // definition must not resolve — payload tenant is display-only (issue #190).
+        seedDetails(
+            listOf(
+                seed(
+                    dataId = "app.properties",
+                    group = "DEFAULT_GROUP",
+                    payloadTenant = null,
+                    content = "feature.enabled=true\n",
+                    coordinateNamespaceId = "team-a"
+                )
+            )
+        )
+
+        val hits = indexService.resolve(
+            snapshot = cache.snapshot(identity),
+            key = "feature.enabled",
+            activeNamespaceId = "public",
+            allowCrossNamespace = false
+        )
+        assertTrue(hits.isEmpty())
+
+        // The same definition is still a hit when the active Namespace matches
+        // the coordinate, even though the payload tenant is null.
+        val activeHits = indexService.resolve(
+            snapshot = cache.snapshot(identity),
+            key = "feature.enabled",
+            activeNamespaceId = "team-a",
+            allowCrossNamespace = false
+        )
+        assertEquals(1, activeHits.size)
+        assertEquals("team-a", activeHits.single().namespaceId)
+        assertNull(activeHits.single().config.tenantId)
+    }
+
+    @Test
+    fun `two coordinates with the same Data ID and tenant-less payloads both enter the key index`() = runBlocking {
+        // Two Namespaces hold the same Data ID / Group with bodies that omit tenant.
+        // Snapshot de-duplication and the derived index must keep both (issue #190).
+        seedDetails(
+            listOf(
+                seed(
+                    dataId = "app.properties",
+                    group = "DEFAULT_GROUP",
+                    payloadTenant = null,
+                    content = "shared=from-a\n",
+                    coordinateNamespaceId = "ns-a"
+                ),
+                seed(
+                    dataId = "app.properties",
+                    group = "DEFAULT_GROUP",
+                    payloadTenant = null,
+                    content = "shared=from-b\n",
+                    coordinateNamespaceId = "ns-b"
+                )
+            )
+        )
+
+        val snapshot = cache.snapshot(identity)
+        assertEquals(2, snapshot.configurations.size)
+        assertEquals(
+            setOf("ns-a", "ns-b"),
+            snapshot.configurations.map { it.namespaceId }.toSet()
+        )
+
+        val hits = indexService.resolve(
+            snapshot = snapshot,
+            key = "shared",
+            allowCrossNamespace = true
+        )
+        assertEquals(2, hits.size)
+        assertEquals(setOf("ns-a", "ns-b"), hits.map { it.namespaceId }.toSet())
+        assertEquals(
+            setOf("from-a", "from-b"),
+            hits.map { it.location.value }.toSet()
+        )
+
+        // Each coordinate remains independently addressable when cross-Namespace
+        // filtering is off.
+        val onlyA = indexService.resolve(
+            snapshot = snapshot,
+            key = "shared",
+            activeNamespaceId = "ns-a",
+            allowCrossNamespace = false
+        )
+        assertEquals(1, onlyA.size)
+        assertEquals("from-a", onlyA.single().location.value)
+        assertEquals("ns-a", onlyA.single().namespaceId)
+    }
+
+    @Test
+    fun `dataIdsByNamespace keys off the coordinate Namespace not the payload tenant`() = runBlocking {
+        seedDetails(
+            listOf(
+                seed(
+                    dataId = "only-on-coord.properties",
+                    group = "DEFAULT_GROUP",
+                    payloadTenant = null,
+                    content = "k=v\n",
+                    coordinateNamespaceId = "team-x"
+                )
+            )
+        )
+        val index = indexService.currentIndex(cache.snapshot(identity))!!
+        // normalizeNamespaceId leaves non-public ids as-is; public collapses to "".
+        assertTrue("only-on-coord.properties" in index.dataIdsByNamespace["team-x"].orEmpty())
+        assertFalse("only-on-coord.properties" in index.dataIdsByNamespace[""].orEmpty())
     }
 }

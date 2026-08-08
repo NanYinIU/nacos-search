@@ -3,6 +3,7 @@ package com.nanyin.nacos.search.services
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CacheAgeCalculator
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.visibility.ConfigurationVisibility
 
 /**
@@ -66,30 +67,33 @@ class CacheSnapshot internal constructor(
      * Every cached configuration detail for [identity], including stale ones so
      * code navigation can still reach an expired target (ADR-0002). Each is
      * judged at [asOfMillis].
+     *
+     * De-duplication is by 配置坐标 (dataId + group + coordinate Namespace), not
+     * the payload tenant — two Namespaces holding the same Data ID with
+     * tenant-less bodies both survive (issue #190).
      */
     val configurations: List<CacheService.CachedConfiguration> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         val prefix = detailPrefix
         details.asSequence()
             .filter { (key, _) -> key.startsWith(prefix) }
-            .map { (_, entry) -> entry.cachedConfigurationAt(asOfMillis) }
-            .distinctBy { it.configuration.identityWithinNamespace() }
+            .map { (key, entry) -> entry.cachedConfigurationAt(asOfMillis, coordinateNamespaceOf(key)) }
+            .distinctBy { it.coordinateIdentity() }
             .toList()
     }
 
     /** The subset of [configurations] still inside its TTL at [asOfMillis]. */
     val freshConfigurations: List<NacosConfiguration> by lazy(LazyThreadSafetyMode.PUBLICATION) {
-        val prefix = detailPrefix
-        details.asSequence()
-            .filter { (key, entry) -> key.startsWith(prefix) && !entry.isExpired(asOfMillis) }
-            .map { it.value.data }
-            .distinctBy { it.identityWithinNamespace() }
+        configurations
+            .asSequence()
+            .filter { it.freshness == CacheService.DetailFreshness.FRESH }
+            .map { it.configuration }
             .toList()
     }
 
     /** One configuration detail by coordinate, judged at [asOfMillis]. */
     fun detail(namespaceId: String?, dataId: String, group: String): CacheService.CachedConfiguration? =
         details[CacheCoordinate.detailKey(identity, namespaceId, dataId, group)]
-            ?.cachedConfigurationAt(asOfMillis)
+            ?.cachedConfigurationAt(asOfMillis, NamespaceInfo.canonicalId(namespaceId))
 
     /**
      * The namespace index for absence checks, judged at [asOfMillis]. Null when
@@ -103,17 +107,23 @@ class CacheSnapshot internal constructor(
         namespaceIndexes[CacheCoordinate.namespaceIndexKey(identity, namespaceId)]
             ?.stateAt(asOfMillis)
 
+    private fun coordinateNamespaceOf(storageKey: String): String =
+        CacheCoordinate.namespaceFromIdentityScopedKey(identity, storageKey)
+            ?: NamespaceInfo.PUBLIC
+
     private fun CacheService.CacheEntry<NacosConfiguration>.cachedConfigurationAt(
-        now: Long
+        now: Long,
+        coordinateNamespaceId: String
     ): CacheService.CachedConfiguration = CacheService.CachedConfiguration(
         data,
         freshness(now),
         freshUntilMillis = createdAt + ttlMs,
-        deepStaleAtMillis = createdAt + CacheAgeCalculator.DEEP_STALE_THRESHOLD_MILLIS
+        deepStaleAtMillis = createdAt + CacheAgeCalculator.DEEP_STALE_THRESHOLD_MILLIS,
+        namespaceId = NamespaceInfo.canonicalId(coordinateNamespaceId)
     )
 
-    private fun NacosConfiguration.identityWithinNamespace(): String =
-        "$dataId:$group:${tenantId ?: ""}"
+    private fun CacheService.CachedConfiguration.coordinateIdentity(): String =
+        "${configuration.dataId}:${configuration.group}:$namespaceId"
 }
 
 /**
