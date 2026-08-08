@@ -172,6 +172,78 @@ class V3ProtocolAdapterTest {
     }
 
     @Test
+    fun `blank or whitespace tenant does not block a present namespaceId on summary`(
+    ) = runBlocking {
+        // firstPresent skips blank/whitespace, so an empty legacy field must
+        // not force public when the request-parameter spelling carries the id.
+        val emptyTenant = RecordingTransport(
+            ProtocolResponse(
+                200,
+                """{"code":0,"message":"success","data":{"totalCount":1,"pageNumber":1,"pagesAvailable":1,"pageItems":[{"id":"1","dataId":"app.yaml","group":"DEFAULT_GROUP","content":null,"type":"yaml","tenant":"","namespaceId":"team-a"}]}}"""
+            )
+        )
+        val whitespaceTenant = RecordingTransport(
+            ProtocolResponse(
+                200,
+                """{"code":0,"message":"success","data":{"totalCount":1,"pageNumber":1,"pagesAvailable":1,"pageItems":[{"id":"1","dataId":"app.yaml","group":"DEFAULT_GROUP","content":null,"type":"yaml","tenant":"   ","namespaceId":"team-a"}]}}"""
+            )
+        )
+
+        assertEquals(
+            "team-a",
+            V3ProtocolAdapter(emptyTenant)
+                .listSummaries(anonymousPublicTarget("team-a"), SummaryQuery())
+                .getOrThrow()
+                .items.single().tenantId
+        )
+        assertEquals(
+            "team-a",
+            V3ProtocolAdapter(whitespaceTenant)
+                .listSummaries(anonymousPublicTarget("team-a"), SummaryQuery())
+                .getOrThrow()
+                .items.single().tenantId
+        )
+    }
+
+    @Test
+    fun `blank or whitespace tenant does not block a present namespaceId on detail`(
+    ) = runBlocking {
+        val emptyTenant = RecordingTransport(
+            ProtocolResponse(
+                200,
+                """{"code":0,"message":"success","data":{"id":"1","dataId":"app.yaml","group":"DEFAULT_GROUP","content":"enabled: true","type":"yaml","md5":"abc","tenant":"","namespaceId":"team-a"}}"""
+            )
+        )
+        val whitespaceTenant = RecordingTransport(
+            ProtocolResponse(
+                200,
+                """{"code":0,"message":"success","data":{"id":"1","dataId":"app.yaml","group":"DEFAULT_GROUP","content":"enabled: true","type":"yaml","md5":"abc","tenant":"   ","namespaceId":"team-a"}}"""
+            )
+        )
+
+        assertEquals(
+            "team-a",
+            V3ProtocolAdapter(emptyTenant)
+                .readDetail(
+                    anonymousPublicTarget("team-a"),
+                    ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP")
+                )
+                .getOrThrow()!!
+                .tenantId
+        )
+        assertEquals(
+            "team-a",
+            V3ProtocolAdapter(whitespaceTenant)
+                .readDetail(
+                    anonymousPublicTarget("team-a"),
+                    ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP")
+                )
+                .getOrThrow()!!
+                .tenantId
+        )
+    }
+
+    @Test
     fun `non-public Namespace detail carries the legacy tenant field from the V3 body`(
     ) = runBlocking {
         val fixture = RecordingTransport(

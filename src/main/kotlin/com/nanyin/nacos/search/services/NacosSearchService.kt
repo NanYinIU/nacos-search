@@ -1033,19 +1033,4 @@ class NacosSearchService(
         val observation: Long = Observed.NO_OBSERVATION
     )
 
-    private fun ConfigItem.toMetadataConfiguration(
-        requestNamespaceId: String? = null
-    ): NacosConfiguration {
-        val fromItem = tenant?.takeUnless { it.isBlank() }
-        val fromRequest = requestNamespaceId?.takeUnless {
-            it.isBlank() || it == "public"
-        }
-        return NacosConfiguration(
-            dataId = dataId,
-            group = group,
-            tenantId = fromItem ?: fromRequest,
-            content = content.orEmpty(),
-            type = type
-        )
-    }
 }

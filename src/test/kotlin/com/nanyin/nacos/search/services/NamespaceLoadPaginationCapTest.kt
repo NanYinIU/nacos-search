@@ -183,7 +183,7 @@ class NamespaceLoadPaginationCapTest {
     }
 
     @Test
-    fun `loadNamespace stamps the requested Namespace when the response carries none`(
+    fun `loadNamespace stamps the requested Namespace when the V1 response carries none`(
     ) = runBlocking {
         // Search already falls back to the requested Namespace when the list
         // item has no tenant; the namespace-load path must match (issue #191).
@@ -201,7 +201,35 @@ class NamespaceLoadPaginationCapTest {
         val load = apiWith(transport).loadNamespace(
             namespaceId = "team-a",
             useCache = false,
-            operationContext = lockedV1Context()
+            operationContext = lockedContext(NacosApiGeneration.V1)
+        ).getOrThrow()
+
+        assertEquals(1, load.configurations.size)
+        assertEquals("team-a", load.configurations.single().tenantId)
+    }
+
+    @Test
+    fun `loadNamespace stamps the requested Namespace when the V3 response carries neither field`(
+    ) = runBlocking {
+        // Generation-agnostic stamp after the adapter returns a null tenant;
+        // pin V3 so neither tenant nor namespaceId in the envelope still yields
+        // the Namespace this load requested (issue #191).
+        val transport = object : NacosRequestExecutor.HttpTransport {
+            override fun get(request: NacosRequestExecutor.TransportRequest): String {
+                if (!request.url.contains("/v3/admin/cs/config/list")) {
+                    return """{"code":0,"message":"success","data":[]}"""
+                }
+                return """{"code":0,"message":"success","data":{"totalCount":1,"pageNumber":1,"pagesAvailable":1,"pageItems":[{"id":"1","dataId":"app.yaml","group":"DEFAULT_GROUP","content":null,"type":"yaml"}]}}"""
+            }
+
+            override fun post(request: NacosRequestExecutor.TransportRequest): String =
+                """{"code":0,"message":"success","data":true}"""
+        }
+
+        val load = apiWith(transport).loadNamespace(
+            namespaceId = "team-a",
+            useCache = false,
+            operationContext = lockedContext(NacosApiGeneration.V3)
         ).getOrThrow()
 
         assertEquals(1, load.configurations.size)
@@ -219,14 +247,16 @@ class NamespaceLoadPaginationCapTest {
         )
     }
 
-    private fun lockedV1Context(): NacosOperationContext {
+    private fun lockedV1Context(): NacosOperationContext = lockedContext(NacosApiGeneration.V1)
+
+    private fun lockedContext(generation: NacosApiGeneration): NacosOperationContext {
         val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
         return NacosOperationContext(
             identity = AccessIdentity.ofProfile(
                 profileId = "pagination-cap-profile",
                 accessRevision = 1,
                 canonicalEndpoint = endpoint.value,
-                resolvedGeneration = NacosApiGeneration.V1,
+                resolvedGeneration = generation,
                 authMode = AuthMode.ANONYMOUS,
                 principal = "<anonymous>"
             ),
@@ -235,7 +265,7 @@ class NamespaceLoadPaginationCapTest {
             authMode = AuthMode.ANONYMOUS,
             profileRevision = 1,
             accessRevision = 1,
-            resolvedGeneration = NacosApiGeneration.V1
+            resolvedGeneration = generation
         )
     }
 

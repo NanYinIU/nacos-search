@@ -387,24 +387,10 @@ class NacosApiService(
                 // dialect declares listCarriesBodies (issue #146). The index
                 // store itself still strips content (issue #52 / ADR-0041).
                 response.pageItems.forEach { item ->
-                    // Mirror the search path: when the response carries no
-                    // Namespace, stamp the one this load requested so a
-                    // non-public configuration is not treated as public
-                    // (issue #191). Public stays null — same as the search
-                    // path's fromRequest filter.
-                    val fromItem = item.tenant?.takeUnless { it.isBlank() }
-                    val fromRequest = namespaceId?.takeUnless {
-                        it.isBlank() || it == "public"
-                    }
-                    allSummaries.add(
-                        NacosConfiguration(
-                            dataId = item.dataId,
-                            group = item.group,
-                            tenantId = fromItem ?: fromRequest,
-                            content = item.content.orEmpty(),
-                            type = item.type
-                        )
-                    )
+                    // Shared with the search path (ConfigItem.toMetadataConfiguration):
+                    // stamp the requested Namespace when the response carries none
+                    // so a non-public load is not treated as public (issue #191).
+                    allSummaries.add(item.toMetadataConfiguration(namespaceId))
                 }
                 // Bound by the tighter of pagesAvailable and totalCount/pageSize
                 // so a proxy that ignores paging (or inflates pagesAvailable)
