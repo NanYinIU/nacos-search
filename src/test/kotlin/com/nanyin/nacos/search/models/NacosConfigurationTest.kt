@@ -72,7 +72,7 @@ class NacosConfigurationTest {
 
 
     @Test
-    fun `test getConfigType explicit type`() {
+    fun `test declaredFormat explicit type`() {
         val config = NacosConfiguration(
             dataId = "test.txt",
             group = "DEFAULT_GROUP",
@@ -80,22 +80,22 @@ class NacosConfigurationTest {
             type = "custom"
         )
 
-        assertEquals("custom", config.getConfigType())
+        assertEquals("custom", config.declaredFormat())
     }
 
     @Test
-    fun `test getConfigType inferred properties`() {
+    fun `test declaredFormat inferred properties`() {
         val config = NacosConfiguration(
             dataId = "test.properties",
             group = "DEFAULT_GROUP",
             content = "key=value"
         )
 
-        assertEquals("properties", config.getConfigType())
+        assertEquals("properties", config.declaredFormat())
     }
 
     @Test
-    fun `test getConfigType inferred yaml`() {
+    fun `test declaredFormat inferred yaml`() {
         val configYml = NacosConfiguration(
             dataId = "test.yml",
             group = "DEFAULT_GROUP",
@@ -107,40 +107,40 @@ class NacosConfigurationTest {
             content = "key: value"
         )
 
-        assertEquals("yaml", configYml.getConfigType())
-        assertEquals("yaml", configYaml.getConfigType())
+        assertEquals("yaml", configYml.declaredFormat())
+        assertEquals("yaml", configYaml.declaredFormat())
     }
 
     @Test
-    fun `test getConfigType inferred json`() {
+    fun `test declaredFormat inferred json`() {
         val config = NacosConfiguration(
             dataId = "test.json",
             group = "DEFAULT_GROUP",
             content = "{}"
         )
 
-        assertEquals("json", config.getConfigType())
+        assertEquals("json", config.declaredFormat())
     }
 
     @Test
-    fun `test getConfigType inferred xml`() {
+    fun `test declaredFormat inferred xml`() {
         val config = NacosConfiguration(
             dataId = "test.xml",
             group = "DEFAULT_GROUP",
             content = "<root/>"
         )
 
-        assertEquals("xml", config.getConfigType())
+        assertEquals("xml", config.declaredFormat())
     }
 
     @Test
-    fun `test getConfigType inferred text`() {
+    fun `test declaredFormat inferred text`() {
         val config = NacosConfiguration(
             dataId = "test.unknown",
             group = "DEFAULT_GROUP",
             content = "hello"
         )
 
-        assertEquals("text", config.getConfigType())
+        assertEquals("text", config.declaredFormat())
     }
 }

@@ -635,33 +635,7 @@ class ConfigKeyExtractorTest {
         assertEquals(KeyExtraction.Extracted(emptyMap()), result)
     }
 
-    // ---- format naming ----
-    //
-    // The format is still derived by the existing accessor in this slice; only
-    // the mapping from its type name onto the closed set lives here.
-
-    @Test
-    fun `type names map onto the closed format set`() {
-        assertEquals(RuntimeConfigFormat.PROPERTIES, RuntimeConfigFormat.ofTypeName("properties"))
-        assertEquals(RuntimeConfigFormat.YAML, RuntimeConfigFormat.ofTypeName("yaml"))
-        assertEquals(RuntimeConfigFormat.YAML, RuntimeConfigFormat.ofTypeName("yml"))
-        assertEquals(RuntimeConfigFormat.JSON, RuntimeConfigFormat.ofTypeName("json"))
-        assertEquals(RuntimeConfigFormat.XML, RuntimeConfigFormat.ofTypeName("xml"))
-        assertEquals(RuntimeConfigFormat.TEXT, RuntimeConfigFormat.ofTypeName("text"))
-        assertEquals(RuntimeConfigFormat.HTML, RuntimeConfigFormat.ofTypeName("html"))
-        assertEquals(RuntimeConfigFormat.TOML, RuntimeConfigFormat.ofTypeName("toml"))
-    }
-
-    @Test
-    fun `an unrecognized or absent type name is undetermined`() {
-        assertEquals(RuntimeConfigFormat.UNDETERMINED, RuntimeConfigFormat.ofTypeName(null))
-        assertEquals(RuntimeConfigFormat.UNDETERMINED, RuntimeConfigFormat.ofTypeName(""))
-        assertEquals(RuntimeConfigFormat.UNDETERMINED, RuntimeConfigFormat.ofTypeName("protobuf"))
-    }
-
-    @Test
-    fun `type names are matched case-insensitively and trimmed`() {
-        assertEquals(RuntimeConfigFormat.JSON, RuntimeConfigFormat.ofTypeName(" JSON "))
-        assertEquals(RuntimeConfigFormat.YAML, RuntimeConfigFormat.ofTypeName("Yml"))
-    }
+    // Which member of the closed set applies to a given configuration is not
+    // asserted here: that is the decision table's job, and it has its own test
+    // (RuntimeFormatDecisionTest).
 }
