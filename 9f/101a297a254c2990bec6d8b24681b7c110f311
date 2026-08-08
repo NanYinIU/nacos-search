@@ -1,0 +1,16 @@
+src/main/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolver.kt
+  h_231225c3625e99 202,207-213,439,447-451,453-460
+src/test/kotlin/com/nanyin/nacos/search/psi/NacosKeyResolverTest.kt
+  h_231225c3625e99 413,419-422,468-520,560-562,580-681
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "9f101a297a254c2990bec6d8b24681b7c110f311",
+  "prompts": {},
+  "humans": {
+    "h_231225c3625e99": {
+      "author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
