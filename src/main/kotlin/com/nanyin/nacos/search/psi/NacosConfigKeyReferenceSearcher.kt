@@ -18,8 +18,14 @@ import com.intellij.util.QueryExecutor
  * Uses the persistent [NacosPlaceholderIndex] (FileBasedIndex) for O(1)
  * key-to-file lookups instead of per-key full-project PSI scans. Candidate
  * files are then PSI-verified to confirm the placeholder lives inside a
- * supported annotation. This keeps the config-detail gutter rendering
- * sub-second even on 100k-line codebases.
+ * supported annotation, and (when the search is anchored on a concrete
+ * configuration) that the usage site's declared `@NacosPropertySource` dataId
+ * does not hard-constrain the placeholder to a *different* Data ID — matching
+ * the forward hard-filter so reverse navigation cannot land on a usage that
+ * would refuse this configuration as a declaration target.
+ *
+ * This keeps the config-detail gutter rendering sub-second even on 100k-line
+ * codebases.
  */
 class NacosConfigKeyReferenceSearcher :
     QueryExecutor<PsiReference, ReferencesSearch.SearchParameters> {
@@ -34,7 +40,9 @@ class NacosConfigKeyReferenceSearcher :
         // Respect the QueryExecutor contract: stop as soon as the consumer declines
         // (process() == false), so Find Usages can short-circuit instead of always
         // materializing the full reference list.
-        for (ref in findUsages(project, key, parameters.effectiveSearchScope as? GlobalSearchScope ?: GlobalSearchScope.projectScope(project))) {
+        val scope = parameters.effectiveSearchScope as? GlobalSearchScope
+            ?: GlobalSearchScope.projectScope(project)
+        for (ref in findUsages(project, key, scope, sourceDataId = target.config.dataId)) {
             if (!consumer.process(ref)) return false
         }
         return true
@@ -42,13 +50,14 @@ class NacosConfigKeyReferenceSearcher :
 
     companion object {
         /**
-         * Result cache: (configIdentity + md5 + psiModCount) -> set of used keys.
-         * Avoids re-querying the index when reopening the same config with no
-         * code changes (plan section 9.3).
+         * Result cache: (configIdentity + md5 + sourceDataId + psiModCount) ->
+         * set of used keys. Avoids re-querying the index when reopening the same
+         * config with no code changes (plan section 9.3).
          */
         private data class UsedKeysCacheKey(
             val configKey: String,
             val md5: String?,
+            val sourceDataId: String?,
             val psiModCount: Long
         )
 
@@ -58,13 +67,15 @@ class NacosConfigKeyReferenceSearcher :
         fun hasUsages(
             project: Project,
             key: String,
-            scope: GlobalSearchScope = GlobalSearchScope.projectScope(project)
-        ): Boolean = findUsages(project, key, scope).isNotEmpty()
+            scope: GlobalSearchScope = GlobalSearchScope.projectScope(project),
+            sourceDataId: String? = null
+        ): Boolean = findUsages(project, key, scope, sourceDataId).isNotEmpty()
 
         fun findUsages(
             project: Project,
             key: String,
-            scope: GlobalSearchScope = GlobalSearchScope.projectScope(project)
+            scope: GlobalSearchScope = GlobalSearchScope.projectScope(project),
+            sourceDataId: String? = null
         ): List<PsiReference> = ReadAction.compute<List<PsiReference>, RuntimeException> {
             val fbi = FileBasedIndex.getInstance()
             val files = fbi.getContainingFiles(
@@ -82,13 +93,9 @@ class NacosConfigKeyReferenceSearcher :
                     val placeholder = PlaceholderParser.parse(text) ?: continue
                     if (placeholder.key != key) continue
                     if (!NacosValueReferenceContributor.isInSupportedAnnotation(literal)) continue
-                    references.add(
-                        NacosValueReference(
-                            literal,
-                            key,
-                            NacosCodeContextExtractor.fromLiteral(literal)
-                        )
-                    )
+                    val codeContext = NacosCodeContextExtractor.fromLiteral(literal)
+                    if (!acceptsUsageForSourceConfig(sourceDataId, codeContext)) continue
+                    references.add(NacosValueReference(literal, key, codeContext))
                 }
             }
             references
@@ -96,37 +103,43 @@ class NacosConfigKeyReferenceSearcher :
 
         /**
          * Returns the subset of [keys] that are referenced by at least one
-         * @Value / @NacosValue annotation in the project.
+         * @Value / @NacosValue annotation in the project that is allowed to
+         * attribute to [sourceDataId] (see [acceptsUsageForSourceConfig]).
          *
          * Uses the persistent [NacosPlaceholderIndex] for the initial key
          * existence check (O(keys) hash lookups), then verifies candidates
          * via PSI only for keys the index reports as present. Results are
-         * cached per (config, md5, psiModificationCount).
+         * cached per (config, md5, sourceDataId, psiModificationCount).
          */
         fun findUsedKeys(
             project: Project,
             keys: Collection<String>,
             configIdentity: String = "",
-            configMd5: String? = null
+            configMd5: String? = null,
+            sourceDataId: String? = null
         ): Set<String> {
             if (keys.isEmpty()) return emptySet()
 
             // Check cache
             val psiModCount = currentPsiModCount(project)
-            val cacheKey = UsedKeysCacheKey(configIdentity, configMd5, psiModCount)
+            val cacheKey = UsedKeysCacheKey(configIdentity, configMd5, sourceDataId, psiModCount)
             usedKeysCache?.let { (cachedKey, cachedValue) ->
                 if (cachedKey == cacheKey) return cachedValue
             }
 
             val result = ReadAction.compute<Set<String>, RuntimeException> {
-                findUsedKeysViaIndex(project, keys)
+                findUsedKeysViaIndex(project, keys, sourceDataId)
             }
 
             usedKeysCache = cacheKey to result
             return result
         }
 
-        private fun findUsedKeysViaIndex(project: Project, keys: Collection<String>): Set<String> {
+        private fun findUsedKeysViaIndex(
+            project: Project,
+            keys: Collection<String>,
+            sourceDataId: String?
+        ): Set<String> {
             val fbi = FileBasedIndex.getInstance()
             val scope = GlobalSearchScope.projectScope(project)
             val found = linkedSetOf<String>()
@@ -135,8 +148,9 @@ class NacosConfigKeyReferenceSearcher :
                 val values = fbi.getValues(NacosPlaceholderIndex.INDEX_ID, key, scope)
                 if (values.isNotEmpty()) {
                     // Index reports at least one file; PSI-verify to filter
-                    // regex false positives (e.g. placeholder in a comment).
-                    if (verifyKeyInProject(project, key, scope)) {
+                    // regex false positives (e.g. placeholder in a comment) and
+                    // usages hard-bound to a different declared Data ID.
+                    if (verifyKeyInProject(project, key, scope, sourceDataId)) {
                         found.add(key)
                     }
                 }
@@ -146,12 +160,14 @@ class NacosConfigKeyReferenceSearcher :
 
         /**
          * PSI-verify that [key] appears in a supported annotation in at least
-         * one candidate file.
+         * one candidate file, under a usage site that may attribute to
+         * [sourceDataId].
          */
         private fun verifyKeyInProject(
             project: Project,
             key: String,
-            scope: GlobalSearchScope
+            scope: GlobalSearchScope,
+            sourceDataId: String?
         ): Boolean {
             val fbi = FileBasedIndex.getInstance()
             val files = fbi.getContainingFiles(NacosPlaceholderIndex.INDEX_ID, key, scope)
@@ -162,12 +178,38 @@ class NacosConfigKeyReferenceSearcher :
                 for (literal in literals) {
                     val text = literal.value as? String ?: continue
                     val placeholder = PlaceholderParser.parse(text) ?: continue
-                    if (placeholder.key == key && NacosValueReferenceContributor.isInSupportedAnnotation(literal)) {
-                        return true
+                    if (placeholder.key != key) continue
+                    if (!NacosValueReferenceContributor.isInSupportedAnnotation(literal)) continue
+                    if (!acceptsUsageForSourceConfig(
+                            sourceDataId,
+                            NacosCodeContextExtractor.fromLiteral(literal)
+                        )
+                    ) {
+                        continue
                     }
+                    return true
                 }
             }
             return false
+        }
+
+        /**
+         * Whether a code usage of a key may be attributed to the configuration
+         * whose Data ID is [sourceDataId] (reverse of the forward hard filter).
+         *
+         * - No source Data ID → accept every usage (unscoped search).
+         * - Usage declares no Data ID → accept (site has no hard constraint).
+         * - Usage declares the same Data ID → accept.
+         * - Usage declares a different Data ID → reject (forward navigation
+         *   would not resolve that placeholder against this configuration).
+         */
+        internal fun acceptsUsageForSourceConfig(
+            sourceDataId: String?,
+            usageContext: NacosCodeContext
+        ): Boolean {
+            val source = sourceDataId?.takeIf { it.isNotBlank() } ?: return true
+            val declared = usageContext.dataId?.takeIf { it.isNotBlank() } ?: return true
+            return declared == source
         }
 
         private fun currentPsiModCount(project: Project): Long {

@@ -781,7 +781,11 @@ private fun setupEventHandlers() {
             val usedKeys = NacosConfigKeyReferenceSearcher.findUsedKeys(
                 project, keys.keys,
                 configIdentity = configuration.getKey(),
-                configMd5 = configuration.md5
+                configMd5 = configuration.md5,
+                // Only usages that may hard-resolve against this Data ID —
+                // reverse of the declared-source hard filter so a key line in
+                // test.yaml does not light up for a @NacosValue bound to es.properties.
+                sourceDataId = configuration.dataId
             )
             if (usedKeys.isEmpty()) return@launch
 
@@ -834,7 +838,11 @@ private fun setupEventHandlers() {
     ) : com.intellij.openapi.actionSystem.AnAction() {
         override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent) {
             val elements = NacosConfigKeyReferenceSearcher
-                .findUsages(keyElement.project, keyElement.key)
+                .findUsages(
+                    keyElement.project,
+                    keyElement.key,
+                    sourceDataId = keyElement.config.dataId
+                )
                 .mapNotNull { it.element }
                 .distinctBy { "${it.containingFile?.virtualFile?.path}:${it.textOffset}" }
                 .sortedBy { usageRank(it, keyElement.config) }
@@ -865,15 +873,17 @@ private fun setupEventHandlers() {
         }
 
         private fun usageRank(element: com.intellij.psi.PsiElement, config: NacosConfiguration): Int {
-            val literal = element as? com.intellij.psi.PsiLiteralExpression ?: return 3
+            val literal = element as? com.intellij.psi.PsiLiteralExpression ?: return 4
             val context = NacosCodeContextExtractor.fromLiteral(literal)
+            val dataIdMatches = context.dataId != null && context.dataId == config.dataId
             val namespaceMatches = context.namespaceId != null && context.namespaceId == (config.tenantId ?: "public")
             val groupMatches = context.group != null && context.group == config.group
             return when {
-                namespaceMatches && groupMatches -> 0
-                groupMatches -> 1
-                namespaceMatches -> 2
-                else -> 3
+                dataIdMatches && namespaceMatches && groupMatches -> 0
+                dataIdMatches && groupMatches -> 1
+                dataIdMatches -> 2
+                groupMatches || namespaceMatches -> 3
+                else -> 4
             }
         }
 

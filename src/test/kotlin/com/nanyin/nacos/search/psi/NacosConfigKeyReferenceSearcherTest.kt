@@ -6,6 +6,7 @@ import com.intellij.psi.PsiFileFactory
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.ApplicationRule
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -51,5 +52,56 @@ class NacosConfigKeyReferenceSearcherTest {
             val literal = PsiTreeUtil.findChildOfType(file, PsiLiteralExpression::class.java)
             assertTrue(NacosValueReferenceContributor.isInSupportedAnnotation(literal!!))
         }
+    }
+
+    @Test
+    fun `reverse search accepts undeclared usages for any source dataId`() {
+        // No @NacosPropertySource on the usage site → no hard constraint; the
+        // key may resolve against any loaded configuration.
+        assertTrue(
+            NacosConfigKeyReferenceSearcher.acceptsUsageForSourceConfig(
+                "test.yaml",
+                NacosCodeContext()
+            )
+        )
+    }
+
+    @Test
+    fun `reverse search accepts usages that declare the same dataId`() {
+        assertTrue(
+            NacosConfigKeyReferenceSearcher.acceptsUsageForSourceConfig(
+                "es.properties",
+                NacosCodeContext(dataId = "es.properties")
+            )
+        )
+    }
+
+    @Test
+    fun `reverse search rejects usages hard-bound to a different dataId`() {
+        // test.yaml's app.name must not reverse-navigate to a @NacosValue under
+        // @NacosPropertySource(dataId = "es.properties") — forward hard filter
+        // would not resolve that placeholder against test.yaml either.
+        assertFalse(
+            NacosConfigKeyReferenceSearcher.acceptsUsageForSourceConfig(
+                "test.yaml",
+                NacosCodeContext(dataId = "es.properties")
+            )
+        )
+    }
+
+    @Test
+    fun `unscoped reverse search accepts every usage`() {
+        assertTrue(
+            NacosConfigKeyReferenceSearcher.acceptsUsageForSourceConfig(
+                null,
+                NacosCodeContext(dataId = "es.properties")
+            )
+        )
+        assertTrue(
+            NacosConfigKeyReferenceSearcher.acceptsUsageForSourceConfig(
+                "",
+                NacosCodeContext(dataId = "es.properties")
+            )
+        )
     }
 }
