@@ -1,19 +1,56 @@
 package com.nanyin.nacos.search.psi
 
-import com.nanyin.nacos.search.models.NacosConfiguration
+import com.google.gson.stream.JsonReader
+import com.google.gson.stream.JsonToken
+import java.io.StringReader
 
 /**
- * Extracts property keys and their line offset / value from a Nacos
- * configuration's [content], keyed by the configuration's type.
+ * The outcome of asking [ConfigKeyExtractor] for a configuration's keys.
  *
- * Pure, side-effect-free — unit tested directly with synthetic content.
+ * A closed set, because the two outcomes answer different questions and a
+ * caller that flattens them silently turns "we do not parse this format" into
+ * "this key is absent". That is the same mistake the cache already refuses to
+ * make about data ids, where only a fresh, complete Namespace index may prove
+ * one absent; here, only a successful parse under the 运行时格式 may prove a key
+ * absent.
  *
- * Supported types (mirrors [NacosConfiguration.getConfigType]):
- *  - properties: line-based `key=value`, `#`/`!` comments skipped
- *  - yaml/yml:   `key: value` with one level of nested mapping via dot paths
- *  - json:       top-level `"key": value` pairs
+ * There is deliberately no `keysOrEmpty()` on this type: the trapdoor is the
+ * defect.
+ */
+sealed interface KeyExtraction {
+
+    /** The body was parsed. [keys] is the whole key space it contributes. */
+    data class Extracted(val keys: Map<String, ConfigKeyExtractor.KeyLocation>) : KeyExtraction
+
+    /** The 运行时格式 contributes no keys, for [reason]. Says nothing about the body. */
+    data class NotExtractable(val reason: Reason) : KeyExtraction
+
+    enum class Reason {
+        /** 格式不参与解析 — no runtime reads this body for placeholder keys. */
+        KNOWN_NON_PARSING_FORMAT,
+
+        /** Nothing available named a format, so no parse rules apply. */
+        FORMAT_UNDETERMINED,
+
+        /** A runtime parses this format; the plugin does not yet. */
+        PARSER_NOT_IMPLEMENTED
+    }
+}
+
+/**
+ * Extracts property keys and their line index / value from a Nacos
+ * configuration body, read under an explicitly supplied 运行时格式.
  *
- * Unknown types return an empty map (they cannot contribute key targets).
+ * Pure, side-effect-free — unit tested directly with synthetic content, and the
+ * primary seam for extraction correctness.
+ *
+ * The format is an input, not something derived here: the same body is a
+ * different key space under different rules, and only the caller knows which
+ * rules the runtime will apply (see [RuntimeConfigFormat]).
+ *
+ * Key extraction lives here in the code-navigation layer. Reading keys out of
+ * configuration content is configuration-format knowledge, and moving it into
+ * the cache would make the cache module depend on this one (ADR-0051).
  */
 object ConfigKeyExtractor {
 
@@ -21,24 +58,55 @@ object ConfigKeyExtractor {
      * Location of a key inside a configuration: the 0-based line index and the
      * resolved value (string form). The line index is used to position the
      * caret / gutter marker; the value is shown in navigation hints.
+     *
+     * [lineIndex] is [LINE_NOT_FOUND] when the key is real but its declaration
+     * line could not be located. The key set and the line are derived
+     * separately on purpose: a wrong line misplaces an icon, a wrong key set
+     * invents or destroys navigation, and the two must not share a failure mode.
      */
     data class KeyLocation(val key: String, val lineIndex: Int, val value: String)
 
+    /** The sentinel every consumer of [KeyLocation.lineIndex] already handles. */
+    const val LINE_NOT_FOUND = -1
+
     /**
-     * Extracts every recognized key for [config], keyed by the key string.
+     * Extracts every key [content] contributes when read as [format].
+     *
      * When the same key repeats within a single configuration the last
      * occurrence wins (matches properties/yaml override semantics).
      */
-    fun extract(config: NacosConfiguration): Map<String, KeyLocation> {
-        val content = config.content ?: return emptyMap()
-        if (content.isBlank()) return emptyMap()
-        return when (config.getConfigType()) {
-            "properties" -> extractProperties(content)
-            "yaml", "yml" -> extractYaml(content)
-            "json" -> extractJson(content)
-            else -> emptyMap()
+    fun extract(content: String?, format: RuntimeConfigFormat): KeyExtraction =
+        // One switch over the closed set, with no `else`: adding a format the
+        // plugin learns to parse must not compile until this decides what it
+        // means. A branch that quietly answered `Extracted(emptyMap())` would
+        // reintroduce the very confusion [KeyExtraction] exists to prevent.
+        //
+        // A refusal is a property of the format alone, so the body is never
+        // consulted for one: an empty XML body is no more extractable than a
+        // full one.
+        when (format) {
+            RuntimeConfigFormat.TEXT,
+            RuntimeConfigFormat.HTML,
+            RuntimeConfigFormat.TOML ->
+                KeyExtraction.NotExtractable(KeyExtraction.Reason.KNOWN_NON_PARSING_FORMAT)
+            RuntimeConfigFormat.UNDETERMINED ->
+                KeyExtraction.NotExtractable(KeyExtraction.Reason.FORMAT_UNDETERMINED)
+            RuntimeConfigFormat.XML ->
+                KeyExtraction.NotExtractable(KeyExtraction.Reason.PARSER_NOT_IMPLEMENTED)
+            RuntimeConfigFormat.PROPERTIES -> parsed(content, ::extractProperties)
+            RuntimeConfigFormat.YAML -> parsed(content, ::extractYaml)
+            RuntimeConfigFormat.JSON -> parsed(content, ::extractJson)
         }
-    }
+
+    private fun parsed(
+        content: String?,
+        parse: (String) -> Map<String, KeyLocation>
+    ): KeyExtraction.Extracted =
+        if (content.isNullOrBlank()) {
+            KeyExtraction.Extracted(emptyMap())
+        } else {
+            KeyExtraction.Extracted(parse(content))
+        }
 
     // ----- properties -------------------------------------------------------
 
@@ -241,116 +309,212 @@ object ConfigKeyExtractor {
     // ----- json -------------------------------------------------------------
 
     /**
-     * Reads `"key": value` pairs from a (possibly nested) JSON object and flattens
-     * nesting to dot-paths (`"sys": {"audit": {"switch": true}}` -> `sys.audit.switch`).
-     * Uses a character-level scanner so it handles minified (single-line) JSON as well
-     * as pretty-printed input; the previous line-regex parser silently returned an empty
-     * map for the default `JSON.stringify` output.
+     * Deliberately not shared with [YamlSeg] and its key rendering, which look
+     * like the same thing and are not: `yamlBracketKey` omits the separator
+     * after an index (`items[0]name.first`), a shape Spring's relaxed binding
+     * can never match. Unifying them now would either carry that defect into
+     * JSON or fix YAML's key space as a side effect of a JSON change. The YAML
+     * reader is replaced wholesale by snakeyaml (#166); the two converge then.
+     */
+    private sealed class JsonSeg {
+        data class Name(val name: String) : JsonSeg()
+        data class Index(val n: Int) : JsonSeg()
+    }
+
+    /**
+     * Reads the key space out of a JSON body with Gson's streaming reader.
+     *
+     * Structure comes from the parser, which is the whole point: the previous
+     * hand-written scanner lost every key declared after an array whose last
+     * element was a string, and never descended into arrays at all.
+     *
+     * Nesting flattens to dot paths, and array elements are addressed by index
+     * in both the bracket and the dot form (`list[0].n` and `list.0.n`), the
+     * same pair the YAML reader emits, so either placeholder style resolves.
+     * A container contributes no key of its own — a runtime property source
+     * flattens to leaves, and `${list}` resolves against none of them.
+     *
+     * A syntax error ends the read and keeps the keys already parsed: a partial
+     * key space is what the scanner it replaces would have produced, and it is
+     * strictly better than none for navigation.
      */
     private fun extractJson(content: String): Map<String, KeyLocation> {
         val result = LinkedHashMap<String, KeyLocation>()
-        val path = ArrayDeque<String>()
-        val chars = content.toCharArray()
-        var i = 0
-        var line = 0
-        val n = chars.size
-
-        fun skipWs() {
-            while (i < n) {
-                when (chars[i]) {
-                    ' ', '\t', '\r' -> i++
-                    '\n' -> { i++; line++ }
-                    else -> return
-                }
+        val locator = JsonDeclarationLocator(content)
+        val path = ArrayDeque<JsonSeg>()
+        try {
+            JsonReader(StringReader(content)).use { reader ->
+                readJsonValue(reader, locator, path, LINE_NOT_FOUND, result)
             }
-        }
-
-        fun readString(): String {
-            // assumes chars[i] == '"'
-            val sb = StringBuilder()
-            i++ // opening quote
-            while (i < n && chars[i] != '"') {
-                if (chars[i] == '\\' && i + 1 < n) { sb.append(chars[i]); sb.append(chars[i + 1]); i += 2; continue }
-                if (chars[i] == '\n') line++
-                sb.append(chars[i]); i++
-            }
-            if (i < n) i++ // closing quote
-            return sb.toString()
-        }
-
-        // Skip a single JSON value (string, number, keyword, array, object) starting at i,
-        // tracking object/array nesting so commas and braces inside it are ignored.
-        fun skipValue(): String {
-            skipWs()
-            if (i >= n) return ""
-            val start = i
-            when (chars[i]) {
-                '"' -> { val s = readString(); return unquoteJson("\"" + s + "\"") }
-                '[', '{' -> {
-                    val open = chars[i]
-                    val close = if (open == '[') ']' else '}'
-                    var depth = 0
-                    while (i < n) {
-                        val c = chars[i]
-                        when {
-                            c == '"' -> readString().also { /* advanced */ }
-                            c == open -> depth++
-                            c == close -> { depth--; if (depth == 0) { i++; return content.substring(start, i).trim() } }
-                        }
-                        if (c == '\n') line++
-                        i++
-                    }
-                    return content.substring(start, i).trim()
-                }
-                else -> {
-                    // bare token (number / true / false / null) until delimiter
-                    while (i < n) {
-                        val c = chars[i]
-                        if (c == ',' || c == '}' || c == ']' || c == '\n' || c == ' ' || c == '\t' || c == '\r') break
-                        i++
-                    }
-                    return content.substring(start, i).trim()
-                }
-            }
-        }
-
-        // The parser only tracks object structure (array elements are skipped as opaque
-        // values), which is sufficient for the config-key use case.
-        while (i < n) {
-            val c = chars[i]
-            when {
-                c == '\n' -> { line++; i++ }
-                c == '{' || c == ',' || c == ':' || c == '[' || c == ']' || c == ' ' || c == '\t' || c == '\r' -> i++
-                c == '}' -> { if (path.isNotEmpty()) path.removeLast(); i++ }
-                c == '"' -> {
-                    val key = readString()
-                    skipWs()
-                    if (i < n && chars[i] == ':') {
-                        i++
-                        skipWs()
-                        if (i < n && chars[i] == '{') {
-                            // nested object: record nothing for the value, descend into it
-                            path.addLast(key)
-                            i++ // consume opening brace
-                        } else {
-                            val value = skipValue()
-                            val fullKey = if (path.isEmpty()) key else path.joinToString(".") + "." + key
-                            result[fullKey] = KeyLocation(fullKey, line, value)
-                        }
-                    } else {
-                        // a bare string not acting as a key; skip its value portion
-                    }
-                }
-                else -> i++
-            }
+        } catch (_: Exception) {
+            // Malformed body. Gson signals this as IOException, IllegalStateException
+            // or NumberFormatException depending on where the read gave out; none of
+            // them are recoverable and all of them leave `result` holding what was
+            // read up to that point.
         }
         return result
     }
 
-    private fun unquoteJson(value: String): String {
-        if ((value.startsWith("\"") && value.endsWith("\"") && value.length >= 2)) {
-            return value.substring(1, value.length - 1)
+    private fun readJsonValue(
+        reader: JsonReader,
+        locator: JsonDeclarationLocator,
+        path: ArrayDeque<JsonSeg>,
+        declarationLine: Int,
+        result: LinkedHashMap<String, KeyLocation>
+    ) {
+        when (reader.peek()) {
+            JsonToken.BEGIN_OBJECT -> {
+                reader.beginObject()
+                while (reader.hasNext()) {
+                    val name = reader.nextName()
+                    // The line is looked up here, before the value is read, so a
+                    // value spanning many lines cannot drag the key's line along
+                    // with it.
+                    val line = locator.lineOf(name)
+                    path.addLast(JsonSeg.Name(name))
+                    readJsonValue(reader, locator, path, line, result)
+                    path.removeLast()
+                }
+                reader.endObject()
+            }
+            JsonToken.BEGIN_ARRAY -> {
+                reader.beginArray()
+                var index = 0
+                while (reader.hasNext()) {
+                    path.addLast(JsonSeg.Index(index))
+                    // An element declares no name of its own, so it keeps the
+                    // line of the key that opened the array.
+                    readJsonValue(reader, locator, path, declarationLine, result)
+                    path.removeLast()
+                    index++
+                }
+                reader.endArray()
+            }
+            // nextString() renders NUMBER tokens as the literal they were written
+            // as, which is what the previous scanner reported and what a value
+            // hint should show.
+            JsonToken.STRING, JsonToken.NUMBER ->
+                emitJsonLeaf(path, reader.nextString(), declarationLine, result)
+            JsonToken.BOOLEAN ->
+                emitJsonLeaf(path, reader.nextBoolean().toString(), declarationLine, result)
+            JsonToken.NULL -> {
+                reader.nextNull()
+                emitJsonLeaf(path, "null", declarationLine, result)
+            }
+            else -> reader.skipValue()
         }
-        return value
+    }
+
+    private fun emitJsonLeaf(
+        path: ArrayDeque<JsonSeg>,
+        value: String,
+        declarationLine: Int,
+        result: LinkedHashMap<String, KeyLocation>
+    ) {
+        // A scalar at the document root belongs to no key.
+        if (path.isEmpty()) return
+        val bracket = jsonKey(path, bracketIndexes = true)
+        result[bracket] = KeyLocation(bracket, declarationLine, value)
+        val dot = jsonKey(path, bracketIndexes = false)
+        if (dot != bracket) {
+            result[dot] = KeyLocation(dot, declarationLine, value)
+        }
+    }
+
+    private fun jsonKey(path: ArrayDeque<JsonSeg>, bracketIndexes: Boolean): String {
+        val sb = StringBuilder()
+        for (seg in path) {
+            when (seg) {
+                is JsonSeg.Name -> {
+                    if (sb.isNotEmpty()) sb.append(".")
+                    sb.append(seg.name)
+                }
+                is JsonSeg.Index -> {
+                    if (bracketIndexes) {
+                        sb.append("[").append(seg.n).append("]")
+                    } else {
+                        if (sb.isNotEmpty()) sb.append(".")
+                        sb.append(seg.n)
+                    }
+                }
+            }
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Reports the line each JSON key is declared on.
+     *
+     * Kept deliberately apart from the parse: Gson's reader supplies no line
+     * number, and deriving one inside the parse would tie the key space to a
+     * positioning defect.
+     *
+     * It does not search for a name. Searching finds *a* plausible occurrence,
+     * and a plausible-but-wrong line is exactly what must not happen: for a
+     * name whose document spelling is escaped, the search would sail past it
+     * and claim the line of the next key that happens to share the name. This
+     * walks key positions instead. The reader reports names in document order
+     * and one per `"…":` position, so each call consumes the next such position
+     * and answers only for the name that position actually holds. When the
+     * position's raw spelling is escaped — the one case where a document key
+     * and a decoded name legitimately differ — it reports [LINE_NOT_FOUND],
+     * the sentinel every consumer already handles, and stays aligned for the
+     * keys that follow.
+     */
+    private class JsonDeclarationLocator(private val content: String) {
+        private var index = 0
+        private var line = 0
+
+        fun lineOf(name: String): Int {
+            while (index < content.length) {
+                val c = content[index]
+                if (c != '"') {
+                    if (c == '\n') line++
+                    index++
+                    continue
+                }
+                val tokenLine = line
+                val raw = readStringToken() ?: return LINE_NOT_FOUND
+                // A string is a key only where a colon follows it; anything else
+                // is a value, and values are skipped rather than counted.
+                if (!colonFollows()) continue
+                // An escaped spelling cannot be compared to the decoded name
+                // without re-implementing the decoding Gson already did.
+                return if (raw == name) tokenLine else LINE_NOT_FOUND
+            }
+            return LINE_NOT_FOUND
+        }
+
+        /**
+         * Reads the string starting at the quote under [index], leaving [index]
+         * past its closing quote. Returns the raw body, or null when unterminated.
+         */
+        private fun readStringToken(): String? {
+            val start = index + 1
+            var i = start
+            var escaped = false
+            while (i < content.length) {
+                val c = content[i]
+                if (c == '\n') line++
+                when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    c == '"' -> {
+                        index = i + 1
+                        return content.substring(start, i)
+                    }
+                }
+                i++
+            }
+            index = content.length
+            return null
+        }
+
+        /** Does not advance [index]: the skipped whitespace is counted by the caller's scan. */
+        private fun colonFollows(): Boolean {
+            var i = index
+            while (i < content.length && content[i].isWhitespace()) i++
+            return i < content.length && content[i] == ':'
+        }
     }
 }

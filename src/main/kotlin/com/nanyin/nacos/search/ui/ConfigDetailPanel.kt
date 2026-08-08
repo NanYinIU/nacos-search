@@ -18,8 +18,8 @@ import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.nanyin.nacos.search.NacosIcons
-import com.nanyin.nacos.search.psi.ConfigKeyExtractor
 import com.nanyin.nacos.search.psi.NacosCodeContextExtractor
+import com.nanyin.nacos.search.psi.keysUnderDeclaredType
 import com.nanyin.nacos.search.psi.NacosConfigKeyElement
 import com.nanyin.nacos.search.psi.NacosConfigKeyReferenceSearcher
 import com.nanyin.nacos.search.psi.NacosUsageChoiceItem
@@ -768,7 +768,7 @@ private fun setupEventHandlers() {
         ed: EditorEx,
         presented: PresentedResult
     ) {
-        val keys = ConfigKeyExtractor.extract(configuration)
+        val keys = keysUnderDeclaredType(configuration)
         if (keys.isEmpty()) return
 
         // Skip during dumb mode — the FileBasedIndex is not available, so

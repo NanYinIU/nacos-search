@@ -67,7 +67,7 @@ class PerformanceBenchmarkTest {
             content = sb.toString(), type = "yaml"
         )
         val start = System.nanoTime()
-        val keys = ConfigKeyExtractor.extract(config)
+        val keys = keysUnderDeclaredType(config)
         val elapsed = (System.nanoTime() - start) / 1_000_000
         println("BENCH: extracted ${keys.size} yaml keys in ${elapsed}ms")
         assertTrue(keys.size >= 1000, "expected >=1000 keys, got ${keys.size}")
