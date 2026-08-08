@@ -604,4 +604,177 @@ class NacosKeyResolverTest {
         assertEquals(ConfigReferenceStatus.UNDECIDABLE, resolution.status)
         assertTrue(resolution.hits.isEmpty())
     }
+
+    // ── 格式不参与解析 (issue #172) ──
+
+    /**
+     * The body is cached and complete. "Content not loaded yet" was a lie about
+     * every one of these, and the lie is what kept a sweep pending forever.
+     */
+    @Test
+    fun `a cached configuration no parse produces keys from reaches a terminal state`() = runBlocking {
+        val configurations = listOf(
+            cfg("beans.xml", "DEFAULT_GROUP", "dev", "<beans><a>1</a></beans>", "xml"),
+            cfg("notes.txt", "DEFAULT_GROUP", "dev", "a=1\n", "text"),
+            cfg("page.html", "DEFAULT_GROUP", "dev", "<p>a=1</p>", "html"),
+            cfg("app.toml", "DEFAULT_GROUP", "dev", "a = 1\n", "toml")
+        )
+        // A complete Namespace index listing every one of them, plus their
+        // bodies: the exact state that used to answer "正文尚未加载" for a body
+        // that was right there.
+        cache.replaceNamespaceIndex(identity, "dev", configurations, ttl = 60_000L)
+        seedConfigurations(configurations)
+
+        configurations.map { it.dataId }.forEach { dataId ->
+            val resolution = indexService.resolveCurrentState(
+                cache.snapshot(identity),
+                "a",
+                preferredDataId = dataId,
+                activeNamespaceId = "dev"
+            )
+            assertEquals(dataId, ConfigReferenceStatus.FORMAT_NOT_PARSED, resolution.status)
+            assertTrue(dataId, resolution.hits.isEmpty())
+            assertFalse(dataId, resolution.status.mayRequestBackgroundRefresh())
+        }
+    }
+
+    @Test
+    fun `a known non-parsing suffix and an undetermined one keep their reasons apart`() = runBlocking {
+        seedConfigurations(
+            listOf(
+                cfg("notes.txt", "DEFAULT_GROUP", "dev", "a=1\n", "text"),
+                cfg("service-config", "DEFAULT_GROUP", "dev", "a=1\n", "properties")
+            )
+        )
+        val snapshot = cache.snapshot(identity)
+
+        assertEquals(
+            KeyExtraction.Reason.KNOWN_NON_PARSING_FORMAT,
+            indexService.resolveCurrentState(snapshot, "a", preferredDataId = "notes.txt", activeNamespaceId = "dev")
+                .formatRefusal
+        )
+        // Declared properties in the console, but the data id names no format,
+        // so no runtime rule applies — a different situation with a different
+        // next action, and the only one of the two the user can act on.
+        val undetermined = indexService.resolveCurrentState(
+            snapshot,
+            "a",
+            preferredDataId = "service-config",
+            activeNamespaceId = "dev"
+        )
+        assertEquals(ConfigReferenceStatus.FORMAT_NOT_PARSED, undetermined.status)
+        assertEquals(KeyExtraction.Reason.FORMAT_UNDETERMINED, undetermined.formatRefusal)
+    }
+
+    @Test
+    fun `the terminal format state never permits a background namespace index refresh`() {
+        // The behavioural point of the state, and the only one with no visual
+        // signal of its own.
+        assertFalse(ConfigReferenceStatus.FORMAT_NOT_PARSED.mayRequestBackgroundRefresh())
+    }
+
+    @Test
+    fun `a placeholder with no data id context keeps its current behaviour`() = runBlocking {
+        seedConfigurations(
+            listOf(cfg("beans.xml", "DEFAULT_GROUP", "dev", "<beans><a>1</a></beans>", "xml"))
+        )
+        // Attribution needs a data id: without one the miss cannot be blamed on
+        // this configuration, or on any other.
+        assertEquals(
+            ConfigReferenceStatus.UNRESOLVED,
+            indexService.resolveCurrentState(cache.snapshot(identity), "a", activeNamespaceId = "dev").status
+        )
+    }
+
+    @Test
+    fun `a cold start reaches the terminal state instead of spending a sweep on it`() {
+        // No index has been built for this identity yet. The conclusion needs
+        // none — and the state it used to fall through to (UNAVAILABLE) asks
+        // for the sweep that cannot help.
+        val resolution = NacosKeyResolver.resolveCurrentState(
+            key = "a",
+            index = null,
+            snapshot = cache.snapshot(identity),
+            preferredDataId = "beans.xml"
+        )
+        assertEquals(ConfigReferenceStatus.FORMAT_NOT_PARSED, resolution.status)
+        assertEquals(KeyExtraction.Reason.PARSER_NOT_IMPLEMENTED, resolution.formatRefusal)
+        assertFalse(resolution.status.mayRequestBackgroundRefresh())
+    }
+
+    @Test
+    fun `a cold start for a parseable data id still asks for the sweep that would load it`() {
+        val resolution = NacosKeyResolver.resolveCurrentState(
+            key = "a",
+            index = null,
+            snapshot = cache.snapshot(identity),
+            preferredDataId = "app.properties"
+        )
+        assertEquals(ConfigReferenceStatus.UNAVAILABLE, resolution.status)
+        assertTrue(resolution.status.mayRequestBackgroundRefresh())
+    }
+
+    @Test
+    fun `a key hit outranks the terminal format conclusion`() = runBlocking {
+        // The declared data id contributes nothing, but the placeholder does
+        // resolve — elsewhere. A refusal the runtime would not make costs
+        // navigation that would have worked (ADR-0055), so the hit wins.
+        seedConfigurations(
+            listOf(cfg("app.properties", "DEFAULT_GROUP", "dev", "a=1\n", "properties"))
+        )
+        val resolution = indexService.resolveCurrentState(
+            cache.snapshot(identity),
+            "a",
+            preferredDataId = "beans.xml",
+            activeNamespaceId = "dev"
+        )
+        assertEquals(ConfigReferenceStatus.RESOLVED, resolution.status)
+        assertEquals("app.properties", resolution.hits.single().config.dataId)
+    }
+
+    @Test
+    fun `a visibility block outranks the terminal format conclusion`() = runBlocking {
+        seedConfigurations(
+            listOf(cfg("beans.xml", "DEFAULT_GROUP", null, "<beans><a>1</a></beans>", "xml"))
+        )
+        cache.visibilityReporter().reportCompleted(
+            CompletedObservation(
+                observation = 10_000,
+                identity = identity,
+                operationClass = ProtocolCapability.CONFIGURATION_READ,
+                outcome = ObservationOutcome.RemoteFailure(RemoteOperationError.Authentication(401))
+            )
+        )
+        val blocked = cache.snapshot(identity)
+        assertTrue(blocked.isAccessBlocked)
+
+        // The plugin never converts "cannot see" into a conclusion, not even a
+        // conclusion it could have reached without looking (issue #126).
+        val resolution = indexService.resolveCurrentState(blocked, "a", preferredDataId = "beans.xml")
+        assertEquals(ConfigReferenceStatus.UNDECIDABLE, resolution.status)
+        assertTrue(resolution.visibilityBlocked)
+    }
+
+    @Test
+    fun `a data id whose format still extracts keeps reaching the presence question`() = runBlocking {
+        // The format question must not swallow the states behind it: a listed
+        // yaml data id with no detail is still "body not loaded yet", and still
+        // asks for the sweep that will load it.
+        cache.replaceNamespaceIndex(
+            identity,
+            "dev",
+            listOf(cfg("app.yaml", "DEFAULT_GROUP", "dev", "", "yaml")),
+            ttl = 60_000L
+        )
+        indexService.refreshIndex(cache.snapshot(identity))
+
+        val resolution = indexService.resolveCurrentState(
+            cache.snapshot(identity),
+            "server.port",
+            preferredDataId = "app.yaml",
+            activeNamespaceId = "dev"
+        )
+        assertEquals(ConfigReferenceStatus.UNDECIDABLE, resolution.status)
+        assertTrue(resolution.status.mayRequestBackgroundRefresh())
+    }
 }

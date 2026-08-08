@@ -1,0 +1,7 @@
+<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g stroke="#6F737A" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- 配置 key/value 一笔连体：与其余状态几何一致，仅描边降饱和 -->
+    <path d="M7.2 3.8H2.8V6H6L8.7 8.7"/>
+    <!-- 无箭头头部：格式不参与解析是终态，没有可跳转的目标 -->
+  </g>
+</svg>

@@ -2,6 +2,7 @@ package com.nanyin.nacos.search.psi
 
 import com.nanyin.nacos.search.models.NacosConfiguration
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -74,9 +75,9 @@ class RuntimeFormatKeyExtractionTest {
 
     @Test
     fun `the two refusals stay distinguishable at the extraction seam`() {
-        // The bridge flattens both to "no keys" for now, but the reason has to
-        // survive: the terminal resolution state that replaces the flattening
-        // explains the two differently, because the user's next action differs.
+        // The reason has to survive the flattening above, because the terminal
+        // resolution state explains the two differently: the user's next action
+        // differs even where the outcome does not.
         assertEquals(
             KeyExtraction.NotExtractable(KeyExtraction.Reason.KNOWN_NON_PARSING_FORMAT),
             ConfigKeyExtractor.extract("k=v", RuntimeFormatDecision.forDataId("notes.txt"))
@@ -85,5 +86,56 @@ class RuntimeFormatKeyExtractionTest {
             KeyExtraction.NotExtractable(KeyExtraction.Reason.FORMAT_UNDETERMINED),
             ConfigKeyExtractor.extract("k=v", RuntimeFormatDecision.forDataId("service-config"))
         )
+    }
+
+    @Test
+    fun `the terminal state takes nothing away from a configuration that still extracts`() {
+        // This is the seam the detail panel's own gutter markers read
+        // (ConfigDetailPanel.applyKeyGutterMarkers), and it keeps answering
+        // exactly what it answered before the terminal state existed: keys with
+        // their lines for a format the plugin reads, and an empty map — which
+        // that panel treats as "no lines to mark", never as an absence claim —
+        // for one it does not (issue #172).
+        val keys = keysUnderRuntimeFormat(config("app.yaml", "server:\n  port: 8080\n", "text"))
+        assertEquals(setOf("server.port"), keys.keys)
+        assertEquals(1, keys["server.port"]?.lineIndex)
+
+        assertTrue(keysUnderRuntimeFormat(config("beans.xml", "<beans><a>1</a></beans>", "xml")).isEmpty())
+    }
+
+    // ── The refusal a caller holding only a data id can ask for (issue #172) ──
+
+    @Test
+    fun `a data id alone says why its format contributes no keys`() {
+        assertEquals(KeyExtraction.Reason.KNOWN_NON_PARSING_FORMAT, runtimeFormatRefusal("notes.txt"))
+        assertEquals(KeyExtraction.Reason.KNOWN_NON_PARSING_FORMAT, runtimeFormatRefusal("page.html"))
+        assertEquals(KeyExtraction.Reason.KNOWN_NON_PARSING_FORMAT, runtimeFormatRefusal("app.toml"))
+        assertEquals(KeyExtraction.Reason.PARSER_NOT_IMPLEMENTED, runtimeFormatRefusal("beans.xml"))
+        assertEquals(KeyExtraction.Reason.FORMAT_UNDETERMINED, runtimeFormatRefusal("service-config"))
+    }
+
+    @Test
+    fun `a data id whose format the plugin parses refuses nothing`() {
+        assertNull(runtimeFormatRefusal("app.properties"))
+        assertNull(runtimeFormatRefusal("app.yaml"))
+        assertNull(runtimeFormatRefusal("app.yml"))
+        assertNull(runtimeFormatRefusal("app.json"))
+    }
+
+    @Test
+    fun `the refusal a data id gives is the one a body would have gotten`() {
+        // Two callers ask the same question from opposite ends — one holding a
+        // body, one holding only a data id — and the answers are read off one
+        // table, so no format can be refused to one and parsed for the other.
+        RuntimeConfigFormat.values().forEach { format ->
+            val withBody = ConfigKeyExtractor.extract("k=v", format)
+            val withoutBody = ConfigKeyExtractor.refusalFor(format)
+            when (withBody) {
+                is KeyExtraction.NotExtractable ->
+                    assertEquals(withBody.reason, withoutBody, "$format")
+                is KeyExtraction.Extracted ->
+                    assertNull(withoutBody, "$format")
+            }
+        }
     }
 }

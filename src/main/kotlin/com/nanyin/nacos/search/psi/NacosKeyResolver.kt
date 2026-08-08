@@ -163,12 +163,18 @@ object NacosKeyResolver {
         if (snapshot.isAccessBlocked) {
             return ConfigResolution(ConfigReferenceStatus.UNDECIDABLE, emptyList(), visibilityBlocked = true)
         }
-        if (index == null) return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
-        // An index derived under a different visibility state may hold hidden
-        // definitions; do not serve it. Identity gating stays the service's job
-        // (the service never hands an index for another identity), so this
-        // guard only has to decide visibility-state mismatches.
-        if (!index.visibilityCompatibleWith(snapshot)) {
+        // No index, or one derived under a different visibility state — the
+        // latter may hold hidden definitions and must not be served. Identity
+        // gating stays the service's job (the service never hands an index for
+        // another identity), so this guard only has to decide visibility-state
+        // mismatches.
+        if (index == null || !index.visibilityCompatibleWith(snapshot)) {
+            // Neither can serve a hit, so concluding here takes nothing from
+            // the user — and the terminal format conclusion needs neither of
+            // them. Deferring it to a later pass would spend a sweep on a
+            // format no sweep can help, which is the cold-start half of the
+            // leak this state closes (issue #172).
+            terminalFormatResolution(preferredDataId)?.let { return it }
             return ConfigResolution(ConfigReferenceStatus.UNAVAILABLE, emptyList())
         }
         val hits = scopedDefinitions(index, key, activeNamespaceId, allowCrossNamespace, preferredDataId)
@@ -183,14 +189,44 @@ object NacosKeyResolver {
             return ConfigResolution(ConfigReferenceStatus.UNDECIDABLE, emptyList(), visibilityBlocked = true)
         }
 
-        // When a preferred data id is declared, the complete namespace summary
-        // index decides absence (UNRESOLVED) vs "exists but body not loaded"
-        // (UNDECIDABLE) — issue #52 / ADR-0041.
+        // A declared data id is what makes a miss attributable, and it decides
+        // two different questions in this order.
         val dataId = preferredDataId?.takeIf { it.isNotBlank() }
         if (dataId != null) {
+            // First, whether any body could have helped.
+            terminalFormatResolution(dataId)?.let { return it }
+            // Then, whether it is there at all: the complete namespace summary
+            // index decides absence (UNRESOLVED) vs "exists but body not
+            // loaded" (UNDECIDABLE) — issue #52 / ADR-0041.
             return dataIdPresenceResolution(dataId, snapshot, activeNamespaceId)
         }
         return resolutionFromHits(hits)
+    }
+
+    /**
+     * The terminal 格式不参与解析 conclusion for [preferredDataId], or null when
+     * its 运行时格式 is one the plugin reads keys from — or when there is no data
+     * id to attribute the miss to.
+     *
+     * Settled by the data id alone, so it needs neither a body nor an index:
+     * cached, listed, or never fetched, no body under this 运行时格式 makes the
+     * placeholder resolve. Answering "exists but body not loaded" instead was a
+     * lie about a body already in hand, and the lie is what kept a sweep pending
+     * for the life of the IDE (issue #172).
+     *
+     * Two things outrank it, and only two. A **key hit** does: a placeholder
+     * that resolves somewhere is resolved whatever its declared data id says,
+     * and a refusal the runtime would not make costs navigation that would have
+     * worked (ADR-0055). A **visibility block** does: the plugin never converts
+     * "cannot see" into a conclusion (issue #126). Presence does not — whether
+     * the configuration exists changes nothing about whether a placeholder could
+     * resolve against it, so proving absence here would buy nothing and cost the
+     * sweep that proves it.
+     */
+    private fun terminalFormatResolution(preferredDataId: String?): ConfigResolution? {
+        val dataId = preferredDataId?.takeIf { it.isNotBlank() } ?: return null
+        val reason = runtimeFormatRefusal(dataId) ?: return null
+        return ConfigResolution(ConfigReferenceStatus.FORMAT_NOT_PARSED, emptyList(), formatRefusal = reason)
     }
 
     private fun isNamespaceBlocked(snapshot: CacheSnapshot, namespaceId: String?): Boolean =
