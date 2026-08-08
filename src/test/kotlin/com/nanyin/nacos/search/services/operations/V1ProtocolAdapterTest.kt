@@ -119,6 +119,48 @@ class V1ProtocolAdapterTest {
     }
 
     @Test
+    fun `non-public Namespace summary carries the tenant from the V1 response body`(
+    ) = runBlocking {
+        // Public cases cannot tell an absent Namespace from a correct one
+        // (issue #191). Pin a non-public id so the adapter must read it.
+        val fixture = RecordingProtocolTransport(
+            ProtocolResponse(
+                200,
+                """{"totalCount":1,"pageNumber":1,"pagesAvailable":1,"pageItems":[{"id":"1","dataId":"app.yaml","group":"DEFAULT_GROUP","content":null,"type":"yaml","tenant":"team-a"}]}"""
+            )
+        )
+
+        val page = V1ProtocolAdapter(fixture)
+            .listSummaries(anonymousPublicTarget("team-a"), SummaryQuery())
+            .getOrThrow()
+
+        assertEquals("team-a", page.items.single().tenantId)
+        assertEquals("team-a", fixture.lastRequest.query.single { it.first == "tenant" }.second)
+    }
+
+    @Test
+    fun `non-public Namespace detail carries the tenant from the V1 response body`(
+    ) = runBlocking {
+        val fixture = RecordingProtocolTransport(
+            ProtocolResponse(
+                200,
+                """{"dataId":"app.yaml","group":"DEFAULT_GROUP","tenant":"team-a","content":"enabled: true","type":"yaml","md5":"abc"}"""
+            )
+        )
+
+        val detail = V1ProtocolAdapter(fixture)
+            .readDetail(
+                anonymousPublicTarget("team-a"),
+                ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP")
+            )
+            .getOrThrow()
+
+        requireNotNull(detail)
+        assertEquals("team-a", detail.tenantId)
+        assertEquals("team-a", fixture.lastRequest.query.single { it.first == "tenant" }.second)
+    }
+
+    @Test
     fun `invalid Nacos password token relogins once and replays the idempotent V1 read`() = runBlocking {
         // Drive the same evidence the production transport carries: a typed
         // Authentication error with a sanitized body (not a hand-built
