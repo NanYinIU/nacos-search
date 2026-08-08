@@ -476,7 +476,13 @@ class V3ProtocolAdapter(
             pageNumber = page.pageNumber,
             pagesAvailable = page.pagesAvailable,
             items = page.pageItems.map { item ->
-                ConfigurationSummary(item.dataId, item.group, NamespaceInfo.canonicalTenantId(item.tenant), item.content, item.type)
+                ConfigurationSummary(
+                    item.dataId,
+                    item.group,
+                    NamespaceInfo.canonicalTenantId(item.namespaceFromResponse()),
+                    item.content,
+                    item.type
+                )
             }
         )
     }
@@ -488,7 +494,7 @@ class V3ProtocolAdapter(
         return NacosConfiguration(
             dataId = detail.dataId,
             group = detail.group,
-            tenantId = NamespaceInfo.canonicalTenantId(detail.tenant),
+            tenantId = NamespaceInfo.canonicalTenantId(detail.namespaceFromResponse()),
             content = detail.content ?: "",
             type = detail.type,
             md5 = detail.md5
@@ -510,7 +516,7 @@ class V3ProtocolAdapter(
                     id = item.id ?: "",
                     dataId = item.dataId,
                     group = item.group,
-                    tenantId = NamespaceInfo.canonicalTenantId(item.tenant),
+                    tenantId = NamespaceInfo.canonicalTenantId(item.namespaceFromResponse()),
                     type = item.type,
                     md5 = item.md5,
                     lastModified = HistoryTimestamps.resolveMillis(
@@ -536,7 +542,7 @@ class V3ProtocolAdapter(
             id = detail.id,
             dataId = detail.dataId,
             group = detail.group,
-            tenantId = NamespaceInfo.canonicalTenantId(detail.tenant),
+            tenantId = NamespaceInfo.canonicalTenantId(detail.namespaceFromResponse()),
             content = detail.content ?: "",
             type = detail.type,
             md5 = detail.md5,
@@ -594,6 +600,28 @@ class V3ProtocolAdapter(
 
     private fun firstPresent(vararg values: String?): String? =
         values.firstOrNull { !it.isNullOrBlank() }
+
+    /**
+     * V3 configuration list/detail/history envelopes may spell the Namespace as
+     * the legacy `tenant` field or as the request parameter `namespaceId`
+     * (issue #191). Prefer whichever is present and non-blank; when both are
+     * present, prefer the legacy tenant spelling that production servers
+     * historically returned.
+     */
+    private fun namespaceFromResponseFields(tenant: String?, namespaceId: String?): String? =
+        firstPresent(tenant, namespaceId)
+
+    private fun V3ConfigItem.namespaceFromResponse(): String? =
+        namespaceFromResponseFields(tenant, namespaceId)
+
+    private fun V3ConfigDetailData.namespaceFromResponse(): String? =
+        namespaceFromResponseFields(tenant, namespaceId)
+
+    private fun V3HistoryItem.namespaceFromResponse(): String? =
+        namespaceFromResponseFields(tenant, namespaceId)
+
+    private fun V3HistoryDetailData.namespaceFromResponse(): String? =
+        namespaceFromResponseFields(tenant, namespaceId)
 
     private fun mapStatusFailure(response: ProtocolResponse): RemoteOperationError {
         val envelope = runCatching { gson.fromJson(response.body, V3Envelope::class.java) }.getOrNull()
@@ -657,7 +685,9 @@ class V3ProtocolAdapter(
         val group: String = "",
         val content: String? = null,
         val type: String? = null,
-        val tenant: String? = null
+        val tenant: String? = null,
+        // V3 request parameter spelling; some 3.x builds echo this instead of tenant.
+        val namespaceId: String? = null
     )
 
     private data class V3ConfigDetailData(
@@ -665,6 +695,7 @@ class V3ProtocolAdapter(
         val dataId: String = "",
         val group: String = "",
         val tenant: String? = null,
+        val namespaceId: String? = null,
         val content: String? = null,
         val type: String? = null,
         val md5: String? = null
@@ -684,6 +715,7 @@ class V3ProtocolAdapter(
         val type: String? = null,
         val md5: String? = null,
         val tenant: String? = null,
+        val namespaceId: String? = null,
         val lastModified: Long? = null,
         val modifyTime: Long? = null,
         val createTime: Long? = null,
@@ -697,6 +729,7 @@ class V3ProtocolAdapter(
         val dataId: String = "",
         val group: String = "",
         val tenant: String? = null,
+        val namespaceId: String? = null,
         val content: String? = null,
         val type: String? = null,
         val md5: String? = null,

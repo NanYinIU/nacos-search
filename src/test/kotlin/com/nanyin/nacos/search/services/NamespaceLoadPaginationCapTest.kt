@@ -182,6 +182,32 @@ class NamespaceLoadPaginationCapTest {
         assertEquals(DatasetCompleteness.COMPLETE, load.completeness)
     }
 
+    @Test
+    fun `loadNamespace stamps the requested Namespace when the response carries none`(
+    ) = runBlocking {
+        // Search already falls back to the requested Namespace when the list
+        // item has no tenant; the namespace-load path must match (issue #191).
+        val transport = object : NacosRequestExecutor.HttpTransport {
+            override fun get(request: NacosRequestExecutor.TransportRequest): String {
+                if (!request.url.contains("/v1/cs/configs")) {
+                    return """{"totalCount":0,"pageNumber":1,"pagesAvailable":0,"pageItems":[]}"""
+                }
+                return """{"totalCount":1,"pageNumber":1,"pagesAvailable":1,"pageItems":[{"dataId":"app.yaml","group":"DEFAULT_GROUP","content":null,"type":"yaml"}]}"""
+            }
+
+            override fun post(request: NacosRequestExecutor.TransportRequest): String = "true"
+        }
+
+        val load = apiWith(transport).loadNamespace(
+            namespaceId = "team-a",
+            useCache = false,
+            operationContext = lockedV1Context()
+        ).getOrThrow()
+
+        assertEquals(1, load.configurations.size)
+        assertEquals("team-a", load.configurations.single().tenantId)
+    }
+
     private fun apiWith(transport: NacosRequestExecutor.HttpTransport): NacosApiService {
         val executor = NacosRequestExecutor(transport)
         return NacosApiService(
