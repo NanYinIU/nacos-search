@@ -402,7 +402,7 @@ object ConfigKeyExtractor {
             //
             // This is the one place the two formats' key spaces legitimately
             // differ, and the difference is not ours to smooth over — each format
-            // follows the loader that reads it (#166). Spring Cloud Alibaba's JSON
+            // follows the loader that reads it (ADR-0055). Spring Cloud Alibaba's JSON
             // loader drops an empty container instead of terminating on it, so
             // `{"a":[]}` contributes no `a`, and the JSON walk below deliberately
             // has no counterpart to these two branches. The differential oracle

@@ -13,10 +13,9 @@ package com.nanyin.nacos.search.psi
  * format contributes no keys" instead of "this configuration has no keys" —
  * two answers a caller must never confuse ([KeyExtraction]).
  *
- * Who decides which member applies is deliberately not here. In this slice the
- * callers still derive it from the configuration's declared type through
- * [ofTypeName]; the decision table that replaces that derivation (reference-site
- * declaration, then data id suffix) lands separately.
+ * Who decides which member applies is deliberately not here: it is
+ * [RuntimeFormatDecision], a unit of its own so that the decision table can be
+ * changed a row at a time and verified without a configuration body.
  */
 enum class RuntimeConfigFormat {
     /** Parsed by both Spring Cloud Alibaba and `nacos-spring-context`. */
@@ -31,24 +30,5 @@ enum class RuntimeConfigFormat {
     TOML,
 
     /** Nothing available names a format. */
-    UNDETERMINED;
-
-    companion object {
-        /**
-         * Maps a Nacos type name onto the closed set. An unrecognized or absent
-         * name is [UNDETERMINED] rather than a guess: extraction under the wrong
-         * rules invents keys that fail at runtime.
-         */
-        fun ofTypeName(typeName: String?): RuntimeConfigFormat =
-            when (typeName?.trim()?.lowercase()) {
-                "properties" -> PROPERTIES
-                "yaml", "yml" -> YAML
-                "json" -> JSON
-                "xml" -> XML
-                "text", "txt" -> TEXT
-                "html", "htm" -> HTML
-                "toml" -> TOML
-                else -> UNDETERMINED
-            }
-    }
+    UNDETERMINED
 }

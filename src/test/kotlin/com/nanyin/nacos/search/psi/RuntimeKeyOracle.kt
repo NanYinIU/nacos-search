@@ -11,7 +11,7 @@ import org.springframework.core.io.ByteArrayResource
 /**
  * The differential oracle: the key space the **runtime** resolves from a body.
  *
- * #166 gives the runtime the last word — a gutter marker asserts that a
+ * ADR-0055 gives the runtime the last word — a gutter marker asserts that a
  * placeholder resolves at runtime, not that the body looks like a key list. That
  * authority is a design principle until something executes it, which is what
  * this is for. It runs the runtime's own `PropertySourceLoader` implementations,

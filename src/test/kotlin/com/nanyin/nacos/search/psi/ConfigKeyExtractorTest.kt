@@ -593,7 +593,7 @@ class ConfigKeyExtractorTest {
         // Deliberately not the YAML answer above: Spring Cloud Alibaba's JSON
         // loader drops an empty container where Spring Boot's YAML flattening
         // terminates on one. Each format follows the loader that reads it
-        // (#166), and the differential oracle holds both directions, so
+        // (ADR-0055), and the differential oracle holds both directions, so
         // making the two agree would fail the build rather than tidy anything.
         val map = keys("""{"a":[],"b":{},"c":1,"d":{"e":[]}}""", RuntimeConfigFormat.JSON)
         assertNull(map["a"])
@@ -672,33 +672,7 @@ class ConfigKeyExtractorTest {
         assertEquals(KeyExtraction.Extracted(emptyMap()), result)
     }
 
-    // ---- format naming ----
-    //
-    // The format is still derived by the existing accessor in this slice; only
-    // the mapping from its type name onto the closed set lives here.
-
-    @Test
-    fun `type names map onto the closed format set`() {
-        assertEquals(RuntimeConfigFormat.PROPERTIES, RuntimeConfigFormat.ofTypeName("properties"))
-        assertEquals(RuntimeConfigFormat.YAML, RuntimeConfigFormat.ofTypeName("yaml"))
-        assertEquals(RuntimeConfigFormat.YAML, RuntimeConfigFormat.ofTypeName("yml"))
-        assertEquals(RuntimeConfigFormat.JSON, RuntimeConfigFormat.ofTypeName("json"))
-        assertEquals(RuntimeConfigFormat.XML, RuntimeConfigFormat.ofTypeName("xml"))
-        assertEquals(RuntimeConfigFormat.TEXT, RuntimeConfigFormat.ofTypeName("text"))
-        assertEquals(RuntimeConfigFormat.HTML, RuntimeConfigFormat.ofTypeName("html"))
-        assertEquals(RuntimeConfigFormat.TOML, RuntimeConfigFormat.ofTypeName("toml"))
-    }
-
-    @Test
-    fun `an unrecognized or absent type name is undetermined`() {
-        assertEquals(RuntimeConfigFormat.UNDETERMINED, RuntimeConfigFormat.ofTypeName(null))
-        assertEquals(RuntimeConfigFormat.UNDETERMINED, RuntimeConfigFormat.ofTypeName(""))
-        assertEquals(RuntimeConfigFormat.UNDETERMINED, RuntimeConfigFormat.ofTypeName("protobuf"))
-    }
-
-    @Test
-    fun `type names are matched case-insensitively and trimmed`() {
-        assertEquals(RuntimeConfigFormat.JSON, RuntimeConfigFormat.ofTypeName(" JSON "))
-        assertEquals(RuntimeConfigFormat.YAML, RuntimeConfigFormat.ofTypeName("Yml"))
-    }
+    // Which member of the closed set applies to a given configuration is not
+    // asserted here: that is the decision table's job, and it has its own test
+    // (RuntimeFormatDecisionTest).
 }

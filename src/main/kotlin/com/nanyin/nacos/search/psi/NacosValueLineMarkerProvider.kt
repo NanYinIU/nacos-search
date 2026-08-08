@@ -170,7 +170,7 @@ class NacosValueLineMarkerProvider internal constructor(
                 )
             }
             if (cached != null) {
-                val lineIndex = keysUnderDeclaredType(cached)[key]?.lineIndex
+                val lineIndex = keysUnderRuntimeFormat(cached)[key]?.lineIndex
                     ?: ConfigKeyExtractor.LINE_NOT_FOUND
                 NacosConfigNavigator.navigate(project, cached, lineIndex)
                 return@executeOnPooledThread
@@ -208,7 +208,7 @@ class NacosValueLineMarkerProvider internal constructor(
                 .getService(NavigationIndexRefreshService::class.java)
                 .refresh(resolvedIdentity, project)
 
-            val lineIndex = keysUnderDeclaredType(config)[key]?.lineIndex
+            val lineIndex = keysUnderRuntimeFormat(config)[key]?.lineIndex
                 ?: ConfigKeyExtractor.LINE_NOT_FOUND
             NacosConfigNavigator.navigate(project, config, lineIndex)
 

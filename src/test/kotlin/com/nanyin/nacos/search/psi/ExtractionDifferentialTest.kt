@@ -10,7 +10,7 @@ import org.junit.jupiter.api.TestFactory
  * The differential oracle: the plugin's key set is asserted against the key set
  * the **runtime** resolves, over [ExtractionCorpus].
  *
- * This is what turns #166's authority — where the plugin and the runtime
+ * This is what turns ADR-0055's authority — where the plugin and the runtime
  * would differ about what a placeholder resolves to, the runtime wins — from a
  * design principle into something that fails the build. The enumerated oracle in
  * [ConfigKeyExtractorTest] cannot do that job on its own: it was entirely green
