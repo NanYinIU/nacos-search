@@ -64,13 +64,16 @@ class AuthenticationSessionRegistry(
             }
             completedToken(key.identity)?.let { return@withLock it }
             val acquired = login()
-            val reusable = acquired?.isValid(clock()) == true
+            // Validate against the clock *before* the publication fence so a
+            // paused clock (tests) or slow validation cannot hold the fence
+            // lock and deadlock invalidateProfile at the same seam.
+            val reusableToken = acquired?.takeIf { it.isValid(clock()) }
             synchronized(profileFence) {
                 if (profileFence.invalidated || epochFor(key.identity).get() != epoch) {
                     return@synchronized null
                 }
-                if (reusable) {
-                    completedTokens[key.identity] = acquired
+                if (reusableToken != null) {
+                    completedTokens[key.identity] = reusableToken
                 }
                 acquired
             }
