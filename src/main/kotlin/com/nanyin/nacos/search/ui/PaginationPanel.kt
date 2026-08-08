@@ -10,9 +10,6 @@ import com.intellij.openapi.ui.ComboBox
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
-import com.nanyin.nacos.search.listeners.NamespaceChangeListener
-import com.nanyin.nacos.search.models.NamespaceInfo
-import com.nanyin.nacos.search.services.NamespaceService
 import java.awt.*
 import javax.swing.*
 import javax.swing.plaf.basic.BasicButtonUI
@@ -25,8 +22,7 @@ import com.nanyin.nacos.search.invokeOnEdt
  * total count on the left, and a narrow page-size combo on the right
  * (fixed width so BorderLayout.EAST does not stretch it).
  */
-class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, NacosLanguageListener, Disposable {
-    private val namespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java)
+class PaginationPanel : JPanel(BorderLayout()), NacosLanguageListener, Disposable {
 
     private val previousButton = toolbarIconButton(AllIcons.Actions.Back, NacosSearchBundle.message("pagination.previous"))
     private val nextButton = toolbarIconButton(AllIcons.Actions.Forward, NacosSearchBundle.message("pagination.next"))
@@ -66,7 +62,6 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, NacosLa
         setupLayout()
         setupEventHandlers()
         border = JBUI.Borders.empty(2, 4)
-        namespaceService.addNamespaceChangeListener(this)
         ApplicationManager.getApplication().messageBus.connect(this)
             .subscribe(NacosLanguageListener.TOPIC, this)
     }
@@ -145,20 +140,7 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, NacosLa
         }
     }
 
-    override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
-        val totalCountNum = newNamespace?.configCount ?: 0
-        val pageSize = 10
-        val totalPages = if (totalCountNum == 0) 0 else (totalCountNum + pageSize - 1) / pageSize
-        updatePagination(NacosSearchService.PaginationState(
-            currentPage = 1,
-            pageSize = pageSize,
-            totalCount = totalCountNum,
-            totalPages = totalPages
-        ))
-    }
-
     override fun dispose() {
-        namespaceService.removeNamespaceChangeListener(this)
     }
 
     override fun languageChanged() {
@@ -189,7 +171,7 @@ class PaginationPanel : JPanel(BorderLayout()), NamespaceChangeListener, NacosLa
                 isEnabled = false
                 toolTipText = tooltip
                 putClientProperty("JButton.buttonType", "toolbar")
-                ui = BasicButtonUI()
+                setUI(BasicButtonUI())
                 preferredSize = Dimension(24, 22)
                 minimumSize = Dimension(24, 22)
                 maximumSize = Dimension(24, 22)

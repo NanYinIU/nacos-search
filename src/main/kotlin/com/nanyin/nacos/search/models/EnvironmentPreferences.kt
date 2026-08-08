@@ -23,7 +23,20 @@ data class EnvironmentPreferences(
      * the project's declared configuration sources so gutter markers resolve
      * without browsing (ADR-0041 / ADR-0042).
      */
-    var navigationDetailPrefetchEnabled: Boolean = true
+    var navigationDetailPrefetchEnabled: Boolean = true,
+    /**
+     * Suggested default namespace for newly seeded project sessions.
+     * Not part of the access identity. Persisted on this record so the legacy
+     * server list need not be rewritten (ADR-0049 / issue #153), but a change
+     * is still classified as operational (session seed) — not preference-only —
+     * by [com.nanyin.nacos.search.settings.EnvironmentProfileStore].
+     */
+    var suggestedNamespace: String = "public",
+    /**
+     * Default configuration group used when prefetch has a dataId but no
+     * namespace-index hit. Preference-only — not an access-boundary field.
+     */
+    var defaultGroup: String = "DEFAULT_GROUP"
 ) {
     fun copyPreferences(): EnvironmentPreferences = copy()
 
@@ -35,7 +48,9 @@ data class EnvironmentPreferences(
             EnvironmentPreferences(
                 profileId = server.id.ifBlank { "default" },
                 allowCrossNamespaceNavigation = server.allowCrossNamespaceNavigation,
-                navigationDetailPrefetchEnabled = server.navigationDetailPrefetchEnabled
+                navigationDetailPrefetchEnabled = server.navigationDetailPrefetchEnabled,
+                suggestedNamespace = server.namespace.trim().ifBlank { "public" },
+                defaultGroup = server.defaultGroup.trim().ifBlank { "DEFAULT_GROUP" }
             )
     }
 }

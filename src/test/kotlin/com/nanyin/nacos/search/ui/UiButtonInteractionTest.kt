@@ -122,7 +122,6 @@ class UiButtonInteractionTest {
 
         val namespaceService = mock<NamespaceService> {
             whenever(it.loadNamespacesAsync()).thenReturn(CompletableDeferred(Result.success(emptyList())))
-            whenever(it.getCurrentNamespace()).thenReturn(null)
         }
         val namespacePanel = NamespacePanel(
             mockProject,
@@ -149,7 +148,6 @@ class UiButtonInteractionTest {
         )
         val namespaceService = mock<NamespaceService> {
             whenever(it.loadNamespacesAsync()).thenReturn(CompletableDeferred(Result.success(listOf(namespace))))
-            whenever(it.getCurrentNamespace()).thenReturn(namespace)
         }
 
         val namespacePanel = NamespacePanel(
@@ -350,7 +348,7 @@ class UiButtonInteractionTest {
     }
 
     private fun runOnEdt(action: () -> Unit) {
-        UIUtil.invokeAndWaitIfNeeded(action)
+        UIUtil.invokeAndWaitIfNeeded(Runnable { action() })
     }
 
     private fun waitForUi() {

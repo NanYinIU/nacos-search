@@ -13,7 +13,6 @@ import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.CacheService
-import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.captureAccessIdentity
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosSettings
@@ -54,7 +53,6 @@ class NacosValueLineMarkerProviderTest {
             cache.clearAll()
             refreshKeyIndex(cache, settings.captureAccessIdentity())
         }
-        ApplicationManager.getApplication().getService(NamespaceService::class.java).setCurrentNamespace(null)
     }
 
     /**
@@ -152,12 +150,9 @@ class NacosValueLineMarkerProviderTest {
     }
 
     @Test
-    fun `marker resolves against project-selected namespace not app-wide NamespaceService`() {
+    fun `marker resolves against project-selected namespace`() {
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         setAllowCrossNamespaceNavigation(false)
-        // App-wide service points at a different namespace than the project session.
-        ApplicationManager.getApplication().getService(NamespaceService::class.java)
-            .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("other-ns", "Other"))
         selectProjectNamespace("qa-ns")
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
@@ -420,8 +415,6 @@ class NacosValueLineMarkerProviderTest {
     fun `value reference only resolves current namespace when cross namespace navigation is disabled`() {
         setAllowCrossNamespaceNavigation(false)
         selectProjectNamespace("namespace1")
-        ApplicationManager.getApplication().getService(NamespaceService::class.java)
-            .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("namespace1", "Namespace 1"))
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
@@ -451,8 +444,6 @@ class NacosValueLineMarkerProviderTest {
     fun `value reference resolves other namespaces when cross namespace navigation is enabled`() {
         setAllowCrossNamespaceNavigation(true)
         selectProjectNamespace("namespace1")
-        ApplicationManager.getApplication().getService(NamespaceService::class.java)
-            .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("namespace1", "Namespace 1"))
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
@@ -587,8 +578,6 @@ class NacosValueLineMarkerProviderTest {
     fun `namespace block hides only that namespace's gutter markers`() = runBlocking {
         setAllowCrossNamespaceNavigation(false)
         selectProjectNamespace("team-a")
-        ApplicationManager.getApplication().getService(NamespaceService::class.java)
-            .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("team-a", "Team A"))
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
         cache.writeDetail(
@@ -635,8 +624,6 @@ class NacosValueLineMarkerProviderTest {
 
         // The visible namespace keeps its resolved marker.
         selectProjectNamespace("team-b")
-        ApplicationManager.getApplication().getService(NamespaceService::class.java)
-            .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo("team-b", "Team B"))
         val visibleMarker = markerFor(javaText)
         assertNotNull(visibleMarker)
         assertEquals(NacosIcons.GutterConfig, visibleMarker?.createGutterRenderer()?.icon)
@@ -645,8 +632,6 @@ class NacosValueLineMarkerProviderTest {
     private fun cacheKeyInOtherNamespaceForActive(activeNamespaceId: String, allowCrossNamespace: Boolean) {
         setAllowCrossNamespaceNavigation(allowCrossNamespace)
         selectProjectNamespace(activeNamespaceId)
-        ApplicationManager.getApplication().getService(NamespaceService::class.java)
-            .setCurrentNamespace(com.nanyin.nacos.search.models.NamespaceInfo(activeNamespaceId, "Namespace 1"))
         runBlocking {
             val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)

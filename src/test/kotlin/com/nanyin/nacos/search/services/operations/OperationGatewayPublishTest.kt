@@ -85,6 +85,28 @@ class OperationGatewayPublishTest {
         assertEquals(2, adapter.detailCalls)
     }
 
+    /**
+     * ADR-0014 / ADR-0031: adapter-typed [RemoteOperationError.WriteConflict]
+     * (V1 CAS "false") becomes [PublishOutcome.CasConflict] for the controller.
+     */
+    @Test
+    fun `PublishGateway remaps WriteConflict to CasConflict`() = runBlocking {
+        val adapter = RecordingPublishAdapter(
+            publishResult = Result.failure(RemoteOperationError.WriteConflict())
+        )
+        val publishGateway = OperationGatewayPublishGateway(
+            OperationGateway(mapOf(NacosApiGeneration.V1 to adapter))
+        )
+
+        val outcome = publishGateway.write(
+            v1Target(),
+            PublishCommand("app.yaml", "G", "new", "yaml", "public", casMd5 = "m1")
+        ).getOrThrow()
+
+        assertEquals(PublishOutcome.CasConflict, outcome)
+        assertEquals(1, adapter.publishCalls)
+    }
+
     private fun session() = EditSession(
         binding = EditBinding.of(
             profileId = "p1",
@@ -124,7 +146,9 @@ class OperationGatewayPublishTest {
         return OperationTarget(context, "public")
     }
 
-    private class RecordingPublishAdapter : ProtocolAdapter {
+    private class RecordingPublishAdapter(
+        private val publishResult: Result<PublishOutcome> = Result.success(PublishOutcome.Written("ok"))
+    ) : ProtocolAdapter {
         var publishCalls = 0
         var detailCalls = 0
         var lastCommand: PublishCommand? = null
@@ -151,7 +175,7 @@ class OperationGatewayPublishTest {
         override suspend fun publish(target: OperationTarget, command: PublishCommand): Result<PublishOutcome> {
             publishCalls++
             lastCommand = command
-            return Result.success(PublishOutcome.Written("ok"))
+            return publishResult
         }
     }
 }

@@ -613,18 +613,26 @@ class NacosSearchService(
         val namespaceId = request.namespace?.namespaceId
         val indexRequest = settings.captureNamespaceIndexRequest(namespaceId, context)
         val indexKey = indexRequest.key
-        val cachedIndex = if (!request.forceRefresh && settings.cacheEnabled) {
+        // Prefer a fresh index, then a persisted/expired STALE one, before any
+        // full-namespace pagination (issue #147). forceRefresh still bypasses.
+        val freshIndex = if (!request.forceRefresh && settings.cacheEnabled) {
             cacheService.getNamespaceIndexEntry(indexKey.identity, namespaceId)
         } else {
             null
         }
+        val staleIndex = if (freshIndex == null && !request.forceRefresh && settings.cacheEnabled) {
+            cacheService.getNamespaceIndexEntry(indexKey.identity, namespaceId, allowStale = true)
+        } else {
+            null
+        }
+        val cachedIndex = freshIndex ?: staleIndex
         val source: SearchSource
         // Carried alongside [source] so the index-backed path reports age from the
         // cached entry's own timestamp, exactly like the list-page path does
         // (issue #42 / ADR-0036). Without it a stale index rendered as WITHIN_TTL.
         val indexFetchedAtMillis: Long?
         val allConfigurations = if (cachedIndex != null) {
-            source = SearchSource.CACHE
+            source = if (freshIndex != null) SearchSource.CACHE else SearchSource.STALE_CACHE
             indexFetchedAtMillis = cachedIndex.createdAtMillis
             cachedIndex.data
         } else {
@@ -685,7 +693,12 @@ class NacosSearchService(
             }
         }
 
-        val filtered = allConfigurations.filter { it.matchesRequest(request) }
+        val filtered = configurationsForLocalMatch(
+            summaries = allConfigurations,
+            identity = indexKey.identity,
+            namespaceId = namespaceId,
+            searchContent = request.searchContent
+        ).filter { it.matchesRequest(request) }
         val fromIndex = paginate(filtered, request.pageNo, request.pageSize)
         val response = ConfigListResponse(
             totalCount = filtered.size,
@@ -889,23 +902,6 @@ class NacosSearchService(
         _paginationState.value = PaginationState()
         currentRequest = null
     }
-    
-    /**
-     * Checks if search is currently active
-     */
-    fun isSearching(): Boolean {
-        return _searchState.value is SearchState.Loading
-    }
-    
-    /**
-     * Gets current search results
-     */
-    fun getCurrentResults(): List<NacosConfiguration> {
-        return when (val state = _searchState.value) {
-            is SearchState.Success -> state.configurations
-            else -> emptyList()
-        }
-    }
 
     private fun SearchRequest.toApiListPageCacheKey(): String {
         return listOf(
@@ -917,6 +913,35 @@ class NacosSearchService(
             "pageSize=$pageSize",
             "search=${getSearchMode()}"
         ).joinToString("|")
+    }
+
+    /**
+     * Namespace-index rows are summaries (empty content). When the caller asked
+     * to search content, overlay any ordinary detail body already seeded or
+     * prefetched for that coordinate so body matches hit again (issue #146).
+     */
+    private suspend fun configurationsForLocalMatch(
+        summaries: List<NacosConfiguration>,
+        identity: AccessIdentity,
+        namespaceId: String?,
+        searchContent: Boolean
+    ): List<NacosConfiguration> {
+        if (!searchContent) return summaries
+        return summaries.map { summary ->
+            if (summary.content.isNotBlank()) return@map summary
+            val detail = cacheService.getConfigDetail(
+                identity,
+                namespaceId,
+                summary.dataId,
+                summary.group,
+                allowStale = false
+            )
+            if (detail != null && detail.content.isNotBlank()) {
+                summary.copy(content = detail.content)
+            } else {
+                summary
+            }
+        }
     }
 
     private fun NacosConfiguration.matchesRequest(request: SearchRequest): Boolean {

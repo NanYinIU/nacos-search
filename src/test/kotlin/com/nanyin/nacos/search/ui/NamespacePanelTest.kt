@@ -61,7 +61,6 @@ class NamespacePanelTest {
         mockNamespaceService = mock<NamespaceService>()
 
         whenever(mockNamespaceService.loadNamespacesAsync()).thenReturn(CompletableDeferred(Result.success(testNamespaces)))
-        whenever(mockNamespaceService.getCurrentNamespace()).thenReturn(null)
     }
 
     @AfterEach
@@ -218,30 +217,34 @@ class NamespacePanelTest {
     }
 
     @Test
-    fun testProjectPanelDoesNotRestoreGlobalNamespaceState() {
-        val currentNamespace = testNamespaces[1]
-        whenever(mockNamespaceService.getCurrentNamespace()).thenReturn(currentNamespace)
+    fun `two project panels keep different selections while discovery refreshes their options`() = runBlocking {
+        val firstProject = mock<Project>()
+        val secondProject = mock<Project>()
+        val firstSession = NacosProjectSession().apply { select("shared", "dev") }
+        val secondSession = NacosProjectSession().apply { select("shared", "staging") }
+        whenever(firstProject.getService(EditSessionService::class.java)).thenReturn(standInEditSessions())
+        whenever(secondProject.getService(EditSessionService::class.java)).thenReturn(standInEditSessions())
+        whenever(firstProject.getService(NacosProjectSession::class.java)).thenReturn(firstSession)
+        whenever(secondProject.getService(NacosProjectSession::class.java)).thenReturn(secondSession)
+        whenever(mockNamespaceService.loadNamespacesAsync(anyOrNull())).thenReturn(
+            CompletableDeferred(Result.success(testNamespaces))
+        )
 
-        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
-        waitForNamespaceLoad()
+        val firstPanel = NamespacePanel(firstProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
+        val secondPanel = NamespacePanel(secondProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
+        try {
+            firstPanel.refreshAndWait()
+            secondPanel.refreshAndWait()
+            waitForUi()
 
-        val selectedNamespace = namespacePanel.getSelectedNamespace()
-        assertNotNull(selectedNamespace)
-        assertEquals("public", selectedNamespace?.namespaceId)
-    }
-
-    @Test
-    fun testPanelIgnoresExternalNamespaceServiceChange() = runBlocking {
-        namespacePanel = NamespacePanel(mockProject, mockNamespaceService, dispatcher = Dispatchers.Unconfined)
-        waitForNamespaceLoad()
-
-        val targetNamespace = testNamespaces[2]
-        namespacePanel.onNamespaceChanged(testNamespaces[0], targetNamespace)
-        waitForUi()
-
-        val selectedNamespace = namespacePanel.getSelectedNamespace()
-        assertNotNull(selectedNamespace)
-        assertEquals("public", selectedNamespace?.namespaceId)
+            assertEquals("dev", firstPanel.getSelectedNamespace()?.namespaceId)
+            assertEquals("staging", secondPanel.getSelectedNamespace()?.namespaceId)
+            assertEquals("dev", firstSession.sessionState.namespaceId)
+            assertEquals("staging", secondSession.sessionState.namespaceId)
+        } finally {
+            Disposer.dispose(firstPanel)
+            Disposer.dispose(secondPanel)
+        }
     }
 
     @Test
@@ -265,9 +268,9 @@ class NamespacePanelTest {
     }
 
     private fun waitForUi() {
-        UIUtil.invokeAndWaitIfNeeded {
+        UIUtil.invokeAndWaitIfNeeded(Runnable {
             PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
-        }
+        })
     }
 
     private fun waitForNamespaceLoad() {

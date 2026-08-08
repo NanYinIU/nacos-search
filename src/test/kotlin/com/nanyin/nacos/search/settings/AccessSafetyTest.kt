@@ -49,10 +49,28 @@ class AccessSafetyTest {
                 authMode = AuthMode.TOKEN
             )
         )
-        val credentials = InMemoryCredentialSlots()
+        val slots = InMemoryCredentialSlotStore()
+        val input = SettingsMigrationInput(
+            schemaVersion = 0,
+            servers = legacy,
+            activeServerId = "dev",
+            flatNamespace = "team-a",
+            profiles = emptyList(),
+            preferences = emptyList(),
+            defaultProfileId = "dev",
+            defaultNamespaceId = "team-a"
+        )
 
-        val first = LegacyProfileMigrator(credentials).migrate(legacy, "dev", "team-a")
-        val second = LegacyProfileMigrator(credentials).migrate(legacy, "dev", "team-a")
+        val first = SettingsMigrator(slots).migrate(input)
+        val second = SettingsMigrator(slots).migrate(
+            input.copy(
+                schemaVersion = first.toSchemaVersion,
+                profiles = first.profiles,
+                preferences = first.preferences,
+                defaultProfileId = first.defaultProfileId,
+                defaultNamespaceId = first.defaultNamespaceId
+            )
+        )
 
         // Profiles and seed are deterministic; the second pass stages nothing
         // (idempotent credential writes) so action lists may differ.
@@ -62,8 +80,12 @@ class AccessSafetyTest {
         assertEquals("dev", first.defaultProfileId)
         assertEquals("team-a", first.defaultNamespaceId)
         assertEquals("https://nacos.example", first.profiles.single().canonicalEndpoint)
-        assertEquals("secret", credentials[first.profiles.single().credentialSlotId])
+        assertEquals(
+            "secret",
+            slots.read(first.profiles.single().id, first.profiles.single().credentialSlotVersion)
+        )
         assertEquals(1L, first.profiles.single().credentialSlotVersion)
+        assertEquals(0, second.credentialSlotWrites)
     }
 
     @Test
@@ -72,14 +94,31 @@ class AccessSafetyTest {
             NacosServerConfig(id = "", serverUrl = "https://dev.nacos.example", password = "dev-secret"),
             NacosServerConfig(id = "", serverUrl = "https://prod.nacos.example", password = "prod-secret")
         )
-        val credentials = InMemoryCredentialSlots()
+        val slots = InMemoryCredentialSlotStore()
 
-        val migrated = LegacyProfileMigrator(credentials).migrate(legacy, "", "public")
+        val migrated = SettingsMigrator(slots).migrate(
+            SettingsMigrationInput(
+                schemaVersion = 0,
+                servers = legacy,
+                activeServerId = "",
+                flatNamespace = "public",
+                profiles = emptyList(),
+                preferences = emptyList(),
+                defaultProfileId = "",
+                defaultNamespaceId = "public"
+            )
+        )
 
         assertEquals(2, migrated.profiles.map { it.id }.toSet().size)
         assertEquals(2, migrated.profiles.map { it.credentialSlotId }.toSet().size)
-        assertEquals("dev-secret", credentials[migrated.profiles[0].credentialSlotId])
-        assertEquals("prod-secret", credentials[migrated.profiles[1].credentialSlotId])
+        assertEquals(
+            "dev-secret",
+            slots.read(migrated.profiles[0].id, migrated.profiles[0].credentialSlotVersion)
+        )
+        assertEquals(
+            "prod-secret",
+            slots.read(migrated.profiles[1].id, migrated.profiles[1].credentialSlotVersion)
+        )
     }
 
     @Test
@@ -111,7 +150,7 @@ class AccessSafetyTest {
 
         val nextVersion = original.credentialSlotVersion + 1
         val updated = original.withUpdated(
-            credentialSlotId = credentialSlotId(original.id, nextVersion),
+            credentialSlotId = CredentialSlotStore.slotKey(original.id, nextVersion),
             credentialSlotVersion = nextVersion
         )
         val staged = CredentialSlotStager(store).stage(updated, "new-secret")
@@ -133,7 +172,7 @@ class AccessSafetyTest {
         )
         val nextVersion = original.credentialSlotVersion + 1
         val pending = original.withUpdated(
-            credentialSlotId = credentialSlotId(original.id, nextVersion),
+            credentialSlotId = CredentialSlotStore.slotKey(original.id, nextVersion),
             credentialSlotVersion = nextVersion
         )
 

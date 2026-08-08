@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is **Nacos Search**, an IntelliJ IDEA platform plugin that lets developers query Nacos configuration center data directly from the IDE. It is written in Kotlin and built with Gradle using the IntelliJ Platform Gradle Plugin.
 
 - **Plugin ID**: `com.nanyin.nacos.search`
-- **Version**: sourced from `build.gradle.kts` (currently `1.3.8`) — bump it there and mirror the `changeNotes`/`<change-notes>` blocks in both `build.gradle.kts` and `META-INF/plugin.xml` when releasing.
-- **Target Platform**: IntelliJ IDEA Community Edition (`sinceBuild = 243`, `untilBuild = 261.*`)
+- **Version**: sourced from `build.gradle.kts` (currently `1.3.8`) — bump it there and update the `pluginDescription` / `changeNotes` blocks in `build.gradle.kts` (`patchPluginXml`) when releasing. Those are the single source; `META-INF/plugin.xml` does not duplicate them.
+- **Target Platform**: IntelliJ IDEA Community Edition (`sinceBuild = 223`, `untilBuild = 261.*`)
 - **JDK**: Java 17
 - **Gradle**: 9.0.0
 - **Kotlin**: 2.0.21
@@ -30,7 +30,7 @@ Use the Gradle wrapper for all build operations. AI agents and automation **must
 # Run a development instance of IntelliJ IDEA with the plugin loaded
 ./gradlew runIde
 
-# Run plugin verification against configured IDE versions (2024.3.5, 2025.1, 2026.1 EAP)
+# Run plugin verification against the configured IDE version (2022.3.3)
 ./gradlew verifyPlugin
 
 # Run all tests
@@ -57,7 +57,7 @@ Plugin signing is configured via the `intellijPlatform.signing` block and reads 
 
 ### Plugin Lifecycle
 
-`NacosSearchPlugin` is an application-level `@Service`, a `ProjectActivity` (registered via the `com.intellij.postStartupActivity` extension point), and a `Disposable`. On project startup it:
+`NacosSearchPlugin` is an application-level `@Service`, a `StartupActivity` (registered via the `com.intellij.postStartupActivity` extension point), and a `Disposable`. On project startup it:
 
 1. Validates `NacosSettings`.
 2. Kicks off background cache loading via `CacheService` (does not block the EDT).
@@ -74,9 +74,8 @@ Services are IntelliJ application- or project-level components registered with `
 - `NacosApiService` — HTTP client for the Nacos Open API (`/nacos/v1/cs/configs`, `/nacos/v1/cs/config`, `/nacos/v1/console/namespaces`). It also maintains a short-lived in-memory cache of configuration responses per namespace and handles auth headers. Requests retry transient IO failures.
 - `AuthenticationSessionRegistry` — Application-level owner of Nacos-password authentication sessions shared by the V1 and V3 protocol adapters. Completed tokens are keyed by the full access identity, while concurrent login flights also pin execution-policy inputs.
 - `NacosSearchService` — Project-level search orchestrator. It **holds the session context** every search targets (see **One held search session** below), exposes search state and pagination state via Kotlin `StateFlow`, and takes intents rather than requests: `search`, `searchAsYouType`, `clearCriteria`, `reload`, `nextPage`, `previousPage`, `changePageSize`. Translates wildcard queries like `*config` into Nacos `blur`/`accurate` search modes.
-- `SearchService` — Local search over the `CacheService` store with regex, content preview, highlighting, and scoring.
 - `CacheService` — Persistent local cache. See **Cache persistence** below.
-- `NamespaceService` — Persists the selected namespace (`PersistentStateComponent`, stored in `nacos-namespace-service.xml`) and notifies `NamespaceChangeListener`s when the user switches namespaces.
+- `NamespaceService` — Fetches Namespace discovery options for a supplied project operation context. Each `NacosProjectSession` owns its selected Namespace; discovery keeps options in the invoking project’s panel and publishes no application-wide selection events.
 - `EditSessionService` — Project-level owner of the one configuration draft, and of publishing it. See **The edit session lives outside the tool window** below.
 - `LanguageService` — Runtime language switching support for the plugin UI.
 
@@ -225,8 +224,9 @@ Two actions are registered in `plugin.xml` and added to the `ToolsMenu`:
 - `NacosApiService.getConfigurationFromItem()` fetches full configuration content for each item returned by `listConfigurations`. `getAllConfigurations` now fetches these per-item contents concurrently (bounded at 8) rather than sequentially, but loading a large namespace still issues many HTTP calls.
 - `NacosSearchService.SearchRequest.isFuzzySearch()` treats `*` and `?` as wildcards. A leading `*` is stripped before calling the Nacos API in `getProcessedDataId()`. Naming a `SearchRequest` requires `@OptIn(SearchRequestAssembly::class)` — see **One held search session**.
 - Settings UI is built with **Kotlin UI DSL Version 2** (`com.intellij.ui.dsl.builder.panel`). If you modify `settings/NacosConfigurable.kt`, avoid the deprecated `com.intellij.ui.layout` DSL and `titledRow`.
-- The plugin targets **2024.3.5** as the build platform with `sinceBuild = 243` and `untilBuild = 261.*` for 2026.1 compatibility. Keep API usage limited to what's available in build 243 if you want broad compatibility.
-- `StartupActivity` has been migrated to **`ProjectActivity`** (`com.intellij.openapi.startup.projectActivity`) with a `postStartupActivity` extension in `plugin.xml`.
+- The plugin targets **2022.3.3** as the build platform with `sinceBuild = 223` and `untilBuild = 261.*` for 2026.1 compatibility. Keep API usage limited to what's available in build 223 if you want broad compatibility.
+- Searchable-options generation is disabled because IntelliJ Platform Gradle Plugin 2.16 refuses that task below build 233; this keeps `buildPlugin` and `verifyPlugin` executable against the build 223 baseline.
+- Startup uses **`StartupActivity`** with a `postStartupActivity` extension in `plugin.xml` so the entry point remains available on the minimum supported build 223.
 - Tool window icons are SVGs under `src/main/resources/icons/` (`nacosSearch.svg`, `nacosSearch_dark.svg`, `nacosSearch_20.svg`, `nacosSearch_20_dark.svg`). `plugin.xml` references `/icons/nacosSearch_20.svg`; IntelliJ automatically picks the `_dark` variant in dark themes.
 - The `.claude/settings.local.json` already allows `./gradlew:*` commands, so Gradle tasks should run without permission prompts.
 - Some UI tests in `NamespacePanelTest` have pre-existing timing/EDT issues and may fail under the newer test framework; they are not indicative of plugin runtime behavior.

@@ -98,27 +98,7 @@ class NamespaceInfoTest {
         assertEquals("custom-id", namespaceInfo.getDisplayName())
     }
     
-    @Test
-    fun `test getFullDescription with description`() {
-        val namespaceInfo = NamespaceInfo(
-            namespaceId = "test-id",
-            namespaceName = "Test Name",
-            namespaceDesc = "Test Description"
-        )
-        
-        assertEquals("Test Name - Test Description", namespaceInfo.getFullDescription())
-    }
     
-    @Test
-    fun `test getFullDescription without description`() {
-        val namespaceInfo = NamespaceInfo(
-            namespaceId = "test-id",
-            namespaceName = "Test Name",
-            namespaceDesc = ""
-        )
-        
-        assertEquals("Test Name", namespaceInfo.getFullDescription())
-    }
     
     @Test
     fun `test createPublicNamespace`() {

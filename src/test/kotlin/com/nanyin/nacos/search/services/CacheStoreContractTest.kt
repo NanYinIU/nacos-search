@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test
  * The store owns the key list as well as the payloads, so a stored entry is
  * always enumerable and a removed entry always disappears from both.
  * Visibility records that gate those payloads share the same contract
- * (issue #123).
+ * (issue #123). Namespace indexes are the third payload kind (issue #147).
  */
 internal abstract class CacheStoreContractTest {
 
@@ -101,17 +101,57 @@ internal abstract class CacheStoreContractTest {
         )
     }
 
+    private fun namespaceIndex(dataIds: List<String>) = CacheService.CacheEntry(
+        type = CacheService.CacheEntryType.NAMESPACE_INDEX,
+        data = dataIds.map { dataId ->
+            NacosConfiguration(dataId, "DEFAULT_GROUP", "dev", "", "properties")
+        },
+        createdAt = 1_000L,
+        ttlMs = 60_000L,
+        source = CacheService.CacheSource.REMOTE
+    )
+
     @Test
     fun `clearing leaves no payload behind`() = runBlocking {
         val store = newStore()
         store.putDetail("d|1", detail("app.yaml", "k=v"))
         store.putListPage("l|1", listPage(totalCount = 1))
+        store.putNamespaceIndex("n|1", namespaceIndex(listOf("app.yaml")))
 
         store.clear()
 
         assertTrue(store.loadDetails().isEmpty())
         assertTrue(store.loadListPages().isEmpty())
+        assertTrue(store.loadNamespaceIndexes().isEmpty())
         assertNull(store.loadDetail("d|1"))
+    }
+
+    @Test
+    fun `namespace indexes are enumerated with their keys and removed the same way`() = runBlocking {
+        val store = newStore()
+        store.putNamespaceIndex(
+            "v2|p|1|http://nacos|V1|BASIC|alice|dev",
+            namespaceIndex(listOf("a.properties", "b.properties"))
+        )
+        store.putNamespaceIndex(
+            "v2|p|1|http://nacos|V1|BASIC|alice|prod",
+            namespaceIndex(listOf("c.properties"))
+        )
+
+        assertEquals(
+            mapOf(
+                "v2|p|1|http://nacos|V1|BASIC|alice|dev" to listOf("a.properties", "b.properties"),
+                "v2|p|1|http://nacos|V1|BASIC|alice|prod" to listOf("c.properties")
+            ),
+            store.loadNamespaceIndexes().mapValues { entry -> entry.value.data.map { it.dataId } }
+        )
+
+        store.removeNamespaceIndex("v2|p|1|http://nacos|V1|BASIC|alice|prod")
+
+        assertEquals(
+            setOf("v2|p|1|http://nacos|V1|BASIC|alice|dev"),
+            store.loadNamespaceIndexes().keys
+        )
     }
 
     @Test

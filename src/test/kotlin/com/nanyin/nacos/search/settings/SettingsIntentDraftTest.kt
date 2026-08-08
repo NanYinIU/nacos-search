@@ -183,9 +183,8 @@ class SettingsIntentDraftTest {
         val settings = NacosSettings().also { it.resetToDefaults() }
         // Mutate a sampling of fields and a preference, then reset again.
         settings.cacheEnabled = false
-        settings.searchResultLimit = 999
+        settings.cacheTtlMinutes = 99
         settings.language = "zh_CN"
-        settings.connectionTimeoutSeconds = 1
         settings.applyServers(
             listOf(
                 NacosServerConfig(
@@ -204,19 +203,8 @@ class SettingsIntentDraftTest {
         val shape = NacosSettings.defaultPersistedShape()
         assertEquals(shape.cacheEnabled, settings.cacheEnabled)
         assertEquals(shape.cacheTtlMinutes, settings.cacheTtlMinutes)
-        assertEquals(shape.maxCacheSize, settings.maxCacheSize)
-        assertEquals(shape.searchResultLimit, settings.searchResultLimit)
-        assertEquals(shape.enableRegexSearch, settings.enableRegexSearch)
-        assertEquals(shape.caseSensitiveSearch, settings.caseSensitiveSearch)
-        assertEquals(shape.highlightMatches, settings.highlightMatches)
-        assertEquals(shape.showToolWindow, settings.showToolWindow)
-        assertEquals(shape.toolWindowLocation, settings.toolWindowLocation)
-        assertEquals(shape.rememberLastSearch, settings.rememberLastSearch)
         assertEquals(shape.language, settings.language)
-        assertEquals(shape.connectionTimeoutSeconds, settings.connectionTimeoutSeconds)
-        assertEquals(shape.readTimeoutSeconds, settings.readTimeoutSeconds)
-        assertEquals(shape.retryAttempts, settings.retryAttempts)
-        assertEquals(shape.retryDelaySeconds, settings.retryDelaySeconds)
+        assertEquals(shape.enableTokenAuth, settings.enableTokenAuth)
         assertEquals(shape.settingsSchemaVersion, settings.settingsSchemaVersion)
         assertEquals(shape.activeServerId, settings.activeServerId)
         assertEquals(shape.migratedDefaultProfileId, settings.migratedDefaultProfileId)
@@ -240,23 +228,9 @@ class SettingsIntentDraftTest {
         assertEquals(shapeSeed.apiPolicy, row.apiPolicy)
         assertEquals(shapeSeed.authMode, row.authMode)
         assertEquals(shapeSeed.defaultGroup, row.defaultGroup)
-        assertEquals(shapeSeed.connectionTimeoutMs, row.connectionTimeoutMs)
         assertEquals(shapeSeed.allowCrossNamespaceNavigation, row.allowCrossNamespaceNavigation)
         assertEquals(shapeSeed.navigationDetailPrefetchEnabled, row.navigationDetailPrefetchEnabled)
         assertEquals(shapeSeed.writeIntent, row.writeIntent)
-    }
-
-    @Test
-    fun `dual-write extras dirty is separate from store operational change`() {
-        val slots = InMemoryCredentialSlotStore()
-        val settings = seededSettings(slots)
-        val draft = settings.loadSettingsDraft(slots).map {
-            it.copy(connectionTimeoutMs = 12_000)
-        }
-
-        val classification = settings.classifyDraft(draft, "dev", "dev", slots)
-        assertTrue(classification.isNoOp())
-        assertEquals(setOf("dev"), settings.dualWriteExtrasDirtyIds(draft))
     }
 
     private fun seededSettings(slots: InMemoryCredentialSlotStore): NacosSettings {

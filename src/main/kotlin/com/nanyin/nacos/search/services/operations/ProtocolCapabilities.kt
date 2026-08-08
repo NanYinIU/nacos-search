@@ -51,7 +51,15 @@ enum class CapabilityCoverage {
 data class ProtocolCapabilities(
     val contentSearch: CapabilityCoverage,
     val namespaceDiscovery: CapabilityCoverage,
-    val history: CapabilityCoverage
+    val history: CapabilityCoverage,
+    /**
+     * Whether configuration-list responses already carry full bodies.
+     * [CapabilityCoverage.COMPLETE] means a COMPLETE namespace-index load may
+     * seed ordinary detail coordinates from those bodies (issue #146);
+     * [CapabilityCoverage.UNAVAILABLE] means lists are summaries only and
+     * navigation detail prefetch remains the body source (ADR-0041).
+     */
+    val listCarriesBodies: CapabilityCoverage
 ) {
     /**
      * Support grade for one capability of the shared vocabulary. Core
@@ -75,19 +83,24 @@ data class ProtocolCapabilities(
         val NONE = ProtocolCapabilities(
             contentSearch = CapabilityCoverage.UNAVAILABLE,
             namespaceDiscovery = CapabilityCoverage.UNAVAILABLE,
-            history = CapabilityCoverage.UNAVAILABLE
+            history = CapabilityCoverage.UNAVAILABLE,
+            listCarriesBodies = CapabilityCoverage.UNAVAILABLE
         )
 
         val V1 = ProtocolCapabilities(
             contentSearch = CapabilityCoverage.LIMITED,
             namespaceDiscovery = CapabilityCoverage.COMPLETE,
-            history = CapabilityCoverage.COMPLETE
+            history = CapabilityCoverage.COMPLETE,
+            // V1 /nacos/v1/cs/configs list pages include each row's content.
+            listCarriesBodies = CapabilityCoverage.COMPLETE
         )
 
         val V3 = ProtocolCapabilities(
             contentSearch = CapabilityCoverage.COMPLETE,
             namespaceDiscovery = CapabilityCoverage.COMPLETE,
-            history = CapabilityCoverage.COMPLETE
+            history = CapabilityCoverage.COMPLETE,
+            // V3 admin list is summaries; bodies arrive via detail reads / prefetch.
+            listCarriesBodies = CapabilityCoverage.UNAVAILABLE
         )
     }
 }

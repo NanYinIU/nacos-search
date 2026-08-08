@@ -18,7 +18,7 @@ import javax.swing.JCheckBox
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JList
-import javax.swing.JSpinner
+import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.UIUtil
 
 @TestApplication
@@ -100,7 +100,7 @@ class NacosConfigurableInteractionTest {
     fun resetDefaultsAndAdvancedToggleBehaveLikeSettingsPrototypeControls() {
         val configurable = NacosConfigurable()
         val component = configurable.createComponent()
-        val timeoutSpinner = privateField<JSpinner>(configurable, "connectionTimeoutSpinner")
+        val defaultGroupField = privateField<JBTextField>(configurable, "defaultGroupField")
         val testConnectionButton = privateField<JButton>(configurable, "testConnectionButton")
         val resetButton = findButtonByAutomationId(component, "nacos.settings.server.resetDefaults")
         val advancedButton = findButtonByAutomationId(component, "nacos.settings.advanced.toggle")
@@ -111,7 +111,7 @@ class NacosConfigurableInteractionTest {
         assertEquals(30, resetButton!!.preferredSize.height)
 
         runOnEdt {
-            timeoutSpinner.value = 120000
+            defaultGroupField.text = "CUSTOM_GROUP"
         }
         waitForUi()
         assertTrue(configurable.isModified())
@@ -120,7 +120,7 @@ class NacosConfigurableInteractionTest {
             resetButton!!.doClick()
         }
         waitForUi()
-        assertEquals(NacosServerConfig.createDefault().connectionTimeoutMs, timeoutSpinner.value)
+        assertEquals(NacosServerConfig.createDefault().defaultGroup, defaultGroupField.text)
 
         val advancedBody = advancedButton!!.parent.components
             .filterIsInstance<JComponent>()
@@ -166,8 +166,8 @@ class NacosConfigurableInteractionTest {
         val configurable = NacosConfigurable()
         val component = configurable.createComponent()
 
-        assertNotNull(findLabelByText(component, "Timeout"))
         assertNotNull(findLabelByText(component, "Cross namespace"))
+        assertNotNull(findLabelByText(component, "Default Group"))
     }
 
     @Test
@@ -408,7 +408,7 @@ class NacosConfigurableInteractionTest {
     }
 
     private fun runOnEdt(action: () -> Unit) {
-        UIUtil.invokeAndWaitIfNeeded(action)
+        UIUtil.invokeAndWaitIfNeeded(Runnable { action() })
     }
 
     private fun waitForUi() {

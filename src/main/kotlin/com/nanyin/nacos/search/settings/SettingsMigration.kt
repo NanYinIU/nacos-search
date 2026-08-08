@@ -272,13 +272,29 @@ class SettingsMigrator(
             .mapValues { (_, p) -> p.copyPreferences() }
             .toMutableMap()
         val serversById = input.servers.associateBy { it.id }
+        val namespaces = suggestedNamespaces(input, profiles)
         for (profile in profiles) {
-            if (byId.containsKey(profile.id)) continue
             val server = serversById[profile.id]
+            val existing = byId[profile.id]
+            if (existing != null) {
+                val ns = existing.suggestedNamespace.trim().ifBlank {
+                    namespaces[profile.id] ?: "public"
+                }
+                val group = existing.defaultGroup.trim().ifBlank {
+                    server?.defaultGroup?.trim()?.ifBlank { "DEFAULT_GROUP" } ?: "DEFAULT_GROUP"
+                }
+                byId[profile.id] = existing.copy(
+                    suggestedNamespace = ns,
+                    defaultGroup = group
+                )
+                continue
+            }
             byId[profile.id] = if (server != null) {
                 EnvironmentPreferences.fromLegacyServer(server.copy(id = profile.id))
             } else {
-                EnvironmentPreferences.defaultsFor(profile.id)
+                EnvironmentPreferences.defaultsFor(profile.id).copy(
+                    suggestedNamespace = namespaces[profile.id] ?: "public"
+                )
             }
         }
         return byId.values.toList()

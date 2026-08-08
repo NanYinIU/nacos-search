@@ -58,6 +58,35 @@ class NacosKeyResolverTest {
     }
 
     @Test
+    fun `key index resolves keys from list-seeded detail bodies without a separate fetch`() = runBlocking {
+        // Issue #146: COMPLETE V1 index load seeds ordinary details; the gutter
+        // key index reads those details from the snapshot — no per-item fetch.
+        cache.replaceNamespaceIndex(
+            identity,
+            "dev",
+            listOf(cfg("app.properties", "DEFAULT_GROUP", "dev", "", "properties")),
+            ttl = 60_000L
+        )
+        cache.writeDetail(
+            identity = identity,
+            namespaceId = "dev",
+            configuration = cfg(
+                "app.properties",
+                "DEFAULT_GROUP",
+                "dev",
+                "feature.enabled=true\n",
+                "properties"
+            ),
+            ttl = 60_000L
+        )
+        indexService.refreshIndex(cache.snapshot(identity))
+
+        val hits = indexService.resolve(cache.snapshot(identity), "feature.enabled")
+        assertEquals(1, hits.size)
+        assertEquals("app.properties", hits.single().config.dataId)
+    }
+
+    @Test
     fun `empty cache returns no hits`() = runBlocking {
         indexService.refreshIndex(cache.snapshot(identity))
         assertTrue(indexService.resolve(cache.snapshot(identity), "anything").isEmpty())

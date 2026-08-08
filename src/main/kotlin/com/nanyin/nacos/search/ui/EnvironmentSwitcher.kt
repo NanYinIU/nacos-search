@@ -55,7 +55,7 @@ class EnvironmentSwitcher(
     private val envButton: JButton = JButton().apply {
         putClientProperty("nacos.automation.id", "nacos.toolwindow.envSwitcher")
         putClientProperty("JButton.buttonType", "toolbar")
-        ui = BasicButtonUI()
+        setUI(BasicButtonUI())
         isContentAreaFilled = false
         isBorderPainted = false
         isFocusPainted = false

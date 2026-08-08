@@ -28,7 +28,7 @@ sealed class ConfigListViewState {
         val status: ListStatus = ListStatus.defaultEmpty()
     ) : ConfigListViewState()
 
-    data object Loading : ConfigListViewState()
+    object Loading : ConfigListViewState()
 
     data class Results(
         val configurations: List<NacosConfiguration>,
@@ -60,7 +60,7 @@ sealed class ConfigListViewState {
  */
 sealed class ListStatus {
     /** Status line intentionally blank — the panel must not invent wording. */
-    data object Blank : ListStatus()
+    object Blank : ListStatus()
 
     data class Bundle(
         val key: String,

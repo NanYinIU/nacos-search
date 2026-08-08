@@ -338,15 +338,9 @@ class SessionGenerationIntegrationTest {
      * ADR-0022: a diagnostic runs on temporary authentication state and modifies
      * no authentication registry.
      *
-     * A NACOS_PASSWORD diagnostic used to authenticate through the shared
-     * `AuthenticationSessionRegistry`, which records a flight lock and an
-     * invalidation epoch under the synthetic "diagnostic" identity — and does so
-     * even when the login itself fails, since the lock is taken before the
-     * attempt. Tracked identities are the assertion because that is exactly the
-     * residue the registry keeps.
-     *
-     * Diagnostics now build a throwaway [AuthenticationSessionRegistry] so the
-     * application registry stays untouched (issue #96).
+     * Diagnostics build a throwaway [AuthenticationSessionRegistry] so the
+     * application registry stays untouched (issue #96). Tracked identities are
+     * the assertion because that is exactly the residue the registry keeps.
      *
      * The credential must be non-blank: `V1ProtocolAdapter.validate` rejects a
      * NACOS_PASSWORD target with an empty secret before authentication is ever

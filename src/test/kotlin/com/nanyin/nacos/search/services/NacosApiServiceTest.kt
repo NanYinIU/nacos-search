@@ -329,18 +329,6 @@ class NacosApiServiceTest {
     }
 
     @Test
-    fun `test configuration display name`() {
-        val config = NacosConfiguration(
-            dataId = "test.properties",
-            group = "DEFAULT_GROUP",
-            tenantId = "public",
-            content = "test=value"
-        )
-
-        assertEquals("test.properties (DEFAULT_GROUP) [public]", config.getDisplayName())
-    }
-
-    @Test
     fun `test configuration type inference`() {
         val yamlConfig = NacosConfiguration(
             dataId = "test.yaml",

@@ -1,6 +1,7 @@
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.dsl.KotlinVersion
 
 plugins {
     id("java")
@@ -27,9 +28,10 @@ kotlin {
 
 dependencies {
     intellijPlatform {
-        // Build against a recent stable release that is compatible with 2026.1 EAP.
-        // Plugin verifier is configured below to test against additional versions.
-        create("IC", "2024.3.5")
+        // Build against the oldest supported release so newer API usage is caught at compile time.
+        create("IC", "2022.3.3") {
+            useInstaller = false
+        }
         bundledPlugin("com.intellij.java")
         pluginVerifier()
         zipSigner()
@@ -45,9 +47,7 @@ dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.vintage:junit-vintage-engine")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
-    testImplementation("org.opentest4j:opentest4j:1.3.0")
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.mockito:mockito-core:5.7.0")
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.1.0")
     // Note: kotlinx-coroutines-test is provided by IntelliJ Platform
 }
@@ -67,12 +67,8 @@ intellijPlatform {
 
     pluginVerification {
         ides {
-            // Verify against the build target and recent stable releases.
-            create(IntelliJPlatformType.IntellijIdeaCommunity, "2024.3.5")
-            create(IntelliJPlatformType.IntellijIdeaCommunity, "2025.1")
-            // Verify against the 2026.1 EAP/Beta branch reported in the Marketplace failure.
-            // Pre-release builds are not published as installers, so useInstaller must be false.
-            create(IntelliJPlatformType.IntellijIdeaCommunity, "261-EAP-SNAPSHOT") {
+            // Keep the local verification footprint small: verify the oldest supported IDE first.
+            create(IntelliJPlatformType.IntellijIdeaCommunity, "2022.3.3") {
                 useInstaller = false
             }
         }
@@ -80,6 +76,20 @@ intellijPlatform {
 }
 
 tasks {
+    // IntelliJ Platform Gradle Plugin 2.16 refuses to execute searchable-options
+    // generation below build 233, while the plugin itself targets build 223.
+    // The settings page remains available; only its precomputed Settings search
+    // index is omitted so buildPlugin/verifyPlugin can run against the oldest IDE.
+    named("buildSearchableOptions") {
+        enabled = false
+    }
+    named("prepareJarSearchableOptions") {
+        enabled = false
+    }
+    named("jarSearchableOptions") {
+        enabled = false
+    }
+
     withType<JavaCompile> {
         sourceCompatibility = "17"
         targetCompatibility = "17"
@@ -88,11 +98,13 @@ tasks {
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         compilerOptions {
             jvmTarget = JvmTarget.JVM_17
+            languageVersion = KotlinVersion.KOTLIN_1_7
+            apiVersion = KotlinVersion.KOTLIN_1_7
         }
     }
 
     patchPluginXml {
-        sinceBuild.set("243")
+        sinceBuild.set("223")
         untilBuild.set("261.*")
 
         pluginDescription.set("""

@@ -322,10 +322,12 @@ class NacosApiService(
 
     /**
      * Loads configuration **summaries** for a namespace (ADR-0016 / ADR-0041).
-     * Issues one list request per summary page and never fetches configuration
-     * bodies — completeness depends only on summary pagination. Detail content
-     * for code navigation is supplied by the independent navigation detail
-     * prefetch (issue #51), not by this path.
+     * Issues one list request per summary page and never issues per-item detail
+     * requests — completeness depends only on summary pagination. Some dialects
+     * already embed bodies in those list rows; [NamespaceIndexCoordinator] may
+     * seed ordinary detail coordinates from them on a COMPLETE load (issue #146).
+     * Detail content for code navigation on dialects whose lists omit bodies is
+     * supplied by the independent navigation detail prefetch (issue #51).
      *
      * Requires an already-captured [operationContext]; never reads settings or the
      * credential store (issue #50). Every generation is resolved and dispatched
@@ -380,8 +382,10 @@ class NacosApiService(
                 val response = result.getOrNull()?.value ?: break
                 expectedCount = response.totalCount
 
-                // Summaries only — empty content is intentional; the namespace
-                // index never promises bodies (ADR-0041 / issue #52).
+                // Keep list-carried bodies on the load result so a COMPLETE
+                // index write can seed ordinary detail coordinates when the
+                // dialect declares listCarriesBodies (issue #146). The index
+                // store itself still strips content (issue #52 / ADR-0041).
                 response.pageItems.forEach { item ->
                     allSummaries.add(
                         NacosConfiguration(

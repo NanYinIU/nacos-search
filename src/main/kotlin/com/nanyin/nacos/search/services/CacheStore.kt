@@ -16,7 +16,8 @@ import java.util.concurrent.ConcurrentHashMap
  * consider both.
  *
  * Two adapters implement it: [FileCacheStore] in production and
- * [InMemoryCacheStore] in tests.
+ * [InMemoryCacheStore] in tests. Payload kinds are configuration details,
+ * list pages, and namespace indexes (issue #147).
  */
 internal interface CacheStore {
     /** Every persisted configuration detail, keyed by its storage key. */
@@ -36,6 +37,16 @@ internal interface CacheStore {
 
     suspend fun removeListPage(key: String)
 
+    /** Every persisted namespace index, keyed by its storage key. */
+    suspend fun loadNamespaceIndexes(): Map<String, CacheService.CacheEntry<List<NacosConfiguration>>>
+
+    suspend fun putNamespaceIndex(
+        key: String,
+        entry: CacheService.CacheEntry<List<NacosConfiguration>>
+    )
+
+    suspend fun removeNamespaceIndex(key: String)
+
     /** Every persisted access-visibility record, keyed by its storage key. */
     suspend fun loadVisibilityRecords(): Map<String, AccessVisibilityRecord>
 
@@ -54,6 +65,8 @@ internal interface CacheStore {
 internal class InMemoryCacheStore : CacheStore {
     private val details = ConcurrentHashMap<String, CacheService.CacheEntry<NacosConfiguration>>()
     private val listPages = ConcurrentHashMap<String, CacheService.CacheEntry<ConfigListResponse>>()
+    private val namespaceIndexes =
+        ConcurrentHashMap<String, CacheService.CacheEntry<List<NacosConfiguration>>>()
     private val visibility = ConcurrentHashMap<String, AccessVisibilityRecord>()
 
     override suspend fun loadDetails(): Map<String, CacheService.CacheEntry<NacosConfiguration>> =
@@ -81,6 +94,21 @@ internal class InMemoryCacheStore : CacheStore {
         listPages.remove(key)
     }
 
+    override suspend fun loadNamespaceIndexes():
+        Map<String, CacheService.CacheEntry<List<NacosConfiguration>>> =
+        namespaceIndexes.toMap()
+
+    override suspend fun putNamespaceIndex(
+        key: String,
+        entry: CacheService.CacheEntry<List<NacosConfiguration>>
+    ) {
+        namespaceIndexes[key] = entry
+    }
+
+    override suspend fun removeNamespaceIndex(key: String) {
+        namespaceIndexes.remove(key)
+    }
+
     override suspend fun loadVisibilityRecords(): Map<String, AccessVisibilityRecord> =
         visibility.toMap()
 
@@ -95,6 +123,7 @@ internal class InMemoryCacheStore : CacheStore {
     override suspend fun clear() {
         details.clear()
         listPages.clear()
+        namespaceIndexes.clear()
         visibility.clear()
     }
 }

@@ -9,6 +9,8 @@ import com.nanyin.nacos.search.models.DatasetCompleteness
 import com.nanyin.nacos.search.models.DatasetState
 import com.nanyin.nacos.search.models.DataSource
 import com.nanyin.nacos.search.models.DataFreshness
+import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.services.operations.CapabilityCoverage
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
@@ -284,6 +286,19 @@ class NamespaceIndexCoordinator internal constructor(
                         )
                     }
                     clearFailureBackoff(key)
+                    // When the dialect's list pages already carried bodies, seed
+                    // ordinary detail coordinates under this same observation so
+                    // navigation prefetch and local content search do not refetch
+                    // (issue #146 / ADR-0048). The index entry itself stays
+                    // summaries-only (issue #52); blank bodies are skipped.
+                    seedListCarriedBodies(
+                        identity = key.identity,
+                        namespaceId = key.namespaceId,
+                        configurations = loadResult.configurations,
+                        cacheTtlMillis = request.cacheTtlMillis,
+                        observation = observation,
+                        generation = context.resolvedGeneration
+                    )
                     IndexOutcome.Complete(
                         loadResult.configurations.size,
                         DatasetState(DataSource.REMOTE, DataFreshness.FRESH, DatasetCompleteness.COMPLETE, now)
@@ -291,8 +306,9 @@ class NamespaceIndexCoordinator internal constructor(
                 }
                 DatasetCompleteness.PARTIAL -> {
                     // Partial summary pagination: do not publish an authoritative
-                    // index and do not seed the detail cache (issue #52). Details
-                    // arrive only via navigation prefetch or explicit reads.
+                    // index and do not seed the detail cache (issue #52 / #146).
+                    // Details arrive only via a COMPLETE list-carried seed,
+                    // navigation prefetch, or explicit reads.
                     // Keep the typed stopping cause so search stale-fallback
                     // policy and presentation can refuse refused-access (issue #122).
                     // Cool down like Failed: Partial never leaves FRESH, so
@@ -319,6 +335,38 @@ class NamespaceIndexCoordinator internal constructor(
             markNonAuthoritative(key, observation)
             recordFailure(key)
             IndexOutcome.Failed(e)
+        }
+    }
+
+    /**
+     * Writes non-blank list-carried bodies into ordinary detail coordinates when
+     * the dialect declares [ProtocolCapabilities.listCarriesBodies]. Uses the
+     * same [observation] the index write used so seeded details lose to any
+     * later-started write exactly like gateway detail writes (ADR-0020).
+     */
+    @OptIn(CacheWriteAccess::class)
+    private suspend fun seedListCarriedBodies(
+        identity: AccessIdentity,
+        namespaceId: String,
+        configurations: List<NacosConfiguration>,
+        cacheTtlMillis: Long,
+        observation: Long,
+        generation: NacosApiGeneration
+    ) {
+        val coverage = apiService.protocolCapabilities(generation)?.listCarriesBodies
+            ?: return
+        if (coverage != CapabilityCoverage.COMPLETE) return
+        for (configuration in configurations) {
+            if (configuration.content.isBlank()) continue
+            cacheService.applyMutation(
+                CacheMutation.WriteDetail(
+                    identity,
+                    namespaceId,
+                    configuration,
+                    cacheTtlMillis
+                ),
+                observation
+            )
         }
     }
 

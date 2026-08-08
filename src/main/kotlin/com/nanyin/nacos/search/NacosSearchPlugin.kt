@@ -2,7 +2,6 @@ package com.nanyin.nacos.search
 
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
-import com.nanyin.nacos.search.services.SearchService
 import com.nanyin.nacos.search.services.IndexOutcome
 import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
 import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
@@ -13,36 +12,33 @@ import com.nanyin.nacos.search.services.requestManualNamespaceRefresh
 import com.nanyin.nacos.search.services.requestStartupNamespaceIndex
 import com.nanyin.nacos.search.psi.NacosKeyIndexService
 import com.nanyin.nacos.search.settings.NacosSettings
+import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.startup.ProjectActivity
+import com.intellij.openapi.startup.StartupActivity
 import kotlinx.coroutines.*
 
 /**
  * Main plugin class that manages the Nacos Search plugin lifecycle
  */
 @Service(Service.Level.APP)
-class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
+class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
 
    private val logger = thisLogger()
   private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-   /** Test/inspection helper: whether the plugin coroutine scope is still active. */
-   internal fun isScopeActive(): Boolean = coroutineScope.isActive
 
     // Services
     private val settings by lazy { ApplicationManager.getApplication().getService(NacosSettings::class.java) }
     private val apiService by lazy { ApplicationManager.getApplication().getService(NacosApiService::class.java) }
     private val cacheService by lazy { ApplicationManager.getApplication().getService(CacheService::class.java) }
-    private val searchService by lazy { ApplicationManager.getApplication().getService(SearchService::class.java) }
     private val indexCoordinator by lazy { ApplicationManager.getApplication().getService(NamespaceIndexCoordinator::class.java) }
 
     private fun keyIndexService(): NacosKeyIndexService =
         ApplicationManager.getApplication().getService(NacosKeyIndexService::class.java)
 
-    override suspend fun execute(project: Project) {
+    override fun runActivity(project: Project) {
         logger.info("Initializing Nacos Search Plugin")
 
        try {
@@ -115,29 +111,23 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
     }
     
     /**
-     * Load initial configuration data from Nacos server
+     * Warm the key index and preheat the namespace index. A standalone first-page
+     * metadata list used to run here and was only logged before the preheat
+     * paged the same namespace again (issue #147) — dropped.
      */
     private suspend fun loadInitialData() {
         try {
-            logger.info("Loading initial configuration metadata from Nacos server")
-            
-            val result = apiService.listConfigurations(pageNo = 1, pageSize = 200, useCache = true)
-            if (result.isSuccess) {
-                val response = result.getOrThrow().value
-                logger.info("Successfully loaded metadata for ${response.pageItems.size}/${response.totalCount} configurations")
-               // Warm the @NacosValue key index from persisted/opened configs so
-               // code gutter markers appear without blocking the highlighter.
-               val identity = settings.captureAccessIdentity()
-               keyIndexService().ensureIndexBuilt(cacheService.snapshot(identity))
+            val identity = settings.captureAccessIdentity()
+            // Warm the @NacosValue key index from persisted/opened configs so
+            // code gutter markers appear without blocking the highlighter.
+            keyIndexService().ensureIndexBuilt(cacheService.snapshot(identity))
 
-                // Preheat the full namespace index in the background so the
-                // first content/regex search does not have to pull every page
-                // on demand. Best-effort: failures are logged and silently
-                // fall back to the existing on-demand pull path.
-                preheatNamespaceIndex(namespaceId = null)
-            } else {
-                logger.error("Failed to load initial data: ${result.exceptionOrNull()?.message}")
-            }
+            // Preheat the full namespace index in the background so the
+            // first content/regex search does not have to pull every page
+            // on demand. Best-effort: failures are logged and silently
+            // fall back to the existing on-demand pull path. A persisted
+            // (possibly stale) index short-circuits the pagination.
+            preheatNamespaceIndex(namespaceId = null)
         } catch (e: Exception) {
             logger.error("Error loading initial data", e)
         }
@@ -171,7 +161,13 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         coroutineScope.launch {
             try {
                 val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
-                val existing = cacheService.getNamespaceIndex(indexRequest.key.identity, namespaceId)
+                // Persisted STALE indexes count: restart must not re-page when
+                // a prior complete index is already on disk (issue #147).
+                val existing = cacheService.getNamespaceIndex(
+                    indexRequest.key.identity,
+                    namespaceId,
+                    allowStale = true
+                )
                 if (existing != null) {
                     keyIndexService().ensureIndexBuilt(cacheService.snapshot(indexRequest.key.identity))
                     return@launch
@@ -197,33 +193,34 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
    /**
     * Refresh cache from Nacos server
      */
-    suspend fun refreshCache(namespaceId: String): Result<Int> {
+    suspend fun refreshCache(
+        namespaceId: String,
+        operationContext: NacosOperationContext,
+        project: Project
+    ): Result<Int> {
         return try {
             logger.info("Refreshing full namespace cache for '${namespaceId.ifBlank { "public" }}'")
             // captureNamespaceIndexRequest fails closed with ConfigurationRequired;
             // the surrounding catch turns it into Result.failure (issue #50).
-            val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
-            // Prefetch is independent of index completion (ADR-0043). Manual
-            // refresh carries no project, so each open project self-triggers
-            // before the index flight returns.
-            com.intellij.openapi.project.ProjectManager.getInstance().openProjects
-                .filter { !it.isDefault && !it.isDisposed }
-                .forEach { openProject ->
-                    ApplicationManager.getApplication()
-                        .getService(NavigationDetailPrefetchService::class.java)
-                        .requestIfNeeded(openProject, indexRequest.key.identity, namespaceId)
-                }
+            val indexRequest = settings.captureNamespaceIndexRequest(namespaceId, operationContext)
+            // Prefetch is independent of index completion (ADR-0043), and a
+            // manual refresh belongs only to its invoking project session.
+            if (!project.isDefault && !project.isDisposed) {
+                ApplicationManager.getApplication()
+                    .getService(NavigationDetailPrefetchService::class.java)
+                    .requestIfNeeded(project, indexRequest.key.identity, namespaceId)
+            }
             when (val outcome = indexCoordinator.requestManualNamespaceRefresh(indexRequest)) {
                 is IndexOutcome.Complete -> {
                     ApplicationManager.getApplication()
                         .getService(NavigationIndexRefreshService::class.java)
-                        .refresh(indexRequest.key.identity, null)
+                        .refresh(indexRequest.key.identity, project)
                     Result.success(outcome.count)
                 }
                 is IndexOutcome.Partial -> {
                     ApplicationManager.getApplication()
                         .getService(NavigationIndexRefreshService::class.java)
-                        .refresh(indexRequest.key.identity, null)
+                        .refresh(indexRequest.key.identity, project)
                     // Prefer the typed stopping cause (authn/authz/connection/…)
                     // so Tools → refresh surfaces the same remote error search
                     // does (issue #122), not only a generic partial-count message.
@@ -260,25 +257,6 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         }
     }
     
-    /**
-     * Get plugin statistics
-     */
-    suspend fun getStatistics(): com.nanyin.nacos.search.PluginStatistics {
-        val cachedCount = if (settings.cacheEnabled) {
-            cacheService.getAllCachedConfigurations(settings.captureAccessIdentity()).size
-        } else {
-            0
-        }
-        
-        return com.nanyin.nacos.search.PluginStatistics(
-            cachedConfigurationsCount = cachedCount,
-            cacheEnabled = settings.cacheEnabled,
-            autoRefreshEnabled = settings.autoRefreshEnabled,
-            serverUrl = settings.serverUrl,
-            lastRefreshTime = null // TODO: Implement getLastRefreshTime in CacheService
-        )
-    }
-    
    /**
     * Dispose plugin resources
      */
@@ -302,14 +280,3 @@ class NacosSearchPlugin : ProjectActivity, com.intellij.openapi.Disposable {
         }
     }
 }
-
-/**
- * Plugin statistics data class
- */
-data class PluginStatistics(
-    val cachedConfigurationsCount: Int,
-    val cacheEnabled: Boolean,
-    val autoRefreshEnabled: Boolean,
-    val serverUrl: String,
-    val lastRefreshTime: Long?
-)

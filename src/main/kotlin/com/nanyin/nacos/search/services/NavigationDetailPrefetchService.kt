@@ -299,11 +299,9 @@ class NavigationDetailPrefetchService internal constructor(
     ): List<PrefetchTarget> {
         val index = cacheService.getNamespaceIndex(identity, namespaceId, allowStale = true).orEmpty()
         val byDataId = index.groupBy { it.dataId }
-        val defaultGroup = settings.cloneServers()
-            .firstOrNull { it.id == identity.profileId }
-            ?.defaultGroup
-            ?.ifBlank { "DEFAULT_GROUP" }
-            ?: "DEFAULT_GROUP"
+        val defaultGroup = settings.preferencesFor(identity.profileId)
+            .defaultGroup
+            .ifBlank { "DEFAULT_GROUP" }
         return declared.map { dataId ->
             val match = byDataId[dataId]?.firstOrNull()
             PrefetchTarget(
@@ -393,7 +391,7 @@ data class PrefetchCoverage(
 )
 
 sealed interface PrefetchOutcome {
-    data object Disabled : PrefetchOutcome
+    object Disabled : PrefetchOutcome
     data class Cancelled(val attempted: Int, val fetched: Int) : PrefetchOutcome
     data class Complete(
         val requested: Int,

@@ -2,7 +2,6 @@ package com.nanyin.nacos.search.ui
 
 import com.nanyin.nacos.search.models.NamespaceFilter
 import com.nanyin.nacos.search.models.NamespaceInfo
-import com.nanyin.nacos.search.listeners.NamespaceChangeListener
 import com.nanyin.nacos.search.services.NamespaceService
 import com.nanyin.nacos.search.services.NacosLanguageListener
 import com.nanyin.nacos.search.services.operations.EditSessionService
@@ -53,7 +52,7 @@ class NamespacePanel(
     private val project: Project,
     private val namespaceService: NamespaceService = ApplicationManager.getApplication().getService(NamespaceService::class.java),
     private val dispatcher: CoroutineDispatcher = Dispatchers.Main
-) : JPanel(BorderLayout()), NacosLanguageListener, NamespaceChangeListener, Disposable {
+) : JPanel(BorderLayout()), NacosLanguageListener, Disposable {
 
     private val projectSession: NacosProjectSession? = project.getService(NacosProjectSession::class.java)
     private val settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
@@ -92,7 +91,7 @@ class NamespacePanel(
         namespaceButton = JButton().apply {
             putClientProperty("nacos.automation.id", "nacos.toolwindow.nsSwitcher")
             putClientProperty("JButton.buttonType", "toolbar")
-            ui = BasicButtonUI()
+            setUI(BasicButtonUI())
             isEnabled = false // Disabled until namespaces are loaded
             isContentAreaFilled = false
             isBorderPainted = false
@@ -111,7 +110,7 @@ class NamespacePanel(
         refreshButton = JButton(AllIcons.Actions.Refresh).apply {
             toolTipText = NacosSearchBundle.message("namespace.refresh")
             putClientProperty("JButton.buttonType", "toolbar")
-            ui = BasicButtonUI()
+            setUI(BasicButtonUI())
             preferredSize = Dimension(28, 24)
             minimumSize = Dimension(28, 24)
             border = JBUI.Borders.empty()
@@ -147,7 +146,7 @@ class NamespacePanel(
             }, BorderLayout.CENTER)
             add(refreshButton.apply {
                 putClientProperty("JButton.buttonType", "toolbar")
-                ui = BasicButtonUI()
+                setUI(BasicButtonUI())
                 preferredSize = Dimension(28, 24)
                 minimumSize = Dimension(28, 24)
                 border = JBUI.Borders.empty()
@@ -187,16 +186,16 @@ class NamespacePanel(
         setLoadingState(true)
 
         return try {
-            val result = projectSession?.let { session ->
+            val context = projectSession?.let { session ->
                 session.ensureInitialized(settings.migrationDefaults())
                 // The capture reads PasswordSafe, and this panel's scope is the
                 // event dispatch thread — never capture a credential on it
                 // (ADR-0039).
-                val context = withContext(Dispatchers.IO) {
+                withContext(Dispatchers.IO) {
                     settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
                 }
-                namespaceService.loadNamespacesAsync(context)
-            } ?: namespaceService.loadNamespacesAsync()
+            }
+            val result = namespaceService.loadNamespacesAsync(context)
             val loaded = result.await()
             loaded.onSuccess { loadedNamespaces ->
                 namespaces = loadedNamespaces.ifEmpty { listOf(NamespaceInfo.createPublicNamespace()) }
@@ -562,6 +561,10 @@ class NamespacePanel(
         return currentNamespace
     }
 
+    /** Resolves a navigation target from this project's discovered options. */
+    fun findNamespaceById(namespaceId: String): NamespaceInfo? =
+        findLoadedNamespace(namespaceId)
+
     /**
      * Set the selected namespace programmatically
      */
@@ -582,12 +585,6 @@ class NamespacePanel(
             matchingNamespace ?: NamespaceInfo(normalizedNamespaceId, normalizedNamespaceId),
             notify = true
         )
-    }
-
-    override suspend fun onNamespaceChanged(oldNamespace: NamespaceInfo?, newNamespace: NamespaceInfo?) {
-        // Intentionally ignored. This callback represents the legacy
-        // application-wide NamespaceService and must not override this
-        // project's persisted selection.
     }
 
     /**

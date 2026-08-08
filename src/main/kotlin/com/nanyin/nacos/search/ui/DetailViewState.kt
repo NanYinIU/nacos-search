@@ -36,9 +36,9 @@ import com.nanyin.nacos.search.services.operations.WriteIntent
  * - [Stale]: an asynchronous result the presentation gate discarded.
  */
 sealed class DetailViewState {
-    data object Empty : DetailViewState()
+    object Empty : DetailViewState()
 
-    data object Loading : DetailViewState()
+    object Loading : DetailViewState()
 
     /**
      * @param confidence the three cache-quality dimensions for what is shown
@@ -75,9 +75,9 @@ sealed class DetailViewState {
         val namedTarget: PublishNamedTarget
     ) : DetailViewState()
 
-    data object Publishing : DetailViewState()
+    object Publishing : DetailViewState()
 
-    data object Verifying : DetailViewState()
+    object Verifying : DetailViewState()
 
     data class Verified(
         val configuration: NacosConfiguration?
@@ -88,7 +88,7 @@ sealed class DetailViewState {
         val draftContent: String
     ) : DetailViewState()
 
-    data object ServerStateUnknown : DetailViewState()
+    object ServerStateUnknown : DetailViewState()
 
     /**
      * @param titleKey optional bundle key for a failure title.
@@ -107,7 +107,7 @@ sealed class DetailViewState {
     ) : DetailViewState()
 
     /** Dropped because the presentation judgement no longer admits this result. */
-    data object Stale : DetailViewState()
+    object Stale : DetailViewState()
 }
 
 /**

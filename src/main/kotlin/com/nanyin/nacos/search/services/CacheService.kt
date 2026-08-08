@@ -30,7 +30,10 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * Persistence lives entirely behind [CacheStore], which owns the entry payloads
  * and the key list that names them together, so the cache cannot leave a payload
- * behind that no reclamation path can see (issue #61).
+ * behind that no reclamation path can see (issue #61). Namespace indexes are
+ * persisted alongside details and list pages (issue #147); authority for
+ * absence remains memory-only so a restored index cannot prove a configuration
+ * gone.
  *
  * **Writes go through [applyMutation] and nowhere else** (ADR-0045). It takes a
  * [CacheMutation] together with the observation sequence of the operation that
@@ -310,7 +313,7 @@ class CacheService internal constructor(
                     }
                     publish()
                 }
-                detailKeys to listKeys
+                Triple(detailKeys, listKeys, indexKeys)
             }
         }
         // Store reclamation outside the write lock so Apply never holds it for I/O.
@@ -319,6 +322,9 @@ class CacheService internal constructor(
         }
         removed.second.forEach { key ->
             serviceScope.launch { runCatching { store.removeListPage(key) } }
+        }
+        removed.third.forEach { key ->
+            serviceScope.launch { runCatching { store.removeNamespaceIndex(key) } }
         }
         // Visibility records for this profile must go even when no payloads remain.
         kotlinx.coroutines.runBlocking { visibility.purgeProfile(id) }
@@ -476,6 +482,7 @@ class CacheService internal constructor(
             mutation.source
         )
         namespaceIndexAuthority[indexKey] = true
+        store.putNamespaceIndex(indexKey, namespaceIndexCache[indexKey]!!)
         reclaimDetailsAbsentFromIndexLocked(mutation, summaries, observation)
         cleanupOversizedCaches()
     }
@@ -530,6 +537,7 @@ class CacheService internal constructor(
         }
         namespaceIndexCache.remove(indexKey)
         namespaceIndexAuthority.remove(indexKey)
+        store.removeNamespaceIndex(indexKey)
     }
 
     /**
@@ -757,6 +765,7 @@ class CacheService internal constructor(
         cacheMutex.withLock {
             loadIdentityScopedDetailsFromStore()
             loadIdentityScopedListPagesFromStore()
+            loadIdentityScopedNamespaceIndexesFromStore()
             // Visibility records hydrate without raising process-local high-water.
             visibility.hydrateFromStore()
             publish()
@@ -784,16 +793,33 @@ class CacheService internal constructor(
         }
     }
 
+    /**
+     * Restores namespace indexes from the store. Unlike list pages, expired
+     * indexes are kept so a restart can serve them via allowStale (issue #147)
+     * instead of forcing a full namespace sweep. Authority for absence stays
+     * memory-only: nothing here raises [namespaceIndexAuthority], so a
+     * restored index cannot prove a configuration gone. Freshness follows the
+     * entry's own createdAt/TTL — a long downtime surfaces as STALE the same
+     * way an in-session expiry does.
+     */
+    private suspend fun loadIdentityScopedNamespaceIndexesFromStore() {
+        store.loadNamespaceIndexes().forEach { (key, entry) ->
+            if (isIdentityScopedKey(key)) {
+                namespaceIndexCache[key] = entry
+            } else {
+                store.removeNamespaceIndex(key)
+            }
+        }
+    }
+
     private suspend fun cleanupExpiredEntriesLocked() {
         val now = currentTimeMillis()
         listPageCache.entries.filter { it.value.isExpired(now) }.forEach { (key, _) ->
             listPageCache.remove(key)
             store.removeListPage(key)
         }
-        namespaceIndexCache.entries.filter { it.value.isExpired(now) }.forEach { (key, _) ->
-            namespaceIndexCache.remove(key)
-            namespaceIndexAuthority.remove(key)
-        }
+        // Expired namespace indexes stay in memory for allowStale reads (issue
+        // #147). Size trimming below still reclaims the oldest ones.
     }
 
     private suspend fun cleanupOversizedCaches() {
@@ -807,7 +833,10 @@ class CacheService internal constructor(
         cleanupExpiredEntriesLocked()
         trimOldest(detailCache) { key -> store.removeDetail(key) }
         trimOldest(listPageCache) { key -> store.removeListPage(key) }
-        trimOldest(namespaceIndexCache) { /* in-memory only, never persisted */ }
+        trimOldest(namespaceIndexCache) { key ->
+            namespaceIndexAuthority.remove(key)
+            store.removeNamespaceIndex(key)
+        }
     }
 
     /**

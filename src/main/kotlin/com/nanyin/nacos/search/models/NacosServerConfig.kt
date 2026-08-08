@@ -25,8 +25,6 @@ data class NacosServerConfig(
      */
     var authMode: AuthMode = AuthMode.ANONYMOUS,
     var defaultGroup: String = "DEFAULT_GROUP",
-    var connectionTimeoutMs: Int = 30000,
-    var autoRefreshOnOpen: Boolean = true,
     /**
      * Dual-write preference field for the settings dialog. Runtime consumers
      * must read [EnvironmentPreferences] by profile id (issue #101 / ADR-0042),
@@ -56,8 +54,6 @@ data class NacosServerConfig(
             apiPolicy = apiPolicy,
             authMode = authMode,
             defaultGroup = defaultGroup,
-            connectionTimeoutMs = connectionTimeoutMs,
-            autoRefreshOnOpen = autoRefreshOnOpen,
             allowCrossNamespaceNavigation = allowCrossNamespaceNavigation,
             navigationDetailPrefetchEnabled = navigationDetailPrefetchEnabled,
             writeIntent = writeIntent

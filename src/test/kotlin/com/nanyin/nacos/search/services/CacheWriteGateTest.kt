@@ -384,12 +384,15 @@ class CacheWriteGateTest {
         )
         assertTrue(first.snapshot(identity).namespaceIndex("dev")!!.authoritativeForAbsence)
 
-        // "Restart": a second cache over the same store. Index authority is
-        // memory-only on purpose, so absence is undecidable rather than proven.
+        // "Restart": a second cache over the same store. The index comes back
+        // (issue #147) but authority is memory-only, so absence stays undecidable.
         val restarted = cache(store)
         restarted.awaitLoadCompleted()
 
-        assertNull(restarted.snapshot(identity).namespaceIndex("dev"))
+        val restored = restarted.snapshot(identity).namespaceIndex("dev")
+        assertNotNull(restored)
+        assertEquals(setOf("a.properties"), restored!!.dataIds)
+        assertFalse(restored.authoritativeForAbsence)
         // A code reference to a data id the pre-restart index did not list is
         // reported as undecidable, never as an unresolved (confidently absent)
         // one — no amount of ordering machinery turns restored data into a

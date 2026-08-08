@@ -42,7 +42,7 @@ sealed class PublishOutcome {
     /** V1: server confirmed the CAS write succeeded. V3: server accepted the POST. */
     data class Written(val body: String) : PublishOutcome()
     /** V1 CAS returned false: a concurrent update was detected. */
-    data object CasConflict : PublishOutcome()
+    object CasConflict : PublishOutcome()
 }
 
 /**
@@ -91,9 +91,9 @@ data class PublishNamedTarget(
 /** State of a controlled publishing session. */
 sealed class PublishState {
     data class ReadOnly(val reason: String) : PublishState()
-    data object Dirty : PublishState()
-    data object Preflight : PublishState()
-    data object TargetDeleted : PublishState()
+    object Dirty : PublishState()
+    object Preflight : PublishState()
+    object TargetDeleted : PublishState()
     data class RemoteConflict(val remoteContent: String, val remoteMd5: String?) : PublishState()
     /**
      * Preflight succeeded and the command is ready; nothing has been sent.
@@ -105,11 +105,11 @@ sealed class PublishState {
         val diff: PublishDiff,
         val namedTarget: PublishNamedTarget
     ) : PublishState()
-    data object Publishing : PublishState()
-    data object Verifying : PublishState()
-    data object Verified : PublishState()
-    data object PermissionDenied : PublishState()
-    data object ServerStateUnknown : PublishState()
+    object Publishing : PublishState()
+    object Verifying : PublishState()
+    object Verified : PublishState()
+    object PermissionDenied : PublishState()
+    object ServerStateUnknown : PublishState()
 }
 
 /**
@@ -123,7 +123,7 @@ sealed class PublishState {
  */
 sealed interface WriteIntent {
     /** The selected profile opted in to publishing. */
-    data object Granted : WriteIntent
+    object Granted : WriteIntent
 
     /** Publishing is not permitted. [cause] is what the user would have to change. */
     data class Withheld(val cause: Cause) : WriteIntent
