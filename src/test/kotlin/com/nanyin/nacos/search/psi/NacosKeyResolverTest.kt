@@ -706,6 +706,47 @@ class NacosKeyResolverTest {
     }
 
     @Test
+    fun `declared source is not actionable under public when only another Namespace holds it`() =
+        runBlocking {
+            seedConfigurations(
+                listOf(cfg("es.properties", "DEFAULT_GROUP", "uxinlive", "app.name=x\n", "properties"))
+            )
+            // No public Namespace 索引 → presence UNKNOWN, but detail cache / key
+            // index already prove the Data ID lives under uxinlive only.
+            val snapshot = cache.snapshot(identity)
+            val index = indexService.currentIndex(snapshot)
+            assertFalse(
+                NacosKeyResolver.isDeclaredSourceActionableInActiveNamespace(
+                    dataId = "es.properties",
+                    index = index,
+                    snapshot = snapshot,
+                    activeNamespaceId = "public"
+                )
+            )
+            assertTrue(
+                NacosKeyResolver.isDeclaredSourceActionableInActiveNamespace(
+                    dataId = "es.properties",
+                    index = index,
+                    snapshot = snapshot,
+                    activeNamespaceId = "uxinlive"
+                )
+            )
+        }
+
+    @Test
+    fun `declared source stays actionable on cold start with no Namespace evidence`() {
+        val snapshot = cache.snapshot(identity)
+        assertTrue(
+            NacosKeyResolver.isDeclaredSourceActionableInActiveNamespace(
+                dataId = "es.properties",
+                index = null,
+                snapshot = snapshot,
+                activeNamespaceId = "public"
+            )
+        )
+    }
+
+    @Test
     fun `public sorts before non active namespaces`() = runBlocking {
         seedConfigurations(
             listOf(

@@ -190,6 +190,22 @@ class NacosKeyIndexService internal constructor(
     )
 
     /**
+     * Whether a hollow marker for a declared Data ID is useful under the
+     * session-selected Namespace — see
+     * [NacosKeyResolver.isDeclaredSourceActionableInActiveNamespace].
+     */
+    fun isDeclaredSourceActionableInActiveNamespace(
+        snapshot: CacheSnapshot,
+        dataId: String,
+        activeNamespaceId: String? = null
+    ): Boolean = NacosKeyResolver.isDeclaredSourceActionableInActiveNamespace(
+        dataId = dataId,
+        index = currentIndex(snapshot),
+        snapshot = snapshot,
+        activeNamespaceId = activeNamespaceId
+    )
+
+    /**
      * Runs at most one rebuild at a time. An ask that arrives while one is
      * running is remembered rather than dropped, and picked up when the running
      * one finishes: a highlighter pass would heal a dropped ask on its own, but

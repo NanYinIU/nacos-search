@@ -458,6 +458,72 @@ object NacosKeyResolver {
     }
 
     /**
+     * Whether a hollow gutter for a declared Data ID is still useful under
+     * [activeNamespaceId] (session-selected Namespace).
+     *
+     * - [DataIdPresence.PRESENT] in this Namespace → yes (body not loaded yet;
+     *   click / sweep can fetch the declared source).
+     * - [DataIdPresence.ABSENT] → no (proven not here).
+     * - [DataIdPresence.UNKNOWN] → yes only while we have **no** evidence the
+     *   Data ID lives under another Namespace and not this one. If the 派生
+     *   key 索引 or detail cache already holds the Data ID elsewhere (e.g.
+     *   `es.properties` only under `uxinlive` while the session is on
+     *   public), a gray icon under public is noise — the source is not
+     *   missing-from-cache here, it is in another Namespace. Cold start with
+     *   no multi-Namespace evidence still returns true so a hollow marker can
+     *   drive the first load.
+     */
+    fun isDeclaredSourceActionableInActiveNamespace(
+        dataId: String,
+        index: KeyIndex?,
+        snapshot: CacheSnapshot,
+        activeNamespaceId: String?
+    ): Boolean {
+        if (dataId.isBlank()) return false
+        return when (dataIdPresence(dataId, snapshot, activeNamespaceId)) {
+            DataIdPresence.PRESENT -> true
+            DataIdPresence.ABSENT -> false
+            DataIdPresence.UNKNOWN -> {
+                if (dataIdKnownUnderNamespace(dataId, index, snapshot, activeNamespaceId)) return true
+                if (dataIdKnownOutsideNamespace(dataId, index, snapshot, activeNamespaceId)) return false
+                // No evidence either way (true cold start): keep optimistic hollow.
+                true
+            }
+        }
+    }
+
+    private fun dataIdKnownUnderNamespace(
+        dataId: String,
+        index: KeyIndex?,
+        snapshot: CacheSnapshot,
+        activeNamespaceId: String?
+    ): Boolean {
+        val ns = normalizeNamespaceId(activeNamespaceId)
+        if (dataId in index?.dataIdsByNamespace?.get(ns).orEmpty()) return true
+        return snapshot.configurations.any {
+            sameNamespace(it.namespaceId, activeNamespaceId) && it.configuration.dataId == dataId
+        }
+    }
+
+    private fun dataIdKnownOutsideNamespace(
+        dataId: String,
+        index: KeyIndex?,
+        snapshot: CacheSnapshot,
+        activeNamespaceId: String?
+    ): Boolean {
+        val ns = normalizeNamespaceId(activeNamespaceId)
+        if (index?.dataIdsByNamespace?.any { (other, ids) ->
+                normalizeNamespaceId(other) != ns && dataId in ids
+            } == true
+        ) {
+            return true
+        }
+        return snapshot.configurations.any {
+            !sameNamespace(it.namespaceId, activeNamespaceId) && it.configuration.dataId == dataId
+        }
+    }
+
+    /**
      * How a declared Data ID sits in the Namespace 索引 when no key hit exists.
      * Distinct from [ConfigReferenceStatus]: presence is an input to the
      * three-way filter, not a gutter conclusion (issue #192).

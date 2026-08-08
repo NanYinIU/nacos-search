@@ -272,6 +272,45 @@ class NacosValueLineMarkerProviderTest {
        assertNull(marker)
    }
 
+    @Test
+    fun `no marker when declared dataId exists only under another Namespace`() = runBlocking {
+        // Session on public; es.properties body only under uxinlive. Public has
+        // no Namespace 索引 yet (UNKNOWN presence) so the old isDataIdKnown
+        // optimistically painted gray. The source is not "missing here" — it
+        // lives elsewhere — so no hollow icon under public.
+        // Cross-namespace off so a hit under uxinlive does not paint blue either;
+        // the point is the hollow/absent-source path for the active Namespace.
+        setAllowCrossNamespaceNavigation(false)
+        val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val identity = settings.captureAccessIdentity()
+        selectProjectNamespace("public")
+        cache.writeDetail(
+            identity,
+            "uxinlive",
+            NacosConfiguration(
+                "es.properties",
+                "DEFAULT_GROUP",
+                "uxinlive",
+                "app.name=volc\n",
+                "properties"
+            )
+        )
+        refreshKeyIndex(cache, identity)
+
+        val marker = markerFor(
+            """
+            @NacosPropertySource(dataId = "es.properties", autoRefreshed = true)
+            class Demo {
+                @NacosValue(value = "${'$'}{app.name:hongdou-elasticsearch}", autoRefreshed = true)
+                private String name;
+            }
+            """.trimIndent()
+        )
+
+        assertNull(marker)
+    }
+
    @Test
    fun `test marker is shown unresolved when dataId context exists but key is not cached`() {
         val marker = markerFor(
