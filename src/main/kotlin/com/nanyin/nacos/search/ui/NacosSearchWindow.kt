@@ -300,12 +300,12 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     /**
      * Lightweight handler for preference-only changes (e.g.
      * allowCrossNamespaceNavigation toggle). Does NOT clear caches or reload
-     * the config list — just refreshes gutter markers so the highlighter pass
-     * re-evaluates resolvability with the new setting.
+     * the config list — just requests a coalesced gutter pass so the highlighter
+     * re-evaluates resolvability with the new setting (issue #193).
      */
     private fun handlePreferencesChanged() {
         invokeOnEdt(ModalityState.defaultModalityState()) { environmentSwitcher.refresh() }
-        com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(project).restart()
+        requestMarkerInputGutterPass()
     }
 
     private fun handleSettingsChanged() {
@@ -335,7 +335,22 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         namespacePanel.refreshAndWait().onSuccess {
             currentNamespace = namespacePanel.getSelectedNamespace()
             openSelectedNamespace()
+            // Environment is a marker input (access identity). Request a
+            // coalesced pass without a remote read (issue #193).
+            requestMarkerInputGutterPass()
         }
+    }
+
+    /**
+     * Selected Namespace / environment / cross-namespace preference are marker
+     * inputs that live outside the cache snapshot. Request one coalesced
+     * [NavigationIndexRefreshService.requestGutterPass] so open files re-rank
+     * under the new inputs; never refreshes data (issue #193).
+     */
+    private fun requestMarkerInputGutterPass() {
+        ApplicationManager.getApplication()
+            .getService(NavigationIndexRefreshService::class.java)
+            .requestGutterPass(project)
     }
 
     private fun loadInitialData() {
@@ -371,6 +386,13 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // API call on every namespace switch. The user can still pull fresh data
         // via the refresh button.
         searchController.openNamespace(newNamespace)
+
+        // Selected Namespace is a marker input that moves neither the cache
+        // version nor the access identity. Request a coalesced pass here —
+        // including when the target index is already cached and preheat's
+        // early return asks for nothing — so gutters re-rank under the new
+        // Namespace without a remote read (issue #193).
+        requestMarkerInputGutterPass()
 
         // Preheat the full namespace index in the background so the first
         // content/regex/wildcard search over this namespace is instant. The
@@ -761,6 +783,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
                     allowStale = true
                 )
                 if (existing != null) {
+                    // Index already present: warm the derived key index only.
+                    // The gutter pass for the Namespace switch was requested
+                    // by openNamespaceSelection before preheat ran — do not
+                    // restart the daemon again here (issue #193).
                     ApplicationManager.getApplication()
                         .getService(NacosKeyIndexService::class.java)
                         .ensureIndexBuilt(cacheService.snapshot(indexRequest.key.identity))
@@ -769,6 +795,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
 
                 val outcome = indexCoordinator.requestSwitchedNamespaceIndex(indexRequest)
                 if (outcome is IndexOutcome.Complete || outcome is IndexOutcome.Partial) {
+                    // Remote index load may have added keys the earlier switch
+                    // pass could not see; rebuild + coalesced pass is intentional.
                     ApplicationManager.getApplication()
                         .getService(NavigationIndexRefreshService::class.java)
                         .refresh(indexRequest.key.identity, project)

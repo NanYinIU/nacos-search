@@ -24,6 +24,7 @@ import com.nanyin.nacos.search.psi.NacosConfigKeyElement
 import com.nanyin.nacos.search.psi.NacosConfigKeyReferenceSearcher
 import com.nanyin.nacos.search.psi.NacosUsageChoiceItem
 import com.nanyin.nacos.search.psi.NacosUsagePresentation
+import com.nanyin.nacos.search.psi.navigateToCodeUsage
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.Disposable
@@ -844,14 +845,19 @@ private fun setupEventHandlers() {
                     NacosSearchBundle.message("nacosvalue.findusages.no.references", keyElement.key),
                     NacosSearchBundle.message("nacosvalue.findusages.title", keyElement.key)
                 )
-                1 -> (elements.single() as? com.intellij.pom.Navigatable)?.navigate(true)
+                // Single-hit and multi-chooser branches both go through
+                // navigateToCodeUsage so neither can open a usage without
+                // requesting a gutter pass (issue #193).
+                1 -> navigateToCodeUsage(keyElement.project, elements.single())
                 else -> {
                     val items = elements.map { NacosUsageChoiceItem(it) }
                     JBPopupFactory.getInstance()
                         .createPopupChooserBuilder(items)
                         .setTitle(NacosSearchBundle.message("nacosvalue.findusages.title", keyElement.key))
                         .setRenderer(CodeUsageRenderer())
-                        .setItemChosenCallback { it.navigate(true) }
+                        .setItemChosenCallback {
+                            navigateToCodeUsage(keyElement.project, it.element)
+                        }
                         .createPopup()
                         .showInBestPositionFor(e.dataContext)
                 }
