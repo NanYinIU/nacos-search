@@ -300,15 +300,120 @@ class ConfigKeyExtractorTest {
 
     @Test
     fun `yaml extracts quoted keys and keys beginning with a digit`() {
-        // A purely numeric or boolean-ish key (`0:`, `on:`) is deliberately not
-        // asserted here: those are not string keys, and the shape the runtime
-        // gives them is a fidelity question for #166's differential oracle, not
-        // something to pin to a guess.
+        // A purely numeric or boolean-ish key (`0:`, `on:`) is a different case
+        // and is asserted below: those are not string keys, and the runtime
+        // spells them in bracket form from the value they resolve to.
         val content = "\"spring.datasource.url\": jdbc:h2:mem\n'single': q\n2fa: enabled\n"
         val map = keys(content, RuntimeConfigFormat.YAML)
         assertEquals("jdbc:h2:mem", map["spring.datasource.url"]?.value)
         assertEquals("q", map["single"]?.value)
         assertEquals("enabled", map["2fa"]?.value)
+    }
+
+    @Test
+    fun `yaml spells a non-string mapping key in bracket form from its resolved value`() {
+        // Spring's flattening brackets any key that is not a CharSequence and
+        // spells it from `key.toString()` — the *resolved* value, not the
+        // document spelling. So `on` is `[true]` and `0x10` is `[16]` (#178).
+        val map = keys("i: 0\n0: int\non: bool\n1.5: float\n0x10: hex\n", RuntimeConfigFormat.YAML)
+        assertEquals("int", map["[0]"]?.value)
+        assertEquals("bool", map["[true]"]?.value)
+        assertEquals("float", map["[1.5]"]?.value)
+        assertEquals("hex", map["[16]"]?.value)
+    }
+
+    @Test
+    fun `yaml emits no dot form for a non-string mapping key`() {
+        // The dot alias exists so `${list.0.n}` resolves for a sequence *index*.
+        // No runtime resolves a dot spelling of a non-string mapping key, so
+        // emitting one beside the bracket form would promise a placeholder that
+        // fails at runtime — the class of defect ADR-0055 exists to close.
+        val map = keys("0: int\non: bool\n", RuntimeConfigFormat.YAML)
+        assertNull(map["0"])
+        assertNull(map["on"])
+        assertEquals(setOf("[0]", "[true]"), map.keys)
+    }
+
+    @Test
+    fun `yaml keeps the dot form for a quoted key that looks numeric`() {
+        // The quoting is what makes it a string key, so the runtime resolves
+        // `a.0` for it — and `a[0]` for the plain `0` beside it. Two different
+        // declarations, and the plugin must hold a distinct key for each rather
+        // than letting one overwrite the other.
+        val map = keys("a:\n  0: x\n  \"0\": q\n", RuntimeConfigFormat.YAML)
+        assertEquals("x", map["a[0]"]?.value)
+        assertEquals("q", map["a.0"]?.value)
+    }
+
+    @Test
+    fun `yaml suppresses the dot form for the whole key a non-string key appears in`() {
+        // `a.0[0]` is a spelling nothing resolves: half the path in the alias
+        // form the plugin widens to, half in the only form the runtime accepts.
+        val map = keys("a:\n  - 0: x\n", RuntimeConfigFormat.YAML)
+        assertEquals("x", map["a[0][0]"]?.value)
+        assertNull(map["a.0[0]"])
+        assertNull(map["a.0.0"])
+    }
+
+    @Test
+    fun `yaml carries a non-string key's own line and value`() {
+        val map = keys("a:\n  0: x\nafter: 1\n", RuntimeConfigFormat.YAML)
+        assertEquals(1, map["a[0]"]?.lineIndex)
+        assertEquals("x", map["a[0]"]?.value)
+        assertEquals(2, map["after"]?.lineIndex)
+    }
+
+    @Test
+    fun `yaml walks beneath a non-string mapping key`() {
+        val map = keys("a:\n  0:\n    b: 1\n  1: {}\n", RuntimeConfigFormat.YAML)
+        assertEquals("1", map["a[0].b"]?.value)
+        // An empty container is a leaf beneath a bracketed segment too.
+        assertEquals("{}", map["a[1]"]?.value)
+    }
+
+    @Test
+    fun `yaml reads a timestamp-shaped key as the string the runtime reads it as`() {
+        // Spring Boot's loader composes with a resolver that drops snakeyaml's
+        // implicit timestamp tag, so `2020-01-01` stays a string rather than
+        // becoming a Date whose bracketed `toString` no placeholder could spell.
+        // The plugin composes with the same resolver; restoring snakeyaml's
+        // default here would invent `[Wed Jan 01 00:00:00 UTC 2020]`.
+        val map = keys("2020-01-01: v\n", RuntimeConfigFormat.YAML)
+        assertEquals("v", map["2020-01-01"]?.value)
+    }
+
+    @Test
+    fun `yaml contributes nothing for a null mapping key and keeps the rest`() {
+        // Spring spells a non-CharSequence key with `key.toString()`, which for a
+        // null key throws inside Spring itself — the runtime resolves nothing at
+        // all from such a body. The plugin drops that one key and keeps the rest,
+        // because a marker vanishing from the file being edited is the worse
+        // answer.
+        val map = keys("~: v\nnull: w\nafter: 1\n", RuntimeConfigFormat.YAML)
+        assertEquals(setOf("after"), map.keys)
+    }
+
+    @Test
+    fun `yaml contributes nothing for a mapping key with no stable spelling`() {
+        // `!!binary` constructs a byte[], and the runtime spells the key from its
+        // identity hash — a different key on every parse, on both sides. This is
+        // the one case the differential oracle cannot hold, because a `Divergence`
+        // states its keys exactly and there is no fixed key to state, so it is
+        // pinned here instead. Extracting twice must give the same answer, or the
+        // key index gains a phantom on every rebuild.
+        val body = "!!binary 'aGk=': v\nafter: 1\n"
+        val map = keys(body, RuntimeConfigFormat.YAML)
+        assertEquals(setOf("after"), map.keys)
+        assertEquals(map.keys, keys(body, RuntimeConfigFormat.YAML).keys)
+    }
+
+    @Test
+    fun `yaml contributes nothing for a mapping key whose tag no safe constructor knows`() {
+        // The runtime constructs the key with a SafeConstructor, which refuses an
+        // unknown tag and fails the whole load. Falling back to the document
+        // spelling would invent `bar`, a key nothing resolves.
+        val map = keys("!foo bar: v\nafter: 1\n", RuntimeConfigFormat.YAML)
+        assertEquals(setOf("after"), map.keys)
     }
 
     @Test
