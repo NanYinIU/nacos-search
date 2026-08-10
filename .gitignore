@@ -1,8 +1,3 @@
-venv
-venv_linux
-__pycache__
-.ruff_cache
-.pytest_cache
 # Ignore Gradle project-specific cache directory
 .gradle
 
@@ -21,3 +16,6 @@ nacos-settings-3.html
 
 # Ignore local Codex/Claude settings (may contain secrets)
 .claude/
+
+# macOS Finder metadata
+.DS_Store
