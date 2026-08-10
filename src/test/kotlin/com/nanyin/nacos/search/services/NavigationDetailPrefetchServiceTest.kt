@@ -351,6 +351,108 @@ class NavigationDetailPrefetchServiceTest {
     }
 
     @Test
+    fun `coordinate refresh reads only the data id the marker named`() = runBlocking {
+        val api = mock<NacosApiService>()
+        val cache = CacheService(InMemoryCacheStore())
+        cache.clearAll()
+        cache.replaceNamespaceIndex(
+            identity,
+            "dev",
+            listOf(
+                NacosConfiguration("declared.properties", "DEFAULT_GROUP", "dev", "", "properties"),
+                NacosConfiguration("noise.properties", "DEFAULT_GROUP", "dev", "", "properties")
+            )
+        )
+        whenever(
+            api.getConfiguration(
+                dataId = eq("declared.properties"),
+                group = any(),
+                namespaceId = anyOrNull(),
+                useCache = any(),
+                forceRefresh = any(),
+                operationContext = eq(context)
+            )
+        ).thenReturn(
+            Result.success(
+                Observed(
+                    NacosConfiguration("declared.properties", "DEFAULT_GROUP", "dev", "new.key=1", "properties"),
+                    observation = ObservationSequence.process.next()
+                )
+            )
+        )
+
+        // Two other data ids are declared by the project: the sweep would read
+        // all three, a marker naming one reads one.
+        val svc = service(api, cache, setOf("declared.properties", "noise.properties"))
+        val body = withTimeout(5_000) {
+            svc.requestCoordinate(project, identity, "dev", "declared.properties", null, context)!!.await()
+        }
+
+        assertEquals("new.key=1", body?.content)
+        assertEquals(
+            "new.key=1",
+            cache.getConfigDetail(identity, "dev", "declared.properties", "DEFAULT_GROUP")?.content
+        )
+        verify(api, never()).getConfiguration(
+            dataId = eq("noise.properties"),
+            group = any(),
+            namespaceId = anyOrNull(),
+            useCache = any(),
+            forceRefresh = any(),
+            operationContext = any()
+        )
+
+        // Same coordinate again inside the TTL window: the claim holds, so a
+        // gutter pass on every keystroke costs nothing.
+        assertNull(svc.requestCoordinate(project, identity, "dev", "declared.properties", null, context))
+        verify(api, times(1)).getConfiguration(
+            dataId = eq("declared.properties"),
+            group = any(),
+            namespaceId = anyOrNull(),
+            useCache = any(),
+            forceRefresh = any(),
+            operationContext = eq(context)
+        )
+        svc.dispose()
+    }
+
+    @Test
+    fun `coordinate refresh claims its window before reading so a failure is not retried per pass`() = runBlocking {
+        val api = mock<NacosApiService>()
+        val cache = CacheService(InMemoryCacheStore())
+        cache.clearAll()
+        whenever(
+            api.getConfiguration(
+                dataId = eq("declared.properties"),
+                group = any(),
+                namespaceId = anyOrNull(),
+                useCache = any(),
+                forceRefresh = any(),
+                operationContext = eq(context)
+            )
+        ).thenReturn(Result.failure(RuntimeException("server unreachable")))
+
+        val svc = service(api, cache, setOf("declared.properties"))
+        assertNull(
+            withTimeout(5_000) {
+                svc.requestCoordinate(project, identity, "dev", "declared.properties", "DEFAULT_GROUP", context)!!
+                    .await()
+            }
+        )
+        assertNull(svc.requestCoordinate(project, identity, "dev", "declared.properties", "DEFAULT_GROUP", context))
+
+        verify(api, times(1)).getConfiguration(
+            dataId = eq("declared.properties"),
+            group = any(),
+            namespaceId = anyOrNull(),
+            useCache = any(),
+            forceRefresh = any(),
+            operationContext = eq(context)
+        )
+        svc.dispose()
+    }
+
+    @Test
     fun `different access identity cannot see prefetched details`() = runBlocking {
         val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()

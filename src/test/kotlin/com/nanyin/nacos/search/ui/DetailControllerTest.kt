@@ -110,7 +110,7 @@ class DetailControllerTest {
     }
 
     @Test
-    fun `stale plan shows cached body and does not load`() {
+    fun `stale plan shows cached body and confirms this coordinate`() {
         val cached = CacheService.CachedConfiguration(
             configuration = config("# cached"),
             freshness = CacheService.DetailFreshness.STALE,
@@ -118,8 +118,13 @@ class DetailControllerTest {
             deepStaleAtMillis = 2L
         )
         val plan = controller(OperationGateway(emptyMap())).planSelection(cached)
-        assertNull(plan.immediate?.overlay?.takeIf { it != DetailOverlay.None })
-        assertFalse(plan.shouldLoad)
+        assertEquals(DetailOverlay.Refreshing, plan.immediate?.overlay)
+        assertEquals("# cached", plan.immediate?.configuration?.content)
+        assertTrue(plan.shouldLoad)
+        // Not forced: the gateway detail cache misses on a stale entry, so the
+        // read reaches the server for this coordinate without bypassing a cache
+        // that may have been refreshed meanwhile.
+        assertFalse(plan.forceRefresh)
         assertTrue(plan.keepCachedVisible)
     }
 

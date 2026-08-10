@@ -9,6 +9,7 @@ import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
 import com.intellij.util.indexing.FileBasedIndex
 import com.nanyin.nacos.search.models.AccessIdentity
+import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.psi.NacosDeclaredSourceIndex
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.NacosSettings
@@ -76,6 +77,7 @@ class NavigationDetailPrefetchService internal constructor(
     private val inFlight = ConcurrentHashMap<PrefetchKey, Deferred<PrefetchOutcome>>()
     private val lastSuccessAt = ConcurrentHashMap<PrefetchKey, Long>()
     private val lastDeclaredFingerprint = ConcurrentHashMap<PrefetchKey, Int>()
+    private val lastCoordinateAttemptAt = ConcurrentHashMap<CoordinateAttemptKey, Long>()
 
     /**
      * Explicit, project-scoped trigger. Always returns a [Deferred] when the
@@ -221,40 +223,8 @@ class NavigationDetailPrefetchService internal constructor(
                                 fetchedCount.incrementAndGet()
                                 return@withPermit existing
                             }
-                            apiService.getConfiguration(
-                                dataId = target.dataId,
-                                group = target.group,
-                                namespaceId = target.namespaceId,
-                                useCache = true,
-                                operationContext = operationContext
-                            ).getOrNull()?.let { observed ->
-                                val config = observed.value ?: return@let null
-                                // The gateway read normally writes the detail itself.
-                                // Only fill the gap when it did not, under that read's
-                                // own observation sequence — a body served from cache
-                                // carries NO_OBSERVATION and is therefore dropped here
-                                // rather than restamped as freshly observed.
-                                val cached = cacheService.getConfigDetail(
-                                    identity,
-                                    target.namespaceId,
-                                    target.dataId,
-                                    target.group,
-                                    allowStale = true
-                                )
-                                if (cached == null || cached.content.isBlank()) {
-                                    cacheService.applyMutation(
-                                        CacheMutation.WriteDetail(
-                                            identity,
-                                            target.namespaceId,
-                                            config,
-                                            settings.getCacheTtlMillis()
-                                        ),
-                                        observed.observation
-                                    )
-                                }
-                                fetchedCount.incrementAndGet()
-                                config
-                            }
+                            readAndCacheDetail(target, identity, operationContext)
+                                ?.also { fetchedCount.incrementAndGet() }
                         }
                     }
                 }.awaitAll()
@@ -290,6 +260,140 @@ class NavigationDetailPrefetchService internal constructor(
                 complete = complete
             )
         )
+    }
+
+    /**
+     * The narrowest refresh a code reference can ask for: one 配置坐标. A marker
+     * that names a data id has named the only body that can answer it, and the
+     * project-wide sweep behind [requestIfNeeded] would re-read every declared
+     * source — and, beside it, page the whole Namespace — to settle one
+     * placeholder. With a TTL that is a repeating full re-scan for as long as one
+     * undecidable marker stays on screen.
+     *
+     * Bounded to one attempt per coordinate per cache TTL, claimed *before* the
+     * read. That claim is both the single-flight for the twenty markers one file
+     * puts on the same data id, and the failure backoff for an unreachable
+     * server: a gutter pass runs on every keystroke and must never become one
+     * request per pass.
+     *
+     * @param operationContext a context the caller already holds; captured off
+     * the EDT here when absent, which is the PSI path (a gutter callback must
+     * never read the credential store — design §11/§19.7).
+     * @return the body once it is in cache, or null when nothing was started —
+     * prefetch disabled, or this coordinate's attempt window is still claimed.
+     */
+    fun requestCoordinate(
+        project: Project,
+        identity: AccessIdentity,
+        namespaceId: String?,
+        dataId: String,
+        group: String?,
+        operationContext: NacosOperationContext? = null
+    ): Deferred<NacosConfiguration?>? {
+        if (dataId.isBlank()) return null
+        if (!settings.navigationDetailPrefetchEnabled(identity.profileId)) return null
+        val attemptKey = CoordinateAttemptKey(identity, namespaceId.orEmpty(), dataId, group.orEmpty())
+        val now = nowMillis()
+        val previous = lastCoordinateAttemptAt[attemptKey]
+        if (previous != null && now - previous < settings.getCacheTtlMillis()) return null
+        // Claim the window atomically: the caller whose put returns the value it
+        // decided on owns this attempt, and a concurrent marker on the same data
+        // id sees the claim and drops out.
+        if (lastCoordinateAttemptAt.put(attemptKey, now) != previous) return null
+
+        return scope.async {
+            try {
+                val context = operationContext ?: withContext(Dispatchers.IO) {
+                    settings.captureOperationContext(identity.profileId).getOrNull()
+                } ?: return@async null
+                // Re-check toggle after the off-EDT hop (ADR-0042).
+                if (!settings.navigationDetailPrefetchEnabled(identity.profileId)) return@async null
+                if (!isActive) return@async null
+                val target = resolveCoordinateTarget(dataId, group, identity, namespaceId)
+                val existing = cacheService.getConfigDetail(
+                    identity,
+                    target.namespaceId,
+                    target.dataId,
+                    target.group,
+                    allowStale = false
+                )
+                if (existing != null && existing.content.isNotBlank()) return@async existing
+                val fetched = readAndCacheDetail(target, identity, context)
+                // Publish only when a body actually arrived: an index rebuild and
+                // gutter pass over nothing new is the blue↔gray churn the
+                // coalescing exists to avoid.
+                if (fetched != null && !project.isDisposed) {
+                    onDetailsFetched(identity, project)
+                }
+                fetched
+            } catch (e: Exception) {
+                logger.debug("Navigation detail coordinate refresh failed", e)
+                null
+            }
+        }
+    }
+
+    /**
+     * Reads one coordinate remotely and makes sure its body is in the detail
+     * cache. Null when the read failed or the configuration does not exist —
+     * neither is coverage.
+     *
+     * Shared by the project-wide sweep and [requestCoordinate] so the gap-fill
+     * rule has one implementation.
+     */
+    @OptIn(CacheWriteAccess::class)
+    private suspend fun readAndCacheDetail(
+        target: PrefetchTarget,
+        identity: AccessIdentity,
+        operationContext: NacosOperationContext
+    ): NacosConfiguration? {
+        val observed = apiService.getConfiguration(
+            dataId = target.dataId,
+            group = target.group,
+            namespaceId = target.namespaceId,
+            useCache = true,
+            operationContext = operationContext
+        ).getOrNull() ?: return null
+        val config = observed.value ?: return null
+        // The gateway read normally writes the detail itself. Only fill the gap
+        // when it did not, under that read's own observation sequence — a body
+        // served from cache carries NO_OBSERVATION and is therefore dropped here
+        // rather than restamped as freshly observed.
+        val cached = cacheService.getConfigDetail(
+            identity,
+            target.namespaceId,
+            target.dataId,
+            target.group,
+            allowStale = true
+        )
+        if (cached == null || cached.content.isBlank()) {
+            cacheService.applyMutation(
+                CacheMutation.WriteDetail(
+                    identity,
+                    target.namespaceId,
+                    config,
+                    settings.getCacheTtlMillis()
+                ),
+                observed.observation
+            )
+        }
+        return config
+    }
+
+    /**
+     * The 配置坐标 to read for a declared data id. A declared group is taken as
+     * written; without one the coordinate is resolved exactly as the sweep
+     * resolves it, so a marker refreshes the entry the sweep would have written.
+     */
+    private suspend fun resolveCoordinateTarget(
+        dataId: String,
+        group: String?,
+        identity: AccessIdentity,
+        namespaceId: String?
+    ): PrefetchTarget = if (!group.isNullOrBlank()) {
+        PrefetchTarget(dataId, group, namespaceId)
+    } else {
+        resolveTargetsFromDeclared(setOf(dataId), identity, namespaceId).single()
     }
 
     private suspend fun resolveTargetsFromDeclared(
@@ -329,6 +433,7 @@ class NavigationDetailPrefetchService internal constructor(
     internal fun clearFreshness() {
         lastSuccessAt.clear()
         lastDeclaredFingerprint.clear()
+        lastCoordinateAttemptAt.clear()
     }
 
     override fun dispose() {
@@ -336,6 +441,7 @@ class NavigationDetailPrefetchService internal constructor(
         inFlight.clear()
         lastSuccessAt.clear()
         lastDeclaredFingerprint.clear()
+        lastCoordinateAttemptAt.clear()
     }
 
     companion object {
@@ -376,6 +482,19 @@ class NavigationDetailPrefetchService internal constructor(
 data class PrefetchKey(
     val identity: AccessIdentity,
     val projectLocationHash: String
+)
+
+/**
+ * Attempt window for a single-coordinate refresh. Project-independent: the
+ * detail cache is identity-scoped, so two projects on the same environment share
+ * whatever either has already fetched — and must share the attempt window too,
+ * or the bound would be per project rather than per coordinate.
+ */
+private data class CoordinateAttemptKey(
+    val identity: AccessIdentity,
+    val namespaceId: String,
+    val dataId: String,
+    val group: String
 )
 
 data class PrefetchTarget(

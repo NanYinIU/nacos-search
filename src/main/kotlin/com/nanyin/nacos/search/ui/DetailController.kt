@@ -66,9 +66,20 @@ class DetailController(
                 forceRefresh = false,
                 keepCachedVisible = true
             )
+            // Past TTL: paint the cached body, then confirm this one coordinate.
+            // Opening (or jumping to) a configuration is the ask to see it, and
+            // a stale body silently shown is how an amber gutter icon turns blue
+            // beside content nobody re-read. No forceRefresh: the gateway's
+            // detail cache already treats a stale entry as a miss, so the read
+            // goes remote for this coordinate alone and never re-pages the
+            // Namespace.
             CacheService.DetailFreshness.STALE -> SelectionPlan(
-                immediate = DetailPresentation.body(cached.configuration, confidence),
-                shouldLoad = false,
+                immediate = DetailPresentation.body(
+                    cached.configuration,
+                    confidence,
+                    overlay = DetailOverlay.Refreshing
+                ),
+                shouldLoad = true,
                 forceRefresh = false,
                 keepCachedVisible = true
             )

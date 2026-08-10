@@ -16,9 +16,11 @@ import com.nanyin.nacos.search.settings.NacosSettings
 
 /**
  * Bridges non-blocking gutter observations to the Namespace single-flight
- * coordinator. After a successful index load it rebuilds the in-memory key
- * index view. The navigation detail prefetch is triggered independently on
- * the same PSI path (ADR-0043) and is never a continuation of index completion.
+ * coordinator, for the one case a gutter pass cannot answer any narrower way:
+ * a Namespace this identity has never indexed. After a successful index load it
+ * rebuilds the in-memory key index view. The navigation detail prefetch is
+ * triggered independently (ADR-0043) and is never a continuation of index
+ * completion.
  */
 @Service(Service.Level.APP)
 class NamespaceIndexRefreshService internal constructor(
@@ -61,20 +63,38 @@ class NamespaceIndexRefreshService internal constructor(
      * Partial would re-enter this path and page again. Partial / Failed cool
      * down inside the coordinator's shared failure backoff (issue #145).
      *
-     * The navigation detail prefetch is always requested independently for
-     * [project] with its own freshness gate (ADR-0043), so a newly declared
-     * data id is fetched without waiting for the namespace index TTL.
+     * A newly declared data id no longer waits on anything here: the marker that
+     * declares it refreshes its own 配置坐标 through
+     * [NavigationDetailPrefetchService.requestCoordinate] (ADR-0057), which is
+     * why this entry point could become cold-start-only.
      */
     fun requestIfNeeded(identity: AccessIdentity, namespaceId: String, project: Project?) {
-        // Independent flight — not gated on index freshness or completion.
+        // Cold start only (ADR-0057). A Namespace already indexed still answers
+        // "does this data id exist" after its TTL, and re-paging it on expiry —
+        // 100 rows a page, and under V1 every row's body rewritten — is what made
+        // one gutter icon cost a full re-scan every five minutes. It is the rule
+        // the startup preheat has followed since issue #147 (a persisted STALE
+        // index counts), applied to the path that kept paying anyway. Re-paging
+        // now belongs to the gestures that ask for it: manual refresh, Namespace
+        // switch, search.
+        //
+        // Only a Namespace with no index at all leaves the question
+        // unanswerable, and a failed load leaves none (the non-authoritative
+        // mark only marks an index that exists), so cold retries still happen
+        // under the coordinator's failure backoff.
+        //
+        // The bounded project-wide body warm sits inside the same gate. It is
+        // still its own flight with its own gate (ADR-0043) — startup and manual
+        // refresh trigger it directly — but on the PSI path a marker that can
+        // name a coordinate now refreshes that coordinate itself, so there is
+        // nothing project-wide left to add on a warm cache.
+        if (cacheService.snapshot(identity).namespaceIndex(namespaceId) != null) return
+
         if (project != null && !project.isDisposed) {
             ApplicationManager.getApplication()
                 .getService(NavigationDetailPrefetchService::class.java)
                 .requestIfNeeded(project, identity, namespaceId)
         }
-
-        val state = cacheService.snapshot(identity).namespaceIndex(namespaceId)
-        if (state?.freshness == CacheService.DetailFreshness.FRESH) return
 
         scope.launch {
             try {

@@ -82,7 +82,17 @@ object NacosKeyResolver {
         val accessIdentity: AccessIdentity,
         val version: Long,
         val definitionsByKey: Map<String, List<KeyDefinition>>,
-        val dataIdsByNamespace: Map<String, Set<String>> = emptyMap(),
+        /**
+         * Canonical Namespace → the data ids whose body this index was built
+         * from, each with the instant that body stops being authority for its
+         * own key set (the latest boundary among copies under other groups).
+         *
+         * The boundary rather than a bare set, and absolute rather than a
+         * duration, for the same reason [KeyDefinition] carries one: the index
+         * is timeless and every freshness judgement is made against a
+         * snapshot's as-of instant.
+         */
+        val dataIdsByNamespace: Map<String, Map<String, Long>> = emptyMap(),
         /** True when built under an identity-wide authentication block. */
         val accessBlocked: Boolean = false,
         /** Canonical Namespace ids hidden by authorization blocks at build time. */
@@ -123,7 +133,10 @@ object NacosKeyResolver {
                 .asSequence()
                 .filter { it.configuration.dataId.isNotBlank() }
                 .groupBy { normalizeNamespaceId(it.namespaceId) }
-                .mapValues { (_, entries) -> entries.mapTo(mutableSetOf()) { it.configuration.dataId } },
+                .mapValues { (_, entries) ->
+                    entries.groupBy { it.configuration.dataId }
+                        .mapValues { (_, copies) -> copies.maxOf { it.freshUntilMillis } }
+                },
             accessBlocked = snapshot.isAccessBlocked,
             blockedNamespaces = snapshot.blockedNamespaces
         )
@@ -214,12 +227,20 @@ object NacosKeyResolver {
         if (dataId != null) {
             // First, whether any body could have helped.
             terminalFormatResolution(dataId, formatOverride)?.let { return it }
-            // The declared body's detail is already in this Namespace's
-            // 配置详情缓存 and contributed no hit under the hard Data-ID filter,
-            // so the key is genuinely absent from the declared source — not
-            // "body not loaded".
-            if (isDetailCachedForDataId(dataId, index, activeNamespaceId)) {
-                return ConfigResolution(ConfigReferenceStatus.UNRESOLVED, emptyList())
+            // The declared body's detail is in this Namespace's 配置详情缓存 and
+            // contributed no hit under the hard Data-ID filter. Whether that
+            // proves the key absent is decided by the body's own freshness:
+            // only a body still inside its TTL speaks for its key set. One past
+            // its TTL says nothing about a key added since it was read, so
+            // absence there is undecidable and a targeted re-read of this one
+            // coordinate settles it — the same rule as "only a fresh complete
+            // Namespace 索引 may prove a data id absent", one level down.
+            cachedBodyFreshUntil(dataId, index, activeNamespaceId)?.let { freshUntil ->
+                return if (snapshot.asOfMillis <= freshUntil) {
+                    ConfigResolution(ConfigReferenceStatus.UNRESOLVED, emptyList())
+                } else {
+                    ConfigResolution(ConfigReferenceStatus.UNDECIDABLE, emptyList())
+                }
             }
             // Then, whether it is there at all: the complete namespace summary
             // index decides absence (UNRESOLVED) vs "exists but body not
@@ -423,20 +444,19 @@ object NacosKeyResolver {
     }
 
     /**
-     * True when the 派生 key 索引 was built from a detail-cached configuration
-     * with [dataId] in the same Namespace that presence is judged under
-     * ([activeNamespaceId], blank/public normalized as in [isDataIdKnown]).
-     * A same-named body in another Namespace must not prove this Namespace's
-     * declared source was read (cross-Namespace twist of issue #192).
+     * The instant the detail-cached body of [dataId] stops being authority for
+     * its own key set, or null when this Namespace holds no body for it.
+     *
+     * Keyed on the same Namespace presence is judged under ([activeNamespaceId],
+     * blank/public normalized as in [isDataIdKnown]): a same-named body in
+     * another Namespace must not prove this Namespace's declared source was read
+     * (cross-Namespace twist of issue #192).
      */
-    private fun isDetailCachedForDataId(
+    private fun cachedBodyFreshUntil(
         dataId: String,
         index: KeyIndex,
         activeNamespaceId: String?
-    ): Boolean {
-        val ns = normalizeNamespaceId(activeNamespaceId)
-        return dataId in index.dataIdsByNamespace[ns].orEmpty()
-    }
+    ): Long? = index.dataIdsByNamespace[normalizeNamespaceId(activeNamespaceId)]?.get(dataId)
 
     /**
      * Presence of [dataId] against the Namespace 索引 only. Does not consult

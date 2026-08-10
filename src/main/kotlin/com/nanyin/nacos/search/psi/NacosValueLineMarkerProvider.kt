@@ -15,6 +15,7 @@ import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.CacheSnapshot
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
+import com.nanyin.nacos.search.services.NavigationDetailPrefetchService
 import com.nanyin.nacos.search.services.NamespaceIndexRefreshService
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.allowCrossNamespaceNavigation
@@ -37,8 +38,24 @@ import javax.swing.ListCellRenderer
  * there, falling back to the standard "go to declaration" list when multiple
  * definitions exist.
  */
+/**
+ * What a marker asks to be refreshed when it cannot decide from cache, or when
+ * what it decided from has aged out.
+ *
+ * [dataId] is the one body that could answer this marker: for a resolved-but-aged
+ * marker the body its own hit came from — no declaration needed — and otherwise
+ * whatever its reference site declared. Null when the marker can name none, and
+ * then the Namespace index is the only thing that could answer, which is why the
+ * Namespace is carried either way (ADR-0057).
+ */
+internal data class MarkerRefreshRequest(
+    val namespaceId: String?,
+    val dataId: String?,
+    val group: String?
+)
+
 class NacosValueLineMarkerProvider internal constructor(
-    private val refreshObserver: (Project, NacosCodeContext) -> Unit
+    private val refreshObserver: (Project, MarkerRefreshRequest) -> Unit
 ) : LineMarkerProvider {
     constructor() : this(::requestBackgroundRefresh)
 
@@ -65,10 +82,11 @@ class NacosValueLineMarkerProvider internal constructor(
         val snapshot = ApplicationManager.getApplication().getService(CacheService::class.java)
             .snapshot(project.captureSelectedAccessIdentity())
         val resolution = currentResolution(project, snapshot, placeholder.key, codeContext)
-        // STALE is resolved-but-aged: render the amber icon without network.
-        // Only states that cannot decide from cache may start a sweep (issue #145).
+        // The icon is always painted from cache — no state waits on a read. What
+        // a state may *ask for* is one coordinate: the aged body this marker
+        // resolved against, or the source its site declared (ADR-0057).
         if (resolution.status.mayRequestBackgroundRefresh()) {
-            refreshObserver(project, codeContext)
+            refreshObserver(project, refreshRequestFor(project, resolution, codeContext))
         }
 
         // Only show the marker if the key is in the cache or a dataId context
@@ -148,6 +166,31 @@ class NacosValueLineMarkerProvider internal constructor(
 
     private fun keyIndexService(): NacosKeyIndexService =
         ApplicationManager.getApplication().getService(NacosKeyIndexService::class.java)
+
+    /**
+     * The narrowest thing that could answer this marker.
+     *
+     * A hit outranks the declaration: a resolved-but-aged marker is looking at
+     * one specific body, and that body's own 配置坐标 is what has to be re-read —
+     * which also means a placeholder resolved by discovery, with no
+     * `@NacosPropertySource` anywhere, still refreshes at coordinate width. The
+     * top hit only: it is the one the icon speaks for and the one a click
+     * navigates to.
+     */
+    private fun refreshRequestFor(
+        project: Project,
+        resolution: ConfigResolution,
+        codeContext: NacosCodeContext
+    ): MarkerRefreshRequest {
+        resolution.hits.firstOrNull()?.let { hit ->
+            return MarkerRefreshRequest(hit.namespaceId, hit.config.dataId, hit.config.group)
+        }
+        return MarkerRefreshRequest(
+            effectiveNamespaceId(project, codeContext),
+            codeContext.dataId?.takeIf { it.isNotBlank() },
+            codeContext.group
+        )
+    }
 
     private fun navigateFromCode(
         anchor: PsiElement,
@@ -328,19 +371,30 @@ class NacosValueLineMarkerProvider internal constructor(
 
         private fun requestBackgroundRefresh(
             project: Project,
-            codeContext: NacosCodeContext
+            request: MarkerRefreshRequest
         ) {
             try {
                 val application = ApplicationManager.getApplication()
                 val settings = application.getService(NacosSettings::class.java)
                 if (!settings.cacheEnabled) return
-                val namespaceId = effectiveNamespaceId(project, codeContext)
+                val identity = project.captureSelectedAccessIdentity(settings)
+                // Named coordinate: one detail read, bounded per coordinate per
+                // TTL. The project-wide prefetch and the Namespace page walk
+                // behind requestIfNeeded re-read every declared source and every
+                // row in the Namespace to settle one placeholder, which the TTL
+                // turned into a repeating full re-scan for as long as one marker
+                // that could not decide stayed on screen (ADR-0057).
+                val dataId = request.dataId
+                if (!dataId.isNullOrBlank()) {
+                    application.getService(NavigationDetailPrefetchService::class.java)
+                        .requestCoordinate(project, identity, request.namespaceId, dataId, request.group)
+                    return
+                }
+                // Nothing nameable: no hit to re-read and no declared source, so
+                // only the Namespace index could answer. That request is now
+                // cold-start-only — see NamespaceIndexRefreshService.
                 application.getService(NamespaceIndexRefreshService::class.java)
-                    .requestIfNeeded(
-                        project.captureSelectedAccessIdentity(settings),
-                        namespaceId.orEmpty(),
-                        project
-                    )
+                    .requestIfNeeded(identity, request.namespaceId.orEmpty(), project)
             } catch (_: Exception) {
                 // Gutter calculation is best-effort and must never fail PSI analysis.
             }
