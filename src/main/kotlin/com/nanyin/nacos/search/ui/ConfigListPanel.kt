@@ -76,11 +76,28 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
 
     private fun initializeComponents() {
         listModel = DefaultListModel()
-        configList = JBList(listModel).apply {
+        configList = object : JBList<NacosConfiguration>(listModel) {
+            /**
+             * Names the unsaved-edit dot, which carries its meaning in colour alone.
+             * The tooltip has to live here rather than on the renderer's dot: a cell
+             * renderer is a rubber stamp, not a component in the hierarchy, so Swing
+             * only ever consults the list's own tooltip. Row-wide rather than
+             * dot-shaped — a 6px target is not a hit area worth aiming for.
+             */
+            override fun getToolTipText(event: java.awt.event.MouseEvent): String? {
+                val index = locationToIndex(event.point)
+                if (index < 0 || getCellBounds(index, index)?.contains(event.point) != true) return null
+                val dirty = model.getElementAt(index)?.getKey() in dirtyConfigKeys
+                return if (dirty) NacosSearchBundle.message("config.list.dirty") else null
+            }
+        }.apply {
             selectionMode = ListSelectionModel.SINGLE_SELECTION
             cellRenderer = ConfigItemRenderer()
             fixedCellHeight = 44
             border = JBUI.Borders.empty(1, 5)
+            // ToolTipManager only polls components registered with it, and setToolTipText
+            // is what normally registers one. Without this the override above never runs.
+            ToolTipManager.sharedInstance().registerComponent(this)
         }
 
         scrollPane = JBScrollPane(configList).apply {
@@ -447,6 +464,16 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
                 dirtyDot.icon = null
                 dirtyDot.isVisible = false
             }
+            // The dot is otherwise colour-only. A screen reader reaches a list cell
+            // through its renderer's accessible context, so the state has to be named
+            // here; the matching tooltip is on the list, which is the only component
+            // Swing consults for one (a rubber-stamp renderer's is never shown).
+            // getAccessibleContext(), not the `accessibleContext` property: inside a
+            // JComponent subclass that name resolves to the protected field, which
+            // stays null until the getter lazily fills it.
+            getAccessibleContext().accessibleName = value.dataId
+            getAccessibleContext().accessibleDescription =
+                if (isDirty) NacosSearchBundle.message("config.list.dirty") else null
 
             // Theme-aware fallbacks so rows render correctly under Darcula / New UI / high-contrast.
             // Previously these fell back to Color.WHITE / Color.BLACK / a fixed navy, which painted a
