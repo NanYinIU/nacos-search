@@ -1,0 +1,24 @@
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigDetailPanel.kt
+  s_48c2671e74f762::t_dc8f247fa10f21 148
+  s_48c2671e74f762::t_5cb5acaf124922 449
+src/test/kotlin/com/nanyin/nacos/search/bundle/NacosSearchBundleKeysTest.kt
+  s_48c2671e74f762::t_b13395f845703c 36,39,43-44
+  s_48c2671e74f762::t_b11c4bdc2ddc8c 13-15
+  s_48c2671e74f762::t_3f6212306b5461 1-12,16-35,37-38,40-42,45-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "4efec7eb290c704e86ddd807087fd166af72bf60",
+  "prompts": {},
+  "sessions": {
+    "s_48c2671e74f762": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "99dc4ac1-3606-4740-a32a-94db78fe721a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
