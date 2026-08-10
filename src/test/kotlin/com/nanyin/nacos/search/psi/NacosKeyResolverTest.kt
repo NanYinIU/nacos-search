@@ -706,6 +706,38 @@ class NacosKeyResolverTest {
     }
 
     @Test
+    fun `a declared body past its TTL cannot prove its key absent`() = runBlocking {
+        // The 5-minute TTL shape: the body is still in the 配置详情缓存 and still
+        // lacks the key, but it was read long enough ago that a key added on the
+        // server since would not be in it. Absence has to become undecidable, or
+        // a newly added key stays invisible (no icon) until something re-reads
+        // the whole namespace.
+        seedConfigurations(
+            listOf(cfg("declared.properties", "DEFAULT_GROUP", "dev", "other.key=1\n", "properties"))
+        )
+        val snapshot = cache.snapshot(identity)
+        val fresh = indexService.currentIndex(snapshot)!!
+        val aged = fresh.copy(
+            dataIdsByNamespace = fresh.dataIdsByNamespace
+                .mapValues { (_, boundaries) -> boundaries.mapValues { 0L } }
+        )
+
+        fun statusFrom(index: NacosKeyResolver.KeyIndex) = NacosKeyResolver.resolveCurrentState(
+            key = "feature.enabled",
+            index = index,
+            snapshot = snapshot,
+            preferredDataId = "declared.properties",
+            activeNamespaceId = "dev"
+        ).status
+
+        assertEquals(ConfigReferenceStatus.UNRESOLVED, statusFrom(fresh))
+        assertEquals(ConfigReferenceStatus.UNDECIDABLE, statusFrom(aged))
+        // And the undecidable one is what may ask for a refresh — that is the
+        // whole point of not calling it a miss.
+        assertTrue(ConfigReferenceStatus.UNDECIDABLE.mayRequestBackgroundRefresh())
+    }
+
+    @Test
     fun `declared source is not actionable under public when only another Namespace holds it`() =
         runBlocking {
             seedConfigurations(

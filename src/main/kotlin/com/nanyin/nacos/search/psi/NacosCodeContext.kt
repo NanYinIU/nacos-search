@@ -13,8 +13,9 @@ import com.intellij.psi.PsiReferenceExpression
  * [group] / [namespaceId] remain soft ranking hints. [dataId] is the
  * 已声明配置来源 **hard filter**: key hits are constrained to that Data ID alone.
  * Zero matches never soft-fall to another configuration; [NacosKeyResolver]
- * classifies the miss (body cached without the key → 未解析 and no gutter icon;
- * listed but unfetched → 不可判定 so a click can lazy-load the declared body;
+ * classifies the miss (body cached **within its TTL** without the key → 未解析
+ * and no gutter icon; body cached past its TTL, or listed but unfetched → 不可判定
+ * so a click — or one coordinate-width refresh — can load the declared body;
  * absence unproven → 不可用).
  */
 data class NacosCodeContext(

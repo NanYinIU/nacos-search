@@ -9,9 +9,11 @@ package com.nanyin.nacos.search.psi
  * | [RESOLVED] | blue solid | detail-backed key hit, still within TTL |
  * | [STALE] | amber + clock | detail-backed key hit, past TTL but not deep-stale |
  * | [UNDECIDABLE] | gray hollow | data id known in the summary index (or visibility
- *   blocked) but no detail-backed key hit yet — content not loaded / index not
- *   caught up |
- * | [UNRESOLVED] | gray hollow | fresh complete namespace index proves the data id absent |
+ *   blocked) but no detail-backed key hit yet — content not loaded, cached past
+ *   its TTL, or index not caught up |
+ * | [UNRESOLVED] | no icon | absence proven: a fresh complete namespace index
+ *   proves the data id absent, or the declared data id's body is cached **within
+ *   its TTL** and does not define the key |
  * | [UNAVAILABLE] | gray hollow | no usable key index / summary yet (cold start,
  *   rebuild in flight with nothing to serve, partial index) |
  * | [FORMAT_NOT_PARSED] | gray, no arrow | the plugin reads no keys from the declared
@@ -49,21 +51,33 @@ enum class ConfigReferenceStatus {
 }
 
 /**
- * Whether a gutter pass for this status may kick off a background namespace-index
- * refresh. Resolved-but-stale markers render amber without network; only
- * unresolved / undecidable / unavailable states need a sweep (issue #145).
+ * Whether a gutter pass for this status may ask for a background refresh.
  *
- * [ConfigReferenceStatus.FORMAT_NOT_PARSED] is terminal, so a sweep can only
+ * What such a request costs is why the answer changed for
+ * [ConfigReferenceStatus.STALE]. Issue #145 said no, because the only thing a
+ * marker could ask for was a namespace-wide sweep, and paying that for an aged
+ * body the user had not even clicked was indefensible. A marker now asks for the
+ * one 配置坐标 that could answer it — for a resolved-but-aged marker, the body
+ * its own hit came from — bounded to one attempt per coordinate per TTL
+ * (ADR-0057). One request that refreshes exactly what the icon speaks for is
+ * worth it; the amber icon still renders from cache with no network on the paint
+ * path, which is the half of #145 that was never about the sweep.
+ *
+ * [ConfigReferenceStatus.RESOLVED] stays false: a body inside its TTL is what
+ * the cache promised, and re-reading it on every pass would make the TTL mean
+ * nothing.
+ *
+ * [ConfigReferenceStatus.FORMAT_NOT_PARSED] is terminal, so any read can only
  * confirm what is already known. Borrowing [ConfigReferenceStatus.UNDECIDABLE]
  * for it is what had the plugin asking the server about a format it will never
  * parse for the life of the IDE (issue #172).
  */
 fun ConfigReferenceStatus.mayRequestBackgroundRefresh(): Boolean = when (this) {
+    ConfigReferenceStatus.STALE,
     ConfigReferenceStatus.UNRESOLVED,
     ConfigReferenceStatus.UNDECIDABLE,
     ConfigReferenceStatus.UNAVAILABLE -> true
     ConfigReferenceStatus.RESOLVED,
-    ConfigReferenceStatus.STALE,
     ConfigReferenceStatus.FORMAT_NOT_PARSED -> false
 }
 

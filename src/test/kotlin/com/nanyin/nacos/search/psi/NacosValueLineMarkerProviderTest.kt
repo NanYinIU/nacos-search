@@ -121,7 +121,7 @@ class NacosValueLineMarkerProviderTest {
     }
 
     @Test
-    fun `stale gutter observation does not request background refresh`() = runBlocking {
+    fun `stale gutter observation asks to refresh the coordinate of its own hit`() = runBlocking {
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         cache.writeDetail(
@@ -132,8 +132,10 @@ class NacosValueLineMarkerProviderTest {
         )
         refreshKeyIndex(cache, settings.captureAccessIdentity())
 
-        var observed = false
-        val provider = NacosValueLineMarkerProvider { _, _ -> observed = true }
+        var request: MarkerRefreshRequest? = null
+        // No @NacosPropertySource anywhere: the hit is what names the coordinate,
+        // so discovery-resolved placeholders refresh at coordinate width too.
+        val provider = NacosValueLineMarkerProvider { _, req -> request = req }
         val marker = markerFor(
             """
             class Demo {
@@ -145,8 +147,11 @@ class NacosValueLineMarkerProviderTest {
         )
 
         assertNotNull(marker)
+        // The icon is still painted from cache — the ask is background, and the
+        // half of issue #145 that mattered is that nothing waits on a read here.
         assertEquals(NacosIcons.GutterConfigStale, marker?.createGutterRenderer()?.icon)
-        assertFalse("STALE markers must render without network (issue #145)", observed)
+        assertEquals("app.properties", request?.dataId)
+        assertEquals("DEFAULT_GROUP", request?.group)
     }
 
     @Test
