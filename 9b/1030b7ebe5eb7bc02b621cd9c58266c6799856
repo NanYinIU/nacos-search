@@ -1,0 +1,22 @@
+CLAUDE.md
+  s_c573b113b67a0b::t_98b118e650444c 166
+  s_c573b113b67a0b::t_c4bea1d76685c9 210
+  s_c573b113b67a0b::t_07de8c21e0921d 174
+  s_c573b113b67a0b::t_032b89fd4a4b40 191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "9b1030b7ebe5eb7bc02b621cd9c58266c6799856",
+  "prompts": {},
+  "sessions": {
+    "s_c573b113b67a0b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "caa77476-93ed-471e-ae70-105241f94878",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
