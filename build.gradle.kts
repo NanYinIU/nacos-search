@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.3.8"
+version = "1.3.9"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -139,6 +139,19 @@ tasks {
         """.trimIndent())
 
        changeNotes.set("""
+            <h3>1.3.9</h3>
+            <ul>
+                <li><b>Requests</b>: an expired cache no longer costs a full re-scan. When a gutter marker cannot decide from cache — or resolved against a configuration whose cached body has expired — the plugin re-reads that one configuration and nothing else, at most once per configuration per cache TTL. Previously the first code analysis pass five minutes after a load re-read every declared configuration source in the project and paged the whole Namespace, so one gray icon left on screen cost that scan every five minutes. The Namespace page walk triggered by code analysis now only happens for a Namespace that has never been indexed; re-paging otherwise belongs to <b>Refresh</b>, switching Namespace, and searching.</li>
+                <li><b>请求量</b>：缓存过期不再引发全量重扫。当 gutter 标记无法依据缓存判定、或其命中的配置正文已过期时，插件只重新读取这一条配置，且每条配置在一个缓存 TTL 内最多读一次。此前加载五分钟后的第一次代码分析会重读项目中所有已声明的配置来源并翻完整个命名空间，屏幕上留着一个灰色图标就意味着每五分钟重扫一次。由代码分析触发的命名空间翻页现在只在该命名空间从未建立索引时发生；其余情况的重新翻页交给<b>刷新</b>、切换命名空间和搜索。</li>
+                <li><b>Navigation</b>: opening or jumping to a configuration whose cached body has expired now re-reads that configuration and shows the result, instead of painting the expired body while the gutter icon turned fresh off an unrelated refresh. The amber (expired) icon also heals on its own with a single request, so clicking is no longer the only way to get current content.</li>
+                <li><b>导航</b>：打开或跳转到正文已过期的配置时，会重新读取这一条并展示结果，不再出现「面板显示旧正文、gutter 图标却因为别处的刷新变成了新鲜」的情况。黄色（已过期）图标也会自行通过一次请求恢复，不再必须点击才能看到最新内容。</li>
+                <li><b>Gutter states</b>: a key added on the server to a configuration whose body is already cached is no longer invisible. Absence is now only claimed from a body that is still within its TTL — past it the reference shows the hollow gray icon (undecidable) and one re-read of that configuration settles it, resolving to the fresh icon when the key is there. Previously such a key had no icon at all, so there was nothing to click and nothing to explain it.</li>
+                <li><b>Gutter 状态</b>：服务端为一份已缓存配置新增的 key 不再完全没有图标。只有仍在 TTL 内的正文才能断言 key 缺席；超过 TTL 时该引用显示空心灰色图标（不可判定），一次重新读取该配置即可定论，key 存在则转为已解析状态。此前这种 key 完全不显示图标，既无处点击也没有任何说明。</li>
+                <li><b>Fixes</b>: a file containing both a key its cached configuration defines and a key added since issued two identical configuration-detail requests, because the two references spelled the same configuration coordinate differently. A coordinate refresh also addressed the Namespace of the response body rather than the one the cache is keyed by, which could write the body where the gutter never reads it and re-read it every window.</li>
+                <li><b>问题修复</b>：同一个文件里同时引用「缓存配置已有的 key」和「之后新增的 key」时会发出两次完全相同的配置详情请求，原因是两处引用把同一个配置坐标拼写成了两种形式。单坐标刷新此前还会使用响应正文中的命名空间而不是缓存键使用的命名空间，可能把正文写到 gutter 永远读不到的位置，并在每个窗口重复读取。</li>
+                <li><b>Trade-offs worth knowing</b>: a declared data id that does not exist on the server keeps its hollow gray icon instead of losing it, and a configuration newly created on the server enters the Namespace index on <b>Refresh</b> / Namespace switch / search rather than from a code analysis pass. A data id declared at a reference site is still fetched directly, so navigation for declared sources is unaffected.</li>
+                <li><b>需要知道的取舍</b>：服务端上确实不存在的已声明 Data ID 会保持空心灰色图标，不再消失；服务端新建的配置通过<b>刷新</b>、切换命名空间或搜索进入命名空间索引，而不再由代码分析触发。引用处声明的 Data ID 仍会被直接拉取，已声明来源的导航不受影响。</li>
+            </ul>
             <h3>1.3.8</h3>
             <ul>
                 <li><b>Compatibility</b>: the supported IDE range now starts at build 223, so the plugin installs on IntelliJ IDEA 2022.3 and later (previously 2024.3+).</li>
