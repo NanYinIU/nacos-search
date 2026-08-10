@@ -444,6 +444,27 @@ object NacosKeyResolver {
     }
 
     /**
+     * The group of the detail-cached body for [dataId] under [activeNamespaceId],
+     * or null when this Namespace holds none.
+     *
+     * A caller that names a 配置坐标 has to name the *same* one whether or not its
+     * key resolved. A key hit carries the real group; a reference site usually
+     * declares none, and two spellings of one coordinate are two refresh
+     * requests for one configuration (ADR-0057).
+     */
+    fun cachedGroupFor(
+        dataId: String,
+        snapshot: CacheSnapshot,
+        activeNamespaceId: String?
+    ): String? = snapshot.configurations
+        .firstOrNull {
+            sameNamespace(it.namespaceId, activeNamespaceId) && it.configuration.dataId == dataId
+        }
+        ?.configuration
+        ?.group
+        ?.takeIf { it.isNotBlank() }
+
+    /**
      * The instant the detail-cached body of [dataId] stops being authority for
      * its own key set, or null when this Namespace holds no body for it.
      *

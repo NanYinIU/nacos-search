@@ -121,6 +121,47 @@ class NacosValueLineMarkerProviderTest {
     }
 
     @Test
+    fun `two markers on one aged configuration ask for the same coordinate`() = runBlocking {
+        // One file, one declared source, two placeholders: one key the aged body
+        // defines (STALE, hit carries the real group) and one added since
+        // (UNDECIDABLE, and @NacosPropertySource declares no group). Both name
+        // the same configuration, so both must name the same 配置坐标 — the
+        // refresh is bounded per coordinate, and two spellings claimed two
+        // windows and issued two identical detail reads.
+        val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        cache.writeDetail(
+            settings.captureAccessIdentity(),
+            null,
+            NacosConfiguration("dup-coord.properties", "APP_GROUP", null, "dup.coord.name=demo", "properties"),
+            ttl = -1L
+        )
+        refreshKeyIndex(cache, settings.captureAccessIdentity())
+
+        val requests = mutableListOf<MarkerRefreshRequest>()
+        val provider = NacosValueLineMarkerProvider { _, req -> requests.add(req) }
+        val markers = markersFor(
+            """
+            @NacosPropertySource(dataId = "dup-coord.properties")
+            class Demo {
+                @NacosValue("${'$'}{dup.coord.name}")
+                private String name;
+                @NacosValue("${'$'}{dup.coord.addedLater}")
+                private String added;
+            }
+            """.trimIndent(),
+            provider
+        )
+
+        assertEquals(2, markers.size)
+        assertEquals(NacosIcons.GutterConfigStale, markers[0]?.createGutterRenderer()?.icon)
+        assertEquals(2, requests.size)
+        assertEquals("dup-coord.properties", requests[0].dataId)
+        assertEquals("APP_GROUP", requests[0].group)
+        assertEquals(requests[0], requests[1])
+    }
+
+    @Test
     fun `stale gutter observation asks to refresh the coordinate of its own hit`() = runBlocking {
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
@@ -957,6 +998,21 @@ class NacosValueLineMarkerProviderTest {
                 """.trimIndent()
             )
         )
+    }
+
+    /** Every placeholder literal in [javaText], in document order. */
+    private fun markersFor(
+        javaText: String,
+        provider: NacosValueLineMarkerProvider
+    ): List<LineMarkerInfo<*>?> = ApplicationManager.getApplication().runReadAction<List<LineMarkerInfo<*>?>> {
+        val file = PsiFileFactory.getInstance(ProjectManager.getInstance().defaultProject).createFileFromText(
+            "Demo.java",
+            com.intellij.lang.java.JavaLanguage.INSTANCE,
+            javaText
+        )
+        PsiTreeUtil.findChildrenOfType(file, PsiLiteralExpression::class.java)
+            .filter { PlaceholderParser.containsPlaceholder(it.value as? String) }
+            .map { provider.getLineMarkerInfo(it.firstChild) }
     }
 
     private fun markerFor(

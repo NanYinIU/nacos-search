@@ -381,19 +381,32 @@ class NavigationDetailPrefetchService internal constructor(
     }
 
     /**
-     * The 配置坐标 to read for a declared data id. A declared group is taken as
-     * written; without one the coordinate is resolved exactly as the sweep
-     * resolves it, so a marker refreshes the entry the sweep would have written.
+     * The 配置坐标 to read for one named data id. A declared group is taken as
+     * written; without one it comes from the Namespace 索引, then the profile's
+     * default group.
+     *
+     * Only the group is resolved. The Namespace stays the one the caller named:
+     * that is the coordinate the gutter reads from, and payload tenant is
+     * display-only (issue #190) — resolving to it would write the body into a key
+     * space nothing looks in, leaving the icon aged and re-reading it every
+     * window.
      */
     private suspend fun resolveCoordinateTarget(
         dataId: String,
         group: String?,
         identity: AccessIdentity,
         namespaceId: String?
-    ): PrefetchTarget = if (!group.isNullOrBlank()) {
-        PrefetchTarget(dataId, group, namespaceId)
-    } else {
-        resolveTargetsFromDeclared(setOf(dataId), identity, namespaceId).single()
+    ): PrefetchTarget {
+        if (!group.isNullOrBlank()) return PrefetchTarget(dataId, group, namespaceId)
+        val listedGroup = cacheService.getNamespaceIndex(identity, namespaceId, allowStale = true)
+            .orEmpty()
+            .firstOrNull { it.dataId == dataId }
+            ?.group
+            ?.takeIf { it.isNotBlank() }
+        val defaultGroup = settings.preferencesFor(identity.profileId)
+            .defaultGroup
+            .ifBlank { "DEFAULT_GROUP" }
+        return PrefetchTarget(dataId, listedGroup ?: defaultGroup, namespaceId)
     }
 
     private suspend fun resolveTargetsFromDeclared(

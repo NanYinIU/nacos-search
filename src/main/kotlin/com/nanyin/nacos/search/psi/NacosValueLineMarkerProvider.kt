@@ -86,7 +86,7 @@ class NacosValueLineMarkerProvider internal constructor(
         // a state may *ask for* is one coordinate: the aged body this marker
         // resolved against, or the source its site declared (ADR-0057).
         if (resolution.status.mayRequestBackgroundRefresh()) {
-            refreshObserver(project, refreshRequestFor(project, resolution, codeContext))
+            refreshObserver(project, refreshRequestFor(project, snapshot, resolution, codeContext))
         }
 
         // Only show the marker if the key is in the cache or a dataId context
@@ -176,19 +176,33 @@ class NacosValueLineMarkerProvider internal constructor(
      * `@NacosPropertySource` anywhere, still refreshes at coordinate width. The
      * top hit only: it is the one the icon speaks for and the one a click
      * navigates to.
+     *
+     * One coordinate must get one spelling, whichever marker names it. A hit
+     * carries the real group; a reference site usually declares none, and the
+     * refresh is bounded per coordinate — so leaving the group unspelled here
+     * made two markers on one aged configuration (one whose key resolves, one
+     * whose key was added since) claim two windows and issue **two identical
+     * detail reads**. The group is therefore taken from the cached body whenever
+     * the cache holds one, which is exactly the case a duplicate would cost
+     * something.
      */
     private fun refreshRequestFor(
         project: Project,
+        snapshot: CacheSnapshot,
         resolution: ConfigResolution,
         codeContext: NacosCodeContext
     ): MarkerRefreshRequest {
         resolution.hits.firstOrNull()?.let { hit ->
             return MarkerRefreshRequest(hit.namespaceId, hit.config.dataId, hit.config.group)
         }
+        val namespaceId = effectiveNamespaceId(project, codeContext)
+        val dataId = codeContext.dataId?.takeIf { it.isNotBlank() }
+            ?: return MarkerRefreshRequest(namespaceId, null, null)
         return MarkerRefreshRequest(
-            effectiveNamespaceId(project, codeContext),
-            codeContext.dataId?.takeIf { it.isNotBlank() },
-            codeContext.group
+            namespaceId,
+            dataId,
+            codeContext.group?.takeIf { it.isNotBlank() }
+                ?: NacosKeyResolver.cachedGroupFor(dataId, snapshot, namespaceId)
         )
     }
 
