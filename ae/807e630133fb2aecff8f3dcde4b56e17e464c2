@@ -1,0 +1,20 @@
+build.gradle.kts
+  s_125e685af94760::t_15b41149858757 154-161
+  s_125e685af94760::t_1ba6f52756b4db 144-149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ae807e630133fb2aecff8f3dcde4b56e17e464c2",
+  "prompts": {},
+  "sessions": {
+    "s_125e685af94760": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "976e4df1-e517-4020-a403-8008bb3020c3",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
