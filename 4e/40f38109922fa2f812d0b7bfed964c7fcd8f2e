@@ -1,0 +1,39 @@
+src/test/kotlin/com/nanyin/nacos/search/settings/NacosSettingsTest.kt
+  s_39501c9e8ada22::t_983419dcec0a23 442
+src/test/kotlin/com/nanyin/nacos/search/services/operations/InMemoryOperationCache.kt
+  s_39501c9e8ada22::t_e10c3fc141cbe6 1-50
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceSummaryIndexTest.kt
+  s_39501c9e8ada22::t_87643580e7b64d 194,236
+src/main/kotlin/com/nanyin/nacos/search/services/SessionFencing.kt
+  s_39501c9e8ada22::t_d53ac0aa8900a1 52
+src/test/kotlin/com/nanyin/nacos/search/settings/AccessSafetyTest.kt
+  s_39501c9e8ada22::t_291fe4fbc7b045 134,136
+  s_39501c9e8ada22::t_82879e76fd03e2 157
+  s_39501c9e8ada22::t_643118fdf77bc3 137-138
+  s_39501c9e8ada22::t_90a6f7b078220a 159-161
+  s_39501c9e8ada22::t_b8d5b39d7d027b 234
+src/main/kotlin/com/nanyin/nacos/search/models/NamespaceLoadResult.kt
+  s_39501c9e8ada22::t_7412d805008574 7-9
+src/test/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinatorTest.kt
+  s_39501c9e8ada22::t_87643580e7b64d 197,256,313,356,412,462,540,643
+docs/ui/stability-status-change-map.md
+  s_39501c9e8ada22::t_3366e00ff9ac50 51
+src/test/kotlin/com/nanyin/nacos/search/services/NacosSearchServiceTest.kt
+  s_39501c9e8ada22::t_2e228dbc63ac4a 179-181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "4e40f38109922fa2f812d0b7bfed964c7fcd8f2e",
+  "prompts": {},
+  "sessions": {
+    "s_39501c9e8ada22": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b2420d3-6e86-4ed7-9a28-dd492c237b00",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
