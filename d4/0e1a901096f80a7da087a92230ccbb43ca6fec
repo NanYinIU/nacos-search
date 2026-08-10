@@ -1,0 +1,35 @@
+src/test/kotlin/com/nanyin/nacos/search/services/visibility/AccessVisibilityCacheIntegrationTest.kt
+  s_48c2671e74f762::t_6086ad2053037a 663-713
+src/main/resources/messages/NacosSearchBundle_zh_CN.properties
+  s_48c2671e74f762::t_d6219a573fdaa8 188
+src/main/kotlin/com/nanyin/nacos/search/services/CacheService.kt
+  s_48c2671e74f762::t_e46a6ae3956f4f 18
+  s_48c2671e74f762::t_270f7bb0390767 320-336
+src/main/resources/messages/NacosSearchBundle.properties
+  s_48c2671e74f762::t_6ec8b7aa254bda 188
+src/main/kotlin/com/nanyin/nacos/search/ui/ConfigListPanel.kt
+  s_48c2671e74f762::t_961a9e0ef9c21a 79-93
+  s_48c2671e74f762::t_4ea7f87975c222 467-470,476
+  s_48c2671e74f762::t_01fc1ecd64c13f 471-475
+  s_48c2671e74f762::t_2a54bd83ff147b 98-100
+src/test/kotlin/com/nanyin/nacos/search/ui/UiButtonInteractionTest.kt
+  s_48c2671e74f762::t_3daf8d358628a3 368
+  s_48c2671e74f762::t_46161028af2e27 22
+  s_48c2671e74f762::t_dd3c255d58cb3c 329-367,369-385
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "d40e1a901096f80a7da087a92230ccbb43ca6fec",
+  "prompts": {},
+  "sessions": {
+    "s_48c2671e74f762": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "99dc4ac1-3606-4740-a32a-94db78fe721a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
