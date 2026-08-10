@@ -1,0 +1,22 @@
+CLAUDE.md
+  s_c573b113b67a0b::t_98b118e650444c 166
+  s_c573b113b67a0b::t_cf42f8c9f04038 191
+  s_c573b113b67a0b::t_07de8c21e0921d 174
+  s_c573b113b67a0b::t_c4bea1d76685c9 210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "f9388144f7ba5d0578592312edb4df819b0bff35",
+  "prompts": {},
+  "sessions": {
+    "s_c573b113b67a0b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "caa77476-93ed-471e-ae70-105241f94878",
+        "model": "claude-opus-5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
