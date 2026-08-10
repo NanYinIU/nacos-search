@@ -145,11 +145,10 @@ class ConfigDetailPanel internal constructor(
      */
     private var discardListenerHandle: AutoCloseable? = null
 
-    // Editor status bar components (UTF-8 · LF · pos · chars · md5)
+    // Editor status bar components (UTF-8 · LF · chars · md5)
     private lateinit var statusBar: JPanel
     private lateinit var statusEncodingLabel: JBLabel
     private lateinit var statusLineEndingLabel: JBLabel
-    private lateinit var statusPositionLabel: JBLabel
     private lateinit var statusCharsLabel: JBLabel
     private lateinit var statusMd5Label: JBLabel
     
@@ -366,10 +365,6 @@ class ConfigDetailPanel internal constructor(
             font = font.deriveFont(Font.PLAIN, 11f)
             foreground = JBColor(0x6f737a, 0x9b9ea6)
         }
-        statusPositionLabel = JBLabel(NacosSearchBundle.message("config.detail.status.position", 1, 1)).apply {
-            font = font.deriveFont(Font.PLAIN, 11f)
-            foreground = JBColor(0x6f737a, 0x9b9ea6)
-        }
         statusCharsLabel = JBLabel(NacosSearchBundle.message("config.detail.status.chars.format", 0)).apply {
             font = font.deriveFont(Font.PLAIN, 11f)
             foreground = JBColor(0x6f737a, 0x9b9ea6)
@@ -451,13 +446,12 @@ class ConfigDetailPanel internal constructor(
         centerContainer.add(contentPanel, BorderLayout.CENTER)
         add(centerContainer, BorderLayout.CENTER)
 
-        // ===== Editor status bar (bottom): UTF-8 · LF · pos | chars · md5 =====
+        // ===== Editor status bar (bottom): UTF-8 · LF | chars · md5 =====
         statusBar = JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(2, 12)
             val leftGroup = JPanel(FlowLayout(FlowLayout.LEFT, 14, 0)).apply {
                 add(statusEncodingLabel)
                 add(statusLineEndingLabel)
-                add(statusPositionLabel)
             }
             val rightGroup = JPanel(FlowLayout(FlowLayout.RIGHT, 14, 0)).apply {
                 add(statusCharsLabel)
@@ -1248,10 +1242,8 @@ private fun setupEventHandlers() {
     private fun updateStatusBar(content: String) {
         invokeOnEdt(ModalityState.defaultModalityState()) {
             val charCount = content.length
-            val lineCount = if (content.isEmpty()) 1 else content.split("\n").size
             statusCharsLabel.text = NacosSearchBundle.message("config.detail.status.chars.format", charCount)
             statusMd5Label.text = NacosSearchBundle.message("config.detail.status.md5", computeShortMd5(content))
-            statusPositionLabel.text = NacosSearchBundle.message("config.detail.status.position", 1, 1)
         }
     }
     
@@ -1768,7 +1760,6 @@ private fun setupEventHandlers() {
         // Reset status bar
         statusCharsLabel.text = NacosSearchBundle.message("config.detail.status.chars.format", 0)
         statusMd5Label.text = "—"
-        statusPositionLabel.text = NacosSearchBundle.message("config.detail.status.position", 1, 1)
         
         invokeOnEdt(ModalityState.defaultModalityState()) {
             dataIdLabel.text = ""
