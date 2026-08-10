@@ -15,6 +15,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.sync.Mutex
@@ -316,18 +317,24 @@ class CacheService internal constructor(
                 Triple(detailKeys, listKeys, indexKeys)
             }
         }
-        // Store reclamation outside the write lock so Apply never holds it for I/O.
-        removed.first.forEach { key ->
-            serviceScope.launch { runCatching { store.removeDetail(key) } }
+        // Store reclamation outside the write lock so Apply never holds it for I/O,
+        // but **awaited**: returning from here has to mean the payloads are gone.
+        // Fire-and-forget left the memory entry removed while its store row was
+        // not, and [reconstituteDetail] — behind the read path, ordered only by
+        // [discardGeneration] — read that row straight back into memory. The
+        // generation catches a reconstitution racing the purge, not one that
+        // starts after it returns, so the deleted profile's payload could
+        // resurrect and stay. Each removal suspends on Dispatchers.IO internally,
+        // so launching them together keeps this one I/O batch rather than N.
+        kotlinx.coroutines.runBlocking {
+            (
+                removed.first.map { key -> launch { runCatching { store.removeDetail(key) } } } +
+                    removed.second.map { key -> launch { runCatching { store.removeListPage(key) } } } +
+                    removed.third.map { key -> launch { runCatching { store.removeNamespaceIndex(key) } } }
+                ).joinAll()
+            // Visibility records for this profile must go even when no payloads remain.
+            visibility.purgeProfile(id)
         }
-        removed.second.forEach { key ->
-            serviceScope.launch { runCatching { store.removeListPage(key) } }
-        }
-        removed.third.forEach { key ->
-            serviceScope.launch { runCatching { store.removeNamespaceIndex(key) } }
-        }
-        // Visibility records for this profile must go even when no payloads remain.
-        kotlinx.coroutines.runBlocking { visibility.purgeProfile(id) }
         logger.info("Purged cache entries for deleted profile $id")
     }
 

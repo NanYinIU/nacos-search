@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import java.awt.Dimension
 import java.awt.Rectangle
@@ -324,6 +325,63 @@ class UiButtonInteractionTest {
         assertEquals(config, selected)
         Disposer.dispose(panel)
     }
+
+    /**
+     * The unsaved-edit dot carries its meaning in colour alone, so it needs a name
+     * a screen reader and a hover can reach. Both are easy to write and never see:
+     * a tooltip set on the renderer is never shown (Swing asks only the list), and
+     * `accessibleContext` inside a JComponent subclass is the protected field, null
+     * until the getter fills it.
+     */
+    @Test
+    fun dirtyRowIsNamedNotJustColoured() {
+        val panel = ConfigListPanel(mockProject)
+        val list = privateField<JList<NacosConfiguration>>(panel, "configList")
+        val dirty = NacosConfiguration(dataId = "dirty.properties", group = "DEFAULT_GROUP", content = "k=v")
+        val clean = NacosConfiguration(dataId = "clean.properties", group = "DEFAULT_GROUP", content = "k=v")
+
+        panel.render(
+            ConfigListViewState.Results(
+                listOf(dirty, clean),
+                status = ListStatus.Dataset(
+                    com.nanyin.nacos.search.models.CacheConfidence.remoteConfirmed(
+                        now = 1L,
+                        completeness = com.nanyin.nacos.search.models.DatasetCompleteness.COMPLETE
+                    )
+                )
+            )
+        )
+        panel.setConfigDirty(dirty.getKey(), true)
+        runOnEdt { list.setSize(300, 200); list.doLayout() }
+        waitForUi()
+
+        assertEquals("Modified", tooltipOverRow(list, 0))
+        assertNull(tooltipOverRow(list, 1))
+        assertEquals("Modified", accessibleDescriptionOfRow(list, dirty, 0))
+        assertNull(accessibleDescriptionOfRow(list, clean, 1))
+
+        Disposer.dispose(panel)
+    }
+
+    /** Hovers the middle of [index]'s cell and asks the list — the only component Swing asks. */
+    private fun tooltipOverRow(list: JList<NacosConfiguration>, index: Int): String? {
+        val bounds = checkNotNull(list.getCellBounds(index, index)) { "row $index has no bounds" }
+        return list.getToolTipText(
+            java.awt.event.MouseEvent(
+                list, java.awt.event.MouseEvent.MOUSE_MOVED, 0L, 0,
+                bounds.x + bounds.width / 2, bounds.y + bounds.height / 2, 0, false
+            )
+        )
+    }
+
+    private fun accessibleDescriptionOfRow(
+        list: JList<NacosConfiguration>,
+        value: NacosConfiguration,
+        index: Int
+    ): String? = list.cellRenderer
+        .getListCellRendererComponent(list, value, index, false, false)
+        .accessibleContext
+        .accessibleDescription
 
     @Suppress("UNCHECKED_CAST")
     private fun <T> privateField(target: Any, name: String): T {

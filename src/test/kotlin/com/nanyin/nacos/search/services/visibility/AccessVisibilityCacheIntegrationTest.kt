@@ -660,6 +660,57 @@ class AccessVisibilityCacheIntegrationTest {
         assertNull(rebuilt.getConfigDetail(blocked, "public", "secret.properties", "DEFAULT_GROUP"))
     }
 
+    /**
+     * The sibling of the test above, made deterministic. That one only caught this
+     * by luck — it purged and read back within the microseconds a fire-and-forget
+     * removal usually needs, so it passed alone and failed under suite load. Here
+     * the store is slow to delete, which is the same window held open on purpose:
+     * `purgeProfile` drops the in-memory entry synchronously, and if it does not
+     * also await the store removal, the read behind it reconstitutes the payload
+     * straight back out of the store (`discardGeneration` orders a reconstitution
+     * racing the purge, not one starting after it returns).
+     */
+    @Test
+    fun `profile purge does not return before the store rows are gone`() = runBlocking {
+        val store = SlowRemovalStore(InMemoryCacheStore())
+        val cache = CacheService(System::currentTimeMillis, ProfileTombstoneRegistry(), store, AccessVisibility(store))
+        cache.awaitLoadCompleted()
+        val identity = identity("dev")
+
+        cache.writeDetail(
+            identity, "public",
+            NacosConfiguration("secret.properties", "DEFAULT_GROUP", "public", "k=v", "properties")
+        )
+        assertNotNull(cache.getConfigDetail(identity, "public", "secret.properties", "DEFAULT_GROUP"))
+
+        cache.purgeProfile("dev")
+
+        // Both surfaces the window was visible through: this cache's own read path,
+        // which falls back to the store, and a restart that reads only the store.
+        assertNull(cache.getConfigDetail(identity, "public", "secret.properties", "DEFAULT_GROUP"))
+        val rebuilt = CacheService(store)
+        rebuilt.awaitLoadCompleted()
+        assertNull(rebuilt.getConfigDetail(identity, "public", "secret.properties", "DEFAULT_GROUP"))
+    }
+
+    /**
+     * Store that takes a visible moment to delete, so an unawaited removal loses
+     * the race every time instead of almost never.
+     *
+     * ponytail: a fixed delay, not a latch. A latch the test releases cannot work
+     * here — `purgeProfile` blocks the calling thread, so the fixed version would
+     * wait on a signal the test can no longer send. Raise the delay if this ever
+     * flakes the other way.
+     */
+    private class SlowRemovalStore(
+        private val delegate: InMemoryCacheStore
+    ) : com.nanyin.nacos.search.services.CacheStore by delegate {
+        override suspend fun removeDetail(key: String) {
+            kotlinx.coroutines.delay(200)
+            delegate.removeDetail(key)
+        }
+    }
+
     /** Store whose visibility-record writes fail, simulating partial persistence failure. */
     private class FailingVisibilityPutStore(
         private val delegate: InMemoryCacheStore
