@@ -67,44 +67,6 @@ data class EnvironmentProfile(
         }
     }
 
-    /**
-     * Legacy capture / test helper that bumps revisions for a field delta.
-     *
-     * **Not a publisher.** Environment profiles are published only by
-     * [com.nanyin.nacos.search.settings.EnvironmentProfileStore] from
-     * [ProfileIntent]s (ADR-0049 / issue #103). Do not use this to write the
-     * settings component's profile list — revision policy lives in the store
-     * and can drift if a second path invents its own definition of "changed."
-     */
-    fun withUpdated(
-        canonicalEndpoint: String = this.canonicalEndpoint,
-        apiPolicy: NacosApiPolicy = this.apiPolicy,
-        authMode: AuthMode = this.authMode,
-        principal: String = this.principal,
-        writeIntent: Boolean = this.writeIntent,
-        credentialSlotId: String = this.credentialSlotId,
-        credentialSlotVersion: Long = this.credentialSlotVersion
-    ): EnvironmentProfile {
-        val accessChanged = canonicalEndpoint != this.canonicalEndpoint ||
-            apiPolicy != this.apiPolicy ||
-            authMode != this.authMode ||
-            principal != this.principal ||
-            credentialSlotId != this.credentialSlotId ||
-            credentialSlotVersion != this.credentialSlotVersion
-        val profileChanged = accessChanged || writeIntent != this.writeIntent
-        return copy(
-            canonicalEndpoint = canonicalEndpoint,
-            apiPolicy = apiPolicy,
-            authMode = authMode,
-            principal = principal,
-            writeIntent = writeIntent,
-            credentialSlotId = credentialSlotId,
-            credentialSlotVersion = credentialSlotVersion,
-            profileRevision = if (profileChanged) profileRevision + 1 else profileRevision,
-            accessRevision = if (accessChanged) accessRevision + 1 else accessRevision
-        )
-    }
-
     companion object {
         fun fromLegacy(server: NacosServerConfig): EnvironmentProfile {
             val profileId = server.id.ifBlank { "default" }

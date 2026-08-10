@@ -48,7 +48,7 @@ This removal does not remove explicit refresh. The existing header refresh actio
 | `src/main/kotlin/com/nanyin/nacos/search/services/NacosSearchService.kt` | 126-146 | `SearchState`, `SearchSource` | Replace `SearchSource` with `DatasetState`; expose typed failure and a non-destructive refresh error that can coexist with the last successful result. |
 | same | 325-355 | `publishIfCurrent()` | Publish source/freshness/completeness and last successful timestamp atomically with results. A failed current refresh updates error/status but does not discard the last success. Latest-request-wins remains authoritative. |
 | `src/main/kotlin/com/nanyin/nacos/search/models/AccessIdentity.kt` | 27-42 | `DataSource`, `DataFreshness`, `DatasetState` | Reuse these domain types; do not create UI-specific duplicate enums. |
-| `src/main/kotlin/com/nanyin/nacos/search/models/NamespaceLoadResult.kt` | 5, 13-23 | `DatasetCompleteness`, `NamespaceLoadResult`, `ConfigLoadFailure` | Use loaded/expected/failure counts for partial status and per-item retry input. |
+| `src/main/kotlin/com/nanyin/nacos/search/models/NamespaceLoadResult.kt` | 5, 13-23 | `DatasetCompleteness`, `NamespaceLoadResult` | Use loaded/expected counts and `stoppingCause` for partial status. Summary pagination produces no per-item failures. |
 | `src/main/kotlin/com/nanyin/nacos/search/services/NamespaceIndexCoordinator.kt` | 32-37 | `IndexOutcome` | Map `Complete`, `Partial`, `Stale`, and `Failed` directly into search/UI state. |
 | `src/main/kotlin/com/nanyin/nacos/search/services/network/NacosRequestError.kt` | 9-17 | typed request errors | Map auth, timeout, rate limit, client/server, connection, and protocol failures without parsing messages. |
 

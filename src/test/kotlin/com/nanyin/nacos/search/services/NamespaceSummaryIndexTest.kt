@@ -191,8 +191,7 @@ class NamespaceSummaryIndexTest {
                 com.nanyin.nacos.search.models.NamespaceLoadResult(
                     completeness = DatasetCompleteness.COMPLETE,
                     expectedCount = 2,
-                    configurations = summaries,
-                    failures = emptyList()
+                    configurations = summaries
                 )
             )
         )
@@ -234,8 +233,7 @@ class NamespaceSummaryIndexTest {
                     expectedCount = 10,
                     configurations = listOf(
                         NacosConfiguration("late.yaml", "DEFAULT_GROUP", "ns-a", "body=1", "yaml")
-                    ),
-                    failures = emptyList()
+                    )
                 )
             )
         )

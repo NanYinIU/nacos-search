@@ -6,51 +6,11 @@ import com.nanyin.nacos.search.services.operations.ProtocolCapabilities
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.settings.AuthMode
-import com.nanyin.nacos.search.services.OperationFence
-import com.nanyin.nacos.search.services.SessionEpochRegistry
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
 class HistoryEpochFencingTest {
-
-    @Test
-    fun `history list result is dropped when session epoch advances before completion`() = runBlocking {
-        val adapter = SlowHistoryAdapter(delayMillis = 50L)
-        val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to adapter))
-        val epochRegistry = SessionEpochRegistry()
-        val fence = OperationFence(epochRegistry)
-        val target = v1Target()
-
-        val deferred = fence.launch(this, "project-1", target.context.identity) {
-            gateway.listHistory(target, HistoryQuery(ConfigurationCoordinate("app.yaml", "G"))).getOrThrow()
-        }
-
-        delay(10L)
-        epochRegistry.bump("project-1")
-
-        val outcome = deferred.await()
-        assertFalse(outcome.published)
-        assertNull(outcome.value)
-    }
-
-    @Test
-    fun `history list result is published when session epoch is unchanged`() = runBlocking {
-        val adapter = SlowHistoryAdapter(delayMillis = 10L)
-        val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to adapter))
-        val epochRegistry = SessionEpochRegistry()
-        val fence = OperationFence(epochRegistry)
-        val target = v1Target()
-
-        val deferred = fence.launch(this, "project-1", target.context.identity) {
-            gateway.listHistory(target, HistoryQuery(ConfigurationCoordinate("app.yaml", "G"))).getOrThrow()
-        }
-
-        val outcome = deferred.await()
-        assertTrue(outcome.published)
-        assertNotNull(outcome.value)
-    }
 
     @Test
     fun `history operations cannot merge across identities`() = runBlocking {
@@ -104,30 +64,6 @@ class HistoryEpochFencingTest {
             resolvedGeneration = NacosApiGeneration.V1
         )
         return OperationTarget(context, "public")
-    }
-
-    private class SlowHistoryAdapter(private val delayMillis: Long) : ProtocolAdapter {
-        override val capabilities = ProtocolCapabilities.NONE.copy(history = CapabilityCoverage.COMPLETE)
-
-        override suspend fun probe(target: OperationTarget) = Result.success(Unit)
-        override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery) =
-            Result.success(SummaryPage(0, 1, 0, emptyList()))
-        override suspend fun readDetail(target: OperationTarget, coordinate: ConfigurationCoordinate): Result<com.nanyin.nacos.search.models.NacosConfiguration?> =
-            Result.success(null)
-        override suspend fun publish(target: OperationTarget, command: PublishCommand) =
-            Result.success(PublishOutcome.Written("true"))
-
-        override suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage> {
-            delay(delayMillis)
-            return Result.success(HistoryPage(1, 1, 1, listOf(
-                HistoryEntry("1", "app.yaml", "G", null, "yaml", "m1", 1000L, "PUBLISH")
-            )))
-        }
-
-        override suspend fun readHistoryDetail(target: OperationTarget, historyId: String): Result<HistoryDetail> {
-            delay(delayMillis)
-            return Result.success(HistoryDetail("1", "app.yaml", "G", null, "content", "yaml", "m1", 1000L, "PUBLISH"))
-        }
     }
 
     private class RecordingHistoryAdapter : ProtocolAdapter {

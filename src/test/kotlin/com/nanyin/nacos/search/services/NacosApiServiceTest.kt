@@ -260,7 +260,6 @@ class NacosApiServiceTest {
         val loadResult = result.getOrNull()!!
         assertEquals(DatasetCompleteness.COMPLETE, loadResult.completeness)
         assertEquals(1, loadResult.configurations.size)
-        assertTrue(loadResult.failures.isEmpty())
     }
 
     @Test
@@ -359,7 +358,6 @@ class NacosApiServiceTest {
         assertEquals(DatasetCompleteness.COMPLETE, load.completeness)
         assertEquals(12, load.expectedCount)
         assertEquals(12, load.configurations.size)
-        assertTrue(load.failures.isEmpty())
         assertEquals(0, activeDetail.get())
     }
 }

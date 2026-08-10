@@ -1109,22 +1109,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
     
     /**
-     * Creates a copy of current settings
-     */
-    fun copy(): NacosSettings {
-        val copy = NacosSettings()
-        XmlSerializerUtil.copyBean(this, copy)
-        return copy
-    }
-    
-    /**
-     * Copies settings from another NacosSettings instance
-     */
-    fun copyFrom(other: NacosSettings) {
-        XmlSerializerUtil.copyBean(other, this)
-    }
-    
-    /**
      * Gets cache TTL in milliseconds
      */
     fun getCacheTtlMillis(): Long {

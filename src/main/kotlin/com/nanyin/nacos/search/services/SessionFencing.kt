@@ -5,9 +5,6 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.nanyin.nacos.search.models.AccessIdentity
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.async
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -52,43 +49,7 @@ class OperationTicket(
      * into cache, token, or UI state.
      */
     fun checkpoint() {
-        // No-op; the real guard is [isCurrent], checked by the fence.
-    }
-}
-
-/**
- * Outcome of a fenced operation. [published] is true only when the session
- * epoch was unchanged for the entire operation lifetime.
- */
-data class FencedOutcome<T>(val published: Boolean, val value: T?)
-
-/**
- * Wraps an operation so that its result is published only when the session
- * epoch has not advanced since the operation started. If a profile/namespace/
- * policy change occurred during the operation, the result is silently dropped.
- */
-class OperationFence(private val registry: SessionEpochRegistry) {
-
-    /**
-     * Launches an operation in [scope] and returns a [Deferred] that resolves
-     * to a [FencedOutcome]. The outcome is published only if the session epoch
-     * has not advanced between launch and completion.
-     */
-    fun <T> launch(
-        scope: CoroutineScope,
-        projectId: String,
-        identity: AccessIdentity,
-        operation: suspend (OperationTicket) -> T
-    ): Deferred<FencedOutcome<T>> {
-        val ticket = registry.capture(projectId, identity)
-        return scope.async {
-            val result = operation(ticket)
-            if (ticket.isCurrent()) {
-                FencedOutcome(published = true, value = result)
-            } else {
-                FencedOutcome(published = false, value = null)
-            }
-        }
+        // No-op; the real guard is [isCurrent], checked before publishing.
     }
 }
 

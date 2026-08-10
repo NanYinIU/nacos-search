@@ -146,7 +146,6 @@ class NacosSearchServiceTest {
     fun `invalid configuration fails closed in the search UI path before cache or API`() = runBlocking {
         val settings = com.intellij.openapi.application.ApplicationManager.getApplication()
             .getService(NacosSettings::class.java)
-        val original = settings.copy()
         try {
             settings.resetToDefaults()
             // Invalid origin (path present) — must fail closed via profile capture.
@@ -177,7 +176,9 @@ class NacosSearchServiceTest {
             )
             Unit
         } finally {
-            settings.copyFrom(original)
+            // Same baseline @BeforeEach publishes, so the bad profile cannot
+            // leak into another test class.
+            resetSharedSettingsToAnonymousDefaults()
         }
     }
 

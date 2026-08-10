@@ -3,11 +3,8 @@ package com.nanyin.nacos.search.services
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.settings.AuthMode
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
-import java.util.concurrent.atomic.AtomicInteger
 
 class SessionFencingTest {
 
@@ -51,46 +48,6 @@ class SessionFencingTest {
         assertFalse(ticket.isCurrent())
     }
 
-    // ── Operation fence: stale results dropped ──
-
-    @Test
-    fun `late operation result is dropped after a newer state change`() = runBlocking {
-        val registry = SessionEpochRegistry()
-        val fence = OperationFence(registry)
-
-        val started = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
-
-        val deferred = fence.launch(this, "proj-a", identity("dev", 1)) { ticket ->
-            started.complete(Unit)
-            release.await()
-            ticket.checkpoint()
-            "stale-result"
-        }
-
-        started.await()
-        registry.bump("proj-a")
-        release.complete(Unit)
-
-        val outcome = deferred.await()
-        assertFalse(outcome.published, "late result must not be published")
-        assertNull(outcome.value)
-    }
-
-    @Test
-    fun `fresh operation result is published when no state change occurred`() = runBlocking {
-        val registry = SessionEpochRegistry()
-        val fence = OperationFence(registry)
-
-        val outcome = fence.launch(this, "proj-a", identity("dev", 1)) { ticket ->
-            ticket.checkpoint()
-            "fresh-result"
-        }.await()
-
-        assertTrue(outcome.published)
-        assertEquals("fresh-result", outcome.value)
-    }
-
     // ── Profile tombstone ──
 
     @Test
@@ -129,44 +86,6 @@ class SessionFencingTest {
 
     // Observation high-water ordering lives with the one implementation that
     // survived the merge — see ObservationHighWaterTest and CacheWriteGateTest.
-
-    // ── Policy-only change fence ──
-
-    @Test
-    fun `policy-only request change blocks new operations from joining old flight`() = runBlocking {
-        val registry = SessionEpochRegistry()
-        val fence = OperationFence(registry)
-
-        val oldStarted = CompletableDeferred<Unit>()
-        val releaseOld = CompletableDeferred<Unit>()
-        val flights = AtomicInteger()
-
-        val oldFlight = fence.launch(this, "proj-a", identity("dev", 1)) { ticket ->
-            flights.incrementAndGet()
-            oldStarted.complete(Unit)
-            releaseOld.await()
-            ticket.checkpoint()
-            "old"
-        }
-
-        oldStarted.await()
-        registry.bump("proj-a")
-
-        val newOutcome = fence.launch(this, "proj-a", identity("dev", 1)) { ticket ->
-            flights.incrementAndGet()
-            ticket.checkpoint()
-            "new"
-        }.await()
-
-        assertTrue(newOutcome.published)
-        assertEquals("new", newOutcome.value)
-
-        releaseOld.complete(Unit)
-        val oldOutcome = oldFlight.await()
-        assertFalse(oldOutcome.published)
-
-        assertEquals(2, flights.get())
-    }
 
     // ── Helpers ──
 
