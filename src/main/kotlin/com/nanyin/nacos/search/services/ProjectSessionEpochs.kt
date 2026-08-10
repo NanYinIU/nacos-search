@@ -33,7 +33,6 @@ fun Project.currentSessionEpoch(): Long = try {
 @Service(Service.Level.PROJECT)
 class ProjectSessionEpochs(private val project: Project) {
     private val registry = SessionEpochRegistry()
-    private val fence = OperationFence(registry)
 
     private val tombstoneCheck: (String) -> Boolean = { profileId ->
         try {
@@ -69,10 +68,6 @@ class ProjectSessionEpochs(private val project: Project) {
 
     fun capture(identity: com.nanyin.nacos.search.models.AccessIdentity): OperationTicket =
         registry.capture(projectId, identity)
-
-    fun fence(): OperationFence = fence
-
-    fun registry(): SessionEpochRegistry = registry
 
     /** In-memory session generation owner for this project. Never persisted. */
     fun generationState(): SessionGenerationState = generationState

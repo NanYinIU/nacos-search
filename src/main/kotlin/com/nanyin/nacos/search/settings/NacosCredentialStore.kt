@@ -51,10 +51,6 @@ object NacosCredentialStore {
             null
         }
 
-    fun set(serverId: String, password: String) {
-        setDurable(serverId, password)
-    }
-
     /**
      * Write [password] for [serverId] and report whether the write is durable.
      * Used by [PlatformCredentialSlotStore] so a failed stage cannot publish a

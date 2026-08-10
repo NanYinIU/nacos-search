@@ -194,8 +194,7 @@ class NamespaceIndexCoordinatorTest {
                 NamespaceLoadResult(
                     completeness = DatasetCompleteness.COMPLETE,
                     expectedCount = 1,
-                    configurations = listOf(configuration),
-                    failures = emptyList()
+                    configurations = listOf(configuration)
                 )
             )
         )
@@ -254,8 +253,7 @@ class NamespaceIndexCoordinatorTest {
                 NamespaceLoadResult(
                     completeness = DatasetCompleteness.COMPLETE,
                     expectedCount = 2,
-                    configurations = listOf(withBody, blankBody),
-                    failures = emptyList()
+                    configurations = listOf(withBody, blankBody)
                 )
             )
         )
@@ -312,8 +310,7 @@ class NamespaceIndexCoordinatorTest {
                 NamespaceLoadResult(
                     completeness = DatasetCompleteness.COMPLETE,
                     expectedCount = 1,
-                    configurations = listOf(withBody),
-                    failures = emptyList()
+                    configurations = listOf(withBody)
                 )
             )
         )
@@ -356,8 +353,7 @@ class NamespaceIndexCoordinatorTest {
                 NamespaceLoadResult(
                     completeness = DatasetCompleteness.COMPLETE,
                     expectedCount = 1,
-                    configurations = listOf(withBody),
-                    failures = emptyList()
+                    configurations = listOf(withBody)
                 )
             )
         )
@@ -413,8 +409,7 @@ class NamespaceIndexCoordinatorTest {
                 NamespaceLoadResult(
                     completeness = DatasetCompleteness.PARTIAL,
                     expectedCount = 2,
-                    configurations = listOf(late),
-                    failures = emptyList()
+                    configurations = listOf(late)
                 )
             )
         )
@@ -464,8 +459,7 @@ class NamespaceIndexCoordinatorTest {
                 NamespaceLoadResult(
                     completeness = DatasetCompleteness.PARTIAL,
                     expectedCount = 2,
-                    configurations = listOf(fresh),
-                    failures = emptyList()
+                    configurations = listOf(fresh)
                 )
             )
         )
@@ -543,8 +537,7 @@ class NamespaceIndexCoordinatorTest {
                     expectedCount = 2,
                     configurations = listOf(
                         NacosConfiguration("a.yaml", "DEFAULT_GROUP", "partial-cooldown-ns", "x=1")
-                    ),
-                    failures = emptyList()
+                    )
                 )
             )
         )
@@ -647,8 +640,7 @@ class NamespaceIndexCoordinatorTest {
                     NamespaceLoadResult(
                         completeness = DatasetCompleteness.COMPLETE,
                         expectedCount = 0,
-                        configurations = emptyList(),
-                        failures = emptyList()
+                        configurations = emptyList()
                     )
                 )
             )

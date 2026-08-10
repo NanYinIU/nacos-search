@@ -373,7 +373,6 @@ class NacosApiService(
                             completeness = completeness,
                             expectedCount = expectedCount,
                             configurations = allSummaries,
-                            failures = emptyList(),
                             stoppingCause = result.exceptionOrNull()
                         )
                     )
@@ -424,7 +423,6 @@ class NacosApiService(
                     completeness = completeness,
                     expectedCount = expectedCount,
                     configurations = allSummaries,
-                    failures = emptyList(),
                     stoppingCause = null
                 )
             )

@@ -122,24 +122,6 @@ class AccessSafetyTest {
     }
 
     @Test
-    fun `profile revisions distinguish access changes from write intent changes`() {
-        val original = EnvironmentProfile.fromLegacy(
-            NacosServerConfig(id = "dev", serverUrl = "https://nacos.example", username = "alice")
-        )
-
-        val writeIntentChange = original.withUpdated(writeIntent = true)
-        val principalChange = original.withUpdated(principal = "bob")
-        val credentialChange = original.withUpdated(credentialSlotId = "dev:v2", credentialSlotVersion = 2)
-
-        assertEquals(original.accessRevision, writeIntentChange.accessRevision)
-        assertEquals(original.profileRevision + 1, writeIntentChange.profileRevision)
-        assertEquals(original.accessRevision + 1, principalChange.accessRevision)
-        assertEquals(original.profileRevision + 1, principalChange.profileRevision)
-        assertEquals(original.accessRevision + 1, credentialChange.accessRevision)
-        assertEquals(original.profileRevision + 1, credentialChange.profileRevision)
-    }
-
-    @Test
     fun `credential rotation stages its new slot before publishing the new access revision`() {
         val store = InMemoryCredentialSlotStore()
         val original = EnvironmentProfile.fromLegacy(
@@ -149,15 +131,16 @@ class AccessSafetyTest {
         val published = mutableListOf<EnvironmentProfile>()
 
         val nextVersion = original.credentialSlotVersion + 1
-        val updated = original.withUpdated(
+        val updated = original.copy(
             credentialSlotId = CredentialSlotStore.slotKey(original.id, nextVersion),
-            credentialSlotVersion = nextVersion
+            credentialSlotVersion = nextVersion,
+            accessRevision = original.accessRevision + 1,
+            profileRevision = original.profileRevision + 1
         )
         val staged = CredentialSlotStager(store).stage(updated, "new-secret")
         assertInstanceOf(CredentialStageResult.Success::class.java, staged)
 
         assertEquals("new-secret", store.read(updated.id, updated.credentialSlotVersion))
-        assertEquals(original.accessRevision + 1, updated.accessRevision)
         published += updated
 
         assertEquals("old-secret", store.read(original.id, original.credentialSlotVersion))
@@ -171,9 +154,11 @@ class AccessSafetyTest {
             NacosServerConfig(id = "dev", serverUrl = "https://nacos.example", username = "alice")
         )
         val nextVersion = original.credentialSlotVersion + 1
-        val pending = original.withUpdated(
+        val pending = original.copy(
             credentialSlotId = CredentialSlotStore.slotKey(original.id, nextVersion),
-            credentialSlotVersion = nextVersion
+            credentialSlotVersion = nextVersion,
+            accessRevision = original.accessRevision + 1,
+            profileRevision = original.profileRevision + 1
         )
 
         val result = CredentialSlotStager(store).stage(pending, "new-secret")
@@ -246,7 +231,7 @@ class AccessSafetyTest {
             )
         )
         val captured = OperationContextResolver.resolve(profile, "dev-secret").getOrThrow()
-        val changed = profile.withUpdated(
+        val changed = profile.copy(
             canonicalEndpoint = "https://prod.nacos.example",
             principal = "bob",
             credentialSlotId = "dev:v2",

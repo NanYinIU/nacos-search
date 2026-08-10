@@ -202,29 +202,6 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `test copy creates independent instance`() {
-        settings.serverUrl = "http://custom:8848"
-        val copy = settings.copy()
-
-        assertEquals("http://custom:8848", copy.serverUrl)
-        copy.serverUrl = "http://modified:8848"
-        assertEquals("http://custom:8848", settings.serverUrl)
-    }
-
-    @Test
-    fun `test copyFrom`() {
-        val source = NacosSettings().apply {
-            serverUrl = "http://source:8848"
-            username = "sourceUser"
-        }
-
-        settings.copyFrom(source)
-
-        assertEquals("http://source:8848", settings.serverUrl)
-        assertEquals("sourceUser", settings.username)
-    }
-
-    @Test
     fun `test getCacheTtlMillis`() {
         settings.cacheTtlMinutes = 5
         assertEquals(5 * 60 * 1000L, settings.getCacheTtlMillis())
@@ -462,7 +439,7 @@ class NacosSettingsTest {
         state.profileMigrationCompleted = true
         state.credentialSlotsPublished = true
         NacosCredentialStore.remove("s_auth:v1")
-        NacosCredentialStore.set("s_auth", "correct-horse")
+        NacosCredentialStore.setDurable("s_auth", "correct-horse")
 
         val loaded = NacosSettings()
         loaded.loadState(state)
