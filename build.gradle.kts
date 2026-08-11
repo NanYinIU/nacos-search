@@ -282,6 +282,15 @@ tasks {
             "intellij.testFramework.junit5.skip.test.application.dispose",
             onCi.map { if (it) "true" else "false" }
         )
+        // Mirror Jenkins ci-heap.init.gradle so a local CI=true run matches the
+        // beijing host. Heap only — never pin a collector: IntelliJ Platform
+        // already injects -XX:+UseG1GC from idea64.vmoptions, and a second
+        // collector aborts the test JVM ("Conflicting collector combinations").
+        if (onCi.get()) {
+            maxHeapSize = "1024m"
+            minHeapSize = "256m"
+            jvmArgs("-XX:MaxMetaspaceSize=384m")
+        }
         testLogging {
             events("passed", "skipped", "failed", "standardOut", "standardError")
             showExceptions = true
