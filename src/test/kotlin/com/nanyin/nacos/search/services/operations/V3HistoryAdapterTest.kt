@@ -40,7 +40,7 @@ class V3HistoryAdapterTest {
             path = "/nacos/v3/admin/cs/history/list",
             query = listOf(
                 "dataId" to "app.yaml",
-                "group" to "DEFAULT_GROUP",
+                "groupName" to "DEFAULT_GROUP",
                 "namespaceId" to "public",
                 "pageNo" to "1",
                 "pageSize" to "100"

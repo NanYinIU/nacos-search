@@ -74,7 +74,7 @@ class V3ProtocolAdapterTest {
                 "pageNo" to "1",
                 "pageSize" to "50",
                 "dataId" to "",
-                "group" to "",
+                "groupName" to "",
                 "appName" to "",
                 "config_tags" to "",
                 "search" to "accurate",
@@ -82,6 +82,7 @@ class V3ProtocolAdapterTest {
             )
         )
         assertFalse(fixture.lastRequest.query.any { it.first == "tenant" })
+        assertFalse(fixture.lastRequest.query.any { it.first == "group" })
     }
 
     @Test
@@ -89,7 +90,8 @@ class V3ProtocolAdapterTest {
         val fixture = RecordingTransport(
             ProtocolResponse(
                 200,
-                """{"code":0,"message":"success","data":{"id":"1","dataId":"app.yaml","group":"DEFAULT_GROUP","content":"enabled: true","type":"yaml","md5":"abc","tenant":"public"}}"""
+                // Real 3.2.x admin responses spell groupName (not group).
+                """{"code":0,"message":"success","data":{"id":"1","dataId":"app.yaml","groupName":"DEFAULT_GROUP","content":"enabled: true","type":"yaml","md5":"abc","namespaceId":"public"}}"""
             )
         )
         val adapter = V3ProtocolAdapter(fixture)
@@ -101,6 +103,7 @@ class V3ProtocolAdapterTest {
 
         requireNotNull(detail)
         assertEquals("enabled: true", detail.content)
+        assertEquals("DEFAULT_GROUP", detail.group)
         assertEquals("abc", detail.md5)
         assertNull(detail.tenantId)
         fixture.assertRequest(
@@ -108,7 +111,7 @@ class V3ProtocolAdapterTest {
             path = "/nacos/v3/admin/cs/config",
             query = listOf(
                 "dataId" to "app.yaml",
-                "group" to "DEFAULT_GROUP",
+                "groupName" to "DEFAULT_GROUP",
                 "namespaceId" to "public"
             )
         )

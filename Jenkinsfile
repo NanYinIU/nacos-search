@@ -65,13 +65,17 @@ pipeline {
                 sh '''
                     set -euo pipefail
                     mkdir -p "${AGENT_GRADLE_CACHE}/init.d"
-                    # Cap Test JVMs so IntelliJ platform tests fit BUILD_MEM (see host docs)
+                    # Cap Test JVMs so IntelliJ platform tests fit BUILD_MEM (see host docs).
+                    # Do NOT add -XX:+UseSerialGC here: IntelliJ Platform injects
+                    # -XX:+UseG1GC from idea64.vmoptions via IntelliJPlatformArgumentProvider,
+                    # and pairing two collectors aborts every Gradle Test Executor with
+                    # "Conflicting collector combinations" / "Could not create the Java Virtual Machine".
                     cat > "${AGENT_GRADLE_CACHE}/init.d/ci-heap.init.gradle" <<'EOF'
 allprojects {
     tasks.withType(Test).configureEach {
         maxHeapSize = "1024m"
         minHeapSize = "256m"
-        jvmArgs("-XX:MaxMetaspaceSize=384m", "-XX:+UseSerialGC")
+        jvmArgs("-XX:MaxMetaspaceSize=384m")
     }
 }
 EOF

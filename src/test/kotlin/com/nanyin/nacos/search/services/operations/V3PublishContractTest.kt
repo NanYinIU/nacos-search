@@ -33,6 +33,8 @@ class V3PublishContractTest {
         assertEquals("/nacos/v3/admin/cs/config", request.path)
         assertFalse(request.headers.containsKey("casMd5"))
         assert(request.body!!.contains("namespaceId=public"))
+        assert(request.body!!.contains("groupName=G"))
+        assertFalse(request.body!!.contains("group=G"))
         Unit
     }
 

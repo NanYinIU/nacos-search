@@ -25,7 +25,7 @@ add a gated live-smoke scenario when the check needs a real server.
 | Cache confidence dimensions | `CacheConfidenceTest` |
 | Tombstone late-completion / no resurrection | `ProfileDeletionLifecycleTest` |
 | Visibility ordering races | `ReleaseGateOrderingRacesTransportIntegrationTest` |
-| Live smoke: Nacos 2.5.3 V1 / 3.2.3 V3 (no legacy adapter) | `LiveSmokeTest` (gated by `NACOS_LIVE_V1_ENDPOINT` / `NACOS_LIVE_V3_ENDPOINT`) |
+| Live smoke: Nacos 2.5.3 V1 / 3.2.3 V3 (no legacy adapter) | `LiveSmokeTest` (gated by `NACOS_LIVE_V1_ENDPOINT` / `NACOS_LIVE_V3_ENDPOINT`) — probe/list, plus publish → create/select Namespace → accurate/blur search → detail jump → force-refresh |
 
 CI still runs Jupiter (`test`) and Vintage (`testVintage`); live smoke retains
 its environment gates. See `docs/ci/jenkins.md` and the root `Jenkinsfile`.

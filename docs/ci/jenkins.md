@@ -10,8 +10,8 @@ CI for this repo runs on the self-hosted Jenkins at `https://jenkins.gorsen.icu`
 |---|---|---|
 | Checkout | shallow clone `master` | credentials `jenkins-github-app`; HTTP/1.1 + retry |
 | Unit tests | `compileKotlin` + `test` + `testVintage` | sibling Docker, same flags as old GHA |
-| Live smoke V1 | Nacos `v2.5.3` + `LiveSmokeTest.V1*` | sibling Docker network |
-| Live smoke V3 | Nacos `v3.2.3` + `LiveSmokeTest.V3*` | Admin auth disabled |
+| Live smoke V1 | Nacos `v2.5.3` + `LiveSmokeTest.V1*` | sibling Docker network; publish/Namespace/search/detail/refresh |
+| Live smoke V3 | Nacos `v3.2.3` + `LiveSmokeTest.V3*` | Admin auth disabled; same browse/publish path + generation resolve |
 
 ADR-0031 release-gate invariants map to one authoritative suite each — see
 [`release-gate.md`](./release-gate.md).
@@ -28,7 +28,7 @@ path `/opt/jenkins/home/workspace/nacos-search` (never `$WORKSPACE` alone for
 | RAM | 3.6G |
 | Swap | `/swapfile-ci` 3G (required for full IntelliJ test suite) |
 | Build container | `--memory=2500m --memory-swap=3500m` |
-| Test JVM | maxHeap 1024m via `gradle-caches/init.d/ci-heap.init.gradle` |
+| Test JVM | maxHeap 1024m + MaxMetaspace 384m via `gradle-caches/init.d/ci-heap.init.gradle` (and `build.gradle.kts` when `CI`/`JENKINS_URL` is set). **Do not** add `-XX:+UseSerialGC` — IntelliJ Platform already injects `-XX:+UseG1GC` from `idea64.vmoptions`; two collectors abort every Gradle Test Executor with `Conflicting collector combinations`. |
 | Gradle dist | Tencent mirror (pipeline `sed` before `./gradlew`) |
 | Cache | `/opt/jenkins/home/gradle-caches` (~5G after first warm) |
 | TestApplication dispose | Skipped on CI (`CI=true` / `JENKINS_URL`) — see below |
