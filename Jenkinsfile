@@ -66,16 +66,29 @@ pipeline {
                     set -euo pipefail
                     mkdir -p "${AGENT_GRADLE_CACHE}/init.d"
                     # Cap Test JVMs so IntelliJ platform tests fit BUILD_MEM (see host docs).
-                    # Do NOT add -XX:+UseSerialGC here: IntelliJ Platform injects
-                    # -XX:+UseG1GC from idea64.vmoptions via IntelliJPlatformArgumentProvider,
-                    # and pairing two collectors aborts every Gradle Test Executor with
-                    # "Conflicting collector combinations" / "Could not create the Java Virtual Machine".
+                    # Drop any older init scripts that may still pin a collector — a stale
+                    # -XX:+UseSerialGC next to IntelliJ's -XX:+UseG1GC aborts every
+                    # Gradle Test Executor ("Conflicting collector combinations").
+                    rm -f "${AGENT_GRADLE_CACHE}/init.d/"*.gradle
                     cat > "${AGENT_GRADLE_CACHE}/init.d/ci-heap.init.gradle" <<'EOF'
 allprojects {
     tasks.withType(Test).configureEach {
         maxHeapSize = "1024m"
         minHeapSize = "256m"
         jvmArgs("-XX:MaxMetaspaceSize=384m")
+    }
+}
+// Belt-and-suspenders: strip collector selects from direct jvmArgs even if
+// another init script re-adds SerialGC. IntelliJ's G1 stays on ArgumentProviders.
+gradle.taskGraph.whenReady {
+    def collector = ~/^(-XX:[+-]Use\w+GC)$/
+    allprojects {
+        tasks.withType(Test).each { t ->
+            def args = t.jvmArgs
+            if (args != null) {
+                t.jvmArgs = args.findAll { !(it ==~ collector) }
+            }
+        }
     }
 }
 EOF
