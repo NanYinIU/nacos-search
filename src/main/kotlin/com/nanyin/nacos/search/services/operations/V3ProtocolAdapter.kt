@@ -155,7 +155,11 @@ class V3ProtocolAdapter(
         command: PublishCommand
     ): Result<PublishOutcome> {
         validate(target)
-        val params = command.commonFormFields() + listOf(
+        // V3 admin CS APIs take groupName (not V1's group). commonFormFields()
+        // is generation-neutral and still spells "group"; remap on this dialect.
+        val params = command.commonFormFields().map { (key, value) ->
+            if (key == "group") "groupName" to value else key to value
+        } + listOf(
             "namespaceId" to NamespaceInfo.canonicalId(command.namespaceId)
         )
         val formData = params.joinToString("&") { (k, v) ->
@@ -276,7 +280,7 @@ class V3ProtocolAdapter(
             "pageNo" to query.pageNo.toString(),
             "pageSize" to query.pageSize.toString(),
             "dataId" to query.dataId,
-            "group" to query.group,
+            "groupName" to query.group,
             "appName" to query.appName,
             "config_tags" to query.configTags,
             "search" to query.search,
@@ -294,7 +298,7 @@ class V3ProtocolAdapter(
         path = DETAIL_PATH,
         query = listOf(
             "dataId" to coordinate.dataId,
-            "group" to coordinate.group,
+            "groupName" to coordinate.group,
             "namespaceId" to NamespaceInfo.canonicalId(target.namespaceId)
         ),
         headers = mapOf("Accept" to "application/json")
@@ -307,7 +311,7 @@ class V3ProtocolAdapter(
         path = HISTORY_LIST_PATH,
         query = listOf(
             "dataId" to query.coordinate.dataId,
-            "group" to query.coordinate.group,
+            "groupName" to query.coordinate.group,
             "namespaceId" to NamespaceInfo.canonicalId(target.namespaceId),
             "pageNo" to query.pageNo.toString(),
             "pageSize" to query.pageSize.toString()
@@ -478,7 +482,7 @@ class V3ProtocolAdapter(
             items = page.pageItems.map { item ->
                 ConfigurationSummary(
                     item.dataId,
-                    item.group,
+                    item.resolvedGroup(),
                     NamespaceInfo.canonicalTenantId(item.namespaceFromResponse()),
                     item.content,
                     item.type
@@ -490,10 +494,11 @@ class V3ProtocolAdapter(
     private fun parseDetail(data: JsonObject): NacosConfiguration? {
         val detail = gson.fromJson(data, V3ConfigDetailData::class.java)
             ?: throw RemoteOperationError.Protocol("Invalid V3 detail data")
-        if (detail.dataId.isBlank() || detail.group.isBlank()) return null
+        val group = detail.resolvedGroup()
+        if (detail.dataId.isBlank() || group.isBlank()) return null
         return NacosConfiguration(
             dataId = detail.dataId,
-            group = detail.group,
+            group = group,
             tenantId = NamespaceInfo.canonicalTenantId(detail.namespaceFromResponse()),
             content = detail.content ?: "",
             type = detail.type,
@@ -515,7 +520,7 @@ class V3ProtocolAdapter(
                 HistoryEntry(
                     id = item.id ?: "",
                     dataId = item.dataId,
-                    group = item.group,
+                    group = item.resolvedGroup(),
                     tenantId = NamespaceInfo.canonicalTenantId(item.namespaceFromResponse()),
                     type = item.type,
                     md5 = item.md5,
@@ -541,7 +546,7 @@ class V3ProtocolAdapter(
         return HistoryDetail(
             id = detail.id,
             dataId = detail.dataId,
-            group = detail.group,
+            group = detail.resolvedGroup(),
             tenantId = NamespaceInfo.canonicalTenantId(detail.namespaceFromResponse()),
             content = detail.content ?: "",
             type = detail.type,
@@ -682,24 +687,31 @@ class V3ProtocolAdapter(
     private data class V3ConfigItem(
         val id: String? = null,
         val dataId: String = "",
+        // Real 3.x admin responses spell groupName; accept legacy "group" too.
+        val groupName: String = "",
         val group: String = "",
         val content: String? = null,
         val type: String? = null,
         val tenant: String? = null,
         // V3 request parameter spelling; some 3.x builds echo this instead of tenant.
         val namespaceId: String? = null
-    )
+    ) {
+        fun resolvedGroup(): String = groupName.ifBlank { group }
+    }
 
     private data class V3ConfigDetailData(
         val id: String? = null,
         val dataId: String = "",
+        val groupName: String = "",
         val group: String = "",
         val tenant: String? = null,
         val namespaceId: String? = null,
         val content: String? = null,
         val type: String? = null,
         val md5: String? = null
-    )
+    ) {
+        fun resolvedGroup(): String = groupName.ifBlank { group }
+    }
 
     private data class V3HistoryListData(
         val totalCount: Int = 0,
@@ -711,6 +723,7 @@ class V3ProtocolAdapter(
     private data class V3HistoryItem(
         val id: String? = null,
         val dataId: String = "",
+        val groupName: String = "",
         val group: String = "",
         val type: String? = null,
         val md5: String? = null,
@@ -722,11 +735,14 @@ class V3ProtocolAdapter(
         val lastModifiedTime: String? = null,
         val createdTime: String? = null,
         val opType: String? = null
-    )
+    ) {
+        fun resolvedGroup(): String = groupName.ifBlank { group }
+    }
 
     private data class V3HistoryDetailData(
         val id: String? = null,
         val dataId: String = "",
+        val groupName: String = "",
         val group: String = "",
         val tenant: String? = null,
         val namespaceId: String? = null,
@@ -739,7 +755,9 @@ class V3ProtocolAdapter(
         val lastModifiedTime: String? = null,
         val createdTime: String? = null,
         val opType: String? = null
-    )
+    ) {
+        fun resolvedGroup(): String = groupName.ifBlank { group }
+    }
 
     private companion object {
         const val STATE_PATH = "/nacos/v3/admin/core/state"
