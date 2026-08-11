@@ -68,8 +68,15 @@ then restarts it in `post`.
 
 - Name: `nacos-search`
 - Definition: inline `CpsFlowDefinition` (mirror of repo root `Jenkinsfile` —
-  keep them in sync when editing)
-- Trigger: `githubPush()` (registers after the first manual build)
+  **must be re-pasted into the job after every `Jenkinsfile` change**; the
+  pipeline does **not** load `Jenkinsfile` from the checkout). Until that sync
+  happens, Checkout keeps rewriting `gradle-caches/init.d/ci-heap.init.gradle`
+  from the stale inline script — historically that re-injected
+  `-XX:+UseSerialGC` and aborted every Test Executor next to IntelliJ's G1.
+  `build.gradle.kts` now strips collector flags from direct `jvmArgs` as a
+  backstop once the repo change is on the built branch.
+- Trigger: `githubPush()` (registers after the first manual build); job checks
+  out `master` only (no PR multi-branch)
 - Concurrency: disabled — do not run alongside heavy `stillness-backend` builds
 
 ## Ops

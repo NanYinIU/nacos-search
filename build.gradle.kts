@@ -359,3 +359,20 @@ tasks {
     }
 
 }
+
+// Beijing's shared gradle-caches/init.d may still inject -XX:+UseSerialGC from a
+// stale Jenkins inline Pipeline (the job's CpsFlowDefinition is not the repo
+// Jenkinsfile until ops re-pastes it). IntelliJ Platform adds -XX:+UseG1GC via
+// jvmArgumentProviders. Strip every collector select from *direct* jvmArgs so
+// only the IDE provider's G1 remains — otherwise every Test Executor aborts
+// with "Conflicting collector combinations".
+gradle.taskGraph.whenReady {
+    val collector = Regex("""^-XX:[+-]Use\w+GC$""")
+    tasks.withType<Test>().configureEach {
+        val current = jvmArgs ?: return@configureEach
+        val filtered = current.filterNot { collector.matches(it) }
+        if (filtered.size != current.size) {
+            jvmArgs = filtered
+        }
+    }
+}
