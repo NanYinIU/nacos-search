@@ -1,0 +1,34 @@
+build.gradle.kts
+  s_b363b4abbdc86b::t_8f71c6e5755d96 13
+  s_b363b4abbdc86b::t_3aa593cee6993c 142-148
+README.md
+  s_b363b4abbdc86b::t_cd32dbef94cac1 143
+.gitignore
+  s_8ffbda52fc1752::t_391f8adeffe56c 20-23
+CLAUDE.md
+  s_b363b4abbdc86b::t_4fac3e59768ce4 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a52ae710b03243130a156aca20080b890f1164e8",
+  "prompts": {},
+  "sessions": {
+    "s_8ffbda52fc1752": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b6a276b7-c91f-44c2-bef0-c0f287f08898",
+        "model": "glm-5.2"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    },
+    "s_b363b4abbdc86b": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "6ee3e0ee-f916-4944-ae5c-fcb9579fdc68",
+        "model": "grok-4.5"
+      },
+      "human_author": "高国兴 <nanyin@uxin.com>"
+    }
+  }
+}
