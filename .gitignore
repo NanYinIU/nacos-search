@@ -17,5 +17,9 @@ nacos-settings-3.html
 # Ignore local Codex/Claude settings (may contain secrets)
 .claude/
 
+# Ignore herdr-orchestrator run state and agent worktrees
+.coordination/
+.agents-wt/
+
 # macOS Finder metadata
 .DS_Store

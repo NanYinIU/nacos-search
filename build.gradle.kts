@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.3.9"
+version = "1.4.0"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -139,10 +139,15 @@ tasks {
         """.trimIndent())
 
        changeNotes.set("""
+            <h3>1.4.0</h3>
+            <ul>
+                <li><b>Nacos 3.x</b>: configuration detail, publish, history, and list now speak the admin API's <code>groupName</code> / <code>configTags</code> (and list responses that return <code>groupName</code> are parsed), so a successful connection test is no longer followed by <code>unexpected v3 envelope code 10000</code> / parameter-missing when opening or publishing a configuration.</li>
+                <li><b>Nacos 3.x</b>：配置详情、发布、历史记录与列表改为使用管理端 API 的 <code>groupName</code> / <code>configTags</code>（列表响应中的 <code>groupName</code> 也会被解析），连接测试成功后打开或发布配置时不再出现 <code>unexpected v3 envelope code 10000</code> / 参数缺失。</li>
+                <li><b>Fixes</b>: envelope code 10000 now surfaces the server's actionable reason (for example that <code>groupName</code> was required) instead of an opaque unexpected-code string.</li>
+                <li><b>问题修复</b>：信封码 10000 会展示服务端给出的可操作原因（例如缺少 <code>groupName</code>），而不再是难懂的 unexpected-code 文案。</li>
+            </ul>
             <h3>1.3.9</h3>
             <ul>
-                <li><b>Nacos 3.x</b>: configuration detail, publish, and history now speak the admin API's <code>groupName</code> (and list responses that return <code>groupName</code> are parsed), so a successful connection test is no longer followed by <code>unexpected v3 envelope code 10000</code> / parameter-missing when opening a configuration. Envelope code 10000 also surfaces the server's reason (for example that <code>groupName</code> was required) instead of an opaque unexpected-code string.</li>
-                <li><b>Nacos 3.x</b>：配置详情、发布与历史记录改为使用管理端 API 的 <code>groupName</code>（列表响应中的 <code>groupName</code> 也会被解析），连接测试成功后打开配置时不再出现 <code>unexpected v3 envelope code 10000</code> / 参数缺失。信封码 10000 也会展示服务端原因（例如缺少 <code>groupName</code>），而不再是难懂的 unexpected-code 文案。</li>
                 <li><b>Requests</b>: an expired cache no longer costs a full re-scan. When a gutter marker cannot decide from cache — or resolved against a configuration whose cached body has expired — the plugin re-reads that one configuration and nothing else, at most once per configuration per cache TTL. Previously the first code analysis pass five minutes after a load re-read every declared configuration source in the project and paged the whole Namespace, so one gray icon left on screen cost that scan every five minutes. The Namespace page walk triggered by code analysis now only happens for a Namespace that has never been indexed; re-paging otherwise belongs to <b>Refresh</b>, switching Namespace, and searching.</li>
                 <li><b>请求量</b>：缓存过期不再引发全量重扫。当 gutter 标记无法依据缓存判定、或其命中的配置正文已过期时，插件只重新读取这一条配置，且每条配置在一个缓存 TTL 内最多读一次。此前加载五分钟后的第一次代码分析会重读项目中所有已声明的配置来源并翻完整个命名空间，屏幕上留着一个灰色图标就意味着每五分钟重扫一次。由代码分析触发的命名空间翻页现在只在该命名空间从未建立索引时发生；其余情况的重新翻页交给<b>刷新</b>、切换命名空间和搜索。</li>
                 <li><b>Navigation</b>: opening or jumping to a configuration whose cached body has expired now re-reads that configuration and shows the result, instead of painting the expired body while the gutter icon turned fresh off an unrelated refresh. The amber (expired) icon also heals on its own with a single request, so clicking is no longer the only way to get current content.</li>
