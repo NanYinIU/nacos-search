@@ -282,7 +282,10 @@ class V3ProtocolAdapter(
             "dataId" to query.dataId,
             "groupName" to query.group,
             "appName" to query.appName,
-            "config_tags" to query.configTags,
+            // Admin list takes camelCase configTags (not V1's config_tags) and
+            // accepts an empty configDetail content filter (docs mark it Yes).
+            "configTags" to query.configTags,
+            "configDetail" to "",
             "search" to query.search,
             "namespaceId" to NamespaceInfo.canonicalId(target.namespaceId)
         ),
@@ -391,7 +394,9 @@ class V3ProtocolAdapter(
         if (root.has("accessToken")) return root
         if (root.has("code")) {
             val code = root.get("code")?.asInt ?: -1
-            if (code != 0) throw mapEnvelopeCode(code, root.get("message")?.asString)
+            if (code != 0) {
+                throw mapEnvelopeCode(code, root.get("message")?.asString, stringDetail(root.get("data")))
+            }
             val data = root.get("data")
             if (data != null && data.isJsonObject) return data.asJsonObject
         }
@@ -428,7 +433,7 @@ class V3ProtocolAdapter(
     private fun classifyStateNotFound(response: ProtocolResponse) {
         val envelope = runCatching { gson.fromJson(response.body, V3Envelope::class.java) }.getOrNull()
         if (envelope != null && envelope.code != -1) {
-            throw mapEnvelopeCode(envelope.code, envelope.message)
+            throw mapEnvelopeCode(envelope.code, envelope.message, envelopeDetail(envelope.data))
         }
         throw RemoteOperationError.GenerationUnsupported("V3 state endpoint returned 404")
     }
@@ -445,9 +450,9 @@ class V3ProtocolAdapter(
             ?: throw RemoteOperationError.Protocol("V3 $operation response was empty")
         val code = root.get("code")?.asInt ?: -1
         val message = root.get("message")?.asString
-        if (code != 0) throw mapEnvelopeCode(code, message)
-        return root.get("data")
-            ?: throw RemoteOperationError.Protocol("V3 $operation response data is missing")
+        val data = root.get("data")
+        if (code != 0) throw mapEnvelopeCode(code, message, stringDetail(data))
+        return data ?: throw RemoteOperationError.Protocol("V3 $operation response data is missing")
     }
 
     private fun unwrapEnvelopeOrNull(response: ProtocolResponse, operation: String): JsonObject? {
@@ -459,7 +464,9 @@ class V3ProtocolAdapter(
         if (response.status !in 200..299) throw mapStatusFailure(response)
         val parsed = runCatching { gson.fromJson(response.body, V3Envelope::class.java) }.getOrNull()
             ?: throw RemoteOperationError.Protocol("V3 $operation response was empty")
-        if (parsed.code != 0) throw mapEnvelopeCode(parsed.code, parsed.message)
+        if (parsed.code != 0) {
+            throw mapEnvelopeCode(parsed.code, parsed.message, envelopeDetail(parsed.data))
+        }
     }
 
     private fun unwrapEnvelopeOrNullInternal(response: ProtocolResponse, operation: String): JsonObject? {
@@ -467,7 +474,11 @@ class V3ProtocolAdapter(
             // Detail 404: check envelope code to distinguish not-found from generation-unsupported.
             val envelope = runCatching { gson.fromJson(response.body, V3Envelope::class.java) }.getOrNull()
             if (envelope != null && envelope.code == CODE_NOT_FOUND) return null
-            throw mapEnvelopeCode(envelope?.code ?: -1, envelope?.message)
+            throw mapEnvelopeCode(
+                envelope?.code ?: -1,
+                envelope?.message,
+                envelopeDetail(envelope?.data)
+            )
         }
         return unwrapEnvelope(response, operation)
     }
@@ -632,7 +643,8 @@ class V3ProtocolAdapter(
         val envelope = runCatching { gson.fromJson(response.body, V3Envelope::class.java) }.getOrNull()
         val code = envelope?.code
         return when {
-            code != null && code != 0 -> mapEnvelopeCode(code, envelope?.message)
+            code != null && code != 0 ->
+                mapEnvelopeCode(code, envelope?.message, envelopeDetail(envelope?.data))
             // Bare status without a usable envelope: keep authentication vs
             // authorization distinct so V1 and V3 agree on product meaning
             // for the same classified outcome (ADR-0048 / issue #97).
@@ -646,21 +658,49 @@ class V3ProtocolAdapter(
         }
     }
 
-    private fun mapEnvelopeCode(code: Int, message: String?): RemoteOperationError = when (code) {
-        CODE_SUCCESS -> throw IllegalStateException("mapEnvelopeCode called with success code")
-        CODE_ACCESS_DENIED -> RemoteOperationError.Authorization(403)
-        CODE_NOT_FOUND -> RemoteOperationError.NotFound()
-        CODE_INVALID_TOKEN -> RemoteOperationError.Authentication(401)
-        // Nacos (and non-V3 frontends) commonly answer unknown V3 routes with
-        // {code:-1,message:"No message available"}. Treat like classifyStateNotFound:
-        // this is generation absence for AUTO, not a locked-V3 auth failure.
-        -1 -> RemoteOperationError.GenerationUnsupported(
-            "V3 envelope code -1: ${message.orEmpty().ifBlank { "not a V3 response" }}"
-        )
-        in 400..499 -> RemoteOperationError.Client(code)
-        in 500..599 -> RemoteOperationError.Server(code)
-        else -> RemoteOperationError.Protocol("Unexpected V3 envelope code $code: ${message.orEmpty()}")
+    /**
+     * Nacos V3 error envelopes put a short category in [message] (e.g.
+     * "parameter missing") and the actionable text in [detail] / `data`
+     * (e.g. "Required parameter 'groupName' type String is not present").
+     * Prefer the detail so the tool window does not show only an opaque code.
+     */
+    private fun mapEnvelopeCode(
+        code: Int,
+        message: String?,
+        detail: String? = null
+    ): RemoteOperationError {
+        val hint = firstPresent(detail, message).orEmpty()
+        return when (code) {
+            CODE_SUCCESS -> throw IllegalStateException("mapEnvelopeCode called with success code")
+            CODE_PARAMETER_MISSING -> RemoteOperationError.Protocol(
+                if (hint.isBlank()) "V3 parameter missing" else "V3 parameter missing: $hint"
+            )
+            CODE_ACCESS_DENIED -> RemoteOperationError.Authorization(403)
+            CODE_NOT_FOUND -> RemoteOperationError.NotFound()
+            CODE_INVALID_TOKEN -> RemoteOperationError.Authentication(401)
+            // Nacos (and non-V3 frontends) commonly answer unknown V3 routes with
+            // {code:-1,message:"No message available"}. Treat like classifyStateNotFound:
+            // this is generation absence for AUTO, not a locked-V3 auth failure.
+            -1 -> RemoteOperationError.GenerationUnsupported(
+                "V3 envelope code -1: ${hint.ifBlank { "not a V3 response" }}"
+            )
+            in 400..499 -> RemoteOperationError.Client(code)
+            in 500..599 -> RemoteOperationError.Server(code)
+            else -> RemoteOperationError.Protocol(
+                "Unexpected V3 envelope code $code" + if (hint.isBlank()) "" else ": $hint"
+            )
+        }
     }
+
+    private fun envelopeDetail(data: Any?): String? = when (data) {
+        is String -> data.takeIf { it.isNotBlank() }
+        else -> null
+    }
+
+    private fun stringDetail(data: JsonElement?): String? =
+        data?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+            ?.asString
+            ?.takeIf { it.isNotBlank() }
 
     // ---- helpers ----
 
@@ -768,6 +808,7 @@ class V3ProtocolAdapter(
         const val HISTORY_LIST_PATH = "/nacos/v3/admin/cs/history/list"
         const val HISTORY_DETAIL_PATH = "/nacos/v3/admin/cs/history"
         const val CODE_SUCCESS = 0
+        const val CODE_PARAMETER_MISSING = 10000
         const val CODE_ACCESS_DENIED = 10001
         const val CODE_NOT_FOUND = 20004
         const val CODE_INVALID_TOKEN = 401

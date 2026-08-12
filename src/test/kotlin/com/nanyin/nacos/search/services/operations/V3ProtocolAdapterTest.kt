@@ -76,13 +76,15 @@ class V3ProtocolAdapterTest {
                 "dataId" to "",
                 "groupName" to "",
                 "appName" to "",
-                "config_tags" to "",
+                "configTags" to "",
+                "configDetail" to "",
                 "search" to "accurate",
                 "namespaceId" to "public"
             )
         )
         assertFalse(fixture.lastRequest.query.any { it.first == "tenant" })
         assertFalse(fixture.lastRequest.query.any { it.first == "group" })
+        assertFalse(fixture.lastRequest.query.any { it.first == "config_tags" })
     }
 
     @Test
@@ -447,6 +449,36 @@ class V3ProtocolAdapterTest {
             .exceptionOrNull()
 
         assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
+    }
+
+    @Test
+    fun `V3 envelope code one-zero-zero-zero-zero surfaces the missing-parameter detail`() = runBlocking {
+        // Real 3.2.x admin detail/publish answers a missing groupName this way:
+        // code 10000, message "parameter missing", data names the field.
+        val fixture = RecordingTransport(
+            ProtocolResponse(
+                200,
+                """{"code":10000,"message":"parameter missing","data":"Required parameter 'groupName' type String is not present"}"""
+            )
+        )
+
+        val error = V3ProtocolAdapter(fixture)
+            .readDetail(anonymousPublicTarget(), ConfigurationCoordinate("app.yaml", "DEFAULT_GROUP"))
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.Protocol::class.java, error)
+        assertTrue(
+            error!!.message!!.contains("groupName"),
+            "expected groupName in '${error.message}'"
+        )
+        assertTrue(
+            error.message!!.contains("parameter missing", ignoreCase = true),
+            "expected parameter-missing wording in '${error.message}'"
+        )
+        assertFalse(
+            error.message!!.contains("Unexpected V3 envelope code"),
+            "10000 must not stay an opaque unexpected-code string"
+        )
     }
 
     @Test
