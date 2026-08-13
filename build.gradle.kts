@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.4.0"
+version = "1.4.1"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -90,6 +90,17 @@ intellijPlatform {
             }
         }
     }
+
+    pluginConfiguration {
+        ideaVersion {
+            sinceBuild = "223"
+            // Open-ended: Marketplace otherwise hides the plugin from IDEs newer than
+            // a hard until-build (261.* blocked 2026.2+). Restrict later in Marketplace
+            // if a future platform actually breaks. Do not omit this assignment —
+            // the Gradle plugin defaults untilBuild to the compile-target MAJOR.*.
+            untilBuild = provider { null }
+        }
+    }
 }
 
 tasks {
@@ -121,9 +132,6 @@ tasks {
     }
 
     patchPluginXml {
-        sinceBuild.set("223")
-        untilBuild.set("261.*")
-
         pluginDescription.set("""
             <p>Nacos Search plugin for IntelliJ IDEA that allows developers to query Nacos configurations
             directly from within the IDE with local caching for improved performance.</p>
@@ -139,6 +147,11 @@ tasks {
         """.trimIndent())
 
        changeNotes.set("""
+            <h3>1.4.1</h3>
+            <ul>
+                <li><b>Compatibility</b>: removed the IDE upper bound, so the plugin installs on IntelliJ IDEA 2026.2 and later instead of stopping at 2026.1.</li>
+                <li><b>兼容性</b>：取消 IDE 版本上限，IntelliJ IDEA 2026.2 及之后版本也可安装，不再只支持到 2026.1。</li>
+            </ul>
             <h3>1.4.0</h3>
             <ul>
                 <li><b>Nacos 3.x</b>: configuration detail, publish, history, and list now speak the admin API's <code>groupName</code> / <code>configTags</code> (and list responses that return <code>groupName</code> are parsed), so a successful connection test is no longer followed by <code>unexpected v3 envelope code 10000</code> / parameter-missing when opening or publishing a configuration.</li>
