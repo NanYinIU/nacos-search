@@ -1058,8 +1058,17 @@ class NacosConfigurable @JvmOverloads constructor(
             }
             usernameField.text = server.username
             passwordField.text = server.password
-            namespaceCombo.clearDiscoveredOptions()
-            discoveredOptionKey = null
+            val incomingKey = DiscoveryOptionKey(
+                endpoint = server.serverUrl.trim(),
+                apiPolicy = server.apiPolicy.name,
+                authStrategy = authMode.name,
+                principal = server.username.trim(),
+                secret = server.password
+            )
+            if (discoveredOptionKey != incomingKey) {
+                namespaceCombo.clearDiscoveredOptions()
+                discoveredOptionKey = null
+            }
             namespaceCombo.setNamespaceId(server.namespace)
             apiPolicyComboBox.selectedItem = server.apiPolicy
             authModeComboBox.selectedItem = authMode
@@ -1317,6 +1326,7 @@ class NacosConfigurable @JvmOverloads constructor(
         testConnectionButton.isEnabled = false
         testStatusLabel.text = NacosSearchBundle.message("settings.test.connecting")
         testStatusLabel.foreground = JBColor.GRAY
+        val testedKey = currentDiscoveryKey()
 
         ProgressManager.getInstance().run(object : Task.Backgroundable(null, NacosSearchBundle.message("settings.test.progress"), true) {
             override fun run(indicator: ProgressIndicator) {
@@ -1333,6 +1343,11 @@ class NacosConfigurable @JvmOverloads constructor(
 
                 invokeOnEdt(ModalityState.defaultModalityState()) {
                     testConnectionButton.isEnabled = true
+                    if (currentDiscoveryKey() != testedKey) {
+                        testStatusLabel.text = ""
+                        testStatusLabel.toolTipText = null
+                        return@invokeOnEdt
+                    }
                     val report = outcome.getOrNull()
                     if (report != null) {
                         acceptDiscoveredNamespaces(report.discoveredNamespaces)
@@ -1356,6 +1371,15 @@ class NacosConfigurable @JvmOverloads constructor(
                 }
             }
         })
+    }
+
+    internal fun applyDiscoveredNamespacesIfCurrent(
+        namespaces: List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>,
+        testedKey: DiscoveryOptionKey
+    ): Boolean {
+        if (currentDiscoveryKey() != testedKey) return false
+        acceptDiscoveredNamespaces(namespaces)
+        return true
     }
 
     internal fun acceptDiscoveredNamespaces(
@@ -1391,35 +1415,28 @@ class NacosConfigurable @JvmOverloads constructor(
     internal fun diagnosticHeadline(
         report: com.nanyin.nacos.search.services.operations.DiagnosticReport
     ): String {
-        val readDenied = report.stages.any {
-            it.stage == "namespace_read" && it.sanitizedFailure == "Permission denied"
-        }
-        if (!report.connected && readDenied) {
-            return if (report.discoveredNamespaces.isNotEmpty()) {
+        val summary = report.summary
+        return when {
+            summary.startsWith("Permission denied for namespace") && report.discoveredNamespaces.isNotEmpty() ->
                 NacosSearchBundle.message(
                     "settings.test.namespace.permission.pick",
                     report.configuredNamespaceId
                 )
-            } else {
+            summary.startsWith("Permission denied for namespace") ->
                 NacosSearchBundle.message(
                     "settings.test.namespace.permission",
                     report.configuredNamespaceId
                 )
-            }
+            summary == "Authentication failed" ->
+                NacosSearchBundle.message("settings.test.authentication.failed")
+            summary == "Connected. Manual namespace. Discovery unavailable." ->
+                NacosSearchBundle.message("settings.test.connected.manual.namespace")
+            summary == "Connected" ->
+                NacosSearchBundle.message("settings.test.connected")
+            !report.connected ->
+                NacosSearchBundle.message("settings.connection.failed")
+            else -> summary
         }
-        val authFailed = report.stages.any {
-            !it.success && it.sanitizedFailure == "Authentication failed"
-        }
-        if (!report.connected && authFailed) {
-            return NacosSearchBundle.message("settings.test.authentication.failed")
-        }
-        if (!report.connected) {
-            return NacosSearchBundle.message("settings.connection.failed")
-        }
-        if (report.manualNamespaceRequired) {
-            return NacosSearchBundle.message("settings.test.connected.manual.namespace")
-        }
-        return NacosSearchBundle.message("settings.test.connected")
     }
 
     // ------------------------------------------------------------------

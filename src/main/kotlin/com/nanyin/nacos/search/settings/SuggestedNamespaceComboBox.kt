@@ -19,6 +19,7 @@ import javax.swing.event.DocumentListener
 class SuggestedNamespaceComboBox : JComboBox<DiscoveredNamespace>(DefaultComboBoxModel()) {
 
     private var allOptions: List<DiscoveredNamespace> = emptyList()
+    private var lastCommitted: String = ""
     private var mutating = false
 
     var onNamespaceCommitted: () -> Unit = {}
@@ -57,6 +58,7 @@ class SuggestedNamespaceComboBox : JComboBox<DiscoveredNamespace>(DefaultComboBo
             mutating = true
             try {
                 editorField.text = selected.namespaceId
+                lastCommitted = selected.namespaceId
                 restoreUnfilteredModel()
             } finally {
                 mutating = false
@@ -66,11 +68,12 @@ class SuggestedNamespaceComboBox : JComboBox<DiscoveredNamespace>(DefaultComboBo
     }
 
     fun namespaceId(): String =
-        SuggestedNamespaceSelection.persistableId(editorField.text, allOptions)
+        SuggestedNamespaceSelection.persistableId(editorField.text, allOptions, lastCommitted)
 
     fun setNamespaceId(id: String) {
         mutating = true
         try {
+            lastCommitted = id
             editorField.text = id
             selectMatching(id)
         } finally {
@@ -81,6 +84,7 @@ class SuggestedNamespaceComboBox : JComboBox<DiscoveredNamespace>(DefaultComboBo
     fun applyDiscovered(options: List<DiscoveredNamespace>) {
         val current = namespaceId()
         allOptions = options
+        lastCommitted = current
         mutating = true
         try {
             restoreUnfilteredModel()
@@ -94,6 +98,7 @@ class SuggestedNamespaceComboBox : JComboBox<DiscoveredNamespace>(DefaultComboBo
     fun clearDiscoveredOptions() {
         val current = namespaceId()
         allOptions = emptyList()
+        lastCommitted = current
         mutating = true
         try {
             removeAllItems()

@@ -28,17 +28,33 @@ class SuggestedNamespaceSelectionTest {
     }
 
     @Test
-    fun `unknown text is kept as a manual namespace id`() {
-        assertEquals("custom-ns", SuggestedNamespaceSelection.persistableId("custom-ns", options))
+    fun `filter keystrokes keep the last committed identifier`() {
+        assertEquals(
+            "ns-uuid-2",
+            SuggestedNamespaceSelection.persistableId("Team", options, lastCommitted = "ns-uuid-2")
+        )
     }
 
     @Test
-    fun `ambiguous display names stay as typed rather than guessing an id`() {
+    fun `text that matches no option is a manual namespace id`() {
+        assertEquals(
+            "custom-ns",
+            SuggestedNamespaceSelection.persistableId("custom-ns", options, lastCommitted = "ns-uuid-1")
+        )
+    }
+
+    @Test
+    fun `unknown text is kept as a manual namespace id`() {
+        assertEquals("custom-ns", SuggestedNamespaceSelection.persistableId("custom-ns", emptyList()))
+    }
+
+    @Test
+    fun `ambiguous display names keep the last committed identifier`() {
         val clash = listOf(
             DiscoveredNamespace("id-a", "shared"),
             DiscoveredNamespace("id-b", "shared")
         )
-        assertEquals("shared", SuggestedNamespaceSelection.persistableId("shared", clash))
+        assertEquals("id-a", SuggestedNamespaceSelection.persistableId("shared", clash, lastCommitted = "id-a"))
     }
 
     @Test

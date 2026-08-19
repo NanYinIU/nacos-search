@@ -333,6 +333,36 @@ class NacosConfigurableInteractionTest {
     }
 
     @Test
+    fun staleDiscoveryIsNotAppliedAfterIdentityChange() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
+        val serverUrlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+        val keep = DiscoveredNamespace("ns-keep", "Keep")
+
+        runOnEdt {
+            combo.setNamespaceId("ns-keep")
+            configurable.acceptDiscoveredNamespaces(listOf(keep, DiscoveredNamespace("ns-other", "Other")))
+        }
+        waitForUi()
+        val staleKey = privateField<DiscoveryOptionKey?>(configurable, "discoveredOptionKey")!!
+
+        runOnEdt {
+            serverUrlField.text = "http://other.example:8848"
+        }
+        waitForUi()
+        assertEquals(0, combo.discoveredCount())
+
+        val applied = configurable.applyDiscoveredNamespacesIfCurrent(
+            listOf(keep, DiscoveredNamespace("ns-stale", "Stale")),
+            staleKey
+        )
+        assertFalse(applied)
+        assertEquals(0, combo.discoveredCount())
+        assertEquals("ns-keep", combo.namespaceId())
+    }
+
+    @Test
     fun diagnosticHeadlineUsesPermissionCopyInsteadOfConnectionFailed() {
         val configurable = NacosConfigurable()
         val denied = DiagnosticStageResult(
@@ -368,6 +398,34 @@ class NacosConfigurableInteractionTest {
                 "secret-ns"
             ),
             configurable.diagnosticHeadline(withoutOptions)
+        )
+    }
+
+    @Test
+    fun diagnosticHeadlineDoesNotTreatDiscoveryAuthFailureAsTheTitle() {
+        val configurable = NacosConfigurable()
+        val report = DiagnosticReport(
+            connected = false,
+            stages = listOf(
+                DiagnosticStageResult(
+                    stage = "namespace_read",
+                    success = false,
+                    durationMillis = 1,
+                    sanitizedFailure = "Connection failed"
+                ),
+                DiagnosticStageResult(
+                    stage = "discovery",
+                    success = false,
+                    durationMillis = 1,
+                    sanitizedFailure = "Authentication failed"
+                )
+            ),
+            manualNamespaceRequired = false,
+            configuredNamespaceId = "public"
+        )
+        assertEquals(
+            com.nanyin.nacos.search.bundle.NacosSearchBundle.message("settings.connection.failed"),
+            configurable.diagnosticHeadline(report)
         )
     }
 

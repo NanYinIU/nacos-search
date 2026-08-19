@@ -55,7 +55,6 @@ data class DiagnosticReport(
     private fun disconnectedSummary(): String {
         val generationFailure = stageFailure("generation")
         if (generationFailure == "Authentication failed") return "Authentication failed"
-        if (generationFailure == "Cancelled") return "Cancelled"
 
         val readFailure = stageFailure("namespace_read")
         if (readFailure == "Permission denied") {
@@ -68,7 +67,6 @@ data class DiagnosticReport(
             }
         }
         if (readFailure == "Authentication failed") return "Authentication failed"
-        if (readFailure == "Cancelled") return "Cancelled"
         return "Connection failed"
     }
 
@@ -111,7 +109,7 @@ class ConnectionDiagnostic(
         }
 
         // Stage 2: honor locked V1/V3 drafts; only AUTO runs isolated probing
-        val genStage = when (val policy = parseApiPolicy(snapshot.apiPolicy)) {
+        val genStage = when (parseApiPolicy(snapshot.apiPolicy)) {
             com.nanyin.nacos.search.models.NacosApiPolicy.V1 ->
                 DiagnosticStageResult(
                     stage = "generation",

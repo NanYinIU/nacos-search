@@ -53,6 +53,16 @@ class SuggestedNamespaceComboBoxTest {
     }
 
     @Test
+    fun `filter keystrokes do not replace the committed namespace id`() {
+        val combo = SuggestedNamespaceComboBox()
+        combo.setNamespaceId("ns-uuid-2")
+        combo.applyDiscovered(listOf(team, live))
+        val editor = combo.editor.editorComponent as JTextField
+        editor.text = "Team"
+        assertEquals("ns-uuid-2", combo.namespaceId())
+    }
+
+    @Test
     fun `selecting a discovered option writes its namespace id`() {
         val combo = SuggestedNamespaceComboBox()
         combo.applyDiscovered(listOf(team, live))

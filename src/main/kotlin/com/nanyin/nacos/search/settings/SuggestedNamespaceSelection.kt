@@ -20,13 +20,19 @@ data class DiscoveryOptionKey(
  * is what the draft stores.
  */
 object SuggestedNamespaceSelection {
-    fun persistableId(editorText: String, options: List<DiscoveredNamespace>): String {
+    fun persistableId(
+        editorText: String,
+        options: List<DiscoveredNamespace>,
+        lastCommitted: String = ""
+    ): String {
         val text = editorText.trim()
         if (text.isEmpty()) return ""
         options.find { it.namespaceId == text }?.let { return it.namespaceId }
         val byName = options.filter { it.displayName.equals(text, ignoreCase = true) }
         if (byName.size == 1) return byName.single().namespaceId
-        return text
+        if (options.isEmpty()) return text
+        val stillFiltering = options.any { matchesFilter(it, text) }
+        return if (stillFiltering) lastCommitted else text
     }
 
     fun matchesFilter(option: DiscoveredNamespace, query: String): Boolean {
