@@ -34,19 +34,46 @@ data class DiagnosticStageResult(
  *
  * A connection is successful when local validation, generation resolution,
  * and a configured-namespace read all succeed. Namespace discovery is
- * attempted separately; its failure does not change the connection verdict.
+ * attempted separately after generation resolution even when that read
+ * fails; its failure does not change the connection verdict, and a
+ * permission-denied read is not headlined as connection failure.
  */
 data class DiagnosticReport(
     val connected: Boolean,
     val stages: List<DiagnosticStageResult>,
-    val manualNamespaceRequired: Boolean
+    val manualNamespaceRequired: Boolean,
+    val discoveredNamespaces: List<DiscoveredNamespace> = emptyList(),
+    val configuredNamespaceId: String = "public"
 ) {
     val summary: String
         get() = when {
-            !connected -> "Connection failed"
+            !connected -> disconnectedSummary()
             manualNamespaceRequired -> "Connected. Manual namespace. Discovery unavailable."
             else -> "Connected"
         }
+
+    private fun disconnectedSummary(): String {
+        val generationFailure = stageFailure("generation")
+        if (generationFailure == "Authentication failed") return "Authentication failed"
+        if (generationFailure == "Cancelled") return "Cancelled"
+
+        val readFailure = stageFailure("namespace_read")
+        if (readFailure == "Permission denied") {
+            val base = "Permission denied for namespace $configuredNamespaceId"
+            val discoveryOk = stages.any { it.stage == "discovery" && it.success }
+            return if (discoveryOk && discoveredNamespaces.isNotEmpty()) {
+                "$base. Pick another from the list."
+            } else {
+                base
+            }
+        }
+        if (readFailure == "Authentication failed") return "Authentication failed"
+        if (readFailure == "Cancelled") return "Cancelled"
+        return "Connection failed"
+    }
+
+    private fun stageFailure(stage: String): String? =
+        stages.find { it.stage == stage && !it.success }?.sanitizedFailure
 }
 
 /**
@@ -60,17 +87,27 @@ data class DiagnosticReport(
 class ConnectionDiagnostic(
     private val resolver: GenerationResolver,
     private val gateway: OperationGateway,
-    private val discoveryProbe: (suspend (OperationTarget) -> Result<Unit>)? = null,
+    private val discoveryProbe: (suspend (OperationTarget) -> Result<List<DiscoveredNamespace>>)? = null,
     private val clock: () -> Long = System::currentTimeMillis
 ) {
     suspend fun diagnose(snapshot: DiagnosticSnapshot): DiagnosticReport {
         val stages = mutableListOf<DiagnosticStageResult>()
 
         // Stage 1: local validation
+        val configuredNamespaceId = snapshot.namespaceId.ifBlank { "public" }
+        val emptyReport = { extra: List<DiagnosticStageResult> ->
+            DiagnosticReport(
+                connected = false,
+                stages = extra,
+                manualNamespaceRequired = false,
+                configuredNamespaceId = configuredNamespaceId
+            )
+        }
+
         val validation = validateLocally(snapshot)
         stages.add(validation)
         if (!validation.success) {
-            return DiagnosticReport(connected = false, stages = stages, manualNamespaceRequired = false)
+            return emptyReport(stages)
         }
 
         // Stage 2: honor locked V1/V3 drafts; only AUTO runs isolated probing
@@ -103,7 +140,7 @@ class ConnectionDiagnostic(
         }
         stages.add(genStage)
         if (!genStage.success) {
-            return DiagnosticReport(connected = false, stages = stages, manualNamespaceRequired = false)
+            return emptyReport(stages)
         }
 
         val generation = genStage.resolvedGeneration!!
@@ -120,14 +157,14 @@ class ConnectionDiagnostic(
             sanitizedFailure = readResult.second.exceptionOrNull()?.let { sanitize(it) }
         )
         stages.add(readStage)
-        if (!readStage.success) {
-            return DiagnosticReport(connected = false, stages = stages, manualNamespaceRequired = false)
-        }
 
         // Stage 4: namespace discovery (optional, does not affect connection verdict).
+        // Runs even when the configured-namespace read failed so a forbidden or
+        // mistyped suggested Namespace can still fill the settings chooser.
         // A dialect that declares discovery UNAVAILABLE is an unsupported
         // operation — keep the manual Namespace usable (ADR-0005 / ADR-0048).
         val discoveryCaps = gateway.capabilities(generation)?.namespaceDiscovery
+        var discovered = emptyList<DiscoveredNamespace>()
         val discoveryStage = if (discoveryCaps == CapabilityCoverage.UNAVAILABLE) {
             DiagnosticStageResult(
                 stage = "discovery",
@@ -137,9 +174,10 @@ class ConnectionDiagnostic(
             )
         } else {
             val discoveryResult = timed("discovery") {
-                val probe = discoveryProbe ?: { t -> gateway.discoverNamespaces(t).map { } }
+                val probe = discoveryProbe ?: { t -> gateway.discoverNamespaces(t) }
                 probe(resolvedTarget)
             }
+            discovered = discoveryResult.second.getOrDefault(emptyList())
             DiagnosticStageResult(
                 stage = "discovery",
                 success = discoveryResult.second.isSuccess,
@@ -152,7 +190,13 @@ class ConnectionDiagnostic(
         val connected = readStage.success
         val manualNamespaceRequired = connected && !discoveryStage.success
 
-        return DiagnosticReport(connected = connected, stages = stages, manualNamespaceRequired = manualNamespaceRequired)
+        return DiagnosticReport(
+            connected = connected,
+            stages = stages,
+            manualNamespaceRequired = manualNamespaceRequired,
+            discoveredNamespaces = discovered,
+            configuredNamespaceId = configuredNamespaceId
+        )
     }
 
     private fun validateLocally(snapshot: DiagnosticSnapshot): DiagnosticStageResult {
