@@ -4,6 +4,9 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.services.operations.DiagnosticReport
+import com.nanyin.nacos.search.services.operations.DiagnosticStageResult
+import com.nanyin.nacos.search.services.operations.DiscoveredNamespace
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -270,6 +273,101 @@ class NacosConfigurableInteractionTest {
         assertEquals(
             com.nanyin.nacos.search.bundle.NacosSearchBundle.message("settings.test.token.incomplete"),
             testStatusLabel.text
+        )
+    }
+
+    @Test
+    fun namespaceChooserIsEditableBeforeDiscovery() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
+
+        runOnEdt {
+            combo.setNamespaceId("manual-ns")
+        }
+        waitForUi()
+        assertTrue(combo.isEditable)
+        assertEquals("manual-ns", combo.namespaceId())
+        assertEquals(0, combo.discoveredCount())
+    }
+
+    @Test
+    fun changingServerUrlClearsDiscoveredNamespaceOptionsButKeepsIdentifier() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
+        val serverUrlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+        val keep = DiscoveredNamespace("ns-keep", "Keep")
+
+        runOnEdt {
+            combo.setNamespaceId("ns-keep")
+            configurable.acceptDiscoveredNamespaces(listOf(keep, DiscoveredNamespace("ns-other", "Other")))
+        }
+        waitForUi()
+        assertEquals(2, combo.discoveredCount())
+
+        runOnEdt {
+            serverUrlField.text = "http://other.example:8848"
+        }
+        waitForUi()
+        assertEquals(0, combo.discoveredCount())
+        assertEquals(0, combo.itemCount)
+        assertEquals("ns-keep", combo.namespaceId())
+    }
+
+    @Test
+    fun changingNamespaceTextDoesNotClearDiscoveredOptions() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
+        val keep = DiscoveredNamespace("ns-keep", "Keep")
+
+        runOnEdt {
+            combo.setNamespaceId("ns-keep")
+            configurable.acceptDiscoveredNamespaces(listOf(keep, DiscoveredNamespace("ns-other", "Other")))
+            combo.setNamespaceId("ns-other")
+        }
+        waitForUi()
+        assertEquals(2, combo.discoveredCount())
+        assertEquals("ns-other", combo.namespaceId())
+    }
+
+    @Test
+    fun diagnosticHeadlineUsesPermissionCopyInsteadOfConnectionFailed() {
+        val configurable = NacosConfigurable()
+        val denied = DiagnosticStageResult(
+            stage = "namespace_read",
+            success = false,
+            durationMillis = 1,
+            sanitizedFailure = "Permission denied"
+        )
+        val discovery = DiagnosticStageResult(
+            stage = "discovery",
+            success = true,
+            durationMillis = 1
+        )
+        val withOptions = DiagnosticReport(
+            connected = false,
+            stages = listOf(denied, discovery),
+            manualNamespaceRequired = false,
+            discoveredNamespaces = listOf(DiscoveredNamespace("ns-1", "Team")),
+            configuredNamespaceId = "secret-ns"
+        )
+        assertEquals(
+            com.nanyin.nacos.search.bundle.NacosSearchBundle.message(
+                "settings.test.namespace.permission.pick",
+                "secret-ns"
+            ),
+            configurable.diagnosticHeadline(withOptions)
+        )
+
+        val withoutOptions = withOptions.copy(discoveredNamespaces = emptyList())
+        assertEquals(
+            com.nanyin.nacos.search.bundle.NacosSearchBundle.message(
+                "settings.test.namespace.permission",
+                "secret-ns"
+            ),
+            configurable.diagnosticHeadline(withoutOptions)
         )
     }
 

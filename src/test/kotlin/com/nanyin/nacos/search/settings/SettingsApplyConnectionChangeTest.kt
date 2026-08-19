@@ -112,7 +112,7 @@ class SettingsApplyConnectionChangeTest {
         val before = settings.getActiveProfile()!!.accessRevision
         val events = recordNotifications {
             val configurable = openConfigurable()
-            privateField<JTextField>(configurable, "namespaceField").text = "dev-ns"
+            privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo").setNamespaceId("dev-ns")
             configurable.apply()
         }
         assertEquals(listOf("settingsChanged"), events)
