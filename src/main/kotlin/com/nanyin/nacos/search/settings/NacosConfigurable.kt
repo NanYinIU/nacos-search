@@ -87,7 +87,7 @@ class NacosConfigurable @JvmOverloads constructor(
     private lateinit var passwordLabel: JLabel
     private lateinit var passwordRow: JComponent
     private lateinit var secretVisibilityToggle: JButton
-    private lateinit var namespaceField: JBTextField
+    private lateinit var namespaceCombo: SuggestedNamespaceComboBox
     private lateinit var apiPolicyComboBox: JComboBox<NacosApiPolicy>
     private lateinit var authModeComboBox: JComboBox<AuthMode>
     private lateinit var defaultGroupField: JBTextField
@@ -99,6 +99,8 @@ class NacosConfigurable @JvmOverloads constructor(
     // Test connection UI
     private lateinit var testConnectionButton: JButton
     private lateinit var testStatusLabel: JLabel
+    /** Discovery list is valid only for this unsaved-form identity. */
+    private var discoveredOptionKey: DiscoveryOptionKey? = null
 
     // Language
     private lateinit var languageComboBox: JComboBox<LanguageService.SupportedLanguage>
@@ -352,12 +354,13 @@ class NacosConfigurable @JvmOverloads constructor(
 
     private fun commitDetailFormToDraft() {
         if (loadingForm) return
+        invalidateDiscoveredOptionsIfIdentityChanged()
         val server = selectedDraft() ?: return
         server.displayName = displayNameField.text.trim()
         server.serverUrl = serverUrlField.text.trim()
         var username = usernameField.text.trim()
         var password = String(passwordField.password)
-        server.namespace = namespaceField.text.trim()
+        server.namespace = namespaceCombo.namespaceId()
         server.apiPolicy = apiPolicyComboBox.selectedItem as NacosApiPolicy
         // Strategy is chooser-only — never inferred from credential keystrokes.
         val authMode = AuthStrategyFormPolicy.normalizeStored(
@@ -537,10 +540,9 @@ class NacosConfigurable @JvmOverloads constructor(
         passwordField = JPasswordField().apply {
             document.addDocumentListener(docListener)
         }
-        namespaceField = JBTextField().apply {
-            emptyText.text = "public"
+        namespaceCombo = SuggestedNamespaceComboBox().apply {
             font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 13)
-            document.addDocumentListener(docListener)
+            onNamespaceCommitted = { commitDetailFormToDraft() }
         }
         apiPolicyComboBox = JComboBox(arrayOf(NacosApiPolicy.AUTO, NacosApiPolicy.V1, NacosApiPolicy.V3)).apply {
             putClientProperty("nacos.automation.id", "nacos.settings.apiPolicy")
@@ -857,7 +859,7 @@ class NacosConfigurable @JvmOverloads constructor(
         passwordRow = pwdRow
 
         // Namespace field with help text below
-        addRow("settings.server.namespace", namespaceField)
+        addRow("settings.server.namespace", namespaceCombo)
         gbc.gridx = 1; gbc.gridy++; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL
         scrollPanel.add(JTextArea(NacosSearchBundle.message("settings.server.help.namespace")).apply {
             isEditable = false
@@ -1041,7 +1043,6 @@ class NacosConfigurable @JvmOverloads constructor(
         serverUrlField.document.removeDocumentListener(docListener)
         usernameField.document.removeDocumentListener(docListener)
         passwordField.document.removeDocumentListener(docListener)
-        namespaceField.document.removeDocumentListener(docListener)
         defaultGroupField.document.removeDocumentListener(docListener)
 
         try {
@@ -1057,7 +1058,18 @@ class NacosConfigurable @JvmOverloads constructor(
             }
             usernameField.text = server.username
             passwordField.text = server.password
-            namespaceField.text = server.namespace
+            val incomingKey = DiscoveryOptionKey(
+                endpoint = server.serverUrl.trim(),
+                apiPolicy = server.apiPolicy.name,
+                authStrategy = authMode.name,
+                principal = server.username.trim(),
+                secret = server.password
+            )
+            if (discoveredOptionKey != incomingKey) {
+                namespaceCombo.clearDiscoveredOptions()
+                discoveredOptionKey = null
+            }
+            namespaceCombo.setNamespaceId(server.namespace)
             apiPolicyComboBox.selectedItem = server.apiPolicy
             authModeComboBox.selectedItem = authMode
             defaultGroupField.text = server.defaultGroup
@@ -1074,7 +1086,6 @@ class NacosConfigurable @JvmOverloads constructor(
             serverUrlField.document.addDocumentListener(docListener)
             usernameField.document.addDocumentListener(docListener)
             passwordField.document.addDocumentListener(docListener)
-            namespaceField.document.addDocumentListener(docListener)
             defaultGroupField.document.addDocumentListener(docListener)
             loadingForm = false
         }
@@ -1315,6 +1326,7 @@ class NacosConfigurable @JvmOverloads constructor(
         testConnectionButton.isEnabled = false
         testStatusLabel.text = NacosSearchBundle.message("settings.test.connecting")
         testStatusLabel.foreground = JBColor.GRAY
+        val testedKey = currentDiscoveryKey()
 
         ProgressManager.getInstance().run(object : Task.Backgroundable(null, NacosSearchBundle.message("settings.test.progress"), true) {
             override fun run(indicator: ProgressIndicator) {
@@ -1331,9 +1343,15 @@ class NacosConfigurable @JvmOverloads constructor(
 
                 invokeOnEdt(ModalityState.defaultModalityState()) {
                     testConnectionButton.isEnabled = true
+                    if (currentDiscoveryKey() != testedKey) {
+                        testStatusLabel.text = ""
+                        testStatusLabel.toolTipText = null
+                        return@invokeOnEdt
+                    }
                     val report = outcome.getOrNull()
                     if (report != null) {
-                        testStatusLabel.text = report.summary
+                        acceptDiscoveredNamespaces(report.discoveredNamespaces)
+                        testStatusLabel.text = diagnosticHeadline(report)
                         testStatusLabel.foreground = if (report.connected) {
                             JBColor(0x5fb865, 0x208a3c)
                         } else {
@@ -1353,6 +1371,72 @@ class NacosConfigurable @JvmOverloads constructor(
                 }
             }
         })
+    }
+
+    internal fun applyDiscoveredNamespacesIfCurrent(
+        namespaces: List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>,
+        testedKey: DiscoveryOptionKey
+    ): Boolean {
+        if (currentDiscoveryKey() != testedKey) return false
+        acceptDiscoveredNamespaces(namespaces)
+        return true
+    }
+
+    internal fun acceptDiscoveredNamespaces(
+        namespaces: List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>
+    ) {
+        namespaceCombo.applyDiscovered(namespaces)
+        discoveredOptionKey = currentDiscoveryKey()
+    }
+
+    private fun invalidateDiscoveredOptionsIfIdentityChanged() {
+        if (!::namespaceCombo.isInitialized) return
+        val current = currentDiscoveryKey()
+        if (discoveredOptionKey != null && discoveredOptionKey != current) {
+            namespaceCombo.clearDiscoveredOptions()
+            discoveredOptionKey = null
+        }
+    }
+
+    private fun currentDiscoveryKey(): DiscoveryOptionKey {
+        val authMode = AuthStrategyFormPolicy.normalizeStored(
+            authModeComboBox.selectedItem as AuthMode? ?: AuthMode.NACOS_PASSWORD,
+            settings.enableTokenAuth
+        )
+        return DiscoveryOptionKey(
+            endpoint = serverUrlField.text.trim(),
+            apiPolicy = (apiPolicyComboBox.selectedItem as NacosApiPolicy? ?: NacosApiPolicy.AUTO).name,
+            authStrategy = authMode.name,
+            principal = usernameField.text.trim(),
+            secret = String(passwordField.password)
+        )
+    }
+
+    internal fun diagnosticHeadline(
+        report: com.nanyin.nacos.search.services.operations.DiagnosticReport
+    ): String {
+        val summary = report.summary
+        return when {
+            summary.startsWith("Permission denied for namespace") && report.discoveredNamespaces.isNotEmpty() ->
+                NacosSearchBundle.message(
+                    "settings.test.namespace.permission.pick",
+                    report.configuredNamespaceId
+                )
+            summary.startsWith("Permission denied for namespace") ->
+                NacosSearchBundle.message(
+                    "settings.test.namespace.permission",
+                    report.configuredNamespaceId
+                )
+            summary == "Authentication failed" ->
+                NacosSearchBundle.message("settings.test.authentication.failed")
+            summary == "Connected. Manual namespace. Discovery unavailable." ->
+                NacosSearchBundle.message("settings.test.connected.manual.namespace")
+            summary == "Connected" ->
+                NacosSearchBundle.message("settings.test.connected")
+            !report.connected ->
+                NacosSearchBundle.message("settings.connection.failed")
+            else -> summary
+        }
     }
 
     // ------------------------------------------------------------------

@@ -371,9 +371,12 @@ class SessionGenerationIntegrationTest {
             "a diagnostic must leave no authentication state behind"
         )
         // It did reach V1 authentication rather than stopping earlier: the read
-        // stage is the one that failed, and it failed for want of a token.
+        // stage failed for want of a token. Discovery still runs after that
+        // failed read so a suggested-Namespace chooser can fill (ADR-0058).
         assertFalse(report.connected, "stages=${report.stages}")
-        assertEquals("namespace_read", report.stages.last().stage)
+        val readStage = report.stages.single { it.stage == "namespace_read" }
+        assertFalse(readStage.success)
+        assertEquals("discovery", report.stages.last().stage)
     }
 
     /**

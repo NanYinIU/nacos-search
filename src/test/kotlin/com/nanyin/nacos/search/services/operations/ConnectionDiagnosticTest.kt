@@ -41,6 +41,7 @@ class ConnectionDiagnosticTest {
         assertEquals(4, report.stages.size)
         assertTrue(report.stages.all { it.success })
         assertEquals(NacosApiGeneration.V3, report.stages[1].resolvedGeneration)
+        assertEquals(emptyList<DiscoveredNamespace>(), report.discoveredNamespaces)
     }
 
     @Test
@@ -74,13 +75,83 @@ class ConnectionDiagnosticTest {
         val gateway = OperationGateway(mapOf(NacosApiGeneration.V3 to v3))
         val diagnostic = ConnectionDiagnostic(
             resolver, gateway,
-            discoveryProbe = { Result.failure<Unit>(RemoteOperationError.Authorization(403)) }
+            discoveryProbe = { Result.failure(RemoteOperationError.Authorization(403)) }
         )
 
         val report = diagnostic.diagnose(validAnonymousSnapshot())
 
         assertTrue(report.connected)
         assertTrue(report.manualNamespaceRequired)
+        assertEquals(emptyList<DiscoveredNamespace>(), report.discoveredNamespaces)
+    }
+
+    @Test
+    fun `configured namespace permission denial still discovers namespaces`() = runBlocking {
+        val discovered = listOf(DiscoveredNamespace("ns-1", "Team One"))
+        val v3 = StubAdapter(
+            NacosApiGeneration.V3,
+            probeResult = Result.success(Unit),
+            summariesResult = Result.failure(RemoteOperationError.Authorization(403)),
+            discovered = discovered
+        )
+        val diagnostic = ConnectionDiagnostic(
+            GenerationResolver(v3, StubAdapter(NacosApiGeneration.V1)),
+            OperationGateway(mapOf(NacosApiGeneration.V3 to v3))
+        )
+
+        val report = diagnostic.diagnose(
+            validAnonymousSnapshot().copy(apiPolicy = "V3", namespaceId = "secret-ns")
+        )
+
+        assertFalse(report.connected)
+        assertEquals("discovery", report.stages.last().stage)
+        assertTrue(report.stages.single { it.stage == "discovery" }.success)
+        assertEquals(discovered, report.discoveredNamespaces)
+        assertEquals(
+            "Permission denied for namespace secret-ns. Pick another from the list.",
+            report.summary
+        )
+    }
+
+    @Test
+    fun `configured namespace permission denial without options is not connection failed`() = runBlocking {
+        val v3 = StubAdapter(
+            NacosApiGeneration.V3,
+            probeResult = Result.success(Unit),
+            summariesResult = Result.failure(RemoteOperationError.Authorization(403))
+        )
+        val diagnostic = ConnectionDiagnostic(
+            GenerationResolver(v3, StubAdapter(NacosApiGeneration.V1)),
+            OperationGateway(mapOf(NacosApiGeneration.V3 to v3)),
+            discoveryProbe = { Result.failure(RemoteOperationError.Authorization(403)) }
+        )
+
+        val report = diagnostic.diagnose(
+            validAnonymousSnapshot().copy(apiPolicy = "V3", namespaceId = "secret-ns")
+        )
+
+        assertFalse(report.connected)
+        assertEquals("Permission denied for namespace secret-ns", report.summary)
+        assertEquals(emptyList<DiscoveredNamespace>(), report.discoveredNamespaces)
+    }
+
+    @Test
+    fun `configured namespace transport failure stays connection failed after discovery`() = runBlocking {
+        val v3 = StubAdapter(
+            NacosApiGeneration.V3,
+            probeResult = Result.success(Unit),
+            summariesResult = Result.failure(RemoteOperationError.Connection(RuntimeException("down")))
+        )
+        val diagnostic = ConnectionDiagnostic(
+            GenerationResolver(v3, StubAdapter(NacosApiGeneration.V1)),
+            OperationGateway(mapOf(NacosApiGeneration.V3 to v3))
+        )
+
+        val report = diagnostic.diagnose(validAnonymousSnapshot().copy(apiPolicy = "V3"))
+
+        assertFalse(report.connected)
+        assertEquals("Connection failed", report.summary)
+        assertEquals("discovery", report.stages.last().stage)
     }
 
     @Test
@@ -98,6 +169,8 @@ class ConnectionDiagnosticTest {
 
         assertFalse(report.connected)
         assertEquals("Authentication failed", report.stages[1].sanitizedFailure)
+        assertEquals("Authentication failed", report.summary)
+        assertTrue(report.stages.none { it.stage == "discovery" })
     }
 
     @Test
@@ -204,7 +277,7 @@ class ConnectionDiagnosticTest {
         val gateway = OperationGateway(mapOf(NacosApiGeneration.V3 to v3))
         val diagnostic = ConnectionDiagnostic(
             resolver, gateway,
-            discoveryProbe = { Result.failure<Unit>(RemoteOperationError.Authorization(403)) }
+            discoveryProbe = { Result.failure(RemoteOperationError.Authorization(403)) }
         )
 
         val report = diagnostic.diagnose(validAnonymousSnapshot())
@@ -226,7 +299,8 @@ class ConnectionDiagnosticTest {
     private class StubAdapter(
         val generation: NacosApiGeneration,
         val probeResult: Result<Unit> = Result.success(Unit),
-        val summariesResult: Result<SummaryPage> = Result.success(SummaryPage(0, 1, 0, emptyList()))
+        val summariesResult: Result<SummaryPage> = Result.success(SummaryPage(0, 1, 0, emptyList())),
+        val discovered: List<DiscoveredNamespace> = emptyList()
     ) : ProtocolAdapter {
         var probeCount = 0
 
@@ -251,7 +325,7 @@ class ConnectionDiagnosticTest {
             Result.success(PublishOutcome.Written("true"))
 
         override suspend fun discoverNamespaces(target: OperationTarget) =
-            Result.success(emptyList<DiscoveredNamespace>())
+            Result.success(discovered)
     }
 
     private class CountingProbeAdapter(
