@@ -394,8 +394,42 @@ class NacosConfigurableInteractionTest {
 
         val withoutOptions = withOptions.copy(discoveredNamespaces = emptyList())
         assertEquals(expected, configurable.diagnosticHeadline(withoutOptions))
-        assertEquals(expected, configurable.diagnosticTooltip(withOptions, expected))
-        assertEquals(expected, configurable.diagnosticTooltip(withoutOptions, expected))
+    }
+
+    @Test
+    fun diagnosticTooltipRepeatsPermissionDeniedHeadline() {
+        val configurable = NacosConfigurable()
+        val denied = DiagnosticStageResult(
+            stage = "namespace_read",
+            success = false,
+            durationMillis = 1,
+            sanitizedFailure = "Permission denied"
+        )
+        val discovery = DiagnosticStageResult(
+            stage = "discovery",
+            success = true,
+            durationMillis = 1
+        )
+        val withOptions = DiagnosticReport(
+            connected = false,
+            stages = listOf(denied, discovery),
+            manualNamespaceRequired = false,
+            discoveredNamespaces = listOf(DiscoveredNamespace("ns-1", "Team")),
+            configuredNamespaceId = "secret-ns"
+        )
+        val headline = configurable.diagnosticHeadline(withOptions)
+        assertEquals(
+            com.nanyin.nacos.search.bundle.NacosSearchBundle.message(
+                "settings.test.namespace.permission",
+                "secret-ns"
+            ),
+            headline
+        )
+        assertEquals(headline, configurable.diagnosticTooltip(withOptions, headline))
+
+        val withoutOptions = withOptions.copy(discoveredNamespaces = emptyList())
+        val withoutHeadline = configurable.diagnosticHeadline(withoutOptions)
+        assertEquals(withoutHeadline, configurable.diagnosticTooltip(withoutOptions, withoutHeadline))
     }
 
     @Test
