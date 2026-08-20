@@ -58,13 +58,7 @@ data class DiagnosticReport(
 
         val readFailure = stageFailure("namespace_read")
         if (readFailure == "Permission denied") {
-            val base = "Permission denied for namespace $configuredNamespaceId"
-            val discoveryOk = stages.any { it.stage == "discovery" && it.success }
-            return if (discoveryOk && discoveredNamespaces.isNotEmpty()) {
-                "$base. Pick another from the list."
-            } else {
-                base
-            }
+            return "Permission denied for namespace $configuredNamespaceId"
         }
         if (readFailure == "Authentication failed") return "Authentication failed"
         return "Connection failed"

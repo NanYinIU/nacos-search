@@ -1374,17 +1374,14 @@ class NacosConfigurable @JvmOverloads constructor(
                     val report = outcome.getOrNull()
                     if (report != null) {
                         acceptDiscoveredNamespaces(report.discoveredNamespaces)
-                        testStatusLabel.text = diagnosticHeadline(report)
+                        val headline = diagnosticHeadline(report)
+                        testStatusLabel.text = headline
                         testStatusLabel.foreground = if (report.connected) {
                             JBColor(0x5fb865, 0x208a3c)
                         } else {
                             JBColor.RED
                         }
-                        testStatusLabel.toolTipText = report.stages.joinToString("\n") { stage ->
-                            val status = if (stage.success) "ok" else (stage.sanitizedFailure ?: "failed")
-                            "${stage.stage}: $status (${stage.durationMillis}ms)" +
-                                (stage.resolvedGeneration?.let { " gen=$it" } ?: "")
-                        }
+                        testStatusLabel.toolTipText = diagnosticTooltip(report, headline)
                     } else {
                         val msg = outcome.exceptionOrNull()?.message ?: NacosSearchBundle.message("error.unknown")
                         testStatusLabel.text = NacosSearchBundle.message("settings.test.failed", msg)
@@ -1500,11 +1497,6 @@ class NacosConfigurable @JvmOverloads constructor(
     ): String {
         val summary = report.summary
         return when {
-            summary.startsWith("Permission denied for namespace") && report.discoveredNamespaces.isNotEmpty() ->
-                NacosSearchBundle.message(
-                    "settings.test.namespace.permission.pick",
-                    report.configuredNamespaceId
-                )
             summary.startsWith("Permission denied for namespace") ->
                 NacosSearchBundle.message(
                     "settings.test.namespace.permission",
@@ -1521,6 +1513,20 @@ class NacosConfigurable @JvmOverloads constructor(
             else -> summary
         }
     }
+
+    internal fun diagnosticTooltip(
+        report: com.nanyin.nacos.search.services.operations.DiagnosticReport,
+        headline: String
+    ): String =
+        if (report.summary.startsWith("Permission denied for namespace")) {
+            headline
+        } else {
+            report.stages.joinToString("\n") { stage ->
+                val status = if (stage.success) "ok" else (stage.sanitizedFailure ?: "failed")
+                "${stage.stage}: $status (${stage.durationMillis}ms)" +
+                    (stage.resolvedGeneration?.let { " gen=$it" } ?: "")
+            }
+        }
 
     // ------------------------------------------------------------------
     // List cell renderer
