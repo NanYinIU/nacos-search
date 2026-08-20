@@ -1426,6 +1426,7 @@ class NacosConfigurable @JvmOverloads constructor(
         )
         val testedKey = currentDiscoveryKey()
         namespaceCombo.showLoadingPlaceholder()
+        discoveredOptionKey = testedKey
         chooserDiscoveryInFlight = true
 
         fun applyResult(

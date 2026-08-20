@@ -448,6 +448,52 @@ class NacosConfigurableInteractionTest {
     }
 
     @Test
+    fun identityChangeClearsChooserFailureRowAndKeepsTypedId() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
+        val urlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+        configurable.suggestedNamespaceDiscoverer = { _ ->
+            Result.failure(IllegalStateException("down"))
+        }
+
+        runOnEdt {
+            urlField.text = "http://nacos.example:8848"
+            combo.setNamespaceId("keep-me")
+            configurable.requestSuggestedNamespaceOptions()
+        }
+        waitForUi()
+        assertTrue(combo.isTransientRowVisible())
+
+        runOnEdt { urlField.text = "http://other.example:8848" }
+        waitForUi()
+        assertFalse(combo.isTransientRowVisible())
+        assertEquals(0, combo.discoveredCount())
+        assertEquals("keep-me", combo.namespaceId())
+    }
+
+    @Test
+    fun emptyUrlDoesNotStartChooserDiscovery() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
+        val urlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+        var discoverCalls = 0
+        configurable.suggestedNamespaceDiscoverer = { _ ->
+            discoverCalls++
+            Result.success(listOf(DiscoveredNamespace("ns-1", "Team")))
+        }
+
+        runOnEdt {
+            urlField.text = ""
+            configurable.requestSuggestedNamespaceOptions()
+        }
+        waitForUi()
+        assertEquals(0, discoverCalls)
+        assertFalse(combo.isTransientRowVisible())
+    }
+
+    @Test
     fun staleDiscoveryIsNotAppliedAfterIdentityChange() {
         val configurable = NacosConfigurable()
         configurable.createComponent()
