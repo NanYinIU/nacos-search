@@ -107,10 +107,7 @@ class ConnectionDiagnosticTest {
         assertEquals("discovery", report.stages.last().stage)
         assertTrue(report.stages.single { it.stage == "discovery" }.success)
         assertEquals(discovered, report.discoveredNamespaces)
-        assertEquals(
-            "Permission denied for namespace secret-ns. Pick another from the list.",
-            report.summary
-        )
+        assertEquals("Permission denied for namespace secret-ns", report.summary)
     }
 
     @Test

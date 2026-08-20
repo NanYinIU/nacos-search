@@ -386,22 +386,40 @@ class NacosConfigurableInteractionTest {
             discoveredNamespaces = listOf(DiscoveredNamespace("ns-1", "Team")),
             configuredNamespaceId = "secret-ns"
         )
-        assertEquals(
-            com.nanyin.nacos.search.bundle.NacosSearchBundle.message(
-                "settings.test.namespace.permission.pick",
-                "secret-ns"
-            ),
-            configurable.diagnosticHeadline(withOptions)
+        val expected = com.nanyin.nacos.search.bundle.NacosSearchBundle.message(
+            "settings.test.namespace.permission",
+            "secret-ns"
         )
+        assertEquals(expected, configurable.diagnosticHeadline(withOptions))
 
         val withoutOptions = withOptions.copy(discoveredNamespaces = emptyList())
-        assertEquals(
-            com.nanyin.nacos.search.bundle.NacosSearchBundle.message(
-                "settings.test.namespace.permission",
-                "secret-ns"
+        assertEquals(expected, configurable.diagnosticHeadline(withoutOptions))
+        assertEquals(expected, configurable.diagnosticTooltip(withOptions, expected))
+        assertEquals(expected, configurable.diagnosticTooltip(withoutOptions, expected))
+    }
+
+    @Test
+    fun diagnosticTooltipKeepsStageDumpWhenHeadlineIsNotPermissionDenied() {
+        val configurable = NacosConfigurable()
+        val report = DiagnosticReport(
+            connected = false,
+            stages = listOf(
+                DiagnosticStageResult(
+                    stage = "namespace_read",
+                    success = false,
+                    durationMillis = 4,
+                    sanitizedFailure = "Connection failed"
+                )
             ),
-            configurable.diagnosticHeadline(withoutOptions)
+            manualNamespaceRequired = false,
+            configuredNamespaceId = "public"
         )
+        val headline = configurable.diagnosticHeadline(report)
+        assertEquals(
+            com.nanyin.nacos.search.bundle.NacosSearchBundle.message("settings.connection.failed"),
+            headline
+        )
+        assertEquals("namespace_read: Connection failed (4ms)", configurable.diagnosticTooltip(report, headline))
     }
 
     @Test
