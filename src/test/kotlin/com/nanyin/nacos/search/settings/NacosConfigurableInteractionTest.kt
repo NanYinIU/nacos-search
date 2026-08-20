@@ -279,11 +279,14 @@ class NacosConfigurableInteractionTest {
     @Test
     fun namespaceChooserIsEditableBeforeDiscovery() {
         val configurable = NacosConfigurable()
-        configurable.createComponent()
+        val component = configurable.createComponent()
         val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
 
         runOnEdt {
             combo.setNamespaceId("manual-ns")
+            val formSize = component.preferredSize
+            assertTrue(formSize.height > 0)
+            assertTrue(combo.preferredSize.height > 0)
         }
         waitForUi()
         assertTrue(combo.isEditable)
