@@ -3,18 +3,6 @@ package com.nanyin.nacos.search.settings
 import com.nanyin.nacos.search.services.operations.DiscoveredNamespace
 
 /**
- * Inputs that determine which Namespace discovery list belongs to the
- * unsaved settings form. Changing any of them invalidates discovered options.
- */
-data class DiscoveryOptionKey(
-    val endpoint: String,
-    val apiPolicy: String,
-    val authStrategy: String,
-    val principal: String,
-    val secret: String
-)
-
-/**
  * Maps the settings suggested-Namespace editor to a persistable Namespace ID
  * and filters discovered options. Display names are for humans; the identifier
  * is what the draft stores.

@@ -304,7 +304,10 @@ class NacosConfigurableInteractionTest {
 
         runOnEdt {
             combo.setNamespaceId("ns-keep")
-            configurable.acceptDiscoveredNamespaces(listOf(keep, DiscoveredNamespace("ns-other", "Other")))
+            discoverNamespaces(
+                configurable,
+                listOf(keep, DiscoveredNamespace("ns-other", "Other"))
+            )
         }
         waitForUi()
         assertEquals(2, combo.discoveredCount())
@@ -327,7 +330,10 @@ class NacosConfigurableInteractionTest {
 
         runOnEdt {
             combo.setNamespaceId("ns-keep")
-            configurable.acceptDiscoveredNamespaces(listOf(keep, DiscoveredNamespace("ns-other", "Other")))
+            discoverNamespaces(
+                configurable,
+                listOf(keep, DiscoveredNamespace("ns-other", "Other"))
+            )
             combo.setNamespaceId("ns-other")
         }
         waitForUi()
@@ -346,7 +352,7 @@ class NacosConfigurableInteractionTest {
 
         runOnEdt {
             combo.setNamespaceId("public")
-            configurable.acceptDiscoveredNamespaces(listOf(publicNs, other))
+            discoverNamespaces(configurable, listOf(publicNs, other))
             status.text = "Permission denied for namespace public"
             status.toolTipText = "stale stages"
         }
@@ -398,6 +404,51 @@ class NacosConfigurableInteractionTest {
         runOnEdt { configurable.requestSuggestedNamespaceOptions() }
         waitForUi()
         assertEquals(1, discoverCalls)
+    }
+
+    @Test
+    fun connectionDiagnosisPopulatesTheSameOptionsUsedByTheChooser() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
+        val status = privateField<JLabel>(configurable, "testStatusLabel")
+        val urlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+        val authCombo = privateField<javax.swing.JComboBox<*>>(configurable, "authModeComboBox")
+        val testButton = privateField<JButton>(configurable, "testConnectionButton")
+        val team = DiscoveredNamespace("ns-1", "Team")
+        var chooserCalls = 0
+        configurable.suggestedNamespaceDiscoverer = {
+            chooserCalls++
+            Result.success(emptyList())
+        }
+        configurable.connectionDiagnoser = {
+            DiagnosticReport(
+                connected = true,
+                stages = listOf(
+                    DiagnosticStageResult("discovery", success = true, durationMillis = 1)
+                ),
+                manualNamespaceRequired = false,
+                discoveredNamespaces = listOf(team)
+            )
+        }
+
+        runOnEdt {
+            urlField.text = "http://nacos.example:8848"
+            authCombo.selectedItem = AuthMode.ANONYMOUS
+            testButton.doClick()
+        }
+        waitForUi()
+
+        assertEquals(1, combo.discoveredCount())
+        assertEquals(
+            com.nanyin.nacos.search.bundle.NacosSearchBundle.message("settings.test.connected"),
+            status.text
+        )
+
+        runOnEdt { configurable.requestSuggestedNamespaceOptions() }
+        waitForUi()
+        assertEquals(0, chooserCalls)
+        assertEquals(1, combo.discoveredCount())
     }
 
     @Test
@@ -491,36 +542,6 @@ class NacosConfigurableInteractionTest {
         waitForUi()
         assertEquals(0, discoverCalls)
         assertFalse(combo.isTransientRowVisible())
-    }
-
-    @Test
-    fun staleDiscoveryIsNotAppliedAfterIdentityChange() {
-        val configurable = NacosConfigurable()
-        configurable.createComponent()
-        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
-        val serverUrlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
-        val keep = DiscoveredNamespace("ns-keep", "Keep")
-
-        runOnEdt {
-            combo.setNamespaceId("ns-keep")
-            configurable.acceptDiscoveredNamespaces(listOf(keep, DiscoveredNamespace("ns-other", "Other")))
-        }
-        waitForUi()
-        val staleKey = privateField<DiscoveryOptionKey?>(configurable, "discoveredOptionKey")!!
-
-        runOnEdt {
-            serverUrlField.text = "http://other.example:8848"
-        }
-        waitForUi()
-        assertEquals(0, combo.discoveredCount())
-
-        val applied = configurable.applyDiscoveredNamespacesIfCurrent(
-            listOf(keep, DiscoveredNamespace("ns-stale", "Stale")),
-            staleKey
-        )
-        assertFalse(applied)
-        assertEquals(0, combo.discoveredCount())
-        assertEquals("ns-keep", combo.namespaceId())
     }
 
     @Test
@@ -699,6 +720,14 @@ class NacosConfigurableInteractionTest {
         val draftServers = privateField<MutableList<NacosServerConfig>>(configurable, "draftServers")
         val selectedId = privateField<String?>(configurable, "selectedServerId")
         return draftServers.first { it.id == selectedId }
+    }
+
+    private fun discoverNamespaces(
+        configurable: NacosConfigurable,
+        options: List<DiscoveredNamespace>
+    ) {
+        configurable.suggestedNamespaceDiscoverer = { Result.success(options) }
+        configurable.requestSuggestedNamespaceOptions()
     }
 
     private fun findByAutomationId(root: Component, automationId: String): JComponent? {

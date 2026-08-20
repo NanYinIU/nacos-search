@@ -99,9 +99,6 @@ class NacosConfigurable @JvmOverloads constructor(
     // Test connection UI
     private lateinit var testConnectionButton: JButton
     private lateinit var testStatusLabel: JLabel
-    /** Discovery list is valid only for this unsaved-form identity. */
-    private var discoveredOptionKey: DiscoveryOptionKey? = null
-    private var chooserDiscoveryInFlight = false
     /**
      * Isolated Namespace discovery for the chooser. Tests replace this; production
      * uses [NacosApiService.discoverSuggestedNamespaces].
@@ -109,6 +106,12 @@ class NacosConfigurable @JvmOverloads constructor(
     internal var suggestedNamespaceDiscoverer:
         (suspend (com.nanyin.nacos.search.services.operations.DiagnosticSnapshot) ->
             Result<List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>>)? = null
+    internal var connectionDiagnoser:
+        (suspend (com.nanyin.nacos.search.services.operations.DiagnosticSnapshot) ->
+            com.nanyin.nacos.search.services.operations.DiagnosticReport)? = null
+    private val settingsDiscoveryLifecycle = SettingsDiscoveryLifecycle { snapshot ->
+        discoverSuggestedNamespaces(snapshot)
+    }
 
     // Language
     private lateinit var languageComboBox: JComboBox<LanguageService.SupportedLanguage>
@@ -362,7 +365,6 @@ class NacosConfigurable @JvmOverloads constructor(
 
     private fun commitDetailFormToDraft() {
         if (loadingForm) return
-        invalidateDiscoveredOptionsIfIdentityChanged()
         val server = selectedDraft() ?: return
         server.displayName = displayNameField.text.trim()
         server.serverUrl = serverUrlField.text.trim()
@@ -410,6 +412,7 @@ class NacosConfigurable @JvmOverloads constructor(
         server.allowCrossNamespaceNavigation = crossNamespaceNavigationCheckBox.isSelected
         server.navigationDetailPrefetchEnabled = navigationDetailPrefetchCheckBox.isSelected
         server.writeIntent = writeIntentCheckBox.isSelected
+        synchronizeSettingsDiscoveryIntent(server)
         // Refresh the list display so name/host changes show immediately
         val idx = serverListModel.indexOf(server)
         if (idx >= 0) {
@@ -1081,17 +1084,11 @@ class NacosConfigurable @JvmOverloads constructor(
             }
             usernameField.text = server.username
             passwordField.text = server.password
-            val incomingKey = DiscoveryOptionKey(
-                endpoint = server.serverUrl.trim(),
-                apiPolicy = server.apiPolicy.name,
-                authStrategy = authMode.name,
-                principal = server.username.trim(),
-                secret = server.password
+            renderNamespaceOptions(
+                settingsDiscoveryLifecycle.updateIntent(
+                    com.nanyin.nacos.search.models.ProfileIntent.fromServerConfig(server)
+                )
             )
-            if (discoveredOptionKey != incomingKey) {
-                namespaceCombo.clearDiscoveredOptions()
-                discoveredOptionKey = null
-            }
             namespaceCombo.setNamespaceId(server.namespace)
             apiPolicyComboBox.selectedItem = server.apiPolicy
             authModeComboBox.selectedItem = authMode
@@ -1336,114 +1333,102 @@ class NacosConfigurable @JvmOverloads constructor(
             return
         }
 
-        // Diagnose from the unapplied draft only — never mutate persisted settings.
-        val snapshot = com.nanyin.nacos.search.services.operations.DiagnosticSnapshot(
-            endpoint = server.serverUrl.trim(),
-            apiPolicy = server.apiPolicy.name,
-            authStrategy = server.authMode.name,
-            principal = server.username.trim(),
-            secret = server.password,
-            namespaceId = server.namespace.trim().ifBlank { "public" }
+        val diagnosticRequest = settingsDiscoveryLifecycle.beginDiagnostic(
+            com.nanyin.nacos.search.models.ProfileIntent.fromServerConfig(server)
         )
 
         testConnectionButton.isEnabled = false
         testStatusLabel.text = NacosSearchBundle.message("settings.test.connecting")
         testStatusLabel.foreground = JBColor.GRAY
-        val testedKey = currentDiscoveryKey()
+
+        fun applyOutcome(
+            outcome: Result<com.nanyin.nacos.search.services.operations.DiagnosticReport>
+        ) {
+            testConnectionButton.isEnabled = true
+            val completion = settingsDiscoveryLifecycle.completeDiagnostic(
+                diagnosticRequest,
+                outcome.getOrNull()
+            )
+            if (completion === SettingsDiscoveryCompletion.Stale) {
+                testStatusLabel.text = ""
+                testStatusLabel.toolTipText = null
+                return
+            }
+            renderNamespaceOptions(
+                (completion as SettingsDiscoveryCompletion.Applied).options
+            )
+            val report = outcome.getOrNull()
+            if (report != null) {
+                val headline = diagnosticHeadline(report)
+                testStatusLabel.text = headline
+                testStatusLabel.foreground = if (report.connected) {
+                    JBColor(0x5fb865, 0x208a3c)
+                } else {
+                    JBColor.RED
+                }
+                testStatusLabel.toolTipText = diagnosticTooltip(report, headline)
+            } else {
+                val msg = outcome.exceptionOrNull()?.message ?: NacosSearchBundle.message("error.unknown")
+                testStatusLabel.text = NacosSearchBundle.message("settings.test.failed", msg)
+                testStatusLabel.foreground = JBColor.RED
+                testStatusLabel.toolTipText = null
+            }
+        }
+
+        fun runDiagnostic(): Result<com.nanyin.nacos.search.services.operations.DiagnosticReport> =
+            try {
+                Result.success(
+                    runBlocking(Dispatchers.IO) {
+                        diagnoseConnection(diagnosticRequest.snapshot)
+                    }
+                )
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+
+        if (ApplicationManager.getApplication().isUnitTestMode) {
+            applyOutcome(runDiagnostic())
+            return
+        }
 
         ProgressManager.getInstance().run(object : Task.Backgroundable(null, NacosSearchBundle.message("settings.test.progress"), true) {
             override fun run(indicator: ProgressIndicator) {
                 indicator.text = NacosSearchBundle.message("settings.test.connecting")
-                val outcome: Result<com.nanyin.nacos.search.services.operations.DiagnosticReport> = try {
-                    Result.success(
-                        runBlocking(Dispatchers.IO) {
-                            apiService.diagnoseConnection(snapshot)
-                        }
-                    )
-                } catch (e: Exception) {
-                    Result.failure(e)
-                }
+                val outcome = runDiagnostic()
 
                 Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
-                    testConnectionButton.isEnabled = true
-                    if (currentDiscoveryKey() != testedKey) {
-                        testStatusLabel.text = ""
-                        testStatusLabel.toolTipText = null
-                        return@invokeOnEdt
-                    }
-                    val report = outcome.getOrNull()
-                    if (report != null) {
-                        acceptDiscoveredNamespaces(report.discoveredNamespaces)
-                        val headline = diagnosticHeadline(report)
-                        testStatusLabel.text = headline
-                        testStatusLabel.foreground = if (report.connected) {
-                            JBColor(0x5fb865, 0x208a3c)
-                        } else {
-                            JBColor.RED
-                        }
-                        testStatusLabel.toolTipText = diagnosticTooltip(report, headline)
-                    } else {
-                        val msg = outcome.exceptionOrNull()?.message ?: NacosSearchBundle.message("error.unknown")
-                        testStatusLabel.text = NacosSearchBundle.message("settings.test.failed", msg)
-                        testStatusLabel.foreground = JBColor.RED
-                        testStatusLabel.toolTipText = null
-                    }
+                    applyOutcome(outcome)
                 }
             }
         })
     }
 
-    internal fun applyDiscoveredNamespacesIfCurrent(
-        namespaces: List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>,
-        testedKey: DiscoveryOptionKey
-    ): Boolean {
-        if (currentDiscoveryKey() != testedKey) return false
-        acceptDiscoveredNamespaces(namespaces)
-        return true
-    }
-
-    internal fun acceptDiscoveredNamespaces(
-        namespaces: List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>
-    ) {
-        namespaceCombo.applyDiscovered(namespaces)
-        discoveredOptionKey = currentDiscoveryKey()
-    }
-
     internal fun requestSuggestedNamespaceOptions() {
         if (!::namespaceCombo.isInitialized) return
-        if (namespaceCombo.discoveredCount() > 0 || chooserDiscoveryInFlight) return
         commitDetailFormToDraft()
         val server = selectedDraft() ?: return
         if (!server.isValidUrl()) return
+        val intent = com.nanyin.nacos.search.models.ProfileIntent.fromServerConfig(server)
 
-        val snapshot = com.nanyin.nacos.search.services.operations.DiagnosticSnapshot(
-            endpoint = server.serverUrl.trim(),
-            apiPolicy = server.apiPolicy.name,
-            authStrategy = server.authMode.name,
-            principal = server.username.trim(),
-            secret = server.password,
-            namespaceId = server.namespace.trim().ifBlank { "public" }
-        )
-        val testedKey = currentDiscoveryKey()
+        when (val current = settingsDiscoveryLifecycle.updateIntent(intent)) {
+            is SettingsNamespaceOptions.Available,
+            SettingsNamespaceOptions.Loading -> {
+                renderNamespaceOptions(current)
+                return
+            }
+            SettingsNamespaceOptions.Empty,
+            SettingsNamespaceOptions.Failed -> Unit
+        }
         namespaceCombo.showLoadingPlaceholder()
-        discoveredOptionKey = testedKey
-        chooserDiscoveryInFlight = true
 
-        fun applyResult(
-            result: Result<List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>>
-        ) {
-            chooserDiscoveryInFlight = false
-            if (currentDiscoveryKey() != testedKey) return
-            result.fold(
-                onSuccess = { acceptDiscoveredNamespaces(it) },
-                onFailure = { namespaceCombo.showFailurePlaceholder() }
-            )
+        fun applyCompletion(completion: SettingsDiscoveryCompletion) {
+            if (completion is SettingsDiscoveryCompletion.Applied) {
+                renderNamespaceOptions(completion.options)
+            }
         }
 
         if (ApplicationManager.getApplication().isUnitTestMode) {
-            val discoverer = suggestedNamespaceDiscoverer
-                ?: { snap -> apiService.discoverSuggestedNamespaces(snap) }
-            applyResult(runBlocking { discoverer(snapshot) })
+            applyCompletion(runBlocking { settingsDiscoveryLifecycle.discover(intent) })
             return
         }
 
@@ -1454,43 +1439,57 @@ class NacosConfigurable @JvmOverloads constructor(
         ) {
             override fun run(indicator: ProgressIndicator) {
                 indicator.text = NacosSearchBundle.message("settings.namespace.chooser.loading")
-                val outcome = try {
-                    runBlocking(Dispatchers.IO) {
-                        val discoverer = suggestedNamespaceDiscoverer
-                            ?: { snap -> apiService.discoverSuggestedNamespaces(snap) }
-                        discoverer(snapshot)
-                    }
-                } catch (e: Exception) {
-                    Result.failure(e)
+                val completion = runBlocking(Dispatchers.IO) {
+                    settingsDiscoveryLifecycle.discover(intent)
                 }
                 Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
-                    applyResult(outcome)
+                    applyCompletion(completion)
                 }
             }
         })
     }
 
-    private fun invalidateDiscoveredOptionsIfIdentityChanged() {
+    private fun synchronizeSettingsDiscoveryIntent(server: NacosServerConfig) {
         if (!::namespaceCombo.isInitialized) return
-        val current = currentDiscoveryKey()
-        if (discoveredOptionKey != null && discoveredOptionKey != current) {
-            namespaceCombo.clearDiscoveredOptions()
-            discoveredOptionKey = null
+        val options = settingsDiscoveryLifecycle.updateIntent(
+            com.nanyin.nacos.search.models.ProfileIntent.fromServerConfig(server)
+        )
+        if (options === SettingsNamespaceOptions.Empty &&
+            (namespaceCombo.discoveredCount() > 0 || namespaceCombo.isTransientRowVisible())
+        ) {
+            renderNamespaceOptions(options)
         }
     }
 
-    private fun currentDiscoveryKey(): DiscoveryOptionKey {
-        val authMode = AuthStrategyFormPolicy.normalizeStored(
-            authModeComboBox.selectedItem as AuthMode? ?: AuthMode.NACOS_PASSWORD,
-            settings.enableTokenAuth
-        )
-        return DiscoveryOptionKey(
-            endpoint = serverUrlField.text.trim(),
-            apiPolicy = (apiPolicyComboBox.selectedItem as NacosApiPolicy? ?: NacosApiPolicy.AUTO).name,
-            authStrategy = authMode.name,
-            principal = usernameField.text.trim(),
-            secret = String(passwordField.password)
-        )
+    private fun renderNamespaceOptions(options: SettingsNamespaceOptions) {
+        when (options) {
+            SettingsNamespaceOptions.Empty -> namespaceCombo.clearDiscoveredOptions()
+            SettingsNamespaceOptions.Loading -> namespaceCombo.showLoadingPlaceholder()
+            SettingsNamespaceOptions.Failed -> namespaceCombo.showFailurePlaceholder()
+            is SettingsNamespaceOptions.Available -> namespaceCombo.applyDiscovered(options.options)
+        }
+    }
+
+    private suspend fun discoverSuggestedNamespaces(
+        snapshot: com.nanyin.nacos.search.services.operations.DiagnosticSnapshot
+    ): Result<List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>> {
+        val discoverer = suggestedNamespaceDiscoverer
+        return if (discoverer != null) {
+            discoverer(snapshot)
+        } else {
+            apiService.discoverSuggestedNamespaces(snapshot)
+        }
+    }
+
+    private suspend fun diagnoseConnection(
+        snapshot: com.nanyin.nacos.search.services.operations.DiagnosticSnapshot
+    ): com.nanyin.nacos.search.services.operations.DiagnosticReport {
+        val diagnoser = connectionDiagnoser
+        return if (diagnoser != null) {
+            diagnoser(snapshot)
+        } else {
+            apiService.diagnoseConnection(snapshot)
+        }
     }
 
     internal fun diagnosticHeadline(
