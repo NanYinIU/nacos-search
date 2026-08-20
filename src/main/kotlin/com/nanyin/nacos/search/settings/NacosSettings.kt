@@ -377,11 +377,48 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     /**
-     * Draft rows for the settings dialog. Preference records overlay the dual-write
-     * list; when dual-write is empty, synthesizes from published profiles.
+     * Intent-native, in-memory Settings draft loaded from the published model.
      *
-     * Pure read of published state plus credential-slot secrets for the form.
-     * Does not migrate, stage, or rewrite active selection / seed (issue #106).
+     * Each secret is read only from the immutable slot named by its published
+     * profile. This method never migrates, stages, or writes settings.
+     */
+    fun loadIntentDraft(
+        credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore,
+        activeProfileId: String = activeServerId,
+        openBaselineActiveId: String = activeProfileId
+    ): SettingsIntentDraft {
+        val intents = profiles.map { profile ->
+            val preferences = preferencesFor(profile.id)
+            val namespace = preferences.suggestedNamespace.trim().ifBlank { "public" }
+            ProfileIntent(
+                profileId = profile.id,
+                displayName = profile.displayName,
+                endpoint = profile.canonicalEndpoint,
+                apiPolicy = profile.apiPolicy,
+                authMode = profile.authMode,
+                principal = profile.principal,
+                secret = credentialSlots
+                    .read(profile.id, profile.credentialSlotVersion)
+                    .orEmpty(),
+                writeIntent = profile.writeIntent,
+                suggestedNamespace = namespace,
+                preferences = preferences.copy(
+                    profileId = profile.id,
+                    suggestedNamespace = namespace
+                )
+            )
+        }
+        val ids = intents.map { it.profileId }.toSet()
+        val resolvedActive = activeProfileId.takeIf { it in ids }
+            ?: this.activeServerId.takeIf { it in ids }
+            ?: intents.firstOrNull()?.profileId.orEmpty()
+        val resolvedBaseline = openBaselineActiveId.takeIf { it in ids } ?: resolvedActive
+        return SettingsIntentDraft.of(intents, resolvedActive, resolvedBaseline)
+    }
+
+    /**
+     * Compatibility rows for callers not yet migrated to [SettingsIntentDraft].
+     * Does not migrate, stage, or rewrite active selection / seed.
      */
     fun cloneServers(
         credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore
@@ -390,17 +427,13 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     /**
-     * Builds an in-memory settings draft from published profiles and preference
-     * records. Secrets come from the published credential slot. Never writes
-     * settings or credentials.
+     * Temporary legacy-row adapter over [loadIntentDraft]. Pre-migration
+     * throwaway instances retain their deserialization-only server rows.
      */
     fun loadSettingsDraft(
         credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore
     ): List<NacosServerConfig> {
-        val dualById = servers.associateBy { it.id }
-        val sourceProfiles = if (profiles.isNotEmpty()) {
-            profiles
-        } else {
+        if (profiles.isEmpty()) {
             // Pre-migration throwaway instance: dual-write list only.
             return servers.map { server ->
                 val prefs = preferencesFor(server.id)
@@ -412,35 +445,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 )
             }
         }
-        return sourceProfiles.map { profile ->
-            val prefs = preferencesFor(profile.id)
-            val dual = dualById[profile.id]
-            val secret = credentialSlots
-                .read(profile.id, profile.credentialSlotVersion)
-                .orEmpty()
-                .ifEmpty { dual?.password.orEmpty() }
-            val ns = prefs.suggestedNamespace.trim().ifBlank {
-                dual?.namespace?.takeIf { it.isNotBlank() }
-                    ?: migratedDefaultNamespaceId.ifBlank { "public" }
-            }
-            NacosServerConfig(
-                id = profile.id,
-                displayName = profile.displayName,
-                serverUrl = dual?.serverUrl?.takeIf { it.isNotBlank() }
-                    ?: profile.canonicalEndpoint,
-                username = profile.principal,
-                password = secret,
-                namespace = ns,
-                apiPolicy = profile.apiPolicy,
-                authMode = profile.authMode,
-                defaultGroup = prefs.defaultGroup.trim().ifBlank {
-                    dual?.defaultGroup ?: "DEFAULT_GROUP"
-                },
-                allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
-                navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled,
-                writeIntent = profile.writeIntent
-            )
-        }
+        return loadIntentDraft(credentialSlots).snapshot().map(::intentToDraftServer)
     }
 
     /**
@@ -448,6 +453,35 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
      */
     fun intentsFromDraft(draft: List<NacosServerConfig>): List<ProfileIntent> =
         draft.map { ProfileIntent.fromServerConfig(it) }
+
+    /**
+     * Pure classification of an intent-native draft against published state.
+     * The draft owns the active id captured when Settings opened, so callers
+     * cannot accidentally compare against a later application selection.
+     */
+    fun classifyIntentDraft(
+        draft: SettingsIntentDraft,
+        credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore,
+        isEntombed: (String) -> Boolean = { isProfileEntombed(it) }
+    ): ProfileIntentClassification {
+        val previousNamespaces = environmentPreferences
+            .filter { it.profileId.isNotBlank() }
+            .associate { it.profileId to it.suggestedNamespace.trim().ifBlank { "public" } }
+            .ifEmpty {
+                profiles.associate { it.id to migratedDefaultNamespaceId.ifBlank { "public" } }
+            }
+        return EnvironmentProfileStore(
+            credentialSlots = credentialSlots,
+            isEntombed = isEntombed
+        ).classifyIntents(
+            intents = draft.snapshot(),
+            activeProfileId = draft.activeProfileId,
+            previousProfiles = publishedProfiles(),
+            previousPreferences = environmentPreferences.map { it.copyPreferences() },
+            previousActiveId = draft.openBaselineActiveId,
+            previousSuggestedNamespaces = previousNamespaces
+        )
+    }
 
     /**
      * Pure store-owned classification of a draft against published state.
@@ -459,40 +493,47 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         previousActiveId: String = activeServerId,
         credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore,
         isEntombed: (String) -> Boolean = { isProfileEntombed(it) }
-    ): ProfileIntentClassification {
-        val previousNamespaces = environmentPreferences
-            .filter { it.profileId.isNotBlank() }
-            .associate { it.profileId to it.suggestedNamespace.trim().ifBlank { "public" } }
-            .ifEmpty {
-                profiles.associate { it.id to migratedDefaultNamespaceId.ifBlank { "public" } }
-            }
-        val store = EnvironmentProfileStore(
-            credentialSlots = credentialSlots,
-            isEntombed = isEntombed
+    ): ProfileIntentClassification =
+        classifyIntentDraft(
+            SettingsIntentDraft.of(
+                intents = intentsFromDraft(draft),
+                activeProfileId = draftActiveId,
+                openBaselineActiveId = previousActiveId
+            ),
+            credentialSlots,
+            isEntombed
         )
-        return store.classifyIntents(
-            intents = intentsFromDraft(draft),
-            activeProfileId = draftActiveId,
-            previousProfiles = publishedProfiles(),
-            previousPreferences = environmentPreferences.map { it.copyPreferences() },
-            previousActiveId = previousActiveId,
-            previousSuggestedNamespaces = previousNamespaces
+
+    /**
+     * Product-default intent for one in-memory Settings row. The stable id and
+     * optional display name are retained; no revision or credential coordinate
+     * crosses this boundary.
+     */
+    fun defaultProfileIntent(profileId: String, displayName: String? = null): ProfileIntent {
+        val shape = defaultPersistedShape()
+        val profile = shape.profiles.first()
+        val preferences = shape.preferencesFor(profile.id)
+        val namespace = preferences.suggestedNamespace.trim().ifBlank { "public" }
+        return ProfileIntent(
+            profileId = profileId,
+            displayName = displayName?.takeIf { it.isNotBlank() } ?: profile.displayName,
+            endpoint = profile.canonicalEndpoint,
+            apiPolicy = profile.apiPolicy,
+            authMode = profile.authMode,
+            principal = profile.principal,
+            secret = "",
+            writeIntent = profile.writeIntent,
+            suggestedNamespace = namespace,
+            preferences = preferences.copy(
+                profileId = profileId,
+                suggestedNamespace = namespace
+            )
         )
     }
 
-    /**
-     * One default draft row for [profileId], derived from the complete default
-     * persisted shape rather than a hand-maintained field list (issue #106).
-     * Keeps [displayName] when provided so Reset to Defaults does not rename.
-     */
-    fun defaultDraftRow(profileId: String, displayName: String? = null): NacosServerConfig {
-        val shape = defaultPersistedShape()
-        val seed = shape.servers.firstOrNull() ?: NacosServerConfig.createDefault()
-        return seed.copy(
-            id = profileId,
-            displayName = displayName?.takeIf { it.isNotBlank() } ?: seed.displayName
-        )
-    }
+    /** Temporary legacy-row adapter over [defaultProfileIntent]. */
+    fun defaultDraftRow(profileId: String, displayName: String? = null): NacosServerConfig =
+        intentToDraftServer(defaultProfileIntent(profileId, displayName))
 
     /**
      * Complete default persisted shape. Field initializers are the source of
