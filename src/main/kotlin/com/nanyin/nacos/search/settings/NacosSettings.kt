@@ -449,7 +449,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     /**
-     * Profile intents derived from a dual-write draft surface (settings dialog).
+     * Compatibility conversion from legacy dual-write rows to profile intents.
      */
     fun intentsFromDraft(draft: List<NacosServerConfig>): List<ProfileIntent> =
         draft.map { ProfileIntent.fromServerConfig(it) }
@@ -562,8 +562,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     /**
      * Compatibility entry that converts the legacy server list into
      * [ProfileIntent]s and publishes through [applyProfileIntents]. Prefer the
-     * intent API for new call sites; this bridge keeps the settings dialog and
-     * existing tests compiling until they edit intents directly (#47 / #106).
+     * intent API for new call sites; this bridge remains for migration and
+     * compatibility until issue #233.
      */
     fun applyServers(newServers: List<NacosServerConfig>, newActiveId: String): ProfileStoreWriteOutcome {
         val intents = newServers.map { ProfileIntent.fromServerConfig(it) }

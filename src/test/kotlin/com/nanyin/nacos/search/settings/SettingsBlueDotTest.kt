@@ -1,21 +1,29 @@
 package com.nanyin.nacos.search.settings
 
-import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.ProfileIntent
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
 class SettingsBlueDotTest {
 
-    private val local = NacosServerConfig(id = "s_local", displayName = "本地 Local", serverUrl = "http://localhost:8848")
-    private val qa = NacosServerConfig(id = "s_qa", displayName = "QA", serverUrl = "http://47.95.169.10:8848")
-    private val servers = listOf(local, qa)
+    private val local = ProfileIntent(
+        profileId = "s_local",
+        displayName = "本地 Local",
+        endpoint = "http://localhost:8848"
+    )
+    private val qa = ProfileIntent(
+        profileId = "s_qa",
+        displayName = "QA",
+        endpoint = "http://47.95.169.10:8848"
+    )
+    private val intents = listOf(local, qa)
 
     @Test
     fun `prefers project tool-window selection over stale app-wide active`() {
         assertEquals(
             "s_qa",
             resolveSettingsBlueDotId(
-                servers = servers,
+                intents = intents,
                 projectProfileId = "s_qa",
                 activeServerId = "s_local"
             )
@@ -27,7 +35,7 @@ class SettingsBlueDotTest {
         assertEquals(
             "s_local",
             resolveSettingsBlueDotId(
-                servers = servers,
+                intents = intents,
                 projectProfileId = null,
                 activeServerId = "s_local"
             )
@@ -39,7 +47,7 @@ class SettingsBlueDotTest {
         assertEquals(
             "s_local",
             resolveSettingsBlueDotId(
-                servers = servers,
+                intents = intents,
                 projectProfileId = "ghost",
                 activeServerId = "s_local"
             )
@@ -51,7 +59,7 @@ class SettingsBlueDotTest {
         assertEquals(
             "s_local",
             resolveSettingsBlueDotId(
-                servers = servers,
+                intents = intents,
                 projectProfileId = "ghost",
                 activeServerId = "also-gone"
             )

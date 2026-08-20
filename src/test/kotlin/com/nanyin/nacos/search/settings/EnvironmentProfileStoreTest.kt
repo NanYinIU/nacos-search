@@ -514,6 +514,11 @@ class EnvironmentProfileStoreTest {
         assertNull(settings.profiles.firstOrNull { it.id == "fresh" })
         // Published slot pair unchanged under the good store (failing store has nothing).
         assertEquals("old", slots.read("dev", 1L))
+        // Settings failure recovery reloads only the still-published intent and
+        // its revision-pinned secret; the failed Add cannot remain visible.
+        val reloaded = settings.loadIntentDraft(slots).snapshot()
+        assertEquals(listOf("dev"), reloaded.map { it.profileId })
+        assertEquals("old", reloaded.single().secret)
     }
 
     @Test

@@ -3,7 +3,7 @@ package com.nanyin.nacos.search.settings
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
-import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.ProfileIntent
 import com.nanyin.nacos.search.services.operations.DiagnosticReport
 import com.nanyin.nacos.search.services.operations.DiagnosticStageResult
 import com.nanyin.nacos.search.services.operations.DiscoveredNamespace
@@ -55,6 +55,7 @@ class NacosConfigurableInteractionTest {
         clickByAutomationId(component, "nacos.settings.server.add")
         waitForUi()
         assertEquals(originalCount + 1, serverList.model.size)
+        assertTrue(serverList.selectedValue is ProfileIntent)
         assertTrue(configurable.isModified())
 
         val addedIndex = serverList.selectedIndex
@@ -123,7 +124,12 @@ class NacosConfigurableInteractionTest {
             resetButton!!.doClick()
         }
         waitForUi()
-        assertEquals(NacosServerConfig.createDefault().defaultGroup, defaultGroupField.text)
+        assertEquals(
+            NacosSettings.defaultPersistedShape()
+                .preferencesFor("s_local")
+                .defaultGroup,
+            defaultGroupField.text
+        )
 
         val advancedBody = advancedButton!!.parent.components
             .filterIsInstance<JComponent>()
@@ -159,9 +165,8 @@ class NacosConfigurableInteractionTest {
 
         configurable.apply()
 
-        val draftServers = privateField<MutableList<NacosServerConfig>>(configurable, "draftServers")
-        val activeId = privateField<String>(configurable, "draftActiveId")
-        assertTrue(draftServers.first { it.id == activeId }.allowCrossNamespaceNavigation)
+        val activeId = configurable.draftActiveProfileId()
+        assertTrue(settings().preferencesFor(activeId).allowCrossNamespaceNavigation)
     }
 
     @Test
@@ -364,7 +369,7 @@ class NacosConfigurableInteractionTest {
         waitForUi()
 
         assertEquals("ns-other", combo.namespaceId())
-        assertEquals("ns-other", selectedDraft(configurable).namespace)
+        assertEquals("ns-other", selectedDraft(configurable).suggestedNamespace)
         assertEquals("", status.text)
         assertEquals(null, status.toolTipText)
         assertFalse(
@@ -687,8 +692,8 @@ class NacosConfigurableInteractionTest {
         assertEquals("s3cret", String(passwordField.password))
         val draftAfterBasic = selectedDraft(configurable)
         assertEquals(AuthMode.HTTP_BASIC, draftAfterBasic.authMode)
-        assertEquals("alice", draftAfterBasic.username)
-        assertEquals("s3cret", draftAfterBasic.password)
+        assertEquals("alice", draftAfterBasic.principal)
+        assertEquals("s3cret", draftAfterBasic.secret)
 
         // Any transition involving Bearer clears secret and username.
         runOnEdt {
@@ -699,8 +704,8 @@ class NacosConfigurableInteractionTest {
         assertEquals("", String(passwordField.password))
         val draftAfterBearer = selectedDraft(configurable)
         assertEquals(AuthMode.BEARER_TOKEN, draftAfterBearer.authMode)
-        assertEquals("", draftAfterBearer.username)
-        assertEquals("", draftAfterBearer.password)
+        assertEquals("", draftAfterBearer.principal)
+        assertEquals("", draftAfterBearer.secret)
 
         // Fill a token, then switch to ANONYMOUS → clear both.
         runOnEdt {
@@ -712,14 +717,14 @@ class NacosConfigurableInteractionTest {
         assertEquals("", String(passwordField.password))
         val draftAfterAnon = selectedDraft(configurable)
         assertEquals(AuthMode.ANONYMOUS, draftAfterAnon.authMode)
-        assertEquals("", draftAfterAnon.username)
-        assertEquals("", draftAfterAnon.password)
+        assertEquals("", draftAfterAnon.principal)
+        assertEquals("", draftAfterAnon.secret)
     }
 
-    private fun selectedDraft(configurable: NacosConfigurable): NacosServerConfig {
-        val draftServers = privateField<MutableList<NacosServerConfig>>(configurable, "draftServers")
-        val selectedId = privateField<String?>(configurable, "selectedServerId")
-        return draftServers.first { it.id == selectedId }
+    private fun selectedDraft(configurable: NacosConfigurable): ProfileIntent {
+        val list = privateField<JList<*>>(configurable, "serverList")
+        val selected = list.selectedValue as ProfileIntent
+        return configurable.draftIntents().first { it.profileId == selected.profileId }
     }
 
     private fun discoverNamespaces(
@@ -757,11 +762,12 @@ class NacosConfigurableInteractionTest {
     }
 
     private fun assertActiveServerMatchesSelection(configurable: NacosConfigurable, serverList: JList<*>) {
-        val draftServers = privateField<MutableList<NacosServerConfig>>(configurable, "draftServers")
-        val activeId = privateField<String>(configurable, "draftActiveId")
-        val selected = draftServers[serverList.selectedIndex]
-        assertEquals(selected.id, activeId)
+        val selected = serverList.selectedValue as ProfileIntent
+        assertEquals(selected.profileId, configurable.draftActiveProfileId())
     }
+
+    private fun settings(): NacosSettings =
+        ApplicationManager.getApplication().getService(NacosSettings::class.java)
 
     private fun clickByAutomationId(root: Component, automationId: String) {
         val button = findButtonByAutomationId(root, automationId)

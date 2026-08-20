@@ -2,8 +2,10 @@ package com.nanyin.nacos.search.settings
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.junit5.TestApplication
+import com.intellij.util.ui.UIUtil
 import com.nanyin.nacos.search.models.NacosApiPolicy
 import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.ProfileIntent
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -125,9 +127,13 @@ class SettingsApplyConnectionChangeTest {
     fun `switching the active environment publishes connection-changed`() {
         val events = recordNotifications {
             val configurable = openConfigurable()
-            val activeField = configurable.javaClass.getDeclaredField("draftActiveId")
-            activeField.isAccessible = true
-            activeField.set(configurable, "prod")
+            val rows = configurable.draftIntents()
+            val list = privateField<javax.swing.JList<ProfileIntent>>(configurable, "serverList")
+            UIUtil.invokeAndWaitIfNeeded(Runnable {
+                list.selectedIndex = rows.indexOfFirst { it.profileId == "prod" }
+                privateField<javax.swing.JButton>(configurable, "setActiveServerButton").doClick()
+            })
+            assertEquals("prod", configurable.draftActiveProfileId())
             configurable.apply()
         }
         assertEquals(listOf("settingsChanged"), events)

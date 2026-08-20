@@ -1,7 +1,8 @@
 package com.nanyin.nacos.search.settings
 
-import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
 import com.nanyin.nacos.search.models.NacosApiPolicy
+import com.nanyin.nacos.search.models.ProfileIntent
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.LanguageService
 import com.nanyin.nacos.search.services.ProjectSessionEpochs
@@ -42,15 +43,14 @@ import com.intellij.openapi.application.ModalityState
  * Right panel: detail form for the selected server (URL, credentials,
  * namespace, auth mode, advanced params).
  *
- * Intent-only draft model (ADR-0049 / issue #106): the dialog holds dual-write
- * draft rows that map 1:1 to [com.nanyin.nacos.search.models.ProfileIntent]s
- * (no profile revision, access revision, or credential slot identity). Opening,
- * Cancel, and the configurable Reset lifecycle only replace in-memory draft
- * state. Apply / OK is the sole path that publishes through the profile store
- * and the deletion lifecycle.
+ * Intent-only draft model (ADR-0049 / issue #231): the dialog edits
+ * [ProfileIntent] rows directly, with no profile revision, access revision,
+ * credential slot identity, or legacy server row in the editing path. Opening,
+ * Cancel, and Reset only replace in-memory draft state. Apply / OK is the sole
+ * path that publishes through the profile store and deletion lifecycle.
  *
  * Row dirty indicators and Apply enablement use the store's one change-
- * classification rule ([NacosSettings.classifyDraft]), not a hand-built field
+ * classification rule ([NacosSettings.classifyIntentDraft]), not a hand-built field
  * comparison. The blue-dot "active" marker follows the **current project's**
  * selected environment when a project context is available and is never written
  * back on open.
@@ -63,15 +63,12 @@ class NacosConfigurable @JvmOverloads constructor(
     private val languageService = ApplicationManager.getApplication().getService(LanguageService::class.java)
 
     // ---- Draft model (in-memory only; never written except via apply()) ----
-    private lateinit var draftServers: MutableList<NacosServerConfig>
-    private var draftActiveId: String = ""
-    /** Active id captured when the draft was loaded — for isModified only. */
-    private var openBaselineActiveId: String = ""
+    private lateinit var intentDraft: SettingsIntentDraft
 
-   // ---- Left panel (master) ----
-   private lateinit var serverList: JBList<NacosServerConfig>
-   private lateinit var serverListModel: DefaultListModel<NacosServerConfig>
-   private lateinit var footerLabel: JLabel
+    // ---- Left panel (master) ----
+    private lateinit var serverList: JBList<ProfileIntent>
+    private lateinit var serverListModel: DefaultListModel<ProfileIntent>
+    private lateinit var footerLabel: JLabel
     private lateinit var deleteServerButton: JButton
     private lateinit var setActiveServerButton: JButton
 
@@ -150,27 +147,27 @@ class NacosConfigurable @JvmOverloads constructor(
     private fun initializeDraft() {
         // Pure read of published profiles + secrets. Never migrates, stages,
         // rewrites the seed, or realigns project selection (issue #106).
-        draftServers = settings.loadSettingsDraft().onEach {
-            it.authMode = AuthStrategyFormPolicy.normalizeStored(it.authMode, settings.enableTokenAuth)
-        }.toMutableList()
-        if (draftServers.isEmpty()) {
-            val default = settings.defaultDraftRow("default", "Local")
-            draftServers.add(default)
-            draftActiveId = "default"
-            openBaselineActiveId = draftActiveId
-            selectedServerId = draftActiveId
+        val loaded = settings.loadIntentDraft()
+        val rows = loaded.snapshot().map { intent ->
+            intent.copy(
+                authMode = AuthStrategyFormPolicy.normalizeStored(intent.authMode, settings.enableTokenAuth)
+            )
+        }
+        if (rows.isEmpty()) {
+            val default = settings.defaultProfileIntent("default", "Local")
+            intentDraft = SettingsIntentDraft.of(listOf(default), default.profileId)
+            selectedServerId = intentDraft.activeProfileId
             return
         }
         // Blue-dot = environment for the current project. Capture it only in
         // draft state — do not write activeServerId or the migration seed.
         val preferred = resolveSettingsBlueDotId(
-            servers = draftServers,
+            intents = rows,
             projectProfileId = resolveProjectProfileId(),
             activeServerId = settings.activeServerId
         )
-        draftActiveId = preferred
-        openBaselineActiveId = preferred
-        selectedServerId = draftActiveId
+        intentDraft = SettingsIntentDraft.of(rows, preferred, preferred)
+        selectedServerId = intentDraft.activeProfileId
     }
 
     /**
@@ -197,14 +194,10 @@ class NacosConfigurable @JvmOverloads constructor(
      * the user changes the draft (issue #106).
      */
     private fun classifyCurrentDraft(): ProfileIntentClassification {
-        if (!::draftServers.isInitialized) {
+        if (!::intentDraft.isInitialized) {
             return ProfileIntentClassification()
         }
-        return settings.classifyDraft(
-            draft = draftServers,
-            draftActiveId = draftActiveId,
-            previousActiveId = openBaselineActiveId
-        )
+        return settings.classifyIntentDraft(intentDraft)
     }
 
     /**
@@ -212,21 +205,22 @@ class NacosConfigurable @JvmOverloads constructor(
      * owns.
      */
     fun dirtyDraftProfileIds(): Set<String> {
-        if (!::draftServers.isInitialized) return emptySet()
+        if (!::intentDraft.isInitialized) return emptySet()
         return classifyCurrentDraft().dirtyProfileIds()
     }
 
     /**
      * Public seam: profile intents currently held in the draft (no revisions).
      */
-    fun draftIntents(): List<com.nanyin.nacos.search.models.ProfileIntent> {
-        if (!::draftServers.isInitialized) return emptyList()
+    fun draftIntents(): List<ProfileIntent> {
+        if (!::intentDraft.isInitialized) return emptyList()
         commitDetailFormToDraft()
-        return settings.intentsFromDraft(draftServers)
+        return intentDraft.snapshot()
     }
 
     /** Public seam: draft active profile id (blue-dot). */
-    fun draftActiveProfileId(): String = if (::draftServers.isInitialized) draftActiveId else ""
+    fun draftActiveProfileId(): String =
+        if (::intentDraft.isInitialized) intentDraft.activeProfileId else ""
 
     private fun contextProject(): Project? {
         val candidate = project
@@ -300,12 +294,12 @@ class NacosConfigurable @JvmOverloads constructor(
      * committing settings.
      */
     private fun admitWriteIntentOffGuards() {
-        val savedById = settings.cloneServers().associateBy { it.id }
-        for (draft in draftServers) {
-            val saved = savedById[draft.id] ?: continue
-            if (!saved.writeIntent || draft.writeIntent) continue
+        val savedById = settings.publishedProfiles().associateBy { it.id }
+        for (intent in intentDraft.snapshot()) {
+            val saved = savedById[intent.profileId] ?: continue
+            if (!saved.writeIntent || intent.writeIntent) continue
             if (!admitAcrossProjects("config.detail.draft.discard.write.intent") {
-                    it.guardWriteIntentOff(draft.id)
+                    it.guardWriteIntentOff(intent.profileId)
                 }
             ) {
                 abortApplyAfterDiscardCancel()
@@ -314,14 +308,14 @@ class NacosConfigurable @JvmOverloads constructor(
     }
 
     /**
-     * For every profile that is about to disappear from the saved server list
+     * For every profile that is about to disappear from the published set
      * on this Apply, ask every open project's edit session. Deletion from the
      * settings draft list alone must not discard a configuration draft — only
      * a committed Apply may (issue #77 review).
      */
     private fun admitProfileDeletionGuards() {
-        val remainingIds = draftServers.map { it.id }.toSet()
-        val deletedIds = settings.cloneServers().map { it.id }.filter { it !in remainingIds }
+        val remainingIds = intentDraft.snapshot().map { it.profileId }.toSet()
+        val deletedIds = settings.publishedProfiles().map { it.id }.filter { it !in remainingIds }
         for (profileId in deletedIds) {
             if (!admitAcrossProjects("config.detail.draft.discard.profile.delete") {
                     it.guardProfileDeletion(profileId)
@@ -334,19 +328,21 @@ class NacosConfigurable @JvmOverloads constructor(
 
     /**
      * When Apply realigns the context project's selected environment to the
-     * blue-dot [draftActiveId], that is an environment switch for ADR-0027.
+     * blue-dot [SettingsIntentDraft.activeProfileId], that is an environment
+     * switch for ADR-0027.
      * Guard before commit so cancel keeps both the draft and the selection.
      */
     private fun admitEnvironmentRealignGuards() {
         val ctx = contextProject() ?: return
         val session = ctx.getService(NacosProjectSession::class.java) ?: return
         val currentId = session.sessionState.selectedProfileId
-        if (currentId.isBlank() || currentId == draftActiveId) return
+        val activeProfileId = intentDraft.activeProfileId
+        if (currentId.isBlank() || currentId == activeProfileId) return
         val sessions = ctx.service<EditSessionService>()
         if (!admitDraftGuard(
                 ctx,
                 sessions,
-                sessions.guardEnvironmentSwitch(draftActiveId),
+                sessions.guardEnvironmentSwitch(activeProfileId),
                 "config.detail.draft.discard.environment"
             )
         ) {
@@ -354,24 +350,18 @@ class NacosConfigurable @JvmOverloads constructor(
         }
     }
 
-    private fun selectedDraft(): NacosServerConfig? {
-        return draftServers.find { it.id == selectedServerId }
-    }
+    private fun selectedDraft(): ProfileIntent? =
+        intentDraft.snapshot().find { it.profileId == selectedServerId }
 
-    /**
-     * Row dirty dots from the store-owned classification (plus dual-write extras).
-     */
+    /** Row dirty dots from the store-owned intent classification. */
     private fun computeDirtyIds(): Set<String> = dirtyDraftProfileIds()
 
     private fun commitDetailFormToDraft() {
         if (loadingForm) return
-        val server = selectedDraft() ?: return
-        server.displayName = displayNameField.text.trim()
-        server.serverUrl = serverUrlField.text.trim()
+        val selected = selectedDraft() ?: return
         var username = usernameField.text.trim()
         var password = String(passwordField.password)
-        server.namespace = namespaceCombo.namespaceId()
-        server.apiPolicy = apiPolicyComboBox.selectedItem as NacosApiPolicy
+        val namespace = namespaceCombo.namespaceId()
         // Strategy is chooser-only — never inferred from credential keystrokes.
         val authMode = AuthStrategyFormPolicy.normalizeStored(
             authModeComboBox.selectedItem as AuthMode? ?: AuthMode.NACOS_PASSWORD,
@@ -405,28 +395,46 @@ class NacosConfigurable @JvmOverloads constructor(
             }
             else -> Unit
         }
-        server.username = username
-        server.password = password
-        server.authMode = authMode
-        server.defaultGroup = defaultGroupField.text.trim()
-        server.allowCrossNamespaceNavigation = crossNamespaceNavigationCheckBox.isSelected
-        server.navigationDetailPrefetchEnabled = navigationDetailPrefetchCheckBox.isSelected
-        server.writeIntent = writeIntentCheckBox.isSelected
-        synchronizeSettingsDiscoveryIntent(server)
+        intentDraft = intentDraft.update(selected.profileId) { current ->
+            current.copy(
+                displayName = displayNameField.text.trim(),
+                endpoint = serverUrlField.text.trim(),
+                apiPolicy = apiPolicyComboBox.selectedItem as NacosApiPolicy,
+                authMode = authMode,
+                principal = username,
+                secret = password,
+                writeIntent = writeIntentCheckBox.isSelected,
+                suggestedNamespace = namespace,
+                preferences = current.preferences.copyPreferences().also { preferences ->
+                    preferences.profileId = current.profileId
+                    preferences.allowCrossNamespaceNavigation =
+                        crossNamespaceNavigationCheckBox.isSelected
+                    preferences.navigationDetailPrefetchEnabled =
+                        navigationDetailPrefetchCheckBox.isSelected
+                    preferences.suggestedNamespace = namespace
+                    preferences.defaultGroup =
+                        defaultGroupField.text.trim().ifBlank { "DEFAULT_GROUP" }
+                }
+            )
+        }
+        val updated = selectedDraft() ?: return
+        synchronizeSettingsDiscoveryIntent(updated)
         // Refresh the list display so name/host changes show immediately
-        val idx = serverListModel.indexOf(server)
+        val idx = (0 until serverListModel.size())
+            .firstOrNull { serverListModel.getElementAt(it).profileId == updated.profileId }
+            ?: -1
         if (idx >= 0) {
-            serverListModel.setElementAt(server, idx)
+            serverListModel.setElementAt(updated, idx)
         }
         refreshServerListDecorations()
-        updateDetailHeader(server)
+        updateDetailHeader(updated)
         updateApplyEnabledState()
     }
 
     private fun onSuggestedNamespaceCommitted() {
-        val before = selectedDraft()?.namespace
+        val before = selectedDraft()?.suggestedNamespace
         commitDetailFormToDraft()
-        if (selectedDraft()?.namespace != before) {
+        if (selectedDraft()?.suggestedNamespace != before) {
             clearConnectionDiagnosticHeadline()
         }
     }
@@ -498,37 +506,44 @@ class NacosConfigurable @JvmOverloads constructor(
 
     private fun updateFooter() {
         if (!::footerLabel.isInitialized) return
-        val activeName = draftServers.find { it.id == draftActiveId }?.displayName?.takeIf { it.isNotBlank() } ?: "—"
-        footerLabel.text = NacosSearchBundle.message("settings.servers.stats", draftServers.size, activeName)
+        val rows = intentDraft.snapshot()
+        val activeName = rows.find { it.profileId == intentDraft.activeProfileId }
+            ?.displayName
+            ?.takeIf { it.isNotBlank() }
+            ?: "—"
+        footerLabel.text = NacosSearchBundle.message("settings.servers.stats", rows.size, activeName)
     }
 
    private fun refreshServerListDecorations() {
        if (!::serverList.isInitialized) return
-       serverList.cellRenderer = ServerListRenderer(draftActiveId, computeDirtyIds())
+       serverList.cellRenderer = ServerListRenderer(intentDraft.activeProfileId, computeDirtyIds())
        updateFooter()
        serverList.repaint()
         // Toolbar button enabled states (match design prototype):
         //  - Delete disabled when only one server remains
         //  - Set Active disabled when the selected server is already active
         if (::deleteServerButton.isInitialized) {
-            deleteServerButton.isEnabled = draftServers.size > 1
+            deleteServerButton.isEnabled = intentDraft.snapshot().size > 1
         }
         if (::setActiveServerButton.isInitialized) {
-            setActiveServerButton.isEnabled = selectedServerId != draftActiveId
+            setActiveServerButton.isEnabled = selectedServerId != intentDraft.activeProfileId
         }
    }
 
-    private fun updateDetailHeader(server: NacosServerConfig? = selectedDraft()) {
-        if (!::detailTitleLabel.isInitialized || server == null) return
-        detailTitleLabel.text = server.displayName.ifBlank { server.serverUrl.ifBlank { NacosSearchBundle.message("settings.server.config") } }
-        activeBadgeLabel.isVisible = server.id == draftActiveId
+    private fun updateDetailHeader(intent: ProfileIntent? = selectedDraft()) {
+        if (!::detailTitleLabel.isInitialized || intent == null) return
+        detailTitleLabel.text = intent.displayName.ifBlank {
+            intent.endpoint.ifBlank { NacosSearchBundle.message("settings.server.config") }
+        }
+        activeBadgeLabel.isVisible = intent.profileId == intentDraft.activeProfileId
     }
 
     private fun selectActiveServerInList() {
-        val activeIdx = draftServers.indexOfFirst { it.id == draftActiveId }
+        val rows = intentDraft.snapshot()
+        val activeIdx = rows.indexOfFirst { it.profileId == intentDraft.activeProfileId }
         when {
             activeIdx >= 0 -> serverList.selectedIndex = activeIdx
-            draftServers.isNotEmpty() -> serverList.selectedIndex = 0
+            rows.isNotEmpty() -> serverList.selectedIndex = 0
         }
     }
 
@@ -539,10 +554,10 @@ class NacosConfigurable @JvmOverloads constructor(
     private fun buildComponents() {
         // --- Left panel list ---
         serverListModel = DefaultListModel()
-        draftServers.forEach { serverListModel.addElement(it) }
+        intentDraft.snapshot().forEach { serverListModel.addElement(it) }
         serverList = JBList(serverListModel).apply {
             selectionMode = ListSelectionModel.SINGLE_SELECTION
-            cellRenderer = ServerListRenderer(draftActiveId, computeDirtyIds())
+            cellRenderer = ServerListRenderer(intentDraft.activeProfileId, computeDirtyIds())
             fixedCellHeight = 46
             addListSelectionListener(listSelectionListener)
         }
@@ -999,9 +1014,9 @@ class NacosConfigurable @JvmOverloads constructor(
     // ------------------------------------------------------------------
 
     private fun addServer() {
-        val newServer = settings.defaultDraftRow(NacosServerConfig.generateId())
-        draftServers.add(newServer)
-        serverListModel.addElement(newServer)
+        val newIntent = settings.defaultProfileIntent(generateProfileId())
+        intentDraft = intentDraft.add(newIntent)
+        serverListModel.addElement(newIntent)
         serverList.selectedIndex = serverListModel.size() - 1
         refreshServerListDecorations()
         displayNameField.requestFocusInWindow()
@@ -1009,8 +1024,9 @@ class NacosConfigurable @JvmOverloads constructor(
 
     private fun duplicateServer() {
         val current = selectedDraft() ?: return
-        val copy = current.copyConfig()
-        draftServers.add(copy)
+        val newProfileId = generateProfileId()
+        intentDraft = intentDraft.duplicate(current.profileId, newProfileId)
+        val copy = intentDraft.snapshot().first { it.profileId == newProfileId }
         serverListModel.addElement(copy)
         serverList.selectedIndex = serverListModel.size() - 1
         refreshServerListDecorations()
@@ -1018,7 +1034,8 @@ class NacosConfigurable @JvmOverloads constructor(
 
     private fun deleteServer() {
         val current = selectedDraft() ?: return
-        if (draftServers.size <= 1) {
+        val rows = intentDraft.snapshot()
+        if (rows.size <= 1) {
             Messages.showWarningDialog(
                 NacosSearchBundle.message("settings.servers.cannot.delete.last"),
                 NacosSearchBundle.message("settings.invalid.title")
@@ -1035,13 +1052,10 @@ class NacosConfigurable @JvmOverloads constructor(
         // profile-deletion guard runs on Apply — discarding the configuration
         // draft here would permanently lose it if the user then Cancelled
         // Settings (P0 has no draft shelf).
-        val idx = draftServers.indexOf(current)
-        draftServers.removeAt(idx)
+        val idx = rows.indexOfFirst { it.profileId == current.profileId }
+        intentDraft = intentDraft.remove(current.profileId)
         serverListModel.removeElementAt(idx)
-        if (draftActiveId == current.id) {
-            draftActiveId = draftServers.firstOrNull()?.id ?: ""
-        }
-        val newIdx = minOf(idx, draftServers.size - 1).coerceAtLeast(0)
+        val newIdx = minOf(idx, intentDraft.snapshot().size - 1).coerceAtLeast(0)
         serverList.selectedIndex = newIdx
         refreshServerListDecorations()
         updateApplyEnabledState()
@@ -1049,20 +1063,21 @@ class NacosConfigurable @JvmOverloads constructor(
 
     private fun setActiveServer() {
         val current = selectedDraft() ?: return
-        draftActiveId = current.id
+        intentDraft = intentDraft.selectActive(current.profileId)
         refreshServerListDecorations()
         updateDetailHeader(current)
         updateApplyEnabledState()
     }
 
     private fun onServerSelected() {
-        val server = serverList.selectedValue ?: return
-        selectedServerId = server.id
+        val intent = serverList.selectedValue ?: return
+        selectedServerId = intent.profileId
         loadDraftIntoForm()
+        refreshServerListDecorations()
     }
 
     private fun loadDraftIntoForm() {
-        val server = selectedDraft() ?: return
+        val selected = selectedDraft() ?: return
         loadingForm = true
         // Remove listener while programmatically setting fields
         displayNameField.document.removeDocumentListener(docListener)
@@ -1072,34 +1087,47 @@ class NacosConfigurable @JvmOverloads constructor(
         defaultGroupField.document.removeDocumentListener(docListener)
 
         try {
-            displayNameField.text = server.displayName
-            serverUrlField.text = server.serverUrl
-            val authMode = AuthStrategyFormPolicy.normalizeStored(server.authMode, settings.enableTokenAuth)
-            server.authMode = authMode
-            if (authMode == AuthMode.ANONYMOUS) {
-                server.username = ""
-                server.password = ""
-            } else if (authMode == AuthMode.BEARER_TOKEN) {
-                server.username = ""
-            }
-            usernameField.text = server.username
-            passwordField.text = server.password
-            renderNamespaceOptions(
-                settingsDiscoveryLifecycle.updateIntent(
-                    com.nanyin.nacos.search.models.ProfileIntent.fromServerConfig(server)
-                )
+            val authMode = AuthStrategyFormPolicy.normalizeStored(selected.authMode, settings.enableTokenAuth)
+            val normalized = selected.copy(
+                authMode = authMode,
+                principal = if (authMode == AuthMode.ANONYMOUS ||
+                    authMode == AuthMode.BEARER_TOKEN
+                ) {
+                    ""
+                } else {
+                    selected.principal
+                },
+                secret = if (authMode == AuthMode.ANONYMOUS) "" else selected.secret
             )
-            namespaceCombo.setNamespaceId(server.namespace)
-            apiPolicyComboBox.selectedItem = server.apiPolicy
+            if (normalized != selected) {
+                intentDraft = intentDraft.replace(selected.profileId, normalized)
+                val idx = (0 until serverListModel.size())
+                    .firstOrNull {
+                        serverListModel.getElementAt(it).profileId == selected.profileId
+                    }
+                    ?: -1
+                if (idx >= 0) serverListModel.setElementAt(normalized, idx)
+            }
+            displayNameField.text = normalized.displayName
+            serverUrlField.text = normalized.endpoint
+            usernameField.text = normalized.principal
+            passwordField.text = normalized.secret
+            renderNamespaceOptions(
+                settingsDiscoveryLifecycle.updateIntent(normalized)
+            )
+            namespaceCombo.setNamespaceId(normalized.suggestedNamespace)
+            apiPolicyComboBox.selectedItem = normalized.apiPolicy
             authModeComboBox.selectedItem = authMode
-            defaultGroupField.text = server.defaultGroup
-            crossNamespaceNavigationCheckBox.isSelected = server.allowCrossNamespaceNavigation
-            navigationDetailPrefetchCheckBox.isSelected = server.navigationDetailPrefetchEnabled
-            writeIntentCheckBox.isSelected = server.writeIntent
+            defaultGroupField.text = normalized.preferences.defaultGroup
+            crossNamespaceNavigationCheckBox.isSelected =
+                normalized.preferences.allowCrossNamespaceNavigation
+            navigationDetailPrefetchCheckBox.isSelected =
+                normalized.preferences.navigationDetailPrefetchEnabled
+            writeIntentCheckBox.isSelected = normalized.writeIntent
             displayedAuthMode = authMode
             applyFieldVisibility(AuthStrategyFormPolicy.fieldVisibility(authMode))
             authModeComboBox.toolTipText = NacosSearchBundle.message(AuthStrategyFormPolicy.tooltipKey(authMode))
-            updateDetailHeader(server)
+            updateDetailHeader(normalized)
         } finally {
             // Re-add listeners
             displayNameField.document.addDocumentListener(docListener)
@@ -1115,14 +1143,14 @@ class NacosConfigurable @JvmOverloads constructor(
     }
 
     private fun resetSelectedServerToDefaults() {
-        val server = selectedDraft() ?: return
-        val keepId = server.id
-        val keepName = server.displayName
+        val intent = selectedDraft() ?: return
+        val keepId = intent.profileId
+        val keepName = intent.displayName
         // Defaults from the complete persisted shape, in-memory only until Apply.
-        val reset = settings.defaultDraftRow(keepId, keepName)
-        val idx = draftServers.indexOfFirst { it.id == keepId }
+        val reset = settings.defaultProfileIntent(keepId, keepName)
+        val idx = intentDraft.snapshot().indexOfFirst { it.profileId == keepId }
         if (idx >= 0) {
-            draftServers[idx] = reset
+            intentDraft = intentDraft.reset(keepId, reset)
             serverListModel.setElementAt(reset, idx)
             loadDraftIntoForm()
             refreshServerListDecorations()
@@ -1135,7 +1163,7 @@ class NacosConfigurable @JvmOverloads constructor(
     // ------------------------------------------------------------------
 
     override fun isModified(): Boolean {
-        if (!::draftServers.isInitialized) return false
+        if (!::intentDraft.isInitialized) return false
         if (::displayNameField.isInitialized) {
             // Ensure the latest form keystrokes are in the draft before classify.
             commitDetailFormToDraft()
@@ -1157,15 +1185,16 @@ class NacosConfigurable @JvmOverloads constructor(
         // Commit current form state to draft one last time
         commitDetailFormToDraft()
 
-        // Validate all draft servers
-        val activeServer = draftServers.find { it.id == draftActiveId } ?: draftServers.first()
-        if (!activeServer.isValidUrl()) {
+        val snapshot = intentDraft.snapshot()
+        val activeIntent = snapshot.find { it.profileId == intentDraft.activeProfileId }
+            ?: snapshot.first()
+        if (CanonicalNacosEndpoint.parse(activeIntent.endpoint).isFailure) {
             Messages.showErrorDialog(
-                NacosSearchBundle.message("settings.server.url.invalid", activeServer.displayName),
+                NacosSearchBundle.message("settings.server.url.invalid", activeIntent.displayName),
                 NacosSearchBundle.message("settings.invalid.title")
             )
             // Select the offending server
-            val idx = draftServers.indexOf(activeServer)
+            val idx = snapshot.indexOf(activeIntent)
             if (idx >= 0) serverList.selectedIndex = idx
             throw java.lang.IllegalStateException("Invalid server URL")
         }
@@ -1182,13 +1211,12 @@ class NacosConfigurable @JvmOverloads constructor(
         // preferences notifications — do not re-compare signatures, passwords,
         // or list positions (#103).
         val outcome = settings.applyProfileIntents(
-            intents = settings.intentsFromDraft(draftServers),
-            newActiveId = draftActiveId,
-            dualWriteServers = draftServers
+            intents = snapshot,
+            newActiveId = intentDraft.activeProfileId
         )
 
-        // Stage / deletion withhold failures: dual-write already kept the
-        // published pair. Resync the draft from published state and tell the
+        // Stage / deletion withhold failures leave the previous publication
+        // visible. Resync the draft from published state and tell the
         // user — never pretend a preferences-only success (ADR-0035 / #103,
         // ADR-0025 / #105).
         if (outcome.hasStageFailures() || outcome.hasWithheldDeletions()) {
@@ -1218,22 +1246,21 @@ class NacosConfigurable @JvmOverloads constructor(
             // showing a deleted environment as applied when it was withheld.
             initializeDraft()
             serverListModel.clear()
-            draftServers.forEach { serverListModel.addElement(it) }
+            intentDraft.snapshot().forEach { serverListModel.addElement(it) }
             refreshServerListDecorations()
             selectActiveServerInList()
             loadDraftIntoForm()
         } else {
             // Successful publish: re-baseline the open active id so isModified
             // is false for the active selection Apply just committed (#106).
-            // Failed Adds stay in the draft and correctly remain dirty.
-            openBaselineActiveId = draftActiveId
+            intentDraft = intentDraft.rebaseline()
             refreshServerListDecorations()
         }
 
         // Align this project's session to the draft blue-dot — project-local
         // only. Do not treat settings.activeServerId as a live selection or
         // rewrite the migration seed (issue #107).
-        val requestedActive = draftActiveId.takeIf {
+        val requestedActive = intentDraft.activeProfileId.takeIf {
             it.isNotBlank() && it !in outcome.failedStageProfileIds
         }
         contextProject()?.let { ctx ->
@@ -1242,7 +1269,9 @@ class NacosConfigurable @JvmOverloads constructor(
                 session.sessionState.selectedProfileId != requestedActive &&
                 settings.getProfile(requestedActive) != null
             ) {
-                val suggestedNs = draftServers.find { it.id == requestedActive }?.namespace
+                val suggestedNs = intentDraft.snapshot()
+                    .find { it.profileId == requestedActive }
+                    ?.suggestedNamespace
                     ?.ifBlank { null }
                     ?: "public"
                 session.adoptEnvironment(requestedActive, suggestedNs)
@@ -1295,7 +1324,7 @@ class NacosConfigurable @JvmOverloads constructor(
         initializeDraft()
         if (!::serverListModel.isInitialized) return
         serverListModel.clear()
-        draftServers.forEach { serverListModel.addElement(it) }
+        intentDraft.snapshot().forEach { serverListModel.addElement(it) }
         refreshServerListDecorations()
         selectActiveServerInList()
         loadDraftIntoForm()
@@ -1313,17 +1342,22 @@ class NacosConfigurable @JvmOverloads constructor(
 
     private fun testConnection() {
         commitDetailFormToDraft()
-        val server = selectedDraft() ?: return
+        val intent = selectedDraft() ?: return
 
-        if (!server.isValidUrl()) {
+        if (CanonicalNacosEndpoint.parse(intent.endpoint).isFailure) {
             testStatusLabel.text = NacosSearchBundle.message("settings.connection.failed")
             testStatusLabel.foreground = JBColor.RED
             testStatusLabel.toolTipText = null
             return
         }
 
-        val authMode = AuthStrategyFormPolicy.normalizeStored(server.authMode, settings.enableTokenAuth)
-        if (!AuthStrategyFormPolicy.credentialsReadyForConnectionTest(authMode, server.username, server.password)) {
+        val authMode = AuthStrategyFormPolicy.normalizeStored(intent.authMode, settings.enableTokenAuth)
+        if (!AuthStrategyFormPolicy.credentialsReadyForConnectionTest(
+                authMode,
+                intent.principal,
+                intent.secret
+            )
+        ) {
             // Local gate only — never hit the network with incomplete secrets.
             testStatusLabel.text = NacosSearchBundle.message(
                 AuthStrategyFormPolicy.incompleteCredentialsMessageKey(authMode)
@@ -1333,9 +1367,7 @@ class NacosConfigurable @JvmOverloads constructor(
             return
         }
 
-        val diagnosticRequest = settingsDiscoveryLifecycle.beginDiagnostic(
-            com.nanyin.nacos.search.models.ProfileIntent.fromServerConfig(server)
-        )
+        val diagnosticRequest = settingsDiscoveryLifecycle.beginDiagnostic(intent)
 
         testConnectionButton.isEnabled = false
         testStatusLabel.text = NacosSearchBundle.message("settings.test.connecting")
@@ -1406,9 +1438,8 @@ class NacosConfigurable @JvmOverloads constructor(
     internal fun requestSuggestedNamespaceOptions() {
         if (!::namespaceCombo.isInitialized) return
         commitDetailFormToDraft()
-        val server = selectedDraft() ?: return
-        if (!server.isValidUrl()) return
-        val intent = com.nanyin.nacos.search.models.ProfileIntent.fromServerConfig(server)
+        val intent = selectedDraft() ?: return
+        if (CanonicalNacosEndpoint.parse(intent.endpoint).isFailure) return
 
         when (val current = settingsDiscoveryLifecycle.updateIntent(intent)) {
             is SettingsNamespaceOptions.Available,
@@ -1449,11 +1480,9 @@ class NacosConfigurable @JvmOverloads constructor(
         })
     }
 
-    private fun synchronizeSettingsDiscoveryIntent(server: NacosServerConfig) {
+    private fun synchronizeSettingsDiscoveryIntent(intent: ProfileIntent) {
         if (!::namespaceCombo.isInitialized) return
-        val options = settingsDiscoveryLifecycle.updateIntent(
-            com.nanyin.nacos.search.models.ProfileIntent.fromServerConfig(server)
-        )
+        val options = settingsDiscoveryLifecycle.updateIntent(intent)
         if (options === SettingsNamespaceOptions.Empty &&
             (namespaceCombo.discoveredCount() > 0 || namespaceCombo.isTransientRowVisible())
         ) {
@@ -1540,11 +1569,11 @@ class NacosConfigurable @JvmOverloads constructor(
             list: JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean
         ): Component {
             super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
-            if (value is NacosServerConfig) {
-                val isActive = value.id == activeId
-                val isDirty = value.id in dirtyIds
-                val name = value.displayName.ifEmpty { value.serverUrl }
-                val host = value.serverUrl.replace(Regex("^https?://"), "")
+            if (value is ProfileIntent) {
+                val isActive = value.profileId == activeId
+                val isDirty = value.profileId in dirtyIds
+                val name = value.displayName.ifEmpty { value.endpoint }
+                val host = value.endpoint.replace(Regex("^https?://"), "")
 
                 // Active = blue dot (●) + bold; dirty = orange dot (◆)
                 val leadDot = if (isActive) "<font color='#3574f0'>●</font>" else "&nbsp;&nbsp;"
@@ -1555,7 +1584,7 @@ class NacosConfigurable @JvmOverloads constructor(
 
                 this.text = "<html>$leadDot $boldOpen$name$boldClose$dirtyDot<br>" +
                     "<font size='2' color='#a8adbd'>$host$activeSuffix</font></html>"
-                this.toolTipText = value.serverUrl
+                this.toolTipText = value.endpoint
                 this.icon = null
                 border = JBUI.Borders.empty(4, 8)
             }
@@ -1584,20 +1613,23 @@ class NacosConfigurable @JvmOverloads constructor(
         NacosApiPolicy.V1 -> "settings.api.generation.v1.tooltip"
         NacosApiPolicy.V3 -> "settings.api.generation.v3.tooltip"
     }
+
+    private fun generateProfileId(): String =
+        "srv_" + System.currentTimeMillis().toString(36) + "_" + (0..9999).random().toString(36)
 }
 
 /**
  * Blue-dot id for the Settings server list: prefer the project tool-window
- * selection when it still exists in [servers], otherwise the persisted
+ * selection when it still exists in [intents], otherwise the persisted
  * app-wide active server, otherwise the first row.
  */
 internal fun resolveSettingsBlueDotId(
-    servers: List<NacosServerConfig>,
+    intents: List<ProfileIntent>,
     projectProfileId: String?,
     activeServerId: String
 ): String {
-    if (servers.isEmpty()) return ""
-    return projectProfileId?.takeIf { id -> servers.any { it.id == id } }
-        ?: activeServerId.takeIf { id -> servers.any { it.id == id } }
-        ?: servers.first().id
+    if (intents.isEmpty()) return ""
+    return projectProfileId?.takeIf { id -> intents.any { it.profileId == id } }
+        ?: activeServerId.takeIf { id -> intents.any { it.profileId == id } }
+        ?: intents.first().profileId
 }

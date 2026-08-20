@@ -78,6 +78,10 @@ class SettingsIntentDraft private constructor(
         return withRows(rows, profileId)
     }
 
+    /** Marks the current active selection as the successfully published baseline. */
+    fun rebaseline(): SettingsIntentDraft =
+        SettingsIntentDraft(rows, activeProfileId, activeProfileId)
+
     private fun withRows(
         intents: List<ProfileIntent>,
         activeId: String = activeProfileId

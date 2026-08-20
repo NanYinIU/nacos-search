@@ -3,8 +3,9 @@ package com.nanyin.nacos.search.models
 import com.nanyin.nacos.search.settings.AuthMode
 
 /**
- * Represents a single Nacos server (environment) entry in the multi-server
- * master-detail settings model. Each entry maps to one connection target.
+ * Legacy persisted server row retained for migration and compatibility.
+ * Settings edits [ProfileIntent] directly; runtime code reads environment
+ * profiles and associated preferences.
  */
 data class NacosServerConfig(
     /** Stable unique id used for active-server tracking and draft diffing. */
@@ -26,14 +27,14 @@ data class NacosServerConfig(
     var authMode: AuthMode = AuthMode.ANONYMOUS,
     var defaultGroup: String = "DEFAULT_GROUP",
     /**
-     * Dual-write preference field for the settings dialog. Runtime consumers
+     * Legacy dual-write preference field. Runtime consumers
      * must read [EnvironmentPreferences] by profile id (issue #101 / ADR-0042),
      * not this field. [com.nanyin.nacos.search.settings.NacosSettings.applyServers]
      * publishes this value into the preference record.
      */
     var allowCrossNamespaceNavigation: Boolean = false,
     /**
-     * Dual-write preference field for the settings dialog. When true, the
+     * Legacy dual-write preference field. When true, the
      * navigation detail prefetch loads configuration bodies for the project's
      * declared configuration sources so gutter markers resolve without browsing.
      * Preference-only — must not live on [EnvironmentProfile] (ADR-0042).

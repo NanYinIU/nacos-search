@@ -93,6 +93,25 @@ class SettingsIntentDraftTest {
     }
 
     @Test
+    fun `intent draft rebaselines a published active selection without changing rows`() {
+        val draft = SettingsIntentDraft.of(
+            intents = listOf(
+                ProfileIntent(profileId = "dev"),
+                ProfileIntent(profileId = "prod")
+            ),
+            activeProfileId = "dev",
+            openBaselineActiveId = "dev"
+        ).selectActive("prod")
+
+        val published = draft.rebaseline()
+
+        assertEquals(draft.snapshot(), published.snapshot())
+        assertEquals("prod", published.activeProfileId)
+        assertEquals("prod", published.openBaselineActiveId)
+        assertEquals("dev", draft.openBaselineActiveId)
+    }
+
+    @Test
     fun `intent draft replaces updates and changes secrets with synchronized namespace`() {
         val original = SettingsIntentDraft.of(
             intents = listOf(ProfileIntent(profileId = "dev", secret = "old")),
@@ -248,8 +267,7 @@ class SettingsIntentDraftTest {
         val slots = InMemoryCredentialSlotStore()
         val settings = seededSettings(slots)
 
-        val draft = settings.loadSettingsDraft(slots)
-        val intents = settings.intentsFromDraft(draft)
+        val intents = settings.loadIntentDraft(slots).snapshot()
 
         assertEquals(1, intents.size)
         val fields = ProfileIntent::class.java.declaredFields.map { it.name }.toSet()
@@ -270,13 +288,8 @@ class SettingsIntentDraftTest {
         val profilesBefore = settings.publishedProfiles().map { it.copy() }
         val prefsBefore = settings.allEnvironmentPreferences()
 
-        settings.loadSettingsDraft(slots)
-        settings.classifyDraft(
-            draft = settings.loadSettingsDraft(slots),
-            draftActiveId = "dev",
-            previousActiveId = "dev",
-            credentialSlots = slots
-        )
+        settings.loadIntentDraft(slots)
+        settings.classifyIntentDraft(settings.loadIntentDraft(slots), slots)
 
         assertEquals(writesBefore, slots.writes.size)
         assertEquals(activeBefore, settings.activeServerId)
@@ -288,16 +301,16 @@ class SettingsIntentDraftTest {
     fun `password and api policy edits classify as access changes`() {
         val slots = InMemoryCredentialSlotStore()
         val settings = seededSettings(slots)
-        val draft = settings.loadSettingsDraft(slots).map { it.copy() }.toMutableList()
+        val draft = settings.loadIntentDraft(slots)
 
-        draft[0] = draft[0].copy(password = "rotated")
-        val passwordClass = settings.classifyDraft(draft, "dev", "dev", slots)
+        val rotated = draft.update("dev") { it.copy(secret = "rotated") }
+        val passwordClass = settings.classifyIntentDraft(rotated, slots)
         assertTrue(passwordClass.accessRevisionWouldAdvanceIds.contains("dev"))
         assertTrue(passwordClass.isOperationalChange())
         assertTrue(passwordClass.dirtyProfileIds().contains("dev"))
 
-        draft[0] = draft[0].copy(password = "secret-1", apiPolicy = NacosApiPolicy.V3)
-        val policyClass = settings.classifyDraft(draft, "dev", "dev", slots)
+        val policyChanged = draft.update("dev") { it.copy(apiPolicy = NacosApiPolicy.V3) }
+        val policyClass = settings.classifyIntentDraft(policyChanged, slots)
         assertTrue(policyClass.accessRevisionWouldAdvanceIds.contains("dev"))
         assertTrue(policyClass.isOperationalChange())
     }
@@ -306,17 +319,18 @@ class SettingsIntentDraftTest {
     fun `display-only edit and pure reorder do not classify as operational`() {
         val slots = InMemoryCredentialSlotStore()
         val settings = twoProfileSettings(slots)
+        val draft = settings.loadIntentDraft(slots)
 
-        val renamed = settings.loadSettingsDraft(slots).map {
-            if (it.id == "dev") it.copy(displayName = "Dev (renamed)") else it.copy()
+        val renamed = draft.update("dev") {
+            it.copy(displayName = "Dev (renamed)")
         }
-        val display = settings.classifyDraft(renamed, "dev", "dev", slots)
+        val display = settings.classifyIntentDraft(renamed, slots)
         assertTrue(display.displayOnlyChangedIds.contains("dev"))
         assertFalse(display.isOperationalChange())
         assertTrue(display.isPreferencesOnlyChange())
 
-        val reordered = settings.loadSettingsDraft(slots).reversed().map { it.copy() }
-        val reorder = settings.classifyDraft(reordered, "dev", "dev", slots)
+        val reordered = draft.reorder(draft.snapshot().map { it.profileId }.reversed())
+        val reorder = settings.classifyIntentDraft(reordered, slots)
         assertTrue(reorder.isNoOp())
         assertFalse(reorder.isModified())
         assertTrue(reorder.dirtyProfileIds().isEmpty())
@@ -326,11 +340,15 @@ class SettingsIntentDraftTest {
     fun `preference-only edit is modified but not operational`() {
         val slots = InMemoryCredentialSlotStore()
         val settings = seededSettings(slots)
-        val draft = settings.loadSettingsDraft(slots).map {
-            it.copy(allowCrossNamespaceNavigation = true)
+        val draft = settings.loadIntentDraft(slots).update("dev") {
+            it.copy(
+                preferences = it.preferences.copyPreferences().also { preferences ->
+                    preferences.allowCrossNamespaceNavigation = true
+                }
+            )
         }
 
-        val classification = settings.classifyDraft(draft, "dev", "dev", slots)
+        val classification = settings.classifyIntentDraft(draft, slots)
         assertTrue(classification.preferenceChangedIds.contains("dev"))
         assertFalse(classification.isOperationalChange())
         assertTrue(classification.isModified())
@@ -340,16 +358,16 @@ class SettingsIntentDraftTest {
     fun `active change against open baseline is modified`() {
         val slots = InMemoryCredentialSlotStore()
         val settings = twoProfileSettings(slots)
-        val draft = settings.loadSettingsDraft(slots)
+        val draft = settings.loadIntentDraft(slots, "dev", "dev")
 
         // Open baseline was "dev"; user set active to "prod".
-        val classification = settings.classifyDraft(draft, "prod", previousActiveId = "dev", slots)
+        val classification = settings.classifyIntentDraft(draft.selectActive("prod"), slots)
         assertTrue(classification.activeProfileIdChanged)
         assertTrue(classification.isOperationalChange())
         assertTrue(classification.isModified())
 
         // Same active as open baseline: not modified for active alone.
-        val same = settings.classifyDraft(draft, "dev", previousActiveId = "dev", slots)
+        val same = settings.classifyIntentDraft(draft, slots)
         assertFalse(same.activeProfileIdChanged)
         assertTrue(same.isNoOp())
     }
@@ -358,9 +376,9 @@ class SettingsIntentDraftTest {
     fun `removal is classified but not executed until apply`() {
         val slots = InMemoryCredentialSlotStore()
         val settings = twoProfileSettings(slots)
-        val draft = settings.loadSettingsDraft(slots).filter { it.id == "dev" }
+        val draft = settings.loadIntentDraft(slots).remove("prod")
 
-        val classification = settings.classifyDraft(draft, "dev", "dev", slots)
+        val classification = settings.classifyIntentDraft(draft, slots)
         assertEquals(setOf("prod"), classification.removedProfileIds)
         assertTrue(classification.isOperationalChange())
 
@@ -385,13 +403,12 @@ class SettingsIntentDraftTest {
         }
         val lifecycle = ProfileDeletionLifecycle(tombstones, cleanup)
 
-        val draft = settings.loadSettingsDraft(slots).filter { it.id == "dev" }
+        val draft = settings.loadIntentDraft(slots).remove("prod")
         assertTrue(tombstones.entombedIds.isEmpty())
 
         val outcome = settings.applyProfileIntents(
-            intents = settings.intentsFromDraft(draft),
-            newActiveId = "dev",
-            dualWriteServers = draft,
+            intents = draft.snapshot(),
+            newActiveId = draft.activeProfileId,
             credentialSlots = slots,
             deletionLifecycle = lifecycle
         )
