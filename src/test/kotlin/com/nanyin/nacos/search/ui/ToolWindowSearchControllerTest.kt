@@ -55,9 +55,9 @@ class ToolWindowSearchControllerTest {
             // (ADR-0049), so ANONYMOUS must be republished through the store
             // write path; mutating the flat legacy mirror alone leaves the
             // NACOS_PASSWORD default, which fails capture with empty credentials.
-            applyServers(
+            applyProfileIntents(
                 listOf(
-                    NacosServerConfig(
+                    com.nanyin.nacos.search.settings.profileIntentFixture(
                         id = "s_local",
                         displayName = "Local",
                         serverUrl = "https://nacos.example",
@@ -80,9 +80,9 @@ class ToolWindowSearchControllerTest {
         controller.openNamespace(namespace("ns-a"))
 
         val session = service.sessionContext()
-        assertEquals(settings.activeServerId, session.profileId)
+        assertEquals(settings.resolveDefaultProfileId(), session.profileId)
         assertEquals("ns-a", session.namespaceId)
-        assertEquals(listOf(settings.activeServerId), captures)
+        assertEquals(listOf(settings.resolveDefaultProfileId()), captures)
     }
 
     @Test
@@ -156,7 +156,7 @@ class ToolWindowSearchControllerTest {
     fun `a capture that finishes after the selection moved on is discarded`() = runBlocking {
         val api = RecordingApi()
         val service = NacosSearchService(apiProvider = { api.service })
-        var selected = settings.activeServerId
+        var selected = settings.resolveDefaultProfileId()
         val controller = ToolWindowSearchController(
             searchService = service,
             selectedProfileId = { selected },
@@ -184,7 +184,7 @@ class ToolWindowSearchControllerTest {
         // the session that adoption installed while believing it opened another.
         val api = RecordingApi()
         val service = NacosSearchService(apiProvider = { api.service })
-        var selected = settings.activeServerId
+        var selected = settings.resolveDefaultProfileId()
         val controller = ToolWindowSearchController(
             searchService = service,
             selectedProfileId = { selected },
@@ -209,7 +209,7 @@ class ToolWindowSearchControllerTest {
         var captureCount = 0
         val controller = ToolWindowSearchController(
             searchService = service,
-            selectedProfileId = { settings.activeServerId },
+            selectedProfileId = { settings.resolveDefaultProfileId() },
             captureOperationContext = { profileId ->
                 if (captureCount++ == 0) {
                     firstCaptureStarted.complete(Unit)
@@ -254,7 +254,7 @@ class ToolWindowSearchControllerTest {
         captures: MutableList<String> = mutableListOf()
     ) = ToolWindowSearchController(
         searchService = service,
-        selectedProfileId = { settings.activeServerId },
+        selectedProfileId = { settings.resolveDefaultProfileId() },
         captureOperationContext = { profileId ->
             captures += profileId
             capturedContextFor(profileId)

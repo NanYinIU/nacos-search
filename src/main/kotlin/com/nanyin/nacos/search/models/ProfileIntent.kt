@@ -51,34 +51,4 @@ data class ProfileIntent(
      * Changes advance neither profile nor access revision.
      */
     val preferences: EnvironmentPreferences = EnvironmentPreferences()
-) {
-    companion object {
-        /**
-         * Compatibility bridge from a legacy server row into a profile intent.
-         * Settings edits intents directly; this remains until the legacy
-         * persistence adapters are removed by issue #233.
-         */
-        fun fromServerConfig(server: NacosServerConfig): ProfileIntent {
-            val id = server.id.ifBlank { "default" }
-            val suggested = server.namespace.ifBlank { "public" }
-            return ProfileIntent(
-                profileId = id,
-                displayName = server.displayName,
-                endpoint = server.serverUrl,
-                apiPolicy = server.apiPolicy,
-                authMode = server.authMode,
-                principal = server.username.trim(),
-                secret = server.password,
-                writeIntent = server.writeIntent,
-                suggestedNamespace = suggested,
-                preferences = EnvironmentPreferences(
-                    profileId = id,
-                    allowCrossNamespaceNavigation = server.allowCrossNamespaceNavigation,
-                    navigationDetailPrefetchEnabled = server.navigationDetailPrefetchEnabled,
-                    suggestedNamespace = suggested,
-                    defaultGroup = server.defaultGroup.trim().ifBlank { "DEFAULT_GROUP" }
-                )
-            )
-        }
-    }
-}
+)

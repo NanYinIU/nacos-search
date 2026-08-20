@@ -124,8 +124,10 @@ class AccessSafetyTest {
     @Test
     fun `credential rotation stages its new slot before publishing the new access revision`() {
         val store = InMemoryCredentialSlotStore()
-        val original = EnvironmentProfile.fromLegacy(
-            NacosServerConfig(id = "dev", serverUrl = "https://nacos.example", username = "alice")
+        val original = EnvironmentProfile(
+            id = "dev",
+            canonicalEndpoint = "https://nacos.example",
+            principal = "alice"
         )
         store.stage(original.id, original.credentialSlotVersion, "old-secret")
         val published = mutableListOf<EnvironmentProfile>()
@@ -150,8 +152,10 @@ class AccessSafetyTest {
     @Test
     fun `failed credential stage keeps the previous published profile revision invisible for the pending pair`() {
         val store = InMemoryCredentialSlotStore(failWrites = true)
-        val original = EnvironmentProfile.fromLegacy(
-            NacosServerConfig(id = "dev", serverUrl = "https://nacos.example", username = "alice")
+        val original = EnvironmentProfile(
+            id = "dev",
+            canonicalEndpoint = "https://nacos.example",
+            principal = "alice"
         )
         val nextVersion = original.credentialSlotVersion + 1
         val pending = original.copy(
@@ -188,10 +192,11 @@ class AccessSafetyTest {
             credentialSlots = slots
         )
         val profile = requireNotNull(settings.getActiveProfile())
-        // Dual-write still holds the secret; the revision-pinned platform slot
-        // does not. Capture must not fall back to the dual-write password
-        // (ADR-0035 / #102).
-        assertEquals("old-secret", settings.servers.single { it.id == "dev" }.password)
+        // Even a stale deserialization input carrying the secret cannot become
+        // a fallback for the revision-pinned slot (ADR-0035 / #233).
+        settings.servers = mutableListOf(
+            NacosServerConfig(id = "dev", password = "old-secret")
+        )
         slots.remove(profile.id, profile.credentialSlotVersion)
         NacosCredentialStore.remove(profile.credentialSlotId)
 
@@ -203,11 +208,15 @@ class AccessSafetyTest {
 
     @Test
     fun `operation context fails closed before a request when endpoint or credentials are incomplete`() {
-        val invalidEndpoint = EnvironmentProfile.fromLegacy(
-            NacosServerConfig(id = "bad", serverUrl = "https://nacos.example/path")
+        val invalidEndpoint = EnvironmentProfile(
+            id = "bad",
+            canonicalEndpoint = "https://nacos.example/path"
         )
-        val incompleteCredentials = EnvironmentProfile.fromLegacy(
-            NacosServerConfig(id = "credentials", serverUrl = "https://nacos.example", username = "alice")
+        val incompleteCredentials = EnvironmentProfile(
+            id = "credentials",
+            canonicalEndpoint = "https://nacos.example",
+            authMode = AuthMode.NACOS_PASSWORD,
+            principal = "alice"
         )
 
         assertInstanceOf(
@@ -222,13 +231,11 @@ class AccessSafetyTest {
 
     @Test
     fun `captured operation context retains the original endpoint principal and credential snapshot`() {
-        val profile = EnvironmentProfile.fromLegacy(
-            NacosServerConfig(
-                id = "dev",
-                serverUrl = "https://dev.nacos.example",
-                username = "alice",
-                authMode = AuthMode.BASIC
-            )
+        val profile = EnvironmentProfile(
+            id = "dev",
+            canonicalEndpoint = "https://dev.nacos.example",
+            authMode = AuthMode.BASIC,
+            principal = "alice"
         )
         val captured = OperationContextResolver.resolve(profile, "dev-secret").getOrThrow()
         val changed = profile.copy(
@@ -247,13 +254,11 @@ class AccessSafetyTest {
 
     @Test
     fun `V1 anonymous profile captures a complete identity without a credential`() {
-        val profile = EnvironmentProfile.fromLegacy(
-            NacosServerConfig(
-                id = "public-read",
-                serverUrl = "https://nacos.example/",
-                apiPolicy = NacosApiPolicy.V1,
-                authMode = AuthMode.ANONYMOUS
-            )
+        val profile = EnvironmentProfile(
+            id = "public-read",
+            canonicalEndpoint = "https://nacos.example",
+            apiPolicy = NacosApiPolicy.V1,
+            authMode = AuthMode.ANONYMOUS
         )
 
         val context = OperationContextResolver.resolve(profile, "").getOrThrow()

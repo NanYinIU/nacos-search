@@ -434,7 +434,7 @@ class NacosSearchService(
         // Prefer the prepared context; fall back to credential-free identity
         // derivation so a missing snapshot never touches PasswordSafe on the
         // EDT (issue #53 / ADR-0039). When serverId is blank, use the project
-        // session's selected profile rather than the app-wide activeServerId so
+        // session's selected profile rather than an application-wide default so
         // multi-project sessions stay isolated — and for the same reason the
         // resolved generation comes from this project's session (ADR-0053).
         val profileId = request.serverId.takeIf { it.isNotBlank() }

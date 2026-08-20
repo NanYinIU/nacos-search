@@ -56,9 +56,9 @@ class ReleaseGateOrderingRacesTransportIntegrationTest {
     fun publishAnonymousProfile() {
         ApplicationManager.getApplication().getService(NacosSettings::class.java).apply {
             resetToDefaults()
-            applyServers(
+            applyProfileIntents(
                 listOf(
-                    NacosServerConfig(
+                    com.nanyin.nacos.search.settings.profileIntentFixture(
                         id = "s_local",
                         displayName = "Local",
                         serverUrl = "https://nacos.example",

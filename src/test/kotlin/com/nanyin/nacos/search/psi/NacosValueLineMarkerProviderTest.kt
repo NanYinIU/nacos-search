@@ -68,7 +68,7 @@ class NacosValueLineMarkerProviderTest {
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         ProjectManager.getInstance().defaultProject
             .getService(NacosProjectSession::class.java)
-            .select(settings.activeServerId, namespaceId)
+            .select(settings.resolveDefaultProfileId(), namespaceId)
     }
 
     private fun cacheAndRefresh(configuration: NacosConfiguration) = runBlocking {
@@ -232,13 +232,13 @@ class NacosValueLineMarkerProviderTest {
     @Test
     fun `marker resolves against project-selected profile cache identity`() {
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        val qa = NacosServerConfig(
+        val qa = com.nanyin.nacos.search.settings.profileIntentFixture(
             id = "qa",
             displayName = "QA",
             serverUrl = "http://qa.example:8848"
         )
-        val local = settings.getActiveServer()
-        settings.applyServers(listOf(local, qa), local.id)
+        val local = settings.loadIntentDraft().snapshot().first()
+        settings.applyProfileIntents(listOf(local, qa), local.profileId)
 
         val project = ProjectManager.getInstance().defaultProject
         project.getService(NacosProjectSession::class.java).select("qa", "public")
@@ -869,14 +869,20 @@ class NacosValueLineMarkerProviderTest {
      */
     private fun setAllowCrossNamespaceNavigation(enabled: Boolean) {
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        val servers = settings.cloneServers().map {
-            if (it.id == settings.activeServerId) {
-                it.copy(allowCrossNamespaceNavigation = enabled)
-            } else {
-                it
-            }
+        val draft = settings.loadIntentDraft()
+        val selectedId = ProjectManager.getInstance().defaultProject
+            .getService(NacosProjectSession::class.java)
+            .sessionState.selectedProfileId
+            .takeIf { id -> draft.snapshot().any { it.profileId == id } }
+            ?: draft.activeProfileId
+        val changed = draft.update(selectedId) {
+            it.copy(
+                preferences = it.preferences.copy(
+                    allowCrossNamespaceNavigation = enabled
+                )
+            )
         }
-        settings.applyServers(servers, settings.activeServerId)
+        settings.applyProfileIntents(changed.snapshot(), changed.activeProfileId)
     }
 
     // ---- a reference site's own 运行时格式 (#173) ----

@@ -40,15 +40,15 @@ class AutoGenerationCacheAddressingTest {
     private lateinit var cacheService: CacheService
     private lateinit var transport: V3Transport
 
-    private var originalServers: List<NacosServerConfig> = emptyList()
+    private var originalIntents: List<com.nanyin.nacos.search.models.ProfileIntent> = emptyList()
     private var originalActiveId: String = ""
 
     @BeforeEach
     fun setUp() {
         settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
-        originalServers = settings.cloneServers()
-        originalActiveId = settings.activeServerId
+        originalIntents = settings.loadIntentDraft().snapshot()
+        originalActiveId = settings.resolveDefaultProfileId()
         transport = V3Transport()
         runBlocking { cacheService.clearAll() }
         forgetTestProfiles()
@@ -57,13 +57,14 @@ class AutoGenerationCacheAddressingTest {
     @AfterEach
     fun tearDown() {
         runBlocking { cacheService.clearAll() }
-        settings.applyServers(originalServers, originalActiveId)
+        originalIntents.map { it.profileId }.forEach { tombstones().clear(it) }
+        settings.applyProfileIntents(originalIntents, originalActiveId)
         forgetTestProfiles()
         // Restoring the original set removes this test's profiles, and removing
         // a profile entombs it for the life of the application. Lift those and
-        // the ones the first applyServers displaced, so neither this class's
+        // the ones the first publication displaced, so neither this class's
         // next test nor another class inherits a dead profile id.
-        (originalServers.map { it.id }).forEach { tombstones().clear(it) }
+        originalIntents.map { it.profileId }.forEach { tombstones().clear(it) }
     }
 
     @Test
@@ -248,9 +249,9 @@ class AutoGenerationCacheAddressingTest {
     private fun selectLockedProfile(policy: NacosApiPolicy) = selectProfile(LOCKED_PROFILE, policy)
 
     private fun selectProfile(profileId: String, policy: NacosApiPolicy) {
-        settings.applyServers(
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                com.nanyin.nacos.search.settings.profileIntentFixture(
                     id = profileId,
                     displayName = profileId,
                     serverUrl = ENDPOINT,

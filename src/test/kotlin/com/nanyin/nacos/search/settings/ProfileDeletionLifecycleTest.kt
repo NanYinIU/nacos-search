@@ -242,7 +242,7 @@ class ProfileDeletionLifecycleTest {
         assertEquals(beforeDrop.id, still?.id)
         assertEquals(beforeDrop.accessRevision, still?.accessRevision)
         assertEquals(beforeSlot, slots.read("drop", beforeDrop.credentialSlotVersion))
-        assertTrue(settings.servers.any { it.id == "drop" })
+        assertTrue(settings.publishedProfiles().any { it.id == "drop" })
     }
 
     @Test
@@ -525,7 +525,7 @@ class ProfileDeletionLifecycleTest {
 
     @Test
     fun `markSelectedProfileUnavailable blocks healSelection auto-retarget`() {
-        val live = NacosServerConfig(
+        val live = profileIntentFixture(
             id = "live",
             displayName = "Live",
             serverUrl = "https://nacos.example",
@@ -534,7 +534,7 @@ class ProfileDeletionLifecycleTest {
             authMode = AuthMode.NACOS_PASSWORD
         )
         val settings = NacosSettings().also { it.resetToDefaults() }
-        settings.applyServers(listOf(live), "live")
+        settings.applyProfileIntents(listOf(live), "live")
 
         // Non-explicit session pointing at a now-deleted profile: an initialized
         // (or non-blank) selection must not retarget to "live" (issue #107 /
