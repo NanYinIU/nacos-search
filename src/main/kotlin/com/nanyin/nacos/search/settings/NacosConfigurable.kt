@@ -101,6 +101,14 @@ class NacosConfigurable @JvmOverloads constructor(
     private lateinit var testStatusLabel: JLabel
     /** Discovery list is valid only for this unsaved-form identity. */
     private var discoveredOptionKey: DiscoveryOptionKey? = null
+    private var chooserDiscoveryInFlight = false
+    /**
+     * Isolated Namespace discovery for the chooser. Tests replace this; production
+     * uses [NacosApiService.discoverSuggestedNamespaces].
+     */
+    internal var suggestedNamespaceDiscoverer:
+        (suspend (com.nanyin.nacos.search.services.operations.DiagnosticSnapshot) ->
+            Result<List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>>)? = null
 
     // Language
     private lateinit var languageComboBox: JComboBox<LanguageService.SupportedLanguage>
@@ -412,6 +420,20 @@ class NacosConfigurable @JvmOverloads constructor(
         updateApplyEnabledState()
     }
 
+    private fun onSuggestedNamespaceCommitted() {
+        val before = selectedDraft()?.namespace
+        commitDetailFormToDraft()
+        if (selectedDraft()?.namespace != before) {
+            clearConnectionDiagnosticHeadline()
+        }
+    }
+
+    private fun clearConnectionDiagnosticHeadline() {
+        if (!::testStatusLabel.isInitialized) return
+        testStatusLabel.text = ""
+        testStatusLabel.toolTipText = null
+    }
+
     private fun applyStrategySwitch(from: AuthMode, to: AuthMode) {
         val effects = AuthStrategyFormPolicy.onStrategySwitch(from, to)
         if (effects.clearUsername) {
@@ -542,7 +564,8 @@ class NacosConfigurable @JvmOverloads constructor(
         }
         namespaceCombo = SuggestedNamespaceComboBox().apply {
             font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 13)
-            onNamespaceCommitted = { commitDetailFormToDraft() }
+            onNamespaceCommitted = { onSuggestedNamespaceCommitted() }
+            onPopupWillBecomeVisible = { requestSuggestedNamespaceOptions() }
         }
         apiPolicyComboBox = JComboBox(arrayOf(NacosApiPolicy.AUTO, NacosApiPolicy.V1, NacosApiPolicy.V3)).apply {
             putClientProperty("nacos.automation.id", "nacos.settings.apiPolicy")
@@ -1351,17 +1374,14 @@ class NacosConfigurable @JvmOverloads constructor(
                     val report = outcome.getOrNull()
                     if (report != null) {
                         acceptDiscoveredNamespaces(report.discoveredNamespaces)
-                        testStatusLabel.text = diagnosticHeadline(report)
+                        val headline = diagnosticHeadline(report)
+                        testStatusLabel.text = headline
                         testStatusLabel.foreground = if (report.connected) {
                             JBColor(0x5fb865, 0x208a3c)
                         } else {
                             JBColor.RED
                         }
-                        testStatusLabel.toolTipText = report.stages.joinToString("\n") { stage ->
-                            val status = if (stage.success) "ok" else (stage.sanitizedFailure ?: "failed")
-                            "${stage.stage}: $status (${stage.durationMillis}ms)" +
-                                (stage.resolvedGeneration?.let { " gen=$it" } ?: "")
-                        }
+                        testStatusLabel.toolTipText = diagnosticTooltip(report, headline)
                     } else {
                         val msg = outcome.exceptionOrNull()?.message ?: NacosSearchBundle.message("error.unknown")
                         testStatusLabel.text = NacosSearchBundle.message("settings.test.failed", msg)
@@ -1387,6 +1407,67 @@ class NacosConfigurable @JvmOverloads constructor(
     ) {
         namespaceCombo.applyDiscovered(namespaces)
         discoveredOptionKey = currentDiscoveryKey()
+    }
+
+    internal fun requestSuggestedNamespaceOptions() {
+        if (!::namespaceCombo.isInitialized) return
+        if (namespaceCombo.discoveredCount() > 0 || chooserDiscoveryInFlight) return
+        commitDetailFormToDraft()
+        val server = selectedDraft() ?: return
+        if (!server.isValidUrl()) return
+
+        val snapshot = com.nanyin.nacos.search.services.operations.DiagnosticSnapshot(
+            endpoint = server.serverUrl.trim(),
+            apiPolicy = server.apiPolicy.name,
+            authStrategy = server.authMode.name,
+            principal = server.username.trim(),
+            secret = server.password,
+            namespaceId = server.namespace.trim().ifBlank { "public" }
+        )
+        val testedKey = currentDiscoveryKey()
+        namespaceCombo.showLoadingPlaceholder()
+        discoveredOptionKey = testedKey
+        chooserDiscoveryInFlight = true
+
+        fun applyResult(
+            result: Result<List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>>
+        ) {
+            chooserDiscoveryInFlight = false
+            if (currentDiscoveryKey() != testedKey) return
+            result.fold(
+                onSuccess = { acceptDiscoveredNamespaces(it) },
+                onFailure = { namespaceCombo.showFailurePlaceholder() }
+            )
+        }
+
+        if (ApplicationManager.getApplication().isUnitTestMode) {
+            val discoverer = suggestedNamespaceDiscoverer
+                ?: { snap -> apiService.discoverSuggestedNamespaces(snap) }
+            applyResult(runBlocking { discoverer(snapshot) })
+            return
+        }
+
+        ProgressManager.getInstance().run(object : Task.Backgroundable(
+            null,
+            NacosSearchBundle.message("settings.namespace.chooser.loading"),
+            true
+        ) {
+            override fun run(indicator: ProgressIndicator) {
+                indicator.text = NacosSearchBundle.message("settings.namespace.chooser.loading")
+                val outcome = try {
+                    runBlocking(Dispatchers.IO) {
+                        val discoverer = suggestedNamespaceDiscoverer
+                            ?: { snap -> apiService.discoverSuggestedNamespaces(snap) }
+                        discoverer(snapshot)
+                    }
+                } catch (e: Exception) {
+                    Result.failure(e)
+                }
+                invokeOnEdt(ModalityState.defaultModalityState()) {
+                    applyResult(outcome)
+                }
+            }
+        })
     }
 
     private fun invalidateDiscoveredOptionsIfIdentityChanged() {
@@ -1417,11 +1498,6 @@ class NacosConfigurable @JvmOverloads constructor(
     ): String {
         val summary = report.summary
         return when {
-            summary.startsWith("Permission denied for namespace") && report.discoveredNamespaces.isNotEmpty() ->
-                NacosSearchBundle.message(
-                    "settings.test.namespace.permission.pick",
-                    report.configuredNamespaceId
-                )
             summary.startsWith("Permission denied for namespace") ->
                 NacosSearchBundle.message(
                     "settings.test.namespace.permission",
@@ -1438,6 +1514,20 @@ class NacosConfigurable @JvmOverloads constructor(
             else -> summary
         }
     }
+
+    internal fun diagnosticTooltip(
+        report: com.nanyin.nacos.search.services.operations.DiagnosticReport,
+        headline: String
+    ): String =
+        if (report.summary.startsWith("Permission denied for namespace")) {
+            headline
+        } else {
+            report.stages.joinToString("\n") { stage ->
+                val status = if (stage.success) "ok" else (stage.sanitizedFailure ?: "failed")
+                "${stage.stage}: $status (${stage.durationMillis}ms)" +
+                    (stage.resolvedGeneration?.let { " gen=$it" } ?: "")
+            }
+        }
 
     // ------------------------------------------------------------------
     // List cell renderer

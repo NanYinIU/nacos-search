@@ -107,10 +107,7 @@ class ConnectionDiagnosticTest {
         assertEquals("discovery", report.stages.last().stage)
         assertTrue(report.stages.single { it.stage == "discovery" }.success)
         assertEquals(discovered, report.discoveredNamespaces)
-        assertEquals(
-            "Permission denied for namespace secret-ns. Pick another from the list.",
-            report.summary
-        )
+        assertEquals("Permission denied for namespace secret-ns", report.summary)
     }
 
     @Test
@@ -285,6 +282,64 @@ class ConnectionDiagnosticTest {
         assertEquals("Connected. Manual namespace. Discovery unavailable.", report.summary)
     }
 
+    @Test
+    fun `chooser discovery does not read the configured namespace`() = runBlocking {
+        val discovered = listOf(DiscoveredNamespace("ns-1", "Team One"))
+        val v3 = StubAdapter(
+            NacosApiGeneration.V3,
+            probeResult = Result.success(Unit),
+            discovered = discovered
+        )
+        val diagnostic = ConnectionDiagnostic(
+            GenerationResolver(v3, StubAdapter(NacosApiGeneration.V1)),
+            OperationGateway(mapOf(NacosApiGeneration.V3 to v3))
+        )
+
+        val result = diagnostic.discover(validAnonymousSnapshot().copy(apiPolicy = "V3"))
+
+        assertEquals(discovered, result.getOrThrow())
+        assertEquals(0, v3.listSummariesCount)
+        assertEquals(0, v3.probeCount)
+    }
+
+    @Test
+    fun `chooser discovery fails locally on a blank endpoint without remote calls`() = runBlocking {
+        val v3 = CountingProbeAdapter(NacosApiGeneration.V3)
+        val diagnostic = ConnectionDiagnostic(
+            GenerationResolver(v3, CountingProbeAdapter(NacosApiGeneration.V1)),
+            OperationGateway(mapOf(NacosApiGeneration.V3 to v3))
+        )
+
+        val result = diagnostic.discover(
+            DiagnosticSnapshot(
+                endpoint = "",
+                apiPolicy = "V3",
+                authStrategy = "ANONYMOUS",
+                principal = "",
+                secret = "",
+                namespaceId = "public"
+            )
+        )
+
+        assertTrue(result.isFailure)
+        assertEquals(0, v3.probeCount)
+    }
+
+    @Test
+    fun `chooser discovery failure is a result failure not a connection diagnostic`() = runBlocking {
+        val v3 = StubAdapter(NacosApiGeneration.V3, probeResult = Result.success(Unit))
+        val diagnostic = ConnectionDiagnostic(
+            GenerationResolver(v3, StubAdapter(NacosApiGeneration.V1)),
+            OperationGateway(mapOf(NacosApiGeneration.V3 to v3)),
+            discoveryProbe = { Result.failure(RemoteOperationError.Connection(RuntimeException("down"))) }
+        )
+
+        val result = diagnostic.discover(validAnonymousSnapshot().copy(apiPolicy = "V3"))
+
+        assertTrue(result.isFailure)
+        assertEquals(0, v3.listSummariesCount)
+    }
+
     // ---- helpers ----
 
     private fun validAnonymousSnapshot() = DiagnosticSnapshot(
@@ -303,6 +358,7 @@ class ConnectionDiagnosticTest {
         val discovered: List<DiscoveredNamespace> = emptyList()
     ) : ProtocolAdapter {
         var probeCount = 0
+        var listSummariesCount = 0
 
         override val capabilities = ProtocolCapabilities.NONE.copy(
             namespaceDiscovery = CapabilityCoverage.COMPLETE
@@ -313,11 +369,13 @@ class ConnectionDiagnosticTest {
             return probeResult
         }
 
-        override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery) =
-            summariesResult.fold(
+        override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery): Result<SummaryPage> {
+            listSummariesCount++
+            return summariesResult.fold(
                 onSuccess = { Result.success(it.copy(pageNumber = query.pageNo)) },
                 onFailure = { Result.failure(it) }
             )
+        }
 
         override suspend fun readDetail(target: OperationTarget, coordinate: ConfigurationCoordinate) =
             Result.success(null)
