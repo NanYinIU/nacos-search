@@ -11,8 +11,22 @@ import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.models.ProfileIntent
 import com.nanyin.nacos.search.services.ResolvedGenerationLocator
+
+/**
+ * Credential-free read projection of one published environment.
+ *
+ * This is deliberately immutable and contains only fields needed to choose an
+ * environment. Settings editors use [ProfileIntent], never this projection.
+ */
+data class PublishedEnvironment(
+    val profileId: String,
+    val displayName: String,
+    val canonicalEndpoint: String,
+    val suggestedNamespace: String
+)
 
 /**
  * Persistent settings for the Nacos plugin.
@@ -1011,10 +1025,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         }
     }
 
-    /**
-     * Pure read of the migration seed and published profiles for a newly opened
-     * project. Never stages credentials or rewrites settings (issue #104).
-     */
+    /** Compatibility read for the upgrade summary; never stages credentials. */
     fun migrationDefaults(): LegacyMigrationResult {
         val report = lastMigrationReport
         return LegacyMigrationResult(
@@ -1053,6 +1064,34 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     /** Immutable snapshots of every published environment profile, in store order. */
     fun publishedProfiles(): List<EnvironmentProfile> =
         profiles.map { it.copy(cacheTombstones = it.cacheTombstones.toMutableList()) }
+
+    /**
+     * Immutable environment choices derived only from published profiles and
+     * their profile-associated preferences. This read never consults legacy
+     * server rows, flat active fields, or credential storage.
+     */
+    fun publishedEnvironments(): List<PublishedEnvironment> {
+        val preferencesByProfile = environmentPreferences
+            .filter { it.profileId.isNotBlank() }
+            .associateBy { it.profileId }
+        return profiles.map { profile ->
+            PublishedEnvironment(
+                profileId = profile.id,
+                displayName = profile.displayName,
+                canonicalEndpoint = profile.canonicalEndpoint,
+                suggestedNamespace = NamespaceInfo.canonicalId(
+                    preferencesByProfile[profile.id]?.suggestedNamespace
+                )
+            )
+        }
+    }
+
+    fun publishedEnvironment(profileId: String): PublishedEnvironment? =
+        publishedEnvironments().firstOrNull { it.profileId == profileId }
+
+    /** Migration-owned default resolved to the published read projection. */
+    fun defaultPublishedEnvironment(): PublishedEnvironment? =
+        publishedEnvironment(resolveDefaultProfileId())
 
     /**
      * Captures a complete immutable context before network I/O.

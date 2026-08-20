@@ -4,9 +4,9 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
+import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
-import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.operations.EditEnvironment
 import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.services.operations.OperationGateway
@@ -90,14 +90,15 @@ class UiButtonInteractionTest {
     @Test
     fun topToolbarSelectionControlsSizeFromDisplayedContentWithBounds() {
         val settings = NacosSettings().apply {
-            servers = mutableListOf(
-                NacosServerConfig(
+            profiles = mutableListOf(
+                EnvironmentProfile(
                     id = "qa",
                     displayName = "QA Integration With A Longer Name",
-                    serverUrl = "http://qa.example.com:8848"
+                    canonicalEndpoint = "http://qa.example.com:8848"
                 )
             )
-            activeServerId = "qa"
+            environmentPreferences = mutableListOf(EnvironmentPreferences.defaultsFor("qa"))
+            migratedDefaultProfileId = "qa"
         }
         val switcher = EnvironmentSwitcher(mockProject, settings)
         val envButton = privateField<JButton>(switcher, "envButton")

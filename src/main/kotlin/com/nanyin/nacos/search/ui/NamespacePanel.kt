@@ -187,7 +187,7 @@ class NamespacePanel(
 
         return try {
             val context = projectSession?.let { session ->
-                session.ensureInitialized(settings.migrationDefaults())
+                session.ensureInitialized(settings)
                 // The capture reads PasswordSafe, and this panel's scope is the
                 // event dispatch thread — never capture a credential on it
                 // (ADR-0039).
@@ -229,7 +229,7 @@ class NamespacePanel(
         // see the session's Namespace before returning. Swing paint stays deferred
         // via invokeOnEdt (#82). Prefer the project session over a stale panel
         // selection left over from the previous environment.
-        projectSession?.ensureInitialized(settings.migrationDefaults())
+        projectSession?.ensureInitialized(settings)
         val storedId = projectSession?.sessionState?.namespaceId?.takeIf { it.isNotBlank() }
         val projectSelection = storedId?.let { token -> findLoadedNamespace(token) }
         val toSelect: NamespaceInfo? = projectSelection
@@ -365,7 +365,7 @@ class NamespacePanel(
     private fun onNamespaceSelected(namespace: NamespaceInfo) {
         coroutineScope.launch {
             try {
-                projectSession?.ensureInitialized(settings.migrationDefaults())
+                projectSession?.ensureInitialized(settings)
                 val profileId = projectSession?.sessionState?.selectedProfileId.orEmpty()
                 if (profileId.isNotBlank()) {
                     projectSession?.adoptEnvironment(profileId, namespace.namespaceId)

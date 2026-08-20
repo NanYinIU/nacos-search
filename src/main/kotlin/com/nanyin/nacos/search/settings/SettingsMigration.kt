@@ -53,8 +53,8 @@ data class SettingsMigrationReport(
 }
 
 /**
- * Compatibility view used by project session seeding and the upgrade banner.
- * Derived from a [SettingsMigrationReport] or the current pure settings read.
+ * Compatibility view used by the upgrade banner. Project sessions seed from
+ * the credential-free published-environment projection (issue #232).
  */
 data class LegacyMigrationResult(
     val profiles: List<EnvironmentProfile>,

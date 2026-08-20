@@ -387,14 +387,15 @@ class AccessSafetyTest {
     fun `project selections stay independent after the shared default is seeded`() {
         val first = NacosProjectSessionState()
         val second = NacosProjectSessionState()
-        val defaults = LegacyMigrationResult(
-            profiles = emptyList(),
-            defaultProfileId = "dev",
-            defaultNamespaceId = "team-a"
+        val defaultEnvironment = PublishedEnvironment(
+            profileId = "dev",
+            displayName = "Development",
+            canonicalEndpoint = "https://dev.example",
+            suggestedNamespace = "team-a"
         )
 
-        first.ensureInitialized(defaults)
-        second.ensureInitialized(defaults)
+        first.ensureInitialized(defaultEnvironment)
+        second.ensureInitialized(defaultEnvironment)
         first.select("prod", "team-b")
 
         assertEquals("prod", first.selectedProfileId)

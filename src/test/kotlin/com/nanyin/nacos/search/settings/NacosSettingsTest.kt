@@ -512,7 +512,7 @@ class NacosSettingsTest {
             namespaceId = "public",
             selectionWasExplicit = false
         )
-        blank.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
+        blank.ensureInitialized(settings.defaultPublishedEnvironment())
         assertEquals("s_ok", blank.selectedProfileId)
         assertTrue(blank.sessionInitialized)
 
@@ -521,7 +521,7 @@ class NacosSettingsTest {
             namespaceId = "public",
             selectionWasExplicit = true
         )
-        explicitDeleted.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
+        explicitDeleted.ensureInitialized(settings.defaultPublishedEnvironment())
         assertEquals("ghost", explicitDeleted.selectedProfileId)
         assertTrue(explicitDeleted.sessionInitialized)
     }

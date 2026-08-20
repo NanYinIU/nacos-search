@@ -37,36 +37,24 @@ data class NacosProjectSessionState(
     var sessionInitialized: Boolean = false
 ) {
     /**
-     * Reads the stable migration default exactly once for a blank session and
-     * persists the resulting project-local selection. Subsequent calls are no-ops
-     * even when the shared seed later moves (issue #107).
+     * Seeds a blank project from the migration-selected published environment.
+     * Subsequent calls are no-ops even when the shared seed later moves; the
+     * suggested Namespace belongs to that profile's preference record.
      */
-    fun ensureInitialized(defaults: LegacyMigrationResult) {
+    fun ensureInitialized(defaultEnvironment: PublishedEnvironment?) {
         if (sessionInitialized) return
         if (selectedProfileId.isNotBlank() || selectionWasExplicit) {
             sessionInitialized = true
             return
         }
-        selectedProfileId = defaults.defaultProfileId
-        namespaceId = defaults.defaultNamespaceId.ifBlank { "public" }
+        selectedProfileId = defaultEnvironment?.profileId.orEmpty()
+        namespaceId = NamespaceInfo.canonicalId(defaultEnvironment?.suggestedNamespace)
         sessionInitialized = true
-    }
-
-    /** @see ensureInitialized */
-    fun seedIfNew(defaults: LegacyMigrationResult) = ensureInitialized(defaults)
-
-    /**
-     * Ensures the session is initialized. Never retargets a missing profile —
-     * leave the stale id for profile-unavailable (ADR-0025 / #107).
-     */
-    @Suppress("UNUSED_PARAMETER")
-    fun healSelection(defaults: LegacyMigrationResult, profileExists: (String) -> Boolean) {
-        ensureInitialized(defaults)
     }
 
     fun select(profileId: String, namespace: String) {
         selectedProfileId = profileId
-        namespaceId = namespace.ifBlank { "public" }
+        namespaceId = NamespaceInfo.canonicalId(namespace)
         selectionWasExplicit = true
         sessionInitialized = true
     }
@@ -107,13 +95,14 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
         }
     }
 
-    fun seedIfNew(defaults: LegacyMigrationResult) = sessionState.ensureInitialized(defaults)
+    fun ensureInitialized(defaultEnvironment: PublishedEnvironment?) =
+        sessionState.ensureInitialized(defaultEnvironment)
 
-    fun ensureInitialized(defaults: LegacyMigrationResult) = sessionState.ensureInitialized(defaults)
+    fun ensureInitialized(settings: NacosSettings) =
+        ensureInitialized(settings.defaultPublishedEnvironment())
 
     fun healSelection(settings: NacosSettings) {
-        val defaults = settings.migrationDefaults()
-        sessionState.healSelection(defaults) { profileId -> settings.getProfile(profileId) != null }
+        sessionState.ensureInitialized(settings.defaultPublishedEnvironment())
     }
 
     fun select(profileId: String, namespace: String) = sessionState.select(profileId, namespace)
@@ -137,11 +126,22 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
         val sameProfile = profileId == sessionState.selectedProfileId
         val ns = when {
             // Explicit argument, including blank/"public" for the public Namespace.
-            namespaceId != null -> namespaceId.ifBlank { NamespaceInfo.PUBLIC }
-            sameProfile && sessionState.namespaceId.isNotBlank() -> sessionState.namespaceId
+            namespaceId != null -> NamespaceInfo.canonicalId(namespaceId)
+            sameProfile && sessionState.namespaceId.isNotBlank() ->
+                NamespaceInfo.canonicalId(sessionState.namespaceId)
             else -> NamespaceInfo.PUBLIC
         }
         select(profileId, ns)
+    }
+
+    /**
+     * Adopts a published environment and its suggested Namespace. Re-adopting
+     * the selected profile preserves this project's explicit Namespace.
+     */
+    fun adoptEnvironment(environment: PublishedEnvironment) {
+        val namespace = environment.suggestedNamespace
+            .takeUnless { environment.profileId == sessionState.selectedProfileId }
+        adoptEnvironment(environment.profileId, namespace)
     }
 
     fun markUpgradeSummaryShown(schemaVersion: Int = SettingsSchema.CURRENT) {
@@ -192,7 +192,7 @@ internal fun Project.selectedNacosProfileId(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
 ): String {
     val session = getService(NacosProjectSession::class.java) ?: return settings.resolveDefaultProfileId()
-    session.ensureInitialized(settings.migrationDefaults())
+    session.ensureInitialized(settings)
     return session.sessionState.selectedProfileId
 }
 
@@ -200,7 +200,7 @@ internal fun Project.selectedNacosNamespaceId(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
 ): String? {
     val session = getService(NacosProjectSession::class.java) ?: return null
-    session.ensureInitialized(settings.migrationDefaults())
+    session.ensureInitialized(settings)
     return resolveProjectNamespaceId(session.sessionState)
 }
 

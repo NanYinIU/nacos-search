@@ -546,7 +546,7 @@ class ProfileDeletionLifecycleTest {
             selectionWasExplicit = false
             sessionInitialized = true
         }
-        session.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
+        session.ensureInitialized(settings.defaultPublishedEnvironment())
         assertEquals("deleted", session.selectedProfileId, "must not auto-select another environment")
 
         // NacosProjectSession.markSelectedProfileUnavailable is the production seam.

@@ -24,7 +24,7 @@ internal fun refreshSelection(project: Project?): RefreshSelection? {
     project ?: return null
     val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
     val session = project.getService(NacosProjectSession::class.java) ?: return null
-    session.ensureInitialized(settings.migrationDefaults())
+        session.ensureInitialized(settings)
     val profileId = session.sessionState.selectedProfileId.takeIf { it.isNotBlank() } ?: return null
     val namespaceId = session.sessionState.namespaceId.takeIf { it.isNotBlank() } ?: return null
     return RefreshSelection(profileId, namespaceId)
