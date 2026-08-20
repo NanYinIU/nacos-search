@@ -98,8 +98,6 @@ class SuggestedNamespaceComboBox : ComboBox<DiscoveredNamespace>() {
         mutating = true
         try {
             restoreUnfilteredModel()
-            editorField.text = current
-            selectMatching(current)
         } finally {
             mutating = false
         }
@@ -139,21 +137,29 @@ class SuggestedNamespaceComboBox : ComboBox<DiscoveredNamespace>() {
             } else {
                 allOptions.filter { SuggestedNamespaceSelection.matchesFilter(it, query) }
             }
-            replaceItems(items)
-            editorField.text = query
+            replaceItems(items, editorText = query)
         } finally {
             mutating = false
         }
     }
 
     private fun restoreUnfilteredModel() {
-        replaceItems(allOptions)
+        val alreadyMutating = mutating
+        mutating = true
+        try {
+            replaceItems(allOptions, editorText = lastCommitted)
+        } finally {
+            if (!alreadyMutating) mutating = false
+        }
     }
 
-    private fun replaceItems(items: List<DiscoveredNamespace>) {
+    private fun replaceItems(items: List<DiscoveredNamespace>, editorText: String) {
         val model = DefaultComboBoxModel<DiscoveredNamespace>()
         items.forEach { model.addElement(it) }
+        val keepId = lastCommitted
+        model.selectedItem = items.find { it.namespaceId == keepId }
         setModel(model)
+        editorField.text = editorText
     }
 
     private fun selectMatching(id: String) {

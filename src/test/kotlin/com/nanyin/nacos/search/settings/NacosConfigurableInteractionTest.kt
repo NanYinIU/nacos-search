@@ -336,6 +336,38 @@ class NacosConfigurableInteractionTest {
     }
 
     @Test
+    fun pickingAnotherNamespaceClearsStaleDiagnosticHeadlineWithoutRetesting() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
+        val status = privateField<JLabel>(configurable, "testStatusLabel")
+        val publicNs = DiscoveredNamespace("public", "public")
+        val other = DiscoveredNamespace("ns-other", "Other")
+
+        runOnEdt {
+            combo.setNamespaceId("public")
+            configurable.acceptDiscoveredNamespaces(listOf(publicNs, other))
+            status.text = "Permission denied for namespace public"
+            status.toolTipText = "stale stages"
+        }
+        waitForUi()
+
+        runOnEdt {
+            combo.selectedItem = other
+        }
+        waitForUi()
+
+        assertEquals("ns-other", combo.namespaceId())
+        assertEquals("ns-other", selectedDraft(configurable).namespace)
+        assertEquals("", status.text)
+        assertEquals(null, status.toolTipText)
+        assertFalse(
+            status.text.contains("Connecting", ignoreCase = true),
+            "picking a Namespace must not start Test Connection"
+        )
+    }
+
+    @Test
     fun staleDiscoveryIsNotAppliedAfterIdentityChange() {
         val configurable = NacosConfigurable()
         configurable.createComponent()

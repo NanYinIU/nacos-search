@@ -412,6 +412,20 @@ class NacosConfigurable @JvmOverloads constructor(
         updateApplyEnabledState()
     }
 
+    private fun onSuggestedNamespaceCommitted() {
+        val before = selectedDraft()?.namespace
+        commitDetailFormToDraft()
+        if (selectedDraft()?.namespace != before) {
+            clearConnectionDiagnosticHeadline()
+        }
+    }
+
+    private fun clearConnectionDiagnosticHeadline() {
+        if (!::testStatusLabel.isInitialized) return
+        testStatusLabel.text = ""
+        testStatusLabel.toolTipText = null
+    }
+
     private fun applyStrategySwitch(from: AuthMode, to: AuthMode) {
         val effects = AuthStrategyFormPolicy.onStrategySwitch(from, to)
         if (effects.clearUsername) {
@@ -542,7 +556,7 @@ class NacosConfigurable @JvmOverloads constructor(
         }
         namespaceCombo = SuggestedNamespaceComboBox().apply {
             font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 13)
-            onNamespaceCommitted = { commitDetailFormToDraft() }
+            onNamespaceCommitted = { onSuggestedNamespaceCommitted() }
         }
         apiPolicyComboBox = JComboBox(arrayOf(NacosApiPolicy.AUTO, NacosApiPolicy.V1, NacosApiPolicy.V3)).apply {
             putClientProperty("nacos.automation.id", "nacos.settings.apiPolicy")
