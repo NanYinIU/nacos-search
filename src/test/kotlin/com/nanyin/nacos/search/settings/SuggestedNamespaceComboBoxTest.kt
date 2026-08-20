@@ -1,11 +1,14 @@
 package com.nanyin.nacos.search.settings
 
+import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.services.operations.DiscoveredNamespace
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import javax.swing.JPanel
 import javax.swing.JTextField
 
+@TestApplication
 class SuggestedNamespaceComboBoxTest {
 
     private val team = DiscoveredNamespace("ns-uuid-1", "Team One")
@@ -68,5 +71,15 @@ class SuggestedNamespaceComboBoxTest {
         combo.applyDiscovered(listOf(team, live))
         combo.selectedItem = live
         assertEquals("ns-uuid-2", combo.namespaceId())
+    }
+
+    @Test
+    fun `preferred size does not npe when an empty editable combo is laid out`() {
+        val combo = SuggestedNamespaceComboBox()
+        val wrapper = JPanel(java.awt.BorderLayout(8, 0))
+        wrapper.add(combo, java.awt.BorderLayout.CENTER)
+        val size = wrapper.preferredSize
+        assertTrue(size.height > 0)
+        assertTrue(size.width >= 0)
     }
 }
