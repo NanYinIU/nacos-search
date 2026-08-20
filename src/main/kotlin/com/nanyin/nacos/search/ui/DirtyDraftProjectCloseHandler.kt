@@ -18,7 +18,7 @@ class DirtyDraftProjectCloseHandler : ProjectCloseHandler {
         return when (val guard = editSessions.guardProjectClose()) {
             DraftGuard.Proceed, DraftGuard.AlreadyEditing -> true
             is DraftGuard.ConfirmDiscard -> {
-                if (confirmDraftDiscard(project, guard.draft, "config.detail.draft.discard.project.close")) {
+                if (DraftDiscardPrompt.confirm(project, guard.draft, "config.detail.draft.discard.project.close")) {
                     editSessions.discardDraft()
                     true
                 } else {
@@ -26,10 +26,10 @@ class DirtyDraftProjectCloseHandler : ProjectCloseHandler {
                 }
             }
             DraftGuard.RefuseInFlight -> {
-                explainPublishInFlight(project)
+                DraftDiscardPrompt.explainPublishInFlight(project)
                 false
             }
-            is DraftGuard.RequireWarnedAbandon -> confirmWarnedAbandon(project, editSessions, guard.draft)
+            is DraftGuard.RequireWarnedAbandon -> DraftDiscardPrompt.confirmWarnedAbandon(project, editSessions, guard.draft)
         }
     }
 }

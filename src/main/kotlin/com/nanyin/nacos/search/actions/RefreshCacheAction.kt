@@ -11,7 +11,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import kotlinx.coroutines.runBlocking
 import com.intellij.openapi.application.ModalityState
-import com.nanyin.nacos.search.invokeOnEdt
+import com.nanyin.nacos.search.Edt
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosSettings
 
@@ -61,7 +61,7 @@ class RefreshCacheAction : AnAction(
                     )
                     indicator.checkCanceled()
 
-                    invokeOnEdt(ModalityState.defaultModalityState()) {
+                    Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
                         if (result.isSuccess) {
                             Messages.showInfoMessage(
                                 project,
@@ -77,7 +77,7 @@ class RefreshCacheAction : AnAction(
                         }
                     }
                 } catch (e: Exception) {
-                    invokeOnEdt(ModalityState.defaultModalityState()) {
+                    Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
                         Messages.showErrorDialog(
                             project,
                             "Error refreshing cache: ${e.message}",

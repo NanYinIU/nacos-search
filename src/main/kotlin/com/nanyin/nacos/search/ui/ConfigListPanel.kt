@@ -20,7 +20,7 @@ import javax.swing.plaf.basic.BasicButtonUI
 import java.util.concurrent.ConcurrentHashMap
 import javax.swing.border.EmptyBorder
 import com.intellij.openapi.application.ModalityState
-import com.nanyin.nacos.search.invokeOnEdt
+import com.nanyin.nacos.search.Edt
 /**
  * Panel for displaying the configuration result list with file-type badges.
  *
@@ -556,7 +556,7 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
     // ------------------------------------------------------------------
 
     override fun languageChanged() {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             refreshButton.toolTipText = NacosSearchBundle.message("tooltip.config.refresh")
             // Always refresh static labels; the held card may not be the loading
             // one, but its text still lives in the component tree.

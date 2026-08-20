@@ -5,7 +5,6 @@ import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.IndexOutcome
 import com.nanyin.nacos.search.services.NamespaceIndexCoordinator
 import com.nanyin.nacos.search.services.captureNamespaceIndexRequest
-import com.nanyin.nacos.search.services.captureAccessIdentity
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.NavigationDetailPrefetchService
 import com.nanyin.nacos.search.services.requestManualNamespaceRefresh

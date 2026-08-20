@@ -54,7 +54,7 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import javax.swing.*
 import kotlin.concurrent.withLock
-import com.nanyin.nacos.search.invokeOnEdt
+import com.nanyin.nacos.search.Edt
 /**
  * Renders a closed [DetailViewState] set with one exhaustive branch and holds
  * no decision (issue #81). Mapping from load / edit / publish outcomes lives in
@@ -241,7 +241,7 @@ class ConfigDetailPanel internal constructor(
         // When Settings (or any other site) discards the project draft, leave
         // edit mode without the panel itself owning that discard.
         discardListenerHandle = editSessions.addDiscardListener(DraftDiscardListener {
-            invokeOnEdt(ModalityState.any()) {
+            Edt.invokeOnEdt(ModalityState.any()) {
                 if (!project.isDisposed) applyViewModeUi()
             }
         })
@@ -598,7 +598,7 @@ private fun setupEventHandlers() {
         // Title asterisk: append/remove '*' from dataId label text
         val config = currentConfiguration ?: return
         val baseId = config.dataId
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             dataIdLabel.text = if (dirty && !baseId.endsWith("*")) "$baseId *" else baseId
         }
         // Notify window for list-row dot update
@@ -745,7 +745,7 @@ private fun setupEventHandlers() {
         // invokeOnEdt always defers (#82). The editor can be released before
         // this runs — selection change, clear, or tool-window dispose — so
         // re-check identity and disposal the same way applyKeyGutterMarkers does.
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             if (editor !== ed || ed.isDisposed) return@invokeOnEdt
             val offset = document.getLineStartOffset(targetLine)
             ed.caretModel.moveToOffset(offset)
@@ -783,7 +783,7 @@ private fun setupEventHandlers() {
             )
             if (usedKeys.isEmpty()) return@launch
 
-            invokeOnEdt(ModalityState.defaultModalityState()) {
+            Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
                 if (!presentation.admitAndRecord(presented)) return@invokeOnEdt
                 if (editor !== ed || ed.isDisposed) return@invokeOnEdt
 
@@ -933,7 +933,7 @@ private fun setupEventHandlers() {
 
    
     private fun updateMetadata(configuration: NacosConfiguration, presented: PresentedResult) {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             if (!presentation.admitAndRecord(presented)) return@invokeOnEdt
             dataIdLabel.text = configuration.dataId
             val nsDisplay = configuration.tenantId?.takeIf { it.isNotBlank() } ?: "public"
@@ -1074,7 +1074,7 @@ private fun setupEventHandlers() {
         configuration: NacosConfiguration,
         presented: PresentedResult
     ) {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             if (!presentation.admitAndRecord(presented)) return@invokeOnEdt
             // Dispose previous editor safely
             disposeEditorSafely()
@@ -1240,7 +1240,7 @@ private fun setupEventHandlers() {
      * Updates the editor status bar with current content stats.
      */
     private fun updateStatusBar(content: String) {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             val charCount = content.length
             statusCharsLabel.text = NacosSearchBundle.message("config.detail.status.chars.format", charCount)
             statusMd5Label.text = NacosSearchBundle.message("config.detail.status.md5", computeShortMd5(content))
@@ -1268,7 +1268,7 @@ private fun setupEventHandlers() {
         // flag to invokeLater left a window where a second selection started
         // another load while the first was still in flight.
         isLoading = loading
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             updateActionsEnabled()
         }
     }
@@ -1287,11 +1287,11 @@ private fun setupEventHandlers() {
                 detailToolbar.updateActionsImmediately()
             }
         }
-        invokeOnEdt(ModalityState.defaultModalityState(), run)
+        Edt.invokeOnEdt(ModalityState.defaultModalityState(), run)
     }
     
     private fun showCard(cardName: String) {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             val cardLayout = contentPanel.layout as CardLayout
             cardLayout.show(contentPanel, cardName)
         }
@@ -1299,7 +1299,7 @@ private fun setupEventHandlers() {
 
     /** Reveal the editor card and ensure the Loading label is not left painted over it. */
     private fun showContentCard() {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             if (::loadingLabel.isInitialized) {
                 loadingLabel.isVisible = false
             }
@@ -1375,7 +1375,7 @@ private fun setupEventHandlers() {
                 }
                 val overlayText = DetailCopy.overlayMessage(state.overlay, bundleMessage)
                 if (overlayText != null) {
-                    invokeOnEdt(ModalityState.defaultModalityState()) {
+                    Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
                         freshnessLabel.text = overlayText
                         freshnessLabel.isVisible = true
                     }
@@ -1391,7 +1391,7 @@ private fun setupEventHandlers() {
                 if (state.dirty != renderedDirty) {
                     updateDirtyUI(state.dirty)
                 }
-                invokeOnEdt(ModalityState.defaultModalityState()) {
+                Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
                     sizeLabel.text = formatSize(state.configuration.content.length)
                 }
                 updateStatusBar(state.configuration.content)
@@ -1467,7 +1467,7 @@ private fun setupEventHandlers() {
                     showCard("error")
                 }
                 val body = DetailCopy.failedBody(state, bundleMessage)
-                invokeOnEdt(ModalityState.defaultModalityState()) {
+                Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
                     JOptionPane.showMessageDialog(
                         this,
                         body,
@@ -1483,14 +1483,14 @@ private fun setupEventHandlers() {
     }
 
     private fun showFreshnessStatus(messageKey: String) {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             freshnessLabel.text = NacosSearchBundle.message(messageKey)
             freshnessLabel.isVisible = true
         }
     }
 
     private fun hideFreshnessStatus() {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             freshnessLabel.isVisible = false
         }
     }
@@ -1761,7 +1761,7 @@ private fun setupEventHandlers() {
         statusCharsLabel.text = NacosSearchBundle.message("config.detail.status.chars.format", 0)
         statusMd5Label.text = "—"
         
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             dataIdLabel.text = ""
             if (::inlineMetaLabel.isInitialized) {
                 inlineMetaLabel.text = ""
@@ -1836,7 +1836,7 @@ private fun setupEventHandlers() {
      * Refresh all UI text elements
      */
     private fun refreshUIText() {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             // Update loading text
             loadingLabel.text = NacosSearchBundle.message("config.detail.loading")
             
@@ -1854,7 +1854,7 @@ private fun setupEventHandlers() {
      * Rebuild metadata panel with new language
      */
     private fun rebuildMetadataPanel() {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             // Remove old metadata panel
             remove(metadataPanel)
             
@@ -1876,7 +1876,7 @@ private fun setupEventHandlers() {
      * Rebuild empty state panel with new language
      */
     private fun rebuildEmptyStatePanel() {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             // Remove old empty state panel
             contentPanel.remove(emptyStatePanel)
             
@@ -1892,7 +1892,7 @@ private fun setupEventHandlers() {
      * Rebuild error panel with new language
      */
     private fun rebuildErrorPanel() {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             // Remove old error panel
             contentPanel.remove(errorPanel)
             

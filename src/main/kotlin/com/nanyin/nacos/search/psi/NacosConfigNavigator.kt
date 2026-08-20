@@ -6,7 +6,7 @@ import com.intellij.openapi.wm.ToolWindowManager
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.ui.NacosSearchToolWindowFactory
 import com.nanyin.nacos.search.ui.NacosSearchWindow
-import com.nanyin.nacos.search.invokeOnEdt
+import com.nanyin.nacos.search.Edt
 
 /**
  * Opens the Nacos Search tool window, selects a configuration and positions
@@ -27,7 +27,7 @@ object NacosConfigNavigator {
         lineIndex: Int = -1,
         namespaceId: String? = null
     ) {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             val toolWindow = ToolWindowManager.getInstance(project)
                 .getToolWindow(NacosSearchToolWindowFactory.TOOL_WINDOW_ID) ?: return@invokeOnEdt
             toolWindow.activate {

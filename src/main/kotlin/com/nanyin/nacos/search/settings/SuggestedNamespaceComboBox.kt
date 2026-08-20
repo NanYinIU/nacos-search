@@ -2,7 +2,7 @@ package com.nanyin.nacos.search.settings
 
 import com.intellij.openapi.ui.ComboBox
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
-import com.nanyin.nacos.search.invokeOnEdt
+import com.nanyin.nacos.search.Edt
 import com.nanyin.nacos.search.services.operations.DiscoveredNamespace
 import java.awt.Component
 import java.awt.event.ItemEvent
@@ -157,7 +157,7 @@ class SuggestedNamespaceComboBox : ComboBox<DiscoveredNamespace>() {
     private fun onEditorChange() {
         if (mutating) return
         val query = editorField.text
-        invokeOnEdt {
+        Edt.invokeOnEdt {
             if (mutating) return@invokeOnEdt
             filterModel(query)
             onNamespaceCommitted()

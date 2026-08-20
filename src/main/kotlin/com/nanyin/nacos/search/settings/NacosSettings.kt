@@ -6,10 +6,13 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.util.xmlb.XmlSerializerUtil
+import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.EnvironmentProfile
+import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.models.ProfileIntent
+import com.nanyin.nacos.search.services.ResolvedGenerationLocator
 
 /**
  * Persistent settings for the Nacos plugin.
@@ -1046,6 +1049,43 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 persistedProfile.id,
                 persistedProfile.credentialSlotVersion
             )
+        )
+    }
+
+    /**
+     * Derives the access identity for PSI/Swing hot paths WITHOUT reading PasswordSafe.
+     * Reading a credential on the EDT triggers `SlowOperations` and is forbidden on
+     * the hot path (design §11/§19.7). Identity fields come entirely from the profile,
+     * so this resolves the selected profile and maps it through
+     * [OperationContextResolver.identityFromProfile], which never touches the
+     * credential store. A missing/invalid profile yields a stable sentinel identity.
+     *
+     * An AUTO profile has no generation in the profile to map, so [locator] supplies
+     * the one the operation layer resolved — also without a credential — and the read
+     * addresses the same key space the gateway writes under (issue #72).
+     *
+     * This is a member of [NacosSettings] rather than a top-level extension so
+     * IDEA's JPS compiler indexes it. Cross-file top-level functions in this
+     * module surface as `Unresolved reference` during `runIde`.
+     */
+    internal fun captureAccessIdentity(
+        profileId: String? = null,
+        locator: ResolvedGenerationLocator = ResolvedGenerationLocator.forSelectedProfile()
+    ): AccessIdentity {
+        val selectedProfileId = profileId?.trim()?.takeUnless { it.isNullOrBlank() }
+            ?: resolveDefaultProfileId()
+        val profile = getProfile(selectedProfileId)
+            ?: return AccessIdentity.ofProfile(
+                profileId = "<configuration-required>",
+                accessRevision = -1,
+                canonicalEndpoint = "<invalid>",
+                resolvedGeneration = NacosApiGeneration.UNKNOWN,
+                authMode = AuthMode.TOKEN,
+                principal = ""
+            )
+        return locator.applyTo(
+            OperationContextResolver.identityFromProfile(profile),
+            profile.profileRevision
         )
     }
 

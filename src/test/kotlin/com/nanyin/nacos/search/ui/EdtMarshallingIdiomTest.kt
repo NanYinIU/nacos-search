@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * Issue #82: one marshalling idiom ([com.nanyin.nacos.search.invokeOnEdt] in
+ * Issue #82: one marshalling idiom ([com.nanyin.nacos.search.Edt.invokeOnEdt] in
  * production, [com.intellij.util.ui.UIUtil.invokeAndWaitIfNeeded] when a test
  * must block) replaces the four prior idioms and both hand-rolled
  * dispatch-thread checks.
