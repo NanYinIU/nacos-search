@@ -51,12 +51,36 @@ internal data class ProfileAccessKeys(
  */
 internal class ResolvedGenerationLocator(
     private val sessionResolved: (ProfileAccessKeys) -> NacosApiGeneration?,
-    private val lastKnown: (ProfileAccessKeys) -> NacosApiGeneration? = ::persistedLastKnownGeneration
+    private val lastKnown: (ProfileAccessKeys) -> NacosApiGeneration? = Companion::persistedLastKnownGeneration
 ) {
     fun locate(keys: ProfileAccessKeys): NacosApiGeneration =
         sessionResolved(keys)?.takeIf { it.isResolved() }
             ?: lastKnown(keys)?.takeIf { it.isResolved() }
             ?: NacosApiGeneration.UNKNOWN
+
+    /**
+     * Addresses [identity] under the generation this locator finds, when the
+     * profile's API policy left it unresolved.
+     *
+     * An identity that already names V1 or V3 is returned untouched: a locked
+     * policy is the answer, and convergence is achieved by giving the hot path
+     * the resolved value, never by letting a lookup override or drop what the
+     * key already says. When nothing is found the identity keeps its unknown
+     * generation, so the read misses rather than silently borrowing another
+     * key space's data.
+     */
+    fun applyTo(identity: AccessIdentity, profileRevision: Long): AccessIdentity {
+        if (identity.resolvedGeneration.isResolved()) return identity
+        val located = locate(
+            ProfileAccessKeys(
+                profileId = identity.profileId,
+                profileRevision = profileRevision,
+                accessRevision = identity.accessRevision,
+                canonicalEndpoint = identity.canonicalEndpoint
+            )
+        )
+        return if (located.isResolved()) identity.copy(resolvedGeneration = located) else identity
+    }
 
     companion object {
         /**
@@ -94,24 +118,25 @@ internal class ResolvedGenerationLocator(
                 }
             }
         )
-    }
-}
 
-/**
- * The persisted last-known generation for [keys]. Sole reader of ADR-0034's
- * three-part access key, so the offline-bootstrap path and the cache hot paths
- * cannot disagree about which entry belongs to an identity.
- */
-internal fun persistedLastKnownGeneration(keys: ProfileAccessKeys): NacosApiGeneration? = bestEffort {
-    ApplicationManager.getApplication()
-        ?.getService(LastKnownGenerationStore::class.java)
-        ?.get(
-            LastKnownGenerationStore.Key(
-                profileId = keys.profileId,
-                accessRevision = keys.accessRevision,
-                canonicalEndpoint = keys.canonicalEndpoint
-            )
-        )
+        /**
+         * The persisted last-known generation for [keys]. Sole reader of
+         * ADR-0034's three-part access key, so the offline-bootstrap path and
+         * the cache hot paths cannot disagree about which entry belongs to an
+         * identity.
+         */
+        fun persistedLastKnownGeneration(keys: ProfileAccessKeys): NacosApiGeneration? = bestEffort {
+            ApplicationManager.getApplication()
+                ?.getService(LastKnownGenerationStore::class.java)
+                ?.get(
+                    LastKnownGenerationStore.Key(
+                        profileId = keys.profileId,
+                        accessRevision = keys.accessRevision,
+                        canonicalEndpoint = keys.canonicalEndpoint
+                    )
+                )
+        }
+    }
 }
 
 /**
@@ -141,18 +166,7 @@ private inline fun <T> bestEffort(lookup: () -> T?): T? = try {
 internal fun AccessIdentity.locatedUnder(
     locator: ResolvedGenerationLocator,
     profileRevision: Long
-): AccessIdentity {
-    if (resolvedGeneration.isResolved()) return this
-    val located = locator.locate(
-        ProfileAccessKeys(
-            profileId = profileId,
-            profileRevision = profileRevision,
-            accessRevision = accessRevision,
-            canonicalEndpoint = canonicalEndpoint
-        )
-    )
-    return if (located.isResolved()) copy(resolvedGeneration = located) else this
-}
+): AccessIdentity = locator.applyTo(this, profileRevision)
 
 /**
  * Addresses [this] under the generation [locator] finds, when the profile's API
@@ -163,7 +177,7 @@ internal fun AccessIdentity.locatedUnder(
 internal fun NacosOperationContext.locatedUnder(
     locator: ResolvedGenerationLocator
 ): NacosOperationContext {
-    val located = identity.locatedUnder(locator, profileRevision)
+    val located = locator.applyTo(identity, profileRevision)
     if (located == identity) return this
     return copy(identity = located, resolvedGeneration = located.resolvedGeneration)
 }

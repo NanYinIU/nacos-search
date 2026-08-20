@@ -14,7 +14,7 @@ import java.awt.*
 import javax.swing.*
 import javax.swing.plaf.basic.BasicButtonUI
 import com.intellij.openapi.application.ModalityState
-import com.nanyin.nacos.search.invokeOnEdt
+import com.nanyin.nacos.search.Edt
 /**
  * Compact pagination strip for the config list.
  *
@@ -107,7 +107,7 @@ class PaginationPanel : JPanel(BorderLayout()), NacosLanguageListener, Disposabl
 
     fun updatePagination(state: NacosSearchService.PaginationState) {
         paginationState = state
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             isVisible = true
             previousButton.isEnabled = state.hasPreviousPage
             nextButton.isEnabled = state.hasNextPage
@@ -122,7 +122,7 @@ class PaginationPanel : JPanel(BorderLayout()), NacosLanguageListener, Disposabl
     }
 
     fun reset() {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             previousButton.isEnabled = false
             nextButton.isEnabled = false
             pageInfoLabel.text = NacosSearchBundle.message("pagination.page.of.format", 1, 1)
@@ -133,7 +133,7 @@ class PaginationPanel : JPanel(BorderLayout()), NacosLanguageListener, Disposabl
     }
 
     fun setLoading(loading: Boolean) {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             previousButton.isEnabled = !loading
             nextButton.isEnabled = !loading
             pageSizeComboBox.isEnabled = !loading
@@ -150,7 +150,7 @@ class PaginationPanel : JPanel(BorderLayout()), NacosLanguageListener, Disposabl
     }
 
     private fun refreshUIText() {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             previousButton.toolTipText = NacosSearchBundle.message("pagination.previous")
             nextButton.toolTipText = NacosSearchBundle.message("pagination.next")
             pageSizeComboBox.toolTipText = NacosSearchBundle.message("tooltip.page.size")

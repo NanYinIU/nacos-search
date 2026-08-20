@@ -8,8 +8,8 @@ import com.nanyin.nacos.search.services.ProjectSessionEpochs
 import com.nanyin.nacos.search.services.operations.DraftGuard
 import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
-import com.nanyin.nacos.search.invokeOnEdt
-import com.nanyin.nacos.search.ui.admitDraftGuard as admitDraftGuardPrompt
+import com.nanyin.nacos.search.Edt
+import com.nanyin.nacos.search.ui.DraftDiscardPrompt
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.options.Configurable
@@ -261,7 +261,7 @@ class NacosConfigurable @JvmOverloads constructor(
                 is DraftGuard.RequireWarnedAbandon -> false
             }
         }
-        return admitDraftGuardPrompt(project, sessions, guard, messageKey)
+        return DraftDiscardPrompt.admit(project, sessions, guard, messageKey)
     }
 
     /**
@@ -683,7 +683,7 @@ class NacosConfigurable @JvmOverloads constructor(
         splitter.rightComponent = buildDetailPanel()
         splitter.resizeWeight = 0.0
         splitter.setDividerLocation(256)
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             splitter.setDividerLocation(256)
         }
 
@@ -1364,7 +1364,7 @@ class NacosConfigurable @JvmOverloads constructor(
                     Result.failure(e)
                 }
 
-                invokeOnEdt(ModalityState.defaultModalityState()) {
+                Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
                     testConnectionButton.isEnabled = true
                     if (currentDiscoveryKey() != testedKey) {
                         testStatusLabel.text = ""
@@ -1463,7 +1463,7 @@ class NacosConfigurable @JvmOverloads constructor(
                 } catch (e: Exception) {
                     Result.failure(e)
                 }
-                invokeOnEdt(ModalityState.defaultModalityState()) {
+                Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
                     applyResult(outcome)
                 }
             }

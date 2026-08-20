@@ -35,7 +35,7 @@ import javax.swing.JComponent
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.ListSelectionModel
-import com.nanyin.nacos.search.invokeOnEdt
+import com.nanyin.nacos.search.Edt
 
 /**
  * Read-only history browser for one configuration coordinate.
@@ -112,7 +112,7 @@ class HistoryBrowserDialog(
      * context, which the platform treats as NON_MODAL (blocked by this dialog).
      */
     private fun onDialogUi(gate: PresentationGate, action: () -> Unit) {
-        invokeOnEdt(ModalityState.any()) {
+        Edt.invokeOnEdt(ModalityState.any()) {
             // Re-ask the judgement on the EDT: a session change can land between
             // the controller's IO checkpoint and this modal resume. This paint
             // carries no new observation, so it only re-tests epoch and

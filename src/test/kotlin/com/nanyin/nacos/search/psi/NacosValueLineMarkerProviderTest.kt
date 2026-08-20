@@ -13,7 +13,6 @@ import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.CacheService
-import com.nanyin.nacos.search.services.captureAccessIdentity
 import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosSettings
 import kotlinx.coroutines.runBlocking

@@ -40,7 +40,7 @@ import javax.swing.*
 import javax.swing.event.DocumentEvent
 import javax.swing.plaf.basic.BasicButtonUI
 import com.intellij.openapi.application.ModalityState
-import com.nanyin.nacos.search.invokeOnEdt
+import com.nanyin.nacos.search.Edt
 /**
  * Panel for namespace selection and management.
  *
@@ -247,7 +247,7 @@ class NamespacePanel(
                 // Settings often store the display name; once discovery returns
                 // the real UUID, heal the session so search uses that id.
                 healSessionNamespaceIfNeeded(matching)
-                invokeOnEdt(ModalityState.defaultModalityState()) {
+                Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
                     renderButton(matching)
                     if (wasEmpty) onNamespaceSelected(matching)
                     namespaceButton.isEnabled = namespaces.isNotEmpty()
@@ -256,7 +256,7 @@ class NamespacePanel(
                 return
             }
             currentNamespace = toSelect
-            invokeOnEdt(ModalityState.defaultModalityState()) {
+            Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
                 renderButton(toSelect)
                 namespaceButton.isEnabled = namespaces.isNotEmpty()
                 refreshPopupIfShowing()
@@ -266,7 +266,7 @@ class NamespacePanel(
         if (namespaces.isNotEmpty()) {
             val first = namespaces.first()
             currentNamespace = first
-            invokeOnEdt(ModalityState.defaultModalityState()) {
+            Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
                 renderButton(first)
                 onNamespaceSelected(first)
                 namespaceButton.isEnabled = true
@@ -274,7 +274,7 @@ class NamespacePanel(
             }
             return
         }
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             namespaceButton.isEnabled = false
             refreshPopupIfShowing()
         }
@@ -354,7 +354,7 @@ class NamespacePanel(
      */
     private fun admitNamespaceSwitch(namespace: NamespaceInfo): Boolean {
         val editSessions = project.service<EditSessionService>()
-        return admitDraftGuard(
+        return DraftDiscardPrompt.admit(
             project,
             editSessions,
             editSessions.guardNamespaceSwitch(namespace.namespaceId),
@@ -453,7 +453,7 @@ class NamespacePanel(
         })
 
         // Defer focusing the search field so the popup is on screen first.
-        invokeOnEdt(ModalityState.defaultModalityState()) { searchField.requestFocusInWindow() }
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) { searchField.requestFocusInWindow() }
 
         val popup = JBPopupFactory.getInstance()
             .createComponentPopupBuilder(panel, searchField)
@@ -522,7 +522,7 @@ class NamespacePanel(
     }
 
     private fun setLoadingState(loading: Boolean) {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             isLoading = loading
             loadingLabel.isVisible = loading
             refreshButton.isEnabled = !loading
@@ -535,7 +535,7 @@ class NamespacePanel(
     }
 
     private fun updateStatus(message: String) {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             statusLabel.text = message
         }
     }
@@ -544,7 +544,7 @@ class NamespacePanel(
         if (GraphicsEnvironment.isHeadless() || ApplicationManager.getApplication().isUnitTestMode) {
             return
         }
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             JOptionPane.showMessageDialog(
                 this,
                 message,
@@ -656,7 +656,7 @@ class NamespacePanel(
      * Refresh all UI text elements
      */
     private fun refreshUIText() {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             loadingLabel.text = NacosSearchBundle.message("namespace.loading.namespaces")
             updateStatusText()
             refreshButton.toolTipText = NacosSearchBundle.message("tooltip.namespace.refresh")
@@ -668,7 +668,7 @@ class NamespacePanel(
      * Update status text based on current state
      */
     private fun updateStatusText() {
-        invokeOnEdt(ModalityState.defaultModalityState()) {
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             when {
                 isLoading -> {
                     statusLabel.text = NacosSearchBundle.message("namespace.loading.namespaces")

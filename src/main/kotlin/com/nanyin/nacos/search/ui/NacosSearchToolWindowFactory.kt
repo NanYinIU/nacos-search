@@ -57,18 +57,18 @@ class NacosSearchToolWindowFactory : ToolWindowFactory {
                 when (val guard = sessions.guardDestroy()) {
                     DraftGuard.Proceed, DraftGuard.AlreadyEditing -> return
                     is DraftGuard.ConfirmDiscard -> {
-                        if (confirmDraftDiscard(project, guard.draft, "config.detail.draft.discard.close")) {
+                        if (DraftDiscardPrompt.confirm(project, guard.draft, "config.detail.draft.discard.close")) {
                             sessions.discardDraft()
                         } else {
                             event.consume()
                         }
                     }
                     DraftGuard.RefuseInFlight -> {
-                        explainPublishInFlight(project)
+                        DraftDiscardPrompt.explainPublishInFlight(project)
                         event.consume()
                     }
                     is DraftGuard.RequireWarnedAbandon -> {
-                        if (!confirmWarnedAbandon(project, sessions, guard.draft)) {
+                        if (!DraftDiscardPrompt.confirmWarnedAbandon(project, sessions, guard.draft)) {
                             event.consume()
                         }
                     }

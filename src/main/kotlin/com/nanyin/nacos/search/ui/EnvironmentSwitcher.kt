@@ -33,7 +33,7 @@ import javax.swing.JPanel
 import javax.swing.SwingConstants
 import javax.swing.plaf.basic.BasicButtonUI
 import com.intellij.openapi.application.ModalityState
-import com.nanyin.nacos.search.invokeOnEdt
+import com.nanyin.nacos.search.Edt
 /**
  * Header control for quickly switching the active Nacos environment
  * (dev / sit / uat ...) without opening the settings dialog.
@@ -181,7 +181,7 @@ class EnvironmentSwitcher(
      * two ADR-0027 choices; asking never mutates — only an explicit discard does.
      */
     private fun admitEnvDraftGuard(guard: DraftGuard, messageKey: String): Boolean =
-        admitDraftGuard(project, project.service<EditSessionService>(), guard, messageKey)
+        DraftDiscardPrompt.admit(project, project.service<EditSessionService>(), guard, messageKey)
 
     private fun openSettings() {
         ShowSettingsUtil.getInstance().editConfigurable(project, NacosConfigurable(project))
@@ -223,7 +223,7 @@ class EnvironmentSwitcher(
     }
 
     override fun languageChanged() {
-        invokeOnEdt(ModalityState.defaultModalityState()) { refresh() }
+        Edt.invokeOnEdt(ModalityState.defaultModalityState()) { refresh() }
     }
 
     /** Anchors the message-bus connection; the switcher holds nothing else to release. */

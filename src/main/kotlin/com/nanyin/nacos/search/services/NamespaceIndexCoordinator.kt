@@ -12,9 +12,7 @@ import com.nanyin.nacos.search.models.DataFreshness
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.operations.CapabilityCoverage
 import com.nanyin.nacos.search.settings.NacosSettings
-import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
-import com.nanyin.nacos.search.settings.OperationContextResolver
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -73,37 +71,6 @@ internal fun NacosSettings.captureNamespaceIndexRequest(
         cacheTtlMillis = getCacheTtlMillis(),
         operationContext = aligned
     )
-}
-
-/**
- * Derives the access identity for PSI/Swing hot paths WITHOUT reading PasswordSafe.
- * Reading a credential on the EDT triggers `SlowOperations` and is forbidden on
- * the hot path (design §11/§19.7). Identity fields come entirely from the profile,
- * so this resolves the selected profile and maps it through
- * [OperationContextResolver.identityFromProfile], which never touches the
- * credential store. A missing/invalid profile yields a stable sentinel identity.
- *
- * An AUTO profile has no generation in the profile to map, so [locator] supplies
- * the one the operation layer resolved — also without a credential — and the read
- * addresses the same key space the gateway writes under (issue #72).
- */
-internal fun NacosSettings.captureAccessIdentity(
-    profileId: String? = null,
-    locator: ResolvedGenerationLocator = ResolvedGenerationLocator.forSelectedProfile()
-): AccessIdentity {
-    val selectedProfileId = profileId?.trim()?.takeUnless { it.isNullOrBlank() }
-        ?: resolveDefaultProfileId()
-    val profile = getProfile(selectedProfileId)
-        ?: return AccessIdentity.ofProfile(
-            profileId = "<configuration-required>",
-            accessRevision = -1,
-            canonicalEndpoint = "<invalid>",
-            resolvedGeneration = NacosApiGeneration.UNKNOWN,
-            authMode = AuthMode.TOKEN,
-            principal = ""
-        )
-    return OperationContextResolver.identityFromProfile(profile)
-        .locatedUnder(locator, profile.profileRevision)
 }
 
 interface NamespaceIndexRequester {

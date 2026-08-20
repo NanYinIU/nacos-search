@@ -12,7 +12,6 @@ import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.ResolvedGenerationLocator
-import com.nanyin.nacos.search.services.captureAccessIdentity
 
 /** Project-local state; profiles themselves remain application-wide. */
 data class NacosProjectSessionState(

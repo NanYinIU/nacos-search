@@ -6,7 +6,7 @@ import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
-import com.nanyin.nacos.search.invokeOnEdt
+import com.nanyin.nacos.search.Edt
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.psi.NacosKeyIndexService
 
@@ -29,7 +29,7 @@ class NavigationIndexRefreshService internal constructor(
 ) {
     constructor() : this(
         scheduleOnEdt = { action ->
-            invokeOnEdt(ModalityState.defaultModalityState(), action)
+            Edt.invokeOnEdt(ModalityState.defaultModalityState(), action)
         },
         restartDaemon = { target -> DaemonCodeAnalyzer.getInstance(target).restart() },
         openProjects = { ProjectManager.getInstance().openProjects }

@@ -10,8 +10,6 @@ import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.NacosSettings
-import com.nanyin.nacos.search.services.captureAccessIdentity
-import com.nanyin.nacos.search.services.persistedLastKnownGeneration
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.network.RequestPolicy
 import com.nanyin.nacos.search.services.operations.CacheServiceOperationCache
@@ -685,7 +683,7 @@ class NacosApiService(
      * there is one owner of what counts as a match for an access key.
      */
     fun lastKnownGeneration(context: NacosOperationContext): NacosApiGeneration? =
-        persistedLastKnownGeneration(
+        ResolvedGenerationLocator.persistedLastKnownGeneration(
             ProfileAccessKeys(
                 profileId = context.identity.profileId,
                 profileRevision = context.profileRevision,
