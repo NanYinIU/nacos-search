@@ -81,8 +81,10 @@ class SuggestedNamespaceComboBoxTest {
         val combo = SuggestedNamespaceComboBox()
         combo.setNamespaceId("public")
         combo.applyDiscovered(listOf(publicNs, team, live))
-        combo.selectedItem = live
-        flushChooserEvents()
+        UIUtil.invokeAndWaitIfNeeded(Runnable {
+            combo.selectedItem = live
+            PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+        })
         assertEquals("ns-uuid-2", combo.namespaceId())
         assertEquals("ns-uuid-2", (combo.editor.editorComponent as JTextField).text)
     }

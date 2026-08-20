@@ -78,10 +78,10 @@ class SuggestedNamespaceComboBox : ComboBox<DiscoveredNamespace>() {
             try {
                 editorField.text = selected.namespaceId
                 lastCommitted = selected.namespaceId
+                restoreUnfilteredModel()
             } finally {
                 mutating = false
             }
-            invokeOnEdt { restoreUnfilteredModel() }
             onNamespaceCommitted()
         }
         addPopupMenuListener(object : PopupMenuListener {
