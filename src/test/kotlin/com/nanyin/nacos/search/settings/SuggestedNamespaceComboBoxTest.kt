@@ -104,6 +104,32 @@ class SuggestedNamespaceComboBoxTest {
     }
 
     @Test
+    fun `loading placeholder is not persistable and keeps the typed id`() {
+        val combo = SuggestedNamespaceComboBox()
+        combo.setNamespaceId("custom-ns")
+        combo.showLoadingPlaceholder()
+        assertTrue(combo.isTransientRowVisible())
+        assertEquals(0, combo.discoveredCount())
+        assertEquals("custom-ns", combo.namespaceId())
+        combo.selectedItem = combo.getItemAt(0)
+        flushChooserEvents()
+        assertEquals("custom-ns", combo.namespaceId())
+        assertEquals("custom-ns", (combo.editor.editorComponent as JTextField).text)
+    }
+
+    @Test
+    fun `failure placeholder is not persistable and keeps the typed id`() {
+        val combo = SuggestedNamespaceComboBox()
+        combo.setNamespaceId("custom-ns")
+        combo.showFailurePlaceholder()
+        assertTrue(combo.isTransientRowVisible())
+        assertEquals("custom-ns", combo.namespaceId())
+        combo.selectedItem = combo.getItemAt(0)
+        flushChooserEvents()
+        assertEquals("custom-ns", combo.namespaceId())
+    }
+
+    @Test
     fun `preferred size does not npe when an empty editable combo is laid out`() {
         val combo = SuggestedNamespaceComboBox()
         val wrapper = JPanel(java.awt.BorderLayout(8, 0))

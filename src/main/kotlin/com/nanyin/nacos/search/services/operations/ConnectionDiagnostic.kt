@@ -197,6 +197,36 @@ class ConnectionDiagnostic(
         )
     }
 
+    /**
+     * Isolated Namespace discovery for the settings 建议 Namespace chooser.
+     * Resolves generation and lists namespaces; it does not read the configured
+     * Namespace and is not a 连接诊断.
+     */
+    suspend fun discover(snapshot: DiagnosticSnapshot): Result<List<DiscoveredNamespace>> {
+        val validation = validateLocally(snapshot)
+        if (!validation.success) {
+            return Result.failure(
+                IllegalArgumentException(validation.sanitizedFailure ?: "invalid snapshot")
+            )
+        }
+
+        val generation = when (parseApiPolicy(snapshot.apiPolicy)) {
+            com.nanyin.nacos.search.models.NacosApiPolicy.V1 -> NacosApiGeneration.V1
+            com.nanyin.nacos.search.models.NacosApiPolicy.V3 -> NacosApiGeneration.V3
+            com.nanyin.nacos.search.models.NacosApiPolicy.AUTO -> {
+                val target = snapshotToTarget(snapshot, NacosApiGeneration.UNKNOWN)
+                resolver.resolve(target).getOrElse { return Result.failure(it) }
+            }
+        }
+
+        val discoveryCaps = gateway.capabilities(generation)?.namespaceDiscovery
+        if (discoveryCaps == CapabilityCoverage.UNAVAILABLE) {
+            return Result.failure(RemoteOperationError.CapabilityUnsupported("namespace discovery"))
+        }
+        val probe = discoveryProbe ?: { t -> gateway.discoverNamespaces(t) }
+        return probe(snapshotToTarget(snapshot, generation))
+    }
+
     private fun validateLocally(snapshot: DiagnosticSnapshot): DiagnosticStageResult {
         val failures = mutableListOf<String>()
         if (snapshot.endpoint.isBlank()) failures.add("Endpoint is required")

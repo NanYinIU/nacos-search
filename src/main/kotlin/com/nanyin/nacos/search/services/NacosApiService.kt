@@ -534,6 +534,19 @@ class NacosApiService(
         ConnectionDiagnostic(resolver = resolver, gateway = gateway).diagnose(snapshot)
     }
 
+    /**
+     * Isolated Namespace list for the settings 建议 Namespace chooser.
+     * Not a 连接诊断: it does not read the configured Namespace or headline
+     * connection success/failure.
+     */
+    suspend fun discoverSuggestedNamespaces(
+        snapshot: DiagnosticSnapshot
+    ): Result<List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>> =
+        withContext(Dispatchers.IO) {
+            val (resolver, gateway) = newDiagnosticStack()
+            ConnectionDiagnostic(resolver = resolver, gateway = gateway).discover(snapshot)
+        }
+
     /** Guards every operation before cache reads, token lookup, or remote transport. */
     private fun operationContextOrFailure() = settings.captureOperationContext().getOrNull()
 

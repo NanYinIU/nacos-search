@@ -101,6 +101,14 @@ class NacosConfigurable @JvmOverloads constructor(
     private lateinit var testStatusLabel: JLabel
     /** Discovery list is valid only for this unsaved-form identity. */
     private var discoveredOptionKey: DiscoveryOptionKey? = null
+    private var chooserDiscoveryInFlight = false
+    /**
+     * Isolated Namespace discovery for the chooser. Tests replace this; production
+     * uses [NacosApiService.discoverSuggestedNamespaces].
+     */
+    internal var suggestedNamespaceDiscoverer:
+        (suspend (com.nanyin.nacos.search.services.operations.DiagnosticSnapshot) ->
+            Result<List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>>)? = null
 
     // Language
     private lateinit var languageComboBox: JComboBox<LanguageService.SupportedLanguage>
@@ -557,6 +565,7 @@ class NacosConfigurable @JvmOverloads constructor(
         namespaceCombo = SuggestedNamespaceComboBox().apply {
             font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 13)
             onNamespaceCommitted = { onSuggestedNamespaceCommitted() }
+            onPopupWillBecomeVisible = { requestSuggestedNamespaceOptions() }
         }
         apiPolicyComboBox = JComboBox(arrayOf(NacosApiPolicy.AUTO, NacosApiPolicy.V1, NacosApiPolicy.V3)).apply {
             putClientProperty("nacos.automation.id", "nacos.settings.apiPolicy")
@@ -1401,6 +1410,66 @@ class NacosConfigurable @JvmOverloads constructor(
     ) {
         namespaceCombo.applyDiscovered(namespaces)
         discoveredOptionKey = currentDiscoveryKey()
+    }
+
+    internal fun requestSuggestedNamespaceOptions() {
+        if (!::namespaceCombo.isInitialized) return
+        if (namespaceCombo.discoveredCount() > 0 || chooserDiscoveryInFlight) return
+        commitDetailFormToDraft()
+        val server = selectedDraft() ?: return
+        if (!server.isValidUrl()) return
+
+        val snapshot = com.nanyin.nacos.search.services.operations.DiagnosticSnapshot(
+            endpoint = server.serverUrl.trim(),
+            apiPolicy = server.apiPolicy.name,
+            authStrategy = server.authMode.name,
+            principal = server.username.trim(),
+            secret = server.password,
+            namespaceId = server.namespace.trim().ifBlank { "public" }
+        )
+        val testedKey = currentDiscoveryKey()
+        namespaceCombo.showLoadingPlaceholder()
+        chooserDiscoveryInFlight = true
+
+        fun applyResult(
+            result: Result<List<com.nanyin.nacos.search.services.operations.DiscoveredNamespace>>
+        ) {
+            chooserDiscoveryInFlight = false
+            if (currentDiscoveryKey() != testedKey) return
+            result.fold(
+                onSuccess = { acceptDiscoveredNamespaces(it) },
+                onFailure = { namespaceCombo.showFailurePlaceholder() }
+            )
+        }
+
+        if (ApplicationManager.getApplication().isUnitTestMode) {
+            val discoverer = suggestedNamespaceDiscoverer
+                ?: { snap -> apiService.discoverSuggestedNamespaces(snap) }
+            applyResult(runBlocking { discoverer(snapshot) })
+            return
+        }
+
+        ProgressManager.getInstance().run(object : Task.Backgroundable(
+            null,
+            NacosSearchBundle.message("settings.namespace.chooser.loading"),
+            true
+        ) {
+            override fun run(indicator: ProgressIndicator) {
+                indicator.text = NacosSearchBundle.message("settings.namespace.chooser.loading")
+                val outcome = try {
+                    runBlocking(Dispatchers.IO) {
+                        val discoverer = suggestedNamespaceDiscoverer
+                            ?: { snap -> apiService.discoverSuggestedNamespaces(snap) }
+                        discoverer(snapshot)
+                    }
+                } catch (e: Exception) {
+                    Result.failure(e)
+                }
+                invokeOnEdt(ModalityState.defaultModalityState()) {
+                    applyResult(outcome)
+                }
+            }
+        })
     }
 
     private fun invalidateDiscoveredOptionsIfIdentityChanged() {

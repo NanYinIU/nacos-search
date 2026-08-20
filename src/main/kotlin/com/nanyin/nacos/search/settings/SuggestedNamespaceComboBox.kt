@@ -1,6 +1,7 @@
 package com.nanyin.nacos.search.settings
 
 import com.intellij.openapi.ui.ComboBox
+import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.nanyin.nacos.search.invokeOnEdt
 import com.nanyin.nacos.search.services.operations.DiscoveredNamespace
 import java.awt.Component
@@ -11,10 +12,12 @@ import javax.swing.JList
 import javax.swing.JTextField
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
+import javax.swing.event.PopupMenuEvent
+import javax.swing.event.PopupMenuListener
 
 /**
  * Editable, filterable suggested-Namespace chooser. Options come from an
- * isolated connection diagnosis; the editor remains typeable when the list
+ * isolated Namespace discovery; the editor remains typeable when the list
  * is empty. Persistable value is always a Namespace ID.
  *
  * Must be an IntelliJ [ComboBox]: a plain Swing editable [javax.swing.JComboBox]
@@ -28,6 +31,7 @@ class SuggestedNamespaceComboBox : ComboBox<DiscoveredNamespace>() {
     private var mutating = false
 
     var onNamespaceCommitted: () -> Unit = {}
+    var onPopupWillBecomeVisible: () -> Unit = {}
 
     private val editorField: JTextField
         get() = editor.editorComponent as JTextField
@@ -50,8 +54,12 @@ class SuggestedNamespaceComboBox : ComboBox<DiscoveredNamespace>() {
                 cellHasFocus: Boolean
             ): Component {
                 super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
-                text = when (value) {
-                    is DiscoveredNamespace -> SuggestedNamespaceSelection.label(value)
+                text = when {
+                    value is DiscoveredNamespace && value === SuggestedNamespaceChooserStatus.LOADING ->
+                        NacosSearchBundle.message("settings.namespace.chooser.loading")
+                    value is DiscoveredNamespace && value === SuggestedNamespaceChooserStatus.FAILED ->
+                        NacosSearchBundle.message("settings.namespace.chooser.failed")
+                    value is DiscoveredNamespace -> SuggestedNamespaceSelection.label(value)
                     else -> value?.toString().orEmpty()
                 }
                 return this
@@ -65,6 +73,7 @@ class SuggestedNamespaceComboBox : ComboBox<DiscoveredNamespace>() {
         addItemListener { event ->
             if (mutating || event.stateChange != ItemEvent.SELECTED) return@addItemListener
             val selected = event.item as? DiscoveredNamespace ?: return@addItemListener
+            if (SuggestedNamespaceChooserStatus.isTransient(selected)) return@addItemListener
             mutating = true
             try {
                 editorField.text = selected.namespaceId
@@ -75,6 +84,13 @@ class SuggestedNamespaceComboBox : ComboBox<DiscoveredNamespace>() {
             invokeOnEdt { restoreUnfilteredModel() }
             onNamespaceCommitted()
         }
+        addPopupMenuListener(object : PopupMenuListener {
+            override fun popupMenuWillBecomeVisible(e: PopupMenuEvent?) {
+                onPopupWillBecomeVisible()
+            }
+            override fun popupMenuWillBecomeInvisible(e: PopupMenuEvent?) = Unit
+            override fun popupMenuCanceled(e: PopupMenuEvent?) = Unit
+        })
     }
 
     fun namespaceId(): String =
@@ -117,6 +133,26 @@ class SuggestedNamespaceComboBox : ComboBox<DiscoveredNamespace>() {
     }
 
     fun discoveredCount(): Int = allOptions.size
+
+    fun showLoadingPlaceholder() = showTransient(SuggestedNamespaceChooserStatus.LOADING)
+
+    fun showFailurePlaceholder() = showTransient(SuggestedNamespaceChooserStatus.FAILED)
+
+    fun isTransientRowVisible(): Boolean =
+        itemCount == 1 && getItemAt(0)?.let { SuggestedNamespaceChooserStatus.isTransient(it) } == true
+
+    private fun showTransient(row: DiscoveredNamespace) {
+        mutating = true
+        try {
+            val model = DefaultComboBoxModel<DiscoveredNamespace>()
+            model.addElement(row)
+            model.selectedItem = null
+            setModel(model)
+            editorField.text = lastCommitted
+        } finally {
+            mutating = false
+        }
+    }
 
     private fun onEditorChange() {
         if (mutating) return
@@ -175,6 +211,7 @@ class SuggestedNamespaceComboBox : ComboBox<DiscoveredNamespace>() {
      */
     private class NamespaceIdEditor : javax.swing.plaf.basic.BasicComboBoxEditor() {
         override fun setItem(anObject: Any?) {
+            if (anObject is DiscoveredNamespace && SuggestedNamespaceChooserStatus.isTransient(anObject)) return
             val text = when (anObject) {
                 is DiscoveredNamespace -> anObject.namespaceId
                 null -> ""

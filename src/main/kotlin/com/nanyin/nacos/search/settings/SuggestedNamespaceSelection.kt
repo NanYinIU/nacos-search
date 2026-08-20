@@ -48,3 +48,15 @@ object SuggestedNamespaceSelection {
         else "$name (${option.namespaceId})"
     }
 }
+
+/**
+ * Non-persistable rows shown while isolated discovery is in flight or failed.
+ * They never become the 建议 Namespace identifier.
+ */
+internal object SuggestedNamespaceChooserStatus {
+    val LOADING = DiscoveredNamespace("\u0000chooser-loading", "")
+    val FAILED = DiscoveredNamespace("\u0000chooser-failed", "")
+
+    fun isTransient(option: DiscoveredNamespace): Boolean =
+        option === LOADING || option === FAILED
+}
