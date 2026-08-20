@@ -26,17 +26,18 @@ import javax.swing.JTextField
 class SettingsApplyConnectionChangeTest {
 
     private lateinit var settings: NacosSettings
-    private var originalServers: List<NacosServerConfig> = emptyList()
+    private var originalIntents: List<ProfileIntent> = emptyList()
     private var originalActiveId: String = ""
 
     @BeforeEach
     fun setUp() {
         settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        originalServers = settings.servers.map { it.copy() }
-        originalActiveId = settings.activeServerId
-        settings.applyServers(
+        originalIntents = settings.loadIntentDraft().snapshot()
+        originalActiveId = settings.resolveDefaultProfileId()
+        clearProfileTombstones(originalIntents.map { it.profileId } + listOf("dev", "prod"))
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "dev",
                     displayName = "Dev",
                     serverUrl = "https://nacos.example",
@@ -45,7 +46,7 @@ class SettingsApplyConnectionChangeTest {
                     authMode = AuthMode.NACOS_PASSWORD,
                     apiPolicy = NacosApiPolicy.AUTO
                 ),
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "prod",
                     displayName = "Prod",
                     serverUrl = "https://prod.example",
@@ -61,12 +62,13 @@ class SettingsApplyConnectionChangeTest {
 
     @AfterEach
     fun tearDown() {
-        // applyServers entombs removed ids permanently (issue #105). Lift
+        // Publication entombs removed ids permanently (issue #105). Lift
         // originals before restore so they can re-publish, then lift fixture
         // ids entombed by the restore so the next setUp can reuse "dev"/"prod".
-        val touched = (settings.servers.map { it.id } + originalServers.map { it.id }).toSet()
+        val touched = (settings.publishedProfiles().map { it.id } +
+            originalIntents.map { it.profileId }).toSet()
         clearProfileTombstones(touched)
-        settings.applyServers(originalServers.map { it.copy() }, originalActiveId)
+        settings.applyProfileIntents(originalIntents, originalActiveId)
         clearProfileTombstones(touched)
     }
 
@@ -118,7 +120,7 @@ class SettingsApplyConnectionChangeTest {
             configurable.apply()
         }
         assertEquals(listOf("settingsChanged"), events)
-        assertEquals("dev-ns", settings.getActiveServer().namespace)
+        assertEquals("dev-ns", settings.preferencesFor("dev").suggestedNamespace)
         // The credential/endpoint identity did not change, so the revision holds.
         assertEquals(before, settings.getActiveProfile()!!.accessRevision)
     }
@@ -137,7 +139,8 @@ class SettingsApplyConnectionChangeTest {
             configurable.apply()
         }
         assertEquals(listOf("settingsChanged"), events)
-        assertEquals("prod", settings.activeServerId)
+        assertEquals("", settings.activeServerId)
+        assertEquals(setOf("dev", "prod"), settings.publishedProfiles().map { it.id }.toSet())
     }
 
     private fun openConfigurable(): NacosConfigurable {

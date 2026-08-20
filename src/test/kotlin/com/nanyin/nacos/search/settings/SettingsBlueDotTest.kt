@@ -19,25 +19,25 @@ class SettingsBlueDotTest {
     private val intents = listOf(local, qa)
 
     @Test
-    fun `prefers project tool-window selection over stale app-wide active`() {
+    fun `prefers project tool-window selection over migration default`() {
         assertEquals(
             "s_qa",
             resolveSettingsBlueDotId(
                 intents = intents,
                 projectProfileId = "s_qa",
-                activeServerId = "s_local"
+                migrationDefaultProfileId = "s_local"
             )
         )
     }
 
     @Test
-    fun `falls back to app-wide active when project selection is missing`() {
+    fun `falls back to migration default when project selection is missing`() {
         assertEquals(
             "s_local",
             resolveSettingsBlueDotId(
                 intents = intents,
                 projectProfileId = null,
-                activeServerId = "s_local"
+                migrationDefaultProfileId = "s_local"
             )
         )
     }
@@ -49,7 +49,7 @@ class SettingsBlueDotTest {
             resolveSettingsBlueDotId(
                 intents = intents,
                 projectProfileId = "ghost",
-                activeServerId = "s_local"
+                migrationDefaultProfileId = "s_local"
             )
         )
     }
@@ -61,7 +61,7 @@ class SettingsBlueDotTest {
             resolveSettingsBlueDotId(
                 intents = intents,
                 projectProfileId = "ghost",
-                activeServerId = "also-gone"
+                migrationDefaultProfileId = "also-gone"
             )
         )
     }

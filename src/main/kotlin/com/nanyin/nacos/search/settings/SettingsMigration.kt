@@ -1,5 +1,6 @@
 package com.nanyin.nacos.search.settings
 
+import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
 import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosServerConfig
@@ -28,7 +29,9 @@ data class SettingsMigrationInput(
     val profiles: List<EnvironmentProfile>,
     val preferences: List<EnvironmentPreferences>,
     val defaultProfileId: String,
-    val defaultNamespaceId: String
+    val defaultNamespaceId: String,
+    val legacyEnableTokenAuth: Boolean = true,
+    val flatServer: NacosServerConfig? = null
 )
 
 /**
@@ -100,10 +103,16 @@ class SettingsMigrator(
         from: Int
     ): SettingsMigrationReport {
         val profiles = sanitizeProfiles(input.profiles)
-        val namespaces = suggestedNamespaces(input, profiles)
-        val preferences = reconcilePreferences(input, profiles, writeActions = null)
-        val defaultId = resolveDefaultId(input, profiles)
-        val defaultNs = resolveDefaultNamespace(input, defaultId, namespaces)
+        val preferences = reconcilePublishedPreferences(input.preferences, profiles)
+        val namespaces = preferences.associate {
+            it.profileId to it.suggestedNamespace.trim().ifBlank { "public" }
+        }
+        val defaultId = input.defaultProfileId
+            .takeIf { candidate -> profiles.any { it.id == candidate } }
+            ?: profiles.firstOrNull()?.id.orEmpty()
+        val defaultNs = input.defaultNamespaceId.trim().ifBlank {
+            namespaces[defaultId] ?: "public"
+        }
         return SettingsMigrationReport(
             fromSchemaVersion = from,
             toSchemaVersion = SettingsSchema.CURRENT,
@@ -117,19 +126,44 @@ class SettingsMigrator(
         )
     }
 
+    private fun reconcilePublishedPreferences(
+        preferences: List<EnvironmentPreferences>,
+        profiles: List<EnvironmentProfile>
+    ): List<EnvironmentPreferences> {
+        val byId = preferences
+            .filter { it.profileId.isNotBlank() }
+            .associateBy { it.profileId }
+        return profiles.map { profile ->
+            val existing = byId[profile.id] ?: EnvironmentPreferences.defaultsFor(profile.id)
+            existing.copy(
+                profileId = profile.id,
+                suggestedNamespace = existing.suggestedNamespace.trim().ifBlank { "public" },
+                defaultGroup = existing.defaultGroup.trim().ifBlank { "DEFAULT_GROUP" }
+            )
+        }
+    }
+
     private fun migrateToCurrent(
         input: SettingsMigrationInput,
         from: Int
     ): SettingsMigrationReport {
         val actions = mutableListOf<String>()
         var writes = 0
-        val sanitizedExisting = sanitizeProfiles(input.profiles)
+        val sanitizedExisting = sanitizeProfiles(input.profiles).map { profile ->
+            profile.copy(
+                authMode = AuthStrategyFormPolicy.normalizeStored(
+                    profile.authMode,
+                    input.legacyEnableTokenAuth
+                ),
+                cacheTombstones = profile.cacheTombstones.toMutableList()
+            )
+        }
 
         val profiles: List<EnvironmentProfile>
         if (sanitizedExisting.isNotEmpty()) {
             profiles = sanitizedExisting
             actions += "Adopted ${profiles.size} existing environment profile(s) with stable ids and revisions"
-            writes += stageMissingSlots(profiles, input.servers, actions)
+            writes += stageMissingSlots(profiles, legacyServers(input), actions)
         } else {
             val built = buildProfilesFromLegacy(input.servers, input, actions)
             profiles = built.profiles
@@ -137,7 +171,7 @@ class SettingsMigrator(
         }
 
         val namespaces = suggestedNamespaces(input, profiles)
-        val preferences = reconcilePreferences(input, profiles, actions)
+        val preferences = reconcilePreferences(input, profiles)
         val defaultId = resolveDefaultId(input, profiles)
         val defaultNs = resolveDefaultNamespace(input, defaultId, namespaces)
 
@@ -171,23 +205,32 @@ class SettingsMigrator(
         input: SettingsMigrationInput,
         actions: MutableList<String>
     ): BuiltProfiles {
-        val source = servers.ifEmpty {
-            // Flat active-server fields only (very old single-server XML).
-            listOf(
-                NacosServerConfig(
-                    id = input.activeServerId.ifBlank { "default" },
-                    displayName = "Local",
-                    serverUrl = "http://localhost:8848",
-                    namespace = input.flatNamespace.ifBlank { "public" }
+        val source = servers
+            .ifEmpty { listOfNotNull(input.flatServer) }
+            .ifEmpty {
+                // No shipped environment input: deterministic product seed.
+                // A present legacy row with omitted authMode remains ANONYMOUS.
+                listOf(
+                    NacosServerConfig(
+                        id = input.activeServerId.ifBlank { "s_local" },
+                        displayName = "Local",
+                        serverUrl = "http://localhost:8848",
+                        namespace = input.flatNamespace.ifBlank { "public" },
+                        authMode = AuthMode.NACOS_PASSWORD
+                    )
                 )
-            )
-        }
+            }
         val usedIds = mutableSetOf<String>()
         var writes = 0
         val profiles = source.mapIndexed { index, server ->
             val profileId = uniqueProfileId(server, index, usedIds)
             val normalized = server.copy(id = profileId)
-            val profile = EnvironmentProfile.fromLegacy(normalized)
+            val profile = profileFromLegacy(normalized).copy(
+                authMode = AuthStrategyFormPolicy.normalizeStored(
+                    normalized.authMode,
+                    input.legacyEnableTokenAuth
+                )
+            )
             val secret = resolveLegacySecret(normalized, profile)
             if (stageIfAbsent(profile, secret)) {
                 writes++
@@ -263,15 +306,14 @@ class SettingsMigrator(
 
     private fun reconcilePreferences(
         input: SettingsMigrationInput,
-        profiles: List<EnvironmentProfile>,
-        writeActions: MutableList<String>?
+        profiles: List<EnvironmentProfile>
     ): List<EnvironmentPreferences> {
         val byId = input.preferences
             .filter { it.profileId.isNotBlank() }
             .associateBy { it.profileId }
             .mapValues { (_, p) -> p.copyPreferences() }
             .toMutableMap()
-        val serversById = input.servers.associateBy { it.id }
+        val serversById = legacyServers(input).associateBy { it.id }
         val namespaces = suggestedNamespaces(input, profiles)
         for (profile in profiles) {
             val server = serversById[profile.id]
@@ -290,7 +332,7 @@ class SettingsMigrator(
                 continue
             }
             byId[profile.id] = if (server != null) {
-                EnvironmentPreferences.fromLegacyServer(server.copy(id = profile.id))
+                preferencesFromLegacy(server.copy(id = profile.id))
             } else {
                 EnvironmentPreferences.defaultsFor(profile.id).copy(
                     suggestedNamespace = namespaces[profile.id] ?: "public"
@@ -304,7 +346,7 @@ class SettingsMigrator(
         input: SettingsMigrationInput,
         profiles: List<EnvironmentProfile>
     ): Map<String, String> {
-        val fromServers = input.servers
+        val fromServers = legacyServers(input)
             .filter { it.id.isNotBlank() }
             .associate { it.id to it.namespace.trim().ifBlank { "public" } }
         return profiles.associate { profile ->
@@ -354,4 +396,31 @@ class SettingsMigrator(
         usedIds.add(unique)
         return unique
     }
+
+    private fun legacyServers(input: SettingsMigrationInput): List<NacosServerConfig> =
+        input.servers.ifEmpty { listOfNotNull(input.flatServer) }
+
+    private fun profileFromLegacy(server: NacosServerConfig): EnvironmentProfile {
+        val profileId = server.id.ifBlank { "s_local" }
+        return EnvironmentProfile(
+            id = profileId,
+            displayName = server.displayName,
+            canonicalEndpoint = CanonicalNacosEndpoint.parse(server.serverUrl).getOrNull()?.value.orEmpty(),
+            apiPolicy = server.apiPolicy,
+            authMode = server.authMode,
+            principal = server.username.trim(),
+            writeIntent = server.writeIntent,
+            credentialSlotId = CredentialSlotStore.slotKey(profileId, 1),
+            credentialSlotVersion = 1
+        )
+    }
+
+    private fun preferencesFromLegacy(server: NacosServerConfig): EnvironmentPreferences =
+        EnvironmentPreferences(
+            profileId = server.id.ifBlank { "s_local" },
+            allowCrossNamespaceNavigation = server.allowCrossNamespaceNavigation,
+            navigationDetailPrefetchEnabled = server.navigationDetailPrefetchEnabled,
+            suggestedNamespace = server.namespace.trim().ifBlank { "public" },
+            defaultGroup = server.defaultGroup.trim().ifBlank { "DEFAULT_GROUP" }
+        )
 }

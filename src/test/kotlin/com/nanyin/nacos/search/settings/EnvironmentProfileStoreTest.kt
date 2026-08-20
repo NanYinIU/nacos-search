@@ -473,7 +473,8 @@ class EnvironmentProfileStoreTest {
         )
 
         assertEquals(setOf("dev"), outcome.addedProfileIds)
-        assertEquals("dev", settings.activeServerId)
+        assertEquals("", settings.activeServerId)
+        assertTrue(settings.servers.isEmpty())
         val profile = settings.getProfile("dev")!!
         assertEquals(1L, profile.profileRevision)
         assertEquals("pw", slots.read("dev", profile.credentialSlotVersion))
@@ -483,7 +484,7 @@ class EnvironmentProfileStoreTest {
     }
 
     @Test
-    fun `host dual-write keeps published secret on stage failure and omits failed add`() {
+    fun `host keeps published profile on stage failure and omits failed add`() {
         val slots = InMemoryCredentialSlotStore()
         val settings = NacosSettings()
         settings.resetToDefaults()
@@ -493,7 +494,7 @@ class EnvironmentProfileStoreTest {
             credentialSlots = slots
         )
         val beforeRev = settings.getProfile("dev")!!.accessRevision
-        assertEquals("old", settings.servers.single { it.id == "dev" }.password)
+        assertTrue(settings.servers.isEmpty())
 
         val failing = InMemoryCredentialSlotStore(failWrites = true)
         val outcome = settings.applyProfileIntents(
@@ -506,11 +507,10 @@ class EnvironmentProfileStoreTest {
         )
 
         assertEquals(setOf("dev", "fresh"), outcome.failedStageProfileIds)
-        // Failed Keep: still published at old revision; dual-write password stays old.
+        // Failed Keep: still published at the old revision.
         assertEquals(beforeRev, settings.getProfile("dev")!!.accessRevision)
-        assertEquals("old", settings.servers.single { it.id == "dev" }.password)
         // Failed Add: no server/profile row left for "fresh".
-        assertTrue(settings.servers.none { it.id == "fresh" })
+        assertTrue(settings.servers.isEmpty())
         assertNull(settings.profiles.firstOrNull { it.id == "fresh" })
         // Published slot pair unchanged under the good store (failing store has nothing).
         assertEquals("old", slots.read("dev", 1L))
@@ -522,7 +522,7 @@ class EnvironmentProfileStoreTest {
     }
 
     @Test
-    fun `host secret rotation success dual-writes the new secret after stage`() {
+    fun `host secret rotation publishes only after staging the new secret`() {
         val slots = InMemoryCredentialSlotStore()
         val settings = NacosSettings()
         settings.resetToDefaults()
@@ -537,31 +537,21 @@ class EnvironmentProfileStoreTest {
             credentialSlots = slots
         )
         assertTrue(outcome.accessRevisionAdvancedIds.contains("dev"))
-        assertEquals("rotated", settings.servers.single { it.id == "dev" }.password)
+        assertTrue(settings.servers.isEmpty())
         assertEquals("rotated", slots.read("dev", settings.getProfile("dev")!!.credentialSlotVersion))
         assertEquals("old", slots.read("dev", 1L))
     }
 
     @Test
-    fun `preference only dual-write fields do not advance profile revision through the store`() {
+    fun `preference only intent fields do not advance profile revision through the store`() {
         // Preference-only edits (default group) must not advance profile/access
         // revisions — store classification owns that gate (ADR-0042 / #156).
         val slots = InMemoryCredentialSlotStore()
         val settings = NacosSettings()
         settings.resetToDefaults()
-        fun server(defaultGroup: String) = com.nanyin.nacos.search.models.NacosServerConfig(
-            id = "dev",
-            displayName = "Dev",
-            serverUrl = "https://nacos.example",
-            username = "alice",
-            password = "s1",
-            authMode = AuthMode.NACOS_PASSWORD,
-            defaultGroup = defaultGroup
-        )
         settings.applyProfileIntents(
             intents = listOf(intent(id = "dev", secret = "s1", principal = "alice", displayName = "Dev")),
             newActiveId = "dev",
-            dualWriteServers = listOf(server("DEFAULT_GROUP")),
             credentialSlots = slots
         )
         val before = settings.getProfile("dev")!!
@@ -576,7 +566,6 @@ class EnvironmentProfileStoreTest {
                 )
             ),
             newActiveId = "dev",
-            dualWriteServers = listOf(server("CUSTOM_GROUP")),
             credentialSlots = slots
         )
         assertEquals(before.profileRevision, settings.getProfile("dev")!!.profileRevision)

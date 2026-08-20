@@ -31,12 +31,6 @@ class EnvironmentPreferencesUnitTest {
     fun `preferencesFor returns defaults without consulting servers`() {
         val settings = NacosSettings()
         settings.resetToDefaults()
-        // Wipe server-entry dual-write fields so a consumer that still reads
-        // servers would see the wrong answer.
-        settings.servers.forEach {
-            it.allowCrossNamespaceNavigation = true
-            it.navigationDetailPrefetchEnabled = false
-        }
         settings.environmentPreferences = mutableListOf(
             EnvironmentPreferences(
                 profileId = "s_local",
@@ -55,9 +49,9 @@ class EnvironmentPreferencesUnitTest {
     @Test
     fun `preference records survive persistence without runtime server fields`() {
         val original = NacosSettings()
-        original.applyServers(
+        original.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "dev",
                     displayName = "Dev",
                     serverUrl = "http://localhost:8848",
@@ -114,9 +108,9 @@ class EnvironmentPreferencesUnitTest {
     @Test
     fun `preference-only apply does not advance profile or access revisions`() {
         val settings = NacosSettings()
-        settings.applyServers(
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "dev",
                     displayName = "Dev",
                     serverUrl = "https://nacos.example",
@@ -130,27 +124,24 @@ class EnvironmentPreferencesUnitTest {
         val before = settings.getProfile("dev")!!
         val profileRev = before.profileRevision
         val accessRev = before.accessRevision
-        val activeIdBefore = settings.activeServerId
-        val idsBefore = settings.servers.map { it.id }.toSet()
-        val namespacesBefore = settings.servers.associate { it.id to it.namespace }
-
-        val servers = settings.cloneServers().map {
+        val draft = settings.loadIntentDraft()
+        val changed = draft.update("dev") {
             it.copy(
-                allowCrossNamespaceNavigation = true,
-                navigationDetailPrefetchEnabled = false
+                preferences = it.preferences.copy(
+                    allowCrossNamespaceNavigation = true,
+                    navigationDetailPrefetchEnabled = false
+                )
             )
         }
-        settings.applyServers(servers, "dev")
+        settings.applyProfileIntents(changed.snapshot(), "dev")
 
         val after = settings.getProfile("dev")!!
         assertEquals(profileRev, after.profileRevision)
         assertEquals(accessRev, after.accessRevision)
-        // Epoch relevance in applyServers is active id / membership / revisions /
+        // Epoch relevance is membership / revisions /
         // namespace only — preference-only writes leave every input unchanged, so
         // ProjectSessionEpochs.bumpAllOpenProjects is not called (ADR-0042).
-        assertEquals(activeIdBefore, settings.activeServerId)
-        assertEquals(idsBefore, settings.servers.map { it.id }.toSet())
-        assertEquals(namespacesBefore, settings.servers.associate { it.id to it.namespace })
+        assertTrue(settings.servers.isEmpty())
         assertTrue(settings.preferencesFor("dev").allowCrossNamespaceNavigation)
         assertFalse(settings.preferencesFor("dev").navigationDetailPrefetchEnabled)
     }
@@ -158,10 +149,10 @@ class EnvironmentPreferencesUnitTest {
     @Test
     fun `removing an environment drops its preference record`() {
         val settings = NacosSettings()
-        settings.applyServers(
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(id = "keep", displayName = "Keep", serverUrl = "http://localhost:8848"),
-                NacosServerConfig(
+                profileIntentFixture(id = "keep", displayName = "Keep", serverUrl = "http://localhost:8848"),
+                profileIntentFixture(
                     id = "drop",
                     displayName = "Drop",
                     serverUrl = "http://localhost:8849",
@@ -172,8 +163,8 @@ class EnvironmentPreferencesUnitTest {
         )
         assertTrue(settings.allEnvironmentPreferences().containsKey("drop"))
 
-        settings.applyServers(
-            listOf(NacosServerConfig(id = "keep", displayName = "Keep", serverUrl = "http://localhost:8848")),
+        settings.applyProfileIntents(
+            listOf(profileIntentFixture(id = "keep", displayName = "Keep", serverUrl = "http://localhost:8848")),
             "keep"
         )
         assertFalse(settings.allEnvironmentPreferences().containsKey("drop"))
@@ -185,19 +176,18 @@ class EnvironmentPreferencesUnitTest {
 class EnvironmentPreferencesNotificationTest {
 
     private lateinit var settings: NacosSettings
-    private var originalServers: List<NacosServerConfig> = emptyList()
+    private var originalIntents: List<com.nanyin.nacos.search.models.ProfileIntent> = emptyList()
     private var originalActiveId: String = ""
-    private var originalPreferences: List<EnvironmentPreferences> = emptyList()
 
     @BeforeEach
     fun setUp() {
         settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        originalServers = settings.servers.map { it.copy() }
-        originalActiveId = settings.activeServerId
-        originalPreferences = settings.environmentPreferences.map { it.copyPreferences() }
-        settings.applyServers(
+        originalIntents = settings.loadIntentDraft().snapshot()
+        originalActiveId = settings.resolveDefaultProfileId()
+        clearProfileTombstones(originalIntents.map { it.profileId } + "dev")
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "dev",
                     displayName = "Dev",
                     serverUrl = "https://nacos.example",
@@ -212,13 +202,13 @@ class EnvironmentPreferencesNotificationTest {
 
     @AfterEach
     fun tearDown() {
-        // applyServers entombs removed ids permanently (issue #105). Lift
+        // Publication entombs removed ids permanently (issue #105). Lift
         // originals before restore so they can re-publish, then lift fixture
         // ids entombed by the restore so the next setUp can reuse "dev".
-        val touched = (settings.servers.map { it.id } + originalServers.map { it.id }).toSet()
+        val touched = (settings.publishedProfiles().map { it.id } +
+            originalIntents.map { it.profileId }).toSet()
         clearProfileTombstones(touched)
-        settings.applyServers(originalServers.map { it.copy() }, originalActiveId)
-        settings.environmentPreferences = originalPreferences.map { it.copyPreferences() }.toMutableList()
+        settings.applyProfileIntents(originalIntents, originalActiveId)
         clearProfileTombstones(touched)
     }
 

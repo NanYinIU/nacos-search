@@ -4,11 +4,11 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.ApplicationRule
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosApiPolicy
-import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.OperationContextResolver
+import com.nanyin.nacos.search.settings.profileIntentFixture
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,8 +39,8 @@ class NamespaceIndexRefreshServiceTest {
         val cacheService = CacheService(InMemoryCacheStore())
         cacheService.clearAll()
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        val originalServers = settings.servers.map { it.copy() }
-        val originalActive = settings.activeServerId
+        val originalServers = settings.loadIntentDraft().snapshot()
+        val originalActive = settings.resolveDefaultProfileId()
         val testProfileId = "s_refresh"
         val service = NamespaceIndexRefreshService(
             requester,
@@ -49,12 +49,12 @@ class NamespaceIndexRefreshServiceTest {
         ) { _, _ -> }
         try {
             // Flat fields are not runtime sources after migration (#104). Publish
-            // through applyServers so captureNamespaceIndexRequest (off-EDT) reads
+            // through profile intents so captureNamespaceIndexRequest (off-EDT) reads
             // the BASIC profile and staged credential, not the ANONYMOUS seed.
-            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
-            settings.applyServers(
+            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.profileId })
+            settings.applyProfileIntents(
                 listOf(
-                    NacosServerConfig(
+                    profileIntentFixture(
                         id = testProfileId,
                         displayName = "Refresh Test",
                         serverUrl = "http://localhost:8848",
@@ -80,9 +80,9 @@ class NamespaceIndexRefreshServiceTest {
             assertEquals("admin", actualRequest.key.identity.principal)
         } finally {
             service.dispose()
-            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
-            settings.applyServers(originalServers, originalActive)
-            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
+            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.profileId })
+            settings.applyProfileIntents(originalServers, originalActive)
+            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.profileId })
         }
     }
 
@@ -101,8 +101,8 @@ class NamespaceIndexRefreshServiceTest {
         val cacheService = CacheService(InMemoryCacheStore())
         cacheService.clearAll()
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        val originalServers = settings.servers.map { it.copy() }
-        val originalActive = settings.activeServerId
+        val originalServers = settings.loadIntentDraft().snapshot()
+        val originalActive = settings.resolveDefaultProfileId()
         val defaultProfileId = "s_default"
         val projectProfileId = "s_project"
         val service = NamespaceIndexRefreshService(
@@ -111,12 +111,12 @@ class NamespaceIndexRefreshServiceTest {
             CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
         ) { _, _ -> }
         try {
-            clearProfileTombstones(listOf(defaultProfileId, projectProfileId) + originalServers.map { it.id })
+            clearProfileTombstones(listOf(defaultProfileId, projectProfileId) + originalServers.map { it.profileId })
             // Migration default / first profile is defaultProfileId; the gutter
             // identity is projectProfileId — capture must follow the identity.
-            settings.applyServers(
+            settings.applyProfileIntents(
                 listOf(
-                    NacosServerConfig(
+                    profileIntentFixture(
                         id = defaultProfileId,
                         displayName = "Default",
                         serverUrl = "http://default:8848",
@@ -124,7 +124,7 @@ class NamespaceIndexRefreshServiceTest {
                         password = "secret",
                         authMode = AuthMode.BASIC
                     ),
-                    NacosServerConfig(
+                    profileIntentFixture(
                         id = projectProfileId,
                         displayName = "Project",
                         serverUrl = "http://project:8848",
@@ -146,9 +146,9 @@ class NamespaceIndexRefreshServiceTest {
             assertEquals("project-user", actualRequest.key.identity.principal)
         } finally {
             service.dispose()
-            clearProfileTombstones(listOf(defaultProfileId, projectProfileId) + originalServers.map { it.id })
-            settings.applyServers(originalServers, originalActive)
-            clearProfileTombstones(listOf(defaultProfileId, projectProfileId) + originalServers.map { it.id })
+            clearProfileTombstones(listOf(defaultProfileId, projectProfileId) + originalServers.map { it.profileId })
+            settings.applyProfileIntents(originalServers, originalActive)
+            clearProfileTombstones(listOf(defaultProfileId, projectProfileId) + originalServers.map { it.profileId })
         }
     }
 
@@ -156,18 +156,18 @@ class NamespaceIndexRefreshServiceTest {
     fun `AUTO freshness-check and index-write identities stay equal before and after resolution`() =
         runBlocking {
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-            val originalServers = settings.servers.map { it.copy() }
-            val originalActive = settings.activeServerId
+            val originalServers = settings.loadIntentDraft().snapshot()
+            val originalActive = settings.resolveDefaultProfileId()
             val profileId = "s_auto_keyspace"
             val endpoint = "http://auto-keyspace:8848"
             val lastKnown = ApplicationManager.getApplication()
                 .getService(LastKnownGenerationStore::class.java)
             try {
-                clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+                clearProfileTombstones(listOf(profileId) + originalServers.map { it.profileId })
                 lastKnown.clearProfile(profileId)
-                settings.applyServers(
+                settings.applyProfileIntents(
                     listOf(
-                        NacosServerConfig(
+                        profileIntentFixture(
                             id = profileId,
                             displayName = "AUTO Keyspace",
                             serverUrl = endpoint,
@@ -211,23 +211,23 @@ class NamespaceIndexRefreshServiceTest {
                 assertEquals(requestAfter.operationContext.identity, requestAfter.key.identity)
             } finally {
                 lastKnown.clearProfile(profileId)
-                clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
-                settings.applyServers(originalServers, originalActive)
-                clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+                clearProfileTombstones(listOf(profileId) + originalServers.map { it.profileId })
+                settings.applyProfileIntents(originalServers, originalActive)
+                clearProfileTombstones(listOf(profileId) + originalServers.map { it.profileId })
             }
         }
 
     @Test
     fun `locked V1 profile index request keeps the locked generation`() = runBlocking {
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        val originalServers = settings.servers.map { it.copy() }
-        val originalActive = settings.activeServerId
+        val originalServers = settings.loadIntentDraft().snapshot()
+        val originalActive = settings.resolveDefaultProfileId()
         val profileId = "s_locked_v1_keyspace"
         try {
-            clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
-            settings.applyServers(
+            clearProfileTombstones(listOf(profileId) + originalServers.map { it.profileId })
+            settings.applyProfileIntents(
                 listOf(
-                    NacosServerConfig(
+                    profileIntentFixture(
                         id = profileId,
                         displayName = "Locked V1",
                         serverUrl = "http://locked-v1:8848",
@@ -248,9 +248,9 @@ class NamespaceIndexRefreshServiceTest {
             assertEquals(freshness, request.key.identity)
             assertEquals(request.operationContext.identity, request.key.identity)
         } finally {
-            clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
-            settings.applyServers(originalServers, originalActive)
-            clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+            clearProfileTombstones(listOf(profileId) + originalServers.map { it.profileId })
+            settings.applyProfileIntents(originalServers, originalActive)
+            clearProfileTombstones(listOf(profileId) + originalServers.map { it.profileId })
         }
     }
 
@@ -280,8 +280,8 @@ class NamespaceIndexRefreshServiceTest {
             val cacheService = CacheService(InMemoryCacheStore())
             cacheService.clearAll()
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-            val originalServers = settings.servers.map { it.copy() }
-            val originalActive = settings.activeServerId
+            val originalServers = settings.loadIntentDraft().snapshot()
+            val originalActive = settings.resolveDefaultProfileId()
             val profileId = "s_auto_psi_fresh"
             val endpoint = "http://auto-psi-fresh:8848"
             val lastKnown = ApplicationManager.getApplication()
@@ -292,11 +292,11 @@ class NamespaceIndexRefreshServiceTest {
                 CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
             ) { _, _ -> }
             try {
-                clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+                clearProfileTombstones(listOf(profileId) + originalServers.map { it.profileId })
                 lastKnown.clearProfile(profileId)
-                settings.applyServers(
+                settings.applyProfileIntents(
                     listOf(
-                        NacosServerConfig(
+                        profileIntentFixture(
                             id = profileId,
                             displayName = "AUTO PSI Fresh",
                             serverUrl = endpoint,
@@ -342,9 +342,9 @@ class NamespaceIndexRefreshServiceTest {
             } finally {
                 service.dispose()
                 lastKnown.clearProfile(profileId)
-                clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
-                settings.applyServers(originalServers, originalActive)
-                clearProfileTombstones(listOf(profileId) + originalServers.map { it.id })
+                clearProfileTombstones(listOf(profileId) + originalServers.map { it.profileId })
+                settings.applyProfileIntents(originalServers, originalActive)
+                clearProfileTombstones(listOf(profileId) + originalServers.map { it.profileId })
             }
         }
 
@@ -363,8 +363,8 @@ class NamespaceIndexRefreshServiceTest {
         val cacheService = CacheService(InMemoryCacheStore())
         cacheService.clearAll()
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        val originalServers = settings.servers.map { it.copy() }
-        val originalActive = settings.activeServerId
+        val originalServers = settings.loadIntentDraft().snapshot()
+        val originalActive = settings.resolveDefaultProfileId()
         val testProfileId = "s_aged_index"
         val service = NamespaceIndexRefreshService(
             requester,
@@ -372,10 +372,10 @@ class NamespaceIndexRefreshServiceTest {
             CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
         ) { _, _ -> }
         try {
-            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
-            settings.applyServers(
+            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.profileId })
+            settings.applyProfileIntents(
                 listOf(
-                    NacosServerConfig(
+                    profileIntentFixture(
                         id = testProfileId,
                         displayName = "Aged Index",
                         serverUrl = "http://localhost:8848",
@@ -411,9 +411,9 @@ class NamespaceIndexRefreshServiceTest {
             assertEquals(1, requestCount.get())
         } finally {
             service.dispose()
-            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
-            settings.applyServers(originalServers, originalActive)
-            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
+            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.profileId })
+            settings.applyProfileIntents(originalServers, originalActive)
+            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.profileId })
         }
     }
 
@@ -437,8 +437,8 @@ class NamespaceIndexRefreshServiceTest {
         val cacheService = CacheService(InMemoryCacheStore())
         cacheService.clearAll()
         val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        val originalServers = settings.servers.map { it.copy() }
-        val originalActive = settings.activeServerId
+        val originalServers = settings.loadIntentDraft().snapshot()
+        val originalActive = settings.resolveDefaultProfileId()
         val testProfileId = "s_after_refresh"
         val service = NamespaceIndexRefreshService(
             requester,
@@ -449,10 +449,10 @@ class NamespaceIndexRefreshServiceTest {
             afterRefreshSignals.poll()?.complete(Unit)
         }
         try {
-            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
-            settings.applyServers(
+            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.profileId })
+            settings.applyProfileIntents(
                 listOf(
-                    NacosServerConfig(
+                    profileIntentFixture(
                         id = testProfileId,
                         displayName = "After Refresh",
                         serverUrl = "http://localhost:8848",
@@ -507,9 +507,9 @@ class NamespaceIndexRefreshServiceTest {
             assertEquals(1, afterRefreshCount.get())
         } finally {
             service.dispose()
-            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
-            settings.applyServers(originalServers, originalActive)
-            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
+            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.profileId })
+            settings.applyProfileIntents(originalServers, originalActive)
+            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.profileId })
         }
     }
 

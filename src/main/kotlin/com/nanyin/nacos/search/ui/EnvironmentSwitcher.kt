@@ -153,7 +153,7 @@ class EnvironmentSwitcher(
             )
         ) return
         // Project-local only — never write the application-wide migration seed
-        // or dual-write active id (issue #107 / ADR-0004). Pass this
+        // or compatibility inputs (issue #107 / ADR-0004). Pass this
         // environment's suggested Namespace so the previous server's id is not
         // reused against a different Nacos (configs would load empty/wrong).
         projectSession?.adoptEnvironment(entry.environment)

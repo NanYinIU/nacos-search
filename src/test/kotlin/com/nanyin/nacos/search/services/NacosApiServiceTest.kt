@@ -163,9 +163,9 @@ class NacosApiServiceTest {
         authMode: AuthMode = AuthMode.ANONYMOUS,
         id: String = "s_local"
     ) {
-        settings.applyServers(
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                com.nanyin.nacos.search.settings.profileIntentFixture(
                     id = id,
                     displayName = "Test",
                     serverUrl = serverUrl,
@@ -344,9 +344,7 @@ class NacosApiServiceTest {
    fun `test settings validation`() {
        assertTrue(settings.isValid())
 
-       publishEnvironment(serverUrl = "http://invalid", authMode = AuthMode.ANONYMOUS)
-       // Empty origin is invalid; an unparseable endpoint fails validation too.
-       settings.serverUrl = ""
+       publishEnvironment(serverUrl = "not a url", authMode = AuthMode.ANONYMOUS)
        assertFalse(settings.isValid())
    }
 

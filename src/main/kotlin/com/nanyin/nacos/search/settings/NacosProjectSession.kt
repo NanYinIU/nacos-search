@@ -109,7 +109,7 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
 
     /**
      * Project-local environment adoption (issue #107). Updates only this
-     * session — never [NacosSettings.activeServerId] or the migration seed.
+     * session — never the application migration seed.
      *
      * [namespaceId] semantics (ADR-0015 / public spelling):
      * - **null (omitted)** — keep the current Namespace when the profile is
@@ -185,8 +185,8 @@ internal fun resolveProjectNamespaceId(
 
 /**
  * PSI/UI helpers that read the project-selected profile and namespace.
- * Tool-window selection lives here; app-wide [NacosSettings.activeServerId] and
- * NamespaceService must not retarget another project's navigation.
+ * Tool-window selection lives here; application defaults and NamespaceService
+ * must not retarget another project's navigation.
  */
 internal fun Project.selectedNacosProfileId(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
@@ -247,8 +247,7 @@ internal fun Project.allowCrossNamespaceNavigation(
  * Reads the navigation detail prefetch preference for this project's selected
  * environment at call time (ADR-0042): the toggle is not captured into the
  * operation context, so the prefetch observes cancellation / disable itself.
- * Resolved from the profile-associated preference record (issue #101), not the
- * legacy server entry.
+ * Resolved from the profile-associated preference record (issue #101).
  */
 internal fun Project.navigationDetailPrefetchEnabled(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
@@ -258,11 +257,11 @@ internal fun Project.navigationDetailPrefetchEnabled(
 }
 
 internal fun NacosSettings.navigationDetailPrefetchEnabled(profileId: String? = null): Boolean {
-    val id = profileId?.takeIf { it.isNotBlank() } ?: activeServerId
+    val id = profileId?.takeIf { it.isNotBlank() } ?: resolveDefaultProfileId()
     return preferencesFor(id).navigationDetailPrefetchEnabled
 }
 
 internal fun NacosSettings.allowCrossNamespaceNavigation(profileId: String? = null): Boolean {
-    val id = profileId?.takeIf { it.isNotBlank() } ?: activeServerId
+    val id = profileId?.takeIf { it.isNotBlank() } ?: resolveDefaultProfileId()
     return preferencesFor(id).allowCrossNamespaceNavigation
 }

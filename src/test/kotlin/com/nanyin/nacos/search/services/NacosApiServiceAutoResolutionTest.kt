@@ -80,9 +80,9 @@ class NacosApiServiceAutoResolutionTest {
     fun setUp() {
         settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
         settings.resetToDefaults()
-        settings.applyServers(
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                com.nanyin.nacos.search.settings.profileIntentFixture(
                     id = "s_local",
                     displayName = "Test",
                     serverUrl = "http://localhost:${server.address.port}",

@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test
 
 /**
  * Issue #230: the pure Settings draft owns only profile intents, ephemeral
- * secrets, and active-selection state; legacy rows are compatibility adapters.
+ * secrets, and active-selection state.
  *
  * Seam: [NacosSettings] + [EnvironmentProfileStore] with
  * [InMemoryCredentialSlotStore]. No shared application credential service and
@@ -147,10 +147,13 @@ class SettingsIntentDraftTest {
     fun `intent native load reads published profiles preferences and revision pinned secrets only`() {
         val slots = InMemoryCredentialSlotStore()
         val settings = seededSettings(slots)
-        settings.servers.single().apply {
-            serverUrl = "https://unpublished.example"
-            password = "unpublished-secret"
-        }
+        settings.servers = mutableListOf(
+            NacosServerConfig(
+                id = "dev",
+                serverUrl = "https://unpublished.example",
+                password = "unpublished-secret"
+            )
+        )
         val writesBefore = slots.writes.size
 
         val draft = settings.loadIntentDraft(
@@ -220,29 +223,6 @@ class SettingsIntentDraftTest {
     }
 
     @Test
-    fun `legacy draft adapters have parity with intent native load classify and defaults`() {
-        val slots = InMemoryCredentialSlotStore()
-        val settings = seededSettings(slots)
-        settings.servers.single().apply {
-            serverUrl = "https://unpublished.example"
-            password = "unpublished-secret"
-        }
-
-        val native = settings.loadIntentDraft(slots, "dev", "dev")
-        val legacyRows = settings.loadSettingsDraft(slots)
-
-        assertEquals(native.snapshot(), settings.intentsFromDraft(legacyRows))
-        assertEquals(
-            settings.classifyIntentDraft(native, slots),
-            settings.classifyDraft(legacyRows, "dev", "dev", slots)
-        )
-        assertEquals(
-            settings.defaultProfileIntent("new", "New"),
-            ProfileIntent.fromServerConfig(settings.defaultDraftRow("new", "New"))
-        )
-    }
-
-    @Test
     fun `open cancel and reset without apply keep unsaved secrets out of persisted state`() {
         val slots = InMemoryCredentialSlotStore()
         val settings = seededSettings(slots)
@@ -284,7 +264,6 @@ class SettingsIntentDraftTest {
         val slots = InMemoryCredentialSlotStore()
         val settings = seededSettings(slots)
         val writesBefore = slots.writes.size
-        val activeBefore = settings.activeServerId
         val profilesBefore = settings.publishedProfiles().map { it.copy() }
         val prefsBefore = settings.allEnvironmentPreferences()
 
@@ -292,7 +271,6 @@ class SettingsIntentDraftTest {
         settings.classifyIntentDraft(settings.loadIntentDraft(slots), slots)
 
         assertEquals(writesBefore, slots.writes.size)
-        assertEquals(activeBefore, settings.activeServerId)
         assertEquals(profilesBefore.map { it.accessRevision }, settings.publishedProfiles().map { it.accessRevision })
         assertEquals(prefsBefore, settings.allEnvironmentPreferences())
     }
@@ -426,14 +404,17 @@ class SettingsIntentDraftTest {
         settings.cacheEnabled = false
         settings.cacheTtlMinutes = 99
         settings.language = "zh_CN"
-        settings.applyServers(
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
-                    id = "custom",
+                ProfileIntent(
+                    profileId = "custom",
                     displayName = "Custom",
-                    serverUrl = "https://custom.example",
-                    allowCrossNamespaceNavigation = true,
-                    navigationDetailPrefetchEnabled = false
+                    endpoint = "https://custom.example",
+                    preferences = EnvironmentPreferences(
+                        profileId = "custom",
+                        allowCrossNamespaceNavigation = true,
+                        navigationDetailPrefetchEnabled = false
+                    )
                 )
             ),
             "custom"
@@ -445,33 +426,14 @@ class SettingsIntentDraftTest {
         assertEquals(shape.cacheEnabled, settings.cacheEnabled)
         assertEquals(shape.cacheTtlMinutes, settings.cacheTtlMinutes)
         assertEquals(shape.language, settings.language)
-        assertEquals(shape.enableTokenAuth, settings.enableTokenAuth)
         assertEquals(shape.settingsSchemaVersion, settings.settingsSchemaVersion)
-        assertEquals(shape.activeServerId, settings.activeServerId)
         assertEquals(shape.migratedDefaultProfileId, settings.migratedDefaultProfileId)
-        assertEquals(shape.servers.map { it.id }, settings.servers.map { it.id })
         assertEquals(shape.profiles.map { it.id }, settings.profiles.map { it.id })
-        val prefs = settings.preferencesFor(settings.activeServerId)
-        val defaultPrefs = EnvironmentPreferences.defaultsFor(settings.activeServerId)
+        val defaultId = settings.resolveDefaultProfileId()
+        val prefs = settings.preferencesFor(defaultId)
+        val defaultPrefs = EnvironmentPreferences.defaultsFor(defaultId)
         assertEquals(defaultPrefs.allowCrossNamespaceNavigation, prefs.allowCrossNamespaceNavigation)
         assertEquals(defaultPrefs.navigationDetailPrefetchEnabled, prefs.navigationDetailPrefetchEnabled)
-    }
-
-    @Test
-    fun `default draft row derives from complete persisted shape`() {
-        val settings = NacosSettings()
-        val row = settings.defaultDraftRow("keep-me", "Kept Name")
-        val shapeSeed = NacosSettings.defaultPersistedShape().servers.first()
-
-        assertEquals("keep-me", row.id)
-        assertEquals("Kept Name", row.displayName)
-        assertEquals(shapeSeed.serverUrl, row.serverUrl)
-        assertEquals(shapeSeed.apiPolicy, row.apiPolicy)
-        assertEquals(shapeSeed.authMode, row.authMode)
-        assertEquals(shapeSeed.defaultGroup, row.defaultGroup)
-        assertEquals(shapeSeed.allowCrossNamespaceNavigation, row.allowCrossNamespaceNavigation)
-        assertEquals(shapeSeed.navigationDetailPrefetchEnabled, row.navigationDetailPrefetchEnabled)
-        assertEquals(shapeSeed.writeIntent, row.writeIntent)
     }
 
     private fun seededSettings(slots: InMemoryCredentialSlotStore): NacosSettings {

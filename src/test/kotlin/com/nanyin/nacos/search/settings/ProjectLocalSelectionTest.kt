@@ -118,7 +118,6 @@ class ProjectLocalSelectionTest {
             environment("s_qa", "team-qa")
         )
         val seedBefore = settings.migratedDefaultProfileId
-        val activeBefore = settings.activeServerId
         assertEquals("s_local", seedBefore)
 
         val session = NacosProjectSession()
@@ -128,7 +127,7 @@ class ProjectLocalSelectionTest {
         assertEquals("s_qa", session.sessionState.selectedProfileId)
         assertEquals("team-qa", session.sessionState.namespaceId)
         assertEquals(seedBefore, settings.migratedDefaultProfileId)
-        assertEquals(activeBefore, settings.activeServerId, "runtime selection must not write the dual-write active id")
+        assertEquals("", settings.activeServerId, "runtime selection must not write the legacy active id")
     }
 
     @Test
@@ -213,20 +212,6 @@ class ProjectLocalSelectionTest {
     }
 
     @Test
-    fun `changing the dual-write active id does not move the migration seed used for new projects`() {
-        val settings = settingsWithProfiles(
-            defaultProfileId = "s_local",
-            environment("s_local", "public"),
-            environment("s_qa", "team-qa")
-        )
-        settings.setActiveServer("s_qa")
-
-        assertEquals("s_qa", settings.activeServerId)
-        assertEquals("s_local", settings.migratedDefaultProfileId)
-        assertEquals("s_local", settings.resolveDefaultProfileId())
-    }
-
-    @Test
     fun `namespace resolution for an initialized session ignores any external namespace id`() {
         val session = NacosProjectSessionState().apply {
             ensureInitialized(environment(profileId = "dev", suggestedNamespace = "from-seed"))
@@ -277,6 +262,6 @@ class ProjectLocalSelectionTest {
             )
         }.toMutableList()
         migratedDefaultProfileId = defaultProfileId
-        activeServerId = defaultProfileId
+        activeServerId = ""
     }
 }

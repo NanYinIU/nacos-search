@@ -150,7 +150,7 @@ class NacosConfigurable @JvmOverloads constructor(
         val loaded = settings.loadIntentDraft()
         val rows = loaded.snapshot().map { intent ->
             intent.copy(
-                authMode = AuthStrategyFormPolicy.normalizeStored(intent.authMode, settings.enableTokenAuth)
+                authMode = AuthStrategyFormPolicy.normalizeStored(intent.authMode)
             )
         }
         if (rows.isEmpty()) {
@@ -160,11 +160,11 @@ class NacosConfigurable @JvmOverloads constructor(
             return
         }
         // Blue-dot = environment for the current project. Capture it only in
-        // draft state — do not write activeServerId or the migration seed.
+        // draft state — do not write compatibility inputs or the migration seed.
         val preferred = resolveSettingsBlueDotId(
             intents = rows,
             projectProfileId = resolveProjectProfileId(),
-            activeServerId = settings.activeServerId
+            migrationDefaultProfileId = settings.resolveDefaultProfileId()
         )
         intentDraft = SettingsIntentDraft.of(rows, preferred, preferred)
         selectedServerId = intentDraft.activeProfileId
@@ -364,8 +364,7 @@ class NacosConfigurable @JvmOverloads constructor(
         val namespace = namespaceCombo.namespaceId()
         // Strategy is chooser-only — never inferred from credential keystrokes.
         val authMode = AuthStrategyFormPolicy.normalizeStored(
-            authModeComboBox.selectedItem as AuthMode? ?: AuthMode.NACOS_PASSWORD,
-            settings.enableTokenAuth
+            authModeComboBox.selectedItem as AuthMode? ?: AuthMode.NACOS_PASSWORD
         )
         when (authMode) {
             AuthMode.ANONYMOUS -> {
@@ -625,8 +624,7 @@ class NacosConfigurable @JvmOverloads constructor(
             addActionListener {
                 if (loadingForm) return@addActionListener
                 val mode = AuthStrategyFormPolicy.normalizeStored(
-                    selectedItem as AuthMode? ?: return@addActionListener,
-                    settings.enableTokenAuth
+                    selectedItem as AuthMode? ?: return@addActionListener
                 )
                 applyStrategySwitch(displayedAuthMode, mode)
                 displayedAuthMode = mode
@@ -768,7 +766,7 @@ class NacosConfigurable @JvmOverloads constructor(
         val addButton = iconButton(AllIcons.General.Add, NacosSearchBundle.message("settings.servers.add"), "nacos.settings.server.add") { addServer() }
         val duplicateButton = iconButton(AllIcons.Actions.Copy, NacosSearchBundle.message("settings.servers.duplicate"), "nacos.settings.server.duplicate") { duplicateServer() }
        val deleteButton = iconButton(AllIcons.General.Remove, NacosSearchBundle.message("settings.servers.delete"), "nacos.settings.server.delete") { deleteServer() }
-       val setActiveButton = iconButton(AllIcons.Actions.Checked, NacosSearchBundle.message("settings.servers.set.active"), "nacos.settings.server.setActive") { setActiveServer() }
+       val setActiveButton = iconButton(AllIcons.Actions.Checked, NacosSearchBundle.message("settings.servers.set.active"), "nacos.settings.server.setActive") { markDraftActive() }
         deleteServerButton = deleteButton
         setActiveServerButton = setActiveButton
 
@@ -1061,7 +1059,7 @@ class NacosConfigurable @JvmOverloads constructor(
         updateApplyEnabledState()
     }
 
-    private fun setActiveServer() {
+    private fun markDraftActive() {
         val current = selectedDraft() ?: return
         intentDraft = intentDraft.selectActive(current.profileId)
         refreshServerListDecorations()
@@ -1087,7 +1085,7 @@ class NacosConfigurable @JvmOverloads constructor(
         defaultGroupField.document.removeDocumentListener(docListener)
 
         try {
-            val authMode = AuthStrategyFormPolicy.normalizeStored(selected.authMode, settings.enableTokenAuth)
+            val authMode = AuthStrategyFormPolicy.normalizeStored(selected.authMode)
             val normalized = selected.copy(
                 authMode = authMode,
                 principal = if (authMode == AuthMode.ANONYMOUS ||
@@ -1212,7 +1210,8 @@ class NacosConfigurable @JvmOverloads constructor(
         // or list positions (#103).
         val outcome = settings.applyProfileIntents(
             intents = snapshot,
-            newActiveId = intentDraft.activeProfileId
+            newActiveId = intentDraft.activeProfileId,
+            previousActiveId = intentDraft.openBaselineActiveId
         )
 
         // Stage / deletion withhold failures leave the previous publication
@@ -1258,8 +1257,7 @@ class NacosConfigurable @JvmOverloads constructor(
         }
 
         // Align this project's session to the draft blue-dot — project-local
-        // only. Do not treat settings.activeServerId as a live selection or
-        // rewrite the migration seed (issue #107).
+        // only. Do not rewrite the migration seed (issue #107).
         val requestedActive = intentDraft.activeProfileId.takeIf {
             it.isNotBlank() && it !in outcome.failedStageProfileIds
         }
@@ -1351,7 +1349,7 @@ class NacosConfigurable @JvmOverloads constructor(
             return
         }
 
-        val authMode = AuthStrategyFormPolicy.normalizeStored(intent.authMode, settings.enableTokenAuth)
+        val authMode = AuthStrategyFormPolicy.normalizeStored(intent.authMode)
         if (!AuthStrategyFormPolicy.credentialsReadyForConnectionTest(
                 authMode,
                 intent.principal,
@@ -1620,16 +1618,16 @@ class NacosConfigurable @JvmOverloads constructor(
 
 /**
  * Blue-dot id for the Settings server list: prefer the project tool-window
- * selection when it still exists in [intents], otherwise the persisted
- * app-wide active server, otherwise the first row.
+ * selection when it still exists in [intents], otherwise the migration-owned
+ * default, otherwise the first row.
  */
 internal fun resolveSettingsBlueDotId(
     intents: List<ProfileIntent>,
     projectProfileId: String?,
-    activeServerId: String
+    migrationDefaultProfileId: String
 ): String {
     if (intents.isEmpty()) return ""
     return projectProfileId?.takeIf { id -> intents.any { it.profileId == id } }
-        ?: activeServerId.takeIf { id -> intents.any { it.profileId == id } }
+        ?: migrationDefaultProfileId.takeIf { id -> intents.any { it.profileId == id } }
         ?: intents.first().profileId
 }

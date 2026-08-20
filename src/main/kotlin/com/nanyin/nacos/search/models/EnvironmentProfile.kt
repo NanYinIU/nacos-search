@@ -66,21 +66,4 @@ data class EnvironmentProfile(
             credentialSlotId = "$id:v1"
         }
     }
-
-    companion object {
-        fun fromLegacy(server: NacosServerConfig): EnvironmentProfile {
-            val profileId = server.id.ifBlank { "default" }
-            return EnvironmentProfile(
-                id = profileId,
-                displayName = server.displayName,
-                canonicalEndpoint = CanonicalNacosEndpoint.parse(server.serverUrl).getOrNull()?.value.orEmpty(),
-                apiPolicy = server.apiPolicy,
-                authMode = server.authMode,
-                principal = server.username.trim(),
-                writeIntent = server.writeIntent,
-                credentialSlotId = "$profileId:v1",
-                credentialSlotVersion = 1
-            )
-        }
-    }
 }

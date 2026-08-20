@@ -45,9 +45,9 @@ class NacosSearchServiceTest {
         // and does not read flat-field mirrors (issue #104).
         ApplicationManager.getApplication().getService(NacosSettings::class.java).apply {
             resetToDefaults()
-            applyServers(
+            applyProfileIntents(
                 listOf(
-                    NacosServerConfig(
+                    com.nanyin.nacos.search.settings.profileIntentFixture(
                         id = "s_local",
                         displayName = "本地 Local",
                         serverUrl = "http://localhost:8848",
@@ -149,9 +149,9 @@ class NacosSearchServiceTest {
         try {
             settings.resetToDefaults()
             // Invalid origin (path present) — must fail closed via profile capture.
-            settings.applyServers(
+            settings.applyProfileIntents(
                 listOf(
-                    NacosServerConfig(
+                    com.nanyin.nacos.search.settings.profileIntentFixture(
                         id = "s_local",
                         displayName = "Bad",
                         serverUrl = "https://nacos.example/not-an-origin",
@@ -427,7 +427,7 @@ class NacosSearchServiceTest {
         val request = NacosSearchService.SearchRequest(
             dataId = "app.yaml",
             namespace = NamespaceInfo.createPublicNamespace(),
-            serverId = settings.activeServerId,
+            serverId = profile.id,
             operationContext = context
         )
         val cacheKey = request.toCacheKey()
@@ -530,9 +530,9 @@ class NacosSearchServiceTest {
     }
 
     private fun sessionFor(settings: NacosSettings, namespaceId: String) = SearchSessionContext(
-        profileId = settings.activeServerId,
+        profileId = settings.resolveDefaultProfileId(),
         namespace = NamespaceInfo(namespaceId = namespaceId, namespaceName = namespaceId),
-        operationContext = settings.captureOperationContext(settings.activeServerId).getOrThrow()
+        operationContext = settings.captureOperationContext(settings.resolveDefaultProfileId()).getOrThrow()
     )
 
     private fun singlePageResponse() = ConfigListResponse(
