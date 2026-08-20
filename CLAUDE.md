@@ -43,6 +43,25 @@ Use the Gradle wrapper for all build operations. AI agents and automation **must
 ./gradlew test --tests "com.nanyin.nacos.search.services.NacosApiServiceTest.test nacos service initialization"
 ```
 
+### Stale Kotlin incremental state
+
+After switching branches, syncing source, or changing the IntelliJ build target,
+`compileKotlin` can report unresolved references even though the declarations
+exist in the current source tree. Confirm the declarations are present before
+changing their shape; valid top-level helpers do not need to be moved into named
+types to repair compiler state.
+
+Rebuild once from clean outputs, then verify that incremental and test-source
+compilation both work:
+
+```bash
+./gradlew clean compileKotlin
+./gradlew compileKotlin
+./gradlew compileTestKotlin
+```
+
+After all three commands pass, retry `./gradlew runIde`.
+
 The `build.gradle.kts` resolves the IntelliJ Platform from JetBrains repositories (`create("IC", "2024.3.5")`) rather than a local IDE installation. Make sure you have a network connection and enough disk space for the downloaded IDE artifacts. `IDEA_LOCAL_PATH` can optionally point `runIde` at a local IDE install.
 
 All builds require **Java 17**. Set `JAVA_HOME` if your default JVM is older:
