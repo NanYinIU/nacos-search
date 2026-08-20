@@ -8,7 +8,8 @@ import com.nanyin.nacos.search.services.ProjectSessionEpochs
 import com.nanyin.nacos.search.services.operations.DraftGuard
 import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
-import com.nanyin.nacos.search.ui.confirmDraftDiscard
+import com.nanyin.nacos.search.invokeOnEdt
+import com.nanyin.nacos.search.ui.admitDraftGuard as admitDraftGuardPrompt
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.options.Configurable
@@ -34,7 +35,6 @@ import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import javax.swing.event.ListSelectionListener
 import com.intellij.openapi.application.ModalityState
-import com.nanyin.nacos.search.invokeOnEdt
 /**
  * Master-detail settings configurable for multi-server management.
  *
@@ -261,7 +261,7 @@ class NacosConfigurable @JvmOverloads constructor(
                 is DraftGuard.RequireWarnedAbandon -> false
             }
         }
-        return com.nanyin.nacos.search.ui.admitDraftGuard(project, sessions, guard, messageKey)
+        return admitDraftGuardPrompt(project, sessions, guard, messageKey)
     }
 
     /**
