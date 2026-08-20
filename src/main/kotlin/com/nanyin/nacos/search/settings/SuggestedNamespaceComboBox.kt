@@ -1,11 +1,12 @@
 package com.nanyin.nacos.search.settings
 
+import com.intellij.openapi.ui.ComboBox
+import com.nanyin.nacos.search.invokeOnEdt
 import com.nanyin.nacos.search.services.operations.DiscoveredNamespace
 import java.awt.Component
 import java.awt.event.ItemEvent
 import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
-import javax.swing.JComboBox
 import javax.swing.JList
 import javax.swing.JTextField
 import javax.swing.event.DocumentEvent
@@ -15,8 +16,12 @@ import javax.swing.event.DocumentListener
  * Editable, filterable suggested-Namespace chooser. Options come from an
  * isolated connection diagnosis; the editor remains typeable when the list
  * is empty. Persistable value is always a Namespace ID.
+ *
+ * Must be an IntelliJ [ComboBox]: a plain Swing editable [javax.swing.JComboBox]
+ * leaves Darcula/Basic ComboBoxUI.editor null, and the first layout NPE's in
+ * getPreferredSize (settings wraps this field in BorderLayout).
  */
-class SuggestedNamespaceComboBox : JComboBox<DiscoveredNamespace>(DefaultComboBoxModel()) {
+class SuggestedNamespaceComboBox : ComboBox<DiscoveredNamespace>() {
 
     private var allOptions: List<DiscoveredNamespace> = emptyList()
     private var lastCommitted: String = ""
@@ -29,6 +34,11 @@ class SuggestedNamespaceComboBox : JComboBox<DiscoveredNamespace>(DefaultComboBo
 
     init {
         isEditable = true
+        // installUI only adds the editor when isEditable is already true.
+        // The ComboBox constructor installed the UI while still non-editable,
+        // so getPreferredSize NPEs (Darcula/Basic ComboBoxUI.editor is null).
+        updateUI()
+        setEditor(NamespaceIdEditor())
         putClientProperty("nacos.automation.id", "nacos.settings.namespace")
         prototypeDisplayValue = DiscoveredNamespace("public", "public")
         renderer = object : DefaultListCellRenderer() {
@@ -59,10 +69,10 @@ class SuggestedNamespaceComboBox : JComboBox<DiscoveredNamespace>(DefaultComboBo
             try {
                 editorField.text = selected.namespaceId
                 lastCommitted = selected.namespaceId
-                restoreUnfilteredModel()
             } finally {
                 mutating = false
             }
+            invokeOnEdt { restoreUnfilteredModel() }
             onNamespaceCommitted()
         }
     }
@@ -112,16 +122,24 @@ class SuggestedNamespaceComboBox : JComboBox<DiscoveredNamespace>(DefaultComboBo
 
     private fun onEditorChange() {
         if (mutating) return
-        filterModel(editorField.text)
-        onNamespaceCommitted()
+        val query = editorField.text
+        invokeOnEdt {
+            if (mutating) return@invokeOnEdt
+            filterModel(query)
+            onNamespaceCommitted()
+        }
     }
 
     private fun filterModel(query: String) {
         if (allOptions.isEmpty()) return
         mutating = true
         try {
-            val filtered = allOptions.filter { SuggestedNamespaceSelection.matchesFilter(it, query) }
-            replaceItems(filtered)
+            val items = if (query == lastCommitted || allOptions.any { it.namespaceId == query }) {
+                allOptions
+            } else {
+                allOptions.filter { SuggestedNamespaceSelection.matchesFilter(it, query) }
+            }
+            replaceItems(items)
             editorField.text = query
         } finally {
             mutating = false
@@ -144,5 +162,21 @@ class SuggestedNamespaceComboBox : JComboBox<DiscoveredNamespace>(DefaultComboBo
         if (match == null) {
             editorField.text = id
         }
+    }
+
+    /**
+     * Stores and displays the Namespace ID, never [DiscoveredNamespace.toString].
+     */
+    private class NamespaceIdEditor : javax.swing.plaf.basic.BasicComboBoxEditor() {
+        override fun setItem(anObject: Any?) {
+            val text = when (anObject) {
+                is DiscoveredNamespace -> anObject.namespaceId
+                null -> ""
+                else -> anObject.toString()
+            }
+            editor.text = text
+        }
+
+        override fun getItem(): Any = editor.text
     }
 }
