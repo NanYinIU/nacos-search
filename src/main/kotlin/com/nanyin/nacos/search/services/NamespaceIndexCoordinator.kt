@@ -6,9 +6,6 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.DatasetCompleteness
-import com.nanyin.nacos.search.models.DatasetState
-import com.nanyin.nacos.search.models.DataSource
-import com.nanyin.nacos.search.models.DataFreshness
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.operations.CapabilityCoverage
 import com.nanyin.nacos.search.settings.NacosSettings
@@ -87,7 +84,7 @@ internal suspend fun NamespaceIndexRequester.requestManualNamespaceRefresh(reque
     requestIndex(request, IndexTrigger.MANUAL_REFRESH)
 
 sealed interface IndexOutcome {
-    data class Complete(val count: Int, val state: DatasetState) : IndexOutcome
+    data class Complete(val count: Int) : IndexOutcome
     /**
      * Summary pagination stopped after loading some rows. [stoppingCause] is
      * the typed remote error that stopped the load when known (issue #122);
@@ -97,10 +94,9 @@ sealed interface IndexOutcome {
     data class Partial(
         val loaded: Int,
         val expected: Int,
-        val state: DatasetState,
         val stoppingCause: Throwable? = null
     ) : IndexOutcome
-    data class Stale(val count: Int, val state: DatasetState) : IndexOutcome
+    data class Stale(val count: Int) : IndexOutcome
     /**
      * Index load failed before any usable complete dataset was published.
      * [error] keeps the original typed cause (RemoteOperationError,
@@ -167,10 +163,7 @@ class NamespaceIndexCoordinator internal constructor(
         // Shared backoff: skip PSI / SEARCH / NAMESPACE_SWITCH while cooling
         // down. MANUAL_REFRESH always proceeds (issue #145).
         if (trigger != IndexTrigger.MANUAL_REFRESH && isInFailureBackoff(key)) {
-            return IndexOutcome.Stale(
-                0,
-                DatasetState(DataSource.CACHE, DataFreshness.UNKNOWN, DatasetCompleteness.FAILED, null)
-            )
+            return IndexOutcome.Stale(0)
         }
 
         // Single-flight: join or start
@@ -186,7 +179,7 @@ class NamespaceIndexCoordinator internal constructor(
             if (trigger == IndexTrigger.SEARCH || trigger == IndexTrigger.MANUAL_REFRESH) {
                 // 15-second front-end cutoff for interactive triggers
                 withTimeoutOrNull(15_000) { deferred.await() }
-                    ?: IndexOutcome.Stale(0, DatasetState(DataSource.CACHE, DataFreshness.UNKNOWN, DatasetCompleteness.FAILED, null))
+                    ?: IndexOutcome.Stale(0)
             } else {
                 deferred.await()
             }
@@ -226,7 +219,6 @@ class NamespaceIndexCoordinator internal constructor(
             }
 
             val loadResult = result.getOrNull()!!
-            val now = clock()
 
             when (loadResult.completeness) {
                 DatasetCompleteness.COMPLETE -> {
@@ -247,10 +239,7 @@ class NamespaceIndexCoordinator internal constructor(
                             "Discarded obsolete namespace index write for ${key.namespaceId} " +
                                 "(observation $observation lost to a later-started load)"
                         )
-                        return IndexOutcome.Stale(
-                            loadResult.configurations.size,
-                            DatasetState(DataSource.REMOTE, DataFreshness.UNKNOWN, DatasetCompleteness.COMPLETE, now)
-                        )
+                        return IndexOutcome.Stale(loadResult.configurations.size)
                     }
                     clearFailureBackoff(key)
                     // When the dialect's list pages already carried bodies, seed
@@ -266,10 +255,7 @@ class NamespaceIndexCoordinator internal constructor(
                         observation = observation,
                         generation = context.resolvedGeneration
                     )
-                    IndexOutcome.Complete(
-                        loadResult.configurations.size,
-                        DatasetState(DataSource.REMOTE, DataFreshness.FRESH, DatasetCompleteness.COMPLETE, now)
-                    )
+                    IndexOutcome.Complete(loadResult.configurations.size)
                 }
                 DatasetCompleteness.PARTIAL -> {
                     // Partial summary pagination: do not publish an authoritative
@@ -285,7 +271,6 @@ class NamespaceIndexCoordinator internal constructor(
                     IndexOutcome.Partial(
                         loaded = loadResult.configurations.size,
                         expected = loadResult.expectedCount,
-                        state = DatasetState(DataSource.REMOTE, DataFreshness.FRESH, DatasetCompleteness.PARTIAL, now),
                         stoppingCause = loadResult.stoppingCause
                     )
                 }

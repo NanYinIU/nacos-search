@@ -2,10 +2,6 @@ package com.nanyin.nacos.search.services
 
 import com.nanyin.nacos.search.models.AccessIdentity
 import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
-import com.nanyin.nacos.search.models.DataSource
-import com.nanyin.nacos.search.models.DataFreshness
-import com.nanyin.nacos.search.models.DatasetCompleteness
-import com.nanyin.nacos.search.models.DatasetState
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.CredentialSnapshot
@@ -39,10 +35,7 @@ class NamespaceIndexRoutingTest {
         300_000L,
         context
     )
-    private val outcome = IndexOutcome.Complete(
-        1,
-        DatasetState(DataSource.REMOTE, DataFreshness.FRESH, DatasetCompleteness.COMPLETE, 1L)
-    )
+    private val outcome = IndexOutcome.Complete(1)
 
     @Test
     fun `startup preheat uses namespace switch trigger`() { runBlocking {

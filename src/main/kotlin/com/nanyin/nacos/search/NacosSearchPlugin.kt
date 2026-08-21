@@ -231,7 +231,9 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
                     )
                 }
                 is IndexOutcome.Failed -> Result.failure(outcome.error)
-                else -> Result.failure(IllegalStateException("Namespace refresh did not produce a complete dataset: $outcome"))
+                is IndexOutcome.Stale -> Result.failure(
+                    IllegalStateException("Namespace refresh did not produce a complete dataset: $outcome")
+                )
             }
         } catch (e: Exception) {
             logger.error("Error refreshing cache", e)
