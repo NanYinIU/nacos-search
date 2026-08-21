@@ -30,8 +30,22 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
-import com.nanyin.nacos.search.services.operations.Observed
+import com.nanyin.nacos.search.services.operations.CapabilityCoverage
+import com.nanyin.nacos.search.services.operations.ConfigurationCoordinate
+import com.nanyin.nacos.search.services.operations.ConfigurationCoordinateRead
+import com.nanyin.nacos.search.services.operations.HistoryDetail
+import com.nanyin.nacos.search.services.operations.HistoryPage
+import com.nanyin.nacos.search.services.operations.HistoryQuery
 import com.nanyin.nacos.search.services.operations.ObservationSequence
+import com.nanyin.nacos.search.services.operations.Observed
+import com.nanyin.nacos.search.services.operations.OperationGateway
+import com.nanyin.nacos.search.services.operations.OperationTarget
+import com.nanyin.nacos.search.services.operations.ProtocolAdapter
+import com.nanyin.nacos.search.services.operations.ProtocolCapabilities
+import com.nanyin.nacos.search.services.operations.PublishCommand
+import com.nanyin.nacos.search.services.operations.PublishOutcome
+import com.nanyin.nacos.search.services.operations.SummaryPage
+import com.nanyin.nacos.search.services.operations.SummaryQuery
 
 class NavigationDetailPrefetchServiceTest {
 
@@ -92,7 +106,8 @@ class NavigationDetailPrefetchServiceTest {
     private fun service(
         api: NacosApiService,
         cache: CacheService,
-        declared: Set<String>
+        declared: Set<String>,
+        coordinateRead: com.nanyin.nacos.search.services.operations.ConfigurationCoordinateRead? = null
     ): NavigationDetailPrefetchService =
         NavigationDetailPrefetchService(
             apiService = api,
@@ -101,7 +116,8 @@ class NavigationDetailPrefetchServiceTest {
             scope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob()),
             declaredSourceLookup = { declared },
             onDetailsFetched = { _, _ -> },
-            nowMillis = { 1_000_000L }
+            nowMillis = { 1_000_000L },
+            coordinateReadOverride = coordinateRead
         )
 
     @Test
@@ -360,7 +376,6 @@ class NavigationDetailPrefetchServiceTest {
 
     @Test
     fun `coordinate refresh reads only the data id the marker named`() = runBlocking {
-        val api = mock<NacosApiService>()
         val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
         cache.replaceNamespaceIndex(
@@ -371,92 +386,38 @@ class NavigationDetailPrefetchServiceTest {
                 NacosConfiguration("noise.properties", "DEFAULT_GROUP", "dev", "", "properties")
             )
         )
-        whenever(
-            api.getConfiguration(
-                dataId = eq("declared.properties"),
-                group = any(),
-                namespaceId = anyOrNull(),
-                useCache = any(),
-                forceRefresh = any(),
-                operationContext = eq(context)
-            )
-        ).thenReturn(
-            Result.success(
-                Observed(
-                    NacosConfiguration("declared.properties", "DEFAULT_GROUP", "dev", "new.key=1", "properties"),
-                    observation = ObservationSequence.process.next()
-                )
-            )
-        )
-
-        // Two other data ids are declared by the project: the sweep would read
-        // all three, a marker naming one reads one.
-        val svc = service(api, cache, setOf("declared.properties", "noise.properties"))
+        val reads = mutableListOf<String>()
+        val reader = coordinateReader { dataId -> reads += dataId }
+        val svc = service(mock(), cache, setOf("declared.properties", "noise.properties"), reader)
         val body = withTimeout(5_000) {
-            svc.requestCoordinate(project, identity, "dev", "declared.properties", null, context)!!.await()
+            svc.requestCoordinate(project, identity, "dev", "declared.properties", null)!!.await()
         }
 
         assertEquals("new.key=1", body?.content)
-        assertEquals(
-            "new.key=1",
-            cache.getConfigDetail(identity, "dev", "declared.properties", "DEFAULT_GROUP")?.content
-        )
-        verify(api, never()).getConfiguration(
-            dataId = eq("noise.properties"),
-            group = any(),
-            namespaceId = anyOrNull(),
-            useCache = any(),
-            forceRefresh = any(),
-            operationContext = any()
-        )
-
-        // Same coordinate again inside the TTL window: the claim holds, so a
-        // gutter pass on every keystroke costs nothing.
-        assertNull(svc.requestCoordinate(project, identity, "dev", "declared.properties", null, context))
-        verify(api, times(1)).getConfiguration(
-            dataId = eq("declared.properties"),
-            group = any(),
-            namespaceId = anyOrNull(),
-            useCache = any(),
-            forceRefresh = any(),
-            operationContext = eq(context)
-        )
+        assertEquals(listOf("declared.properties"), reads)
+        assertNull(svc.requestCoordinate(project, identity, "dev", "declared.properties", null))
+        assertEquals(listOf("declared.properties"), reads)
         svc.dispose()
     }
 
     @Test
     fun `coordinate refresh claims its window before reading so a failure is not retried per pass`() = runBlocking {
-        val api = mock<NacosApiService>()
+        val reads = java.util.concurrent.atomic.AtomicInteger(0)
+        val reader = coordinateReader(
+            error = RuntimeException("server unreachable"),
+            onRead = { _ -> reads.incrementAndGet() }
+        )
         val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
-        whenever(
-            api.getConfiguration(
-                dataId = eq("declared.properties"),
-                group = any(),
-                namespaceId = anyOrNull(),
-                useCache = any(),
-                forceRefresh = any(),
-                operationContext = eq(context)
-            )
-        ).thenReturn(Result.failure(RuntimeException("server unreachable")))
-
-        val svc = service(api, cache, setOf("declared.properties"))
+        val svc = service(mock(), cache, setOf("declared.properties"), reader)
         assertNull(
             withTimeout(5_000) {
-                svc.requestCoordinate(project, identity, "dev", "declared.properties", "DEFAULT_GROUP", context)!!
+                svc.requestCoordinate(project, identity, "dev", "declared.properties", "DEFAULT_GROUP")!!
                     .await()
             }
         )
-        assertNull(svc.requestCoordinate(project, identity, "dev", "declared.properties", "DEFAULT_GROUP", context))
-
-        verify(api, times(1)).getConfiguration(
-            dataId = eq("declared.properties"),
-            group = any(),
-            namespaceId = anyOrNull(),
-            useCache = any(),
-            forceRefresh = any(),
-            operationContext = eq(context)
-        )
+        assertNull(svc.requestCoordinate(project, identity, "dev", "declared.properties", "DEFAULT_GROUP"))
+        assertEquals(1, reads.get())
         svc.dispose()
     }
 
@@ -507,5 +468,44 @@ class NavigationDetailPrefetchServiceTest {
         whenever(defaultProject.isDisposed).thenReturn(false)
         whenever(defaultProject.isDefault).thenReturn(true)
         assertTrue(NavigationDetailPrefetchService.lookupDeclaredDataIds(defaultProject).isEmpty())
+    }
+
+    private fun coordinateReader(
+        error: Throwable? = null,
+        onRead: (String) -> Unit = {}
+    ): ConfigurationCoordinateRead {
+        val adapter = object : ProtocolAdapter {
+            override val capabilities = ProtocolCapabilities.NONE.copy(history = CapabilityCoverage.COMPLETE)
+            override suspend fun probe(target: OperationTarget) = Result.success(Unit)
+            override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery) =
+                Result.success(SummaryPage(0, 1, 0, emptyList()))
+            override suspend fun readDetail(
+                target: OperationTarget,
+                coordinate: ConfigurationCoordinate
+            ): Result<NacosConfiguration?> {
+                onRead(coordinate.dataId)
+                if (error != null) return Result.failure(error)
+                return Result.success(
+                    NacosConfiguration(coordinate.dataId, coordinate.group, "dev", "new.key=1", "properties")
+                )
+            }
+            override suspend fun publish(target: OperationTarget, command: PublishCommand) =
+                Result.success(PublishOutcome.Written("true"))
+            override suspend fun listHistory(target: OperationTarget, query: HistoryQuery) =
+                Result.success(HistoryPage(0, 1, 0, emptyList()))
+            override suspend fun readHistoryDetail(target: OperationTarget, historyId: String) =
+                Result.success(HistoryDetail(historyId, "app.yaml", "G", null, "body", "yaml", "md5", 1000L, "PUBLISH"))
+        }
+        return ConfigurationCoordinateRead(
+            gateway = OperationGateway(
+                mapOf(NacosApiGeneration.V1 to adapter),
+                observationSequence = ObservationSequence()
+            ),
+            captureContext = { context },
+            resolveTarget = { ctx, ns -> Result.success(OperationTarget(ctx, ns)) },
+            nowMillis = { 1_000_000L },
+            ttlMillis = { settings.getCacheTtlMillis() },
+            scope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
+        )
     }
 }

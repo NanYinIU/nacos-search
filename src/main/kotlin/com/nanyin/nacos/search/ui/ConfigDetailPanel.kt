@@ -38,13 +38,13 @@ import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.currentSessionEpoch
 import com.nanyin.nacos.search.services.operations.ConfigurationCoordinate
+import com.nanyin.nacos.search.services.operations.ConfigurationDetailConfirmation
 import com.nanyin.nacos.search.services.operations.ObservedDetailRecorder
 import com.nanyin.nacos.search.services.operations.DraftDiscardListener
 import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.services.operations.PublishState
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosProjectSession
-import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
 import com.nanyin.nacos.search.settings.operationNamespaceIdFor
 import kotlinx.coroutines.*
@@ -68,8 +68,7 @@ class ConfigDetailPanel internal constructor(
     private val settings: NacosSettings,
     private val editSessions: EditSessionService,
     private val navigationRefresh: NavigationIndexRefreshService,
-    private val observedDetailRecorder: ObservedDetailRecorder,
-    private val captureOperationContext: suspend () -> NacosOperationContext?
+    private val confirmation: ConfigurationDetailConfirmation
 ) : JPanel(BorderLayout()), Disposable, NacosLanguageListener {
     constructor(project: Project) : this(
         project = project,
@@ -79,18 +78,7 @@ class ConfigDetailPanel internal constructor(
         editSessions = project.getService(EditSessionService::class.java),
         navigationRefresh = ApplicationManager.getApplication()
             .getService(NavigationIndexRefreshService::class.java),
-        observedDetailRecorder = ObservedDetailRecorder(
-            ApplicationManager.getApplication().getService(CacheService::class.java)
-        ),
-        captureOperationContext = {
-            withContext(Dispatchers.IO) {
-                project.getService(NacosProjectSession::class.java)?.let { session ->
-                    val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-                    // Do not heal: deleted explicit profiles must fail closed (ADR 0025).
-                    settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
-                }
-            }
-        }
+        confirmation = defaultConfirmation(project)
     )
 
     companion object {
@@ -107,6 +95,33 @@ class ConfigDetailPanel internal constructor(
             editing: Boolean,
             sameContent: Boolean
         ): Boolean = hasLiveEditor && sameCoordinate && (editing || sameContent)
+
+        private fun defaultConfirmation(project: Project): ConfigurationDetailConfirmation {
+            val api = ApplicationManager.getApplication().getService(NacosApiService::class.java)
+            val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+            val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+            val recorder = ObservedDetailRecorder(cache)
+            return ConfigurationDetailConfirmation(
+                gateway = api.operationGateway(),
+                captureContext = {
+                    withContext(Dispatchers.IO) {
+                        project.getService(NacosProjectSession::class.java)?.let { session ->
+                            // Do not heal: deleted explicit profiles must fail closed (ADR 0025).
+                            settings.captureOperationContext(session.sessionState.selectedProfileId).getOrNull()
+                        }
+                    }
+                },
+                resolveTarget = { context, namespaceId ->
+                    api.resolveOperationTarget(context, namespaceId)
+                },
+                recordMissing = { identity, namespaceId, dataId, group, observation ->
+                    recorder.recordMissing(identity, namespaceId, dataId, group, observation)
+                },
+                lookupCached = { identity, namespaceId, dataId, group ->
+                    cache.snapshot(identity).detail(namespaceId, dataId, group)
+                }
+            )
+        }
     }
 
     /** Namespace for history and publish — the one derivation, shared with the window. */
@@ -201,6 +216,7 @@ class ConfigDetailPanel internal constructor(
     private var viewState: DetailViewState = DetailViewState.Empty
     /** Cached body kept visible across a deep-stale refresh. */
     private var keptCachedBody: DetailViewState.Body? = null
+    private var keptCached: CacheService.CachedConfiguration? = null
 
     /**
      * The one judgement of whether an asynchronous result may still update this
@@ -212,13 +228,7 @@ class ConfigDetailPanel internal constructor(
         currentCoordinate = { selectedCoordinate }
     )
 
-    private val detailController = DetailController(
-        gateway = apiService.operationGateway(),
-        presentation = presentation,
-        onAuthoritativeNotFound = { identity, namespaceId, dataId, group, observation ->
-            observedDetailRecorder.recordMissing(identity, namespaceId, dataId, group, observation)
-        }
-    )
+    private val detailController = DetailController(presentation)
 
     // Coroutine scope for async operations
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -695,12 +705,14 @@ private fun setupEventHandlers() {
         val fromCache = issue()
         updateMetadata(configuration, fromCache)
         val accessIdentity = project.captureSelectedAccessIdentity(settings)
-        val cachedState = cacheService.snapshot(accessIdentity).detail(
+        val cachePlan = confirmation.consult(
+            accessIdentity,
             configuration.tenantId,
             configuration.dataId,
             configuration.group
         )
-        val plan = detailController.planSelection(cachedState)
+        val plan = detailController.planSelection(cachePlan.cached)
+        keptCached = cachePlan.cached
         keptCachedBody = plan.immediate
         plan.immediate?.let { render(it) }
         if (!plan.shouldLoad) return
@@ -985,51 +997,20 @@ private fun setupEventHandlers() {
 
         currentLoadingJob = coroutineScope.launch {
             try {
-                val context = captureOperationContext()
-                if (context == null) {
-                    if (!isActive) return@launch
-                    if (!presentation.admitAndRecord(issued)) {
-                        setLoadingState(false)
-                        render(DetailViewState.Stale)
-                        return@launch
-                    }
-                    setLoadingState(false)
-                    render(DetailViewState.ConfigurationRequired())
-                    return@launch
-                }
-                val namespaceId = operationNamespaceId(configuration)
-                val target = apiService.resolveOperationTarget(context, namespaceId).getOrElse { error ->
-                    if (!isActive) return@launch
-                    if (!presentation.admitAndRecord(issued)) {
-                        setLoadingState(false)
-                        render(DetailViewState.Stale)
-                        return@launch
-                    }
-                    setLoadingState(false)
-                    if (keepCachedVisible && keptCachedBody != null) {
-                        render(
-                            DetailPresentation.fromRefreshFailure(
-                                keptCachedBody!!.configuration,
-                                keptCachedBody!!.confidence
-                            )
-                        )
-                    } else {
-                        render(DetailPresentation.fromFailure(error, error.message ?: "Unknown error"))
-                    }
-                    return@launch
-                }
-
-                val state = detailController.load(
-                    target = target,
+                val result = confirmation.confirm(
+                    namespaceId = operationNamespaceId(configuration),
                     coordinate = ConfigurationCoordinate(configuration.dataId, configuration.group),
-                    sessionEpoch = issued.sessionEpoch,
                     forceRefresh = forceRefresh,
                     useCache = true,
                     keepCachedVisible = keepCachedVisible,
-                    cachedBody = keptCachedBody
+                    retained = keptCached
                 )
-
                 if (!isActive) return@launch
+                val state = detailController.present(
+                    result = result,
+                    issued = issued,
+                    retainedConfidence = keptCachedBody?.confidence
+                )
                 setLoadingState(false)
                 render(state)
                 if (state !is DetailViewState.Body) return@launch
@@ -1323,6 +1304,7 @@ private fun setupEventHandlers() {
             is DetailViewState.Empty -> {
                 currentConfiguration = null
                 keptCachedBody = null
+                keptCached = null
                 showCard("empty")
                 hideFreshnessStatus()
                 updateActionsEnabled()
@@ -1703,15 +1685,8 @@ private fun setupEventHandlers() {
     private fun openHistoryBrowser() {
         val config = currentConfiguration ?: return
         coroutineScope.launch {
-            val context = captureOperationContext()
-            if (context == null) {
-                withContext(Dispatchers.Main) {
-                    render(DetailViewState.ConfigurationRequired())
-                }
-                return@launch
-            }
             val namespaceId = operationNamespaceId(config)
-            val target = apiService.resolveOperationTarget(context, namespaceId).getOrElse {
+            val target = confirmation.targetFor(namespaceId).getOrElse {
                 withContext(Dispatchers.Main) {
                     render(DetailPresentation.fromFailure(it, it.message ?: it.toString()))
                 }
@@ -1744,6 +1719,7 @@ private fun setupEventHandlers() {
         currentConfiguration = null
         selectedCoordinate = null
         keptCachedBody = null
+        keptCached = null
         exitEditMode()
         disposeEditorSafely()
         showEmptyState()

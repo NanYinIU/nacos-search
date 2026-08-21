@@ -14,6 +14,9 @@ import com.nanyin.nacos.search.psi.NacosDeclaredSourceIndex
 import com.nanyin.nacos.search.settings.NacosOperationContext
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.navigationDetailPrefetchEnabled
+import com.nanyin.nacos.search.services.operations.ConfigurationCoordinateRead
+import com.nanyin.nacos.search.services.operations.CoordinateReadResult
+import com.nanyin.nacos.search.services.operations.PreparedCoordinate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -56,7 +59,8 @@ class NavigationDetailPrefetchService internal constructor(
     private val scope: CoroutineScope,
     private val declaredSourceLookup: (Project) -> Set<String>,
     private val onDetailsFetched: (AccessIdentity, Project) -> Unit,
-    private val nowMillis: () -> Long = System::currentTimeMillis
+    private val nowMillis: () -> Long = System::currentTimeMillis,
+    coordinateReadOverride: ConfigurationCoordinateRead? = null
 ) : Disposable {
 
     constructor() : this(
@@ -77,7 +81,23 @@ class NavigationDetailPrefetchService internal constructor(
     private val inFlight = ConcurrentHashMap<PrefetchKey, Deferred<PrefetchOutcome>>()
     private val lastSuccessAt = ConcurrentHashMap<PrefetchKey, Long>()
     private val lastDeclaredFingerprint = ConcurrentHashMap<PrefetchKey, Int>()
-    private val lastCoordinateAttemptAt = ConcurrentHashMap<CoordinateAttemptKey, Long>()
+    private var initializedCoordinateRead: ConfigurationCoordinateRead? = coordinateReadOverride
+    private val coordinateRead: ConfigurationCoordinateRead
+        get() = initializedCoordinateRead ?: ConfigurationCoordinateRead(
+            gateway = apiService.operationGateway(),
+            captureContext = { profileId ->
+                settings.captureOperationContext(profileId).getOrNull()
+            },
+            resolveTarget = { context, namespaceId ->
+                apiService.resolveOperationTarget(context, namespaceId)
+            },
+            lookupCached = { identity, namespaceId, dataId, group, allowStale ->
+                cacheService.getConfigDetail(identity, namespaceId, dataId, group, allowStale)
+            },
+            nowMillis = nowMillis,
+            ttlMillis = { settings.getCacheTtlMillis() },
+            scope = scope
+        ).also { initializedCoordinateRead = it }
 
     /**
      * Explicit, project-scoped trigger. Always returns a [Deferred] when the
@@ -276,9 +296,6 @@ class NavigationDetailPrefetchService internal constructor(
      * server: a gutter pass runs on every keystroke and must never become one
      * request per pass.
      *
-     * @param operationContext a context the caller already holds; captured off
-     * the EDT here when absent, which is the PSI path (a gutter callback must
-     * never read the credential store — design §11/§19.7).
      * @return the body once it is in cache, or null when nothing was started —
      * prefetch disabled, or this coordinate's attempt window is still claimed.
      */
@@ -287,50 +304,46 @@ class NavigationDetailPrefetchService internal constructor(
         identity: AccessIdentity,
         namespaceId: String?,
         dataId: String,
-        group: String?,
-        operationContext: NacosOperationContext? = null
+        group: String?
     ): Deferred<NacosConfiguration?>? {
         if (dataId.isBlank()) return null
         if (!settings.navigationDetailPrefetchEnabled(identity.profileId)) return null
-        val attemptKey = CoordinateAttemptKey(identity, namespaceId.orEmpty(), dataId, group.orEmpty())
-        val now = nowMillis()
-        val previous = lastCoordinateAttemptAt[attemptKey]
-        if (previous != null && now - previous < settings.getCacheTtlMillis()) return null
-        // Claim the window atomically: the caller whose put returns the value it
-        // decided on owns this attempt, and a concurrent marker on the same data
-        // id sees the claim and drops out.
-        if (lastCoordinateAttemptAt.put(attemptKey, now) != previous) return null
-
-        return scope.async {
-            try {
-                val context = operationContext ?: withContext(Dispatchers.IO) {
-                    settings.captureOperationContext(identity.profileId).getOrNull()
-                } ?: return@async null
-                // Re-check toggle after the off-EDT hop (ADR-0042).
-                if (!settings.navigationDetailPrefetchEnabled(identity.profileId)) return@async null
-                if (!isActive) return@async null
+        val flight = coordinateRead.background(
+            identity = identity,
+            namespaceId = namespaceId,
+            dataId = dataId,
+            group = group.orEmpty(),
+            publish = { resolved ->
+                if (!project.isDisposed) onDetailsFetched(resolved, project)
+            },
+            prepare = {
                 val target = resolveCoordinateTarget(dataId, group, identity, namespaceId)
-                val existing = cacheService.getConfigDetail(
-                    identity,
-                    target.namespaceId,
-                    target.dataId,
-                    target.group,
-                    allowStale = false
-                )
-                if (existing != null && existing.content.isNotBlank()) return@async existing
-                val fetched = readAndCacheDetail(target, identity, context)
-                // Publish only when a body actually arrived: an index rebuild and
-                // gutter pass over nothing new is the blue↔gray churn the
-                // coalescing exists to avoid.
-                if (fetched != null && !project.isDisposed) {
-                    onDetailsFetched(identity, project)
-                }
-                fetched
-            } catch (e: Exception) {
-                logger.debug("Navigation detail coordinate refresh failed", e)
-                null
+                PreparedCoordinate(target.dataId, target.group, target.namespaceId)
             }
-        }
+        ) ?: return null
+        return scope.async { flight.await().body() }
+    }
+
+    /**
+     * Click-triggered lazy navigation. Joins an in-flight background read when
+     * one exists and is never discarded by the background TTL window.
+     */
+    fun readForNavigation(
+        project: Project,
+        identity: AccessIdentity,
+        namespaceId: String?,
+        dataId: String,
+        group: String
+    ): Deferred<CoordinateReadResult> {
+        return coordinateRead.navigation(
+            identity = identity,
+            namespaceId = namespaceId,
+            dataId = dataId,
+            group = group,
+            publish = { resolved ->
+                if (!project.isDisposed) onDetailsFetched(resolved, project)
+            }
+        )
     }
 
     /**
@@ -338,8 +351,9 @@ class NavigationDetailPrefetchService internal constructor(
      * cache. Null when the read failed or the configuration does not exist —
      * neither is coverage.
      *
-     * Shared by the project-wide sweep and [requestCoordinate] so the gap-fill
-     * rule has one implementation.
+     * Shared by the project-wide declared-source sweep so the gap-fill rule
+     * has one implementation. Gutter refresh and click navigation use
+     * [ConfigurationCoordinateRead] instead.
      */
     @OptIn(CacheWriteAccess::class)
     private suspend fun readAndCacheDetail(
@@ -446,7 +460,7 @@ class NavigationDetailPrefetchService internal constructor(
     internal fun clearFreshness() {
         lastSuccessAt.clear()
         lastDeclaredFingerprint.clear()
-        lastCoordinateAttemptAt.clear()
+        initializedCoordinateRead?.clearAttempts()
     }
 
     override fun dispose() {
@@ -454,7 +468,7 @@ class NavigationDetailPrefetchService internal constructor(
         inFlight.clear()
         lastSuccessAt.clear()
         lastDeclaredFingerprint.clear()
-        lastCoordinateAttemptAt.clear()
+        initializedCoordinateRead?.clearAttempts()
     }
 
     companion object {
@@ -495,19 +509,6 @@ class NavigationDetailPrefetchService internal constructor(
 data class PrefetchKey(
     val identity: AccessIdentity,
     val projectLocationHash: String
-)
-
-/**
- * Attempt window for a single-coordinate refresh. Project-independent: the
- * detail cache is identity-scoped, so two projects on the same environment share
- * whatever either has already fetched — and must share the attempt window too,
- * or the bound would be per project rather than per coordinate.
- */
-private data class CoordinateAttemptKey(
-    val identity: AccessIdentity,
-    val namespaceId: String,
-    val dataId: String,
-    val group: String
 )
 
 data class PrefetchTarget(

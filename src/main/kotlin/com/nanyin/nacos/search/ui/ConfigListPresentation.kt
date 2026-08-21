@@ -72,7 +72,7 @@ object ConfigListPresentation {
         fallbackMessage: String,
         titleKey: String? = null
     ): ConfigListViewState {
-        val root = unwrap(error)
+        val root = FailureCopy.unwrap(error)
         return when {
             root is ConfigurationRequired -> ConfigListViewState.Blocked(
                 reason = BlockedReason.CONFIGURATION_REQUIRED,
@@ -104,8 +104,7 @@ object ConfigListPresentation {
      *   [fallback] **is** the full body — never replace it with a bare
      *   throwable message.
      * - When [titleKey] is set (search path): prefer the unwrapped throwable
-     *   message, then [fallback], and strip legacy Chinese/English search
-     *   prefixes so presentation can own a single localised title.
+     *   message, then [fallback]. Presentation owns the localised title.
      */
     internal fun failureDetail(
         error: Throwable?,
@@ -113,24 +112,12 @@ object ConfigListPresentation {
         titleKey: String? = null
     ): String {
         if (titleKey == null) {
-            return stripLegacySearchPrefix(fallback.trim())
+            return fallback.trim()
         }
-        val raw = when {
+        return when {
             error != null && !error.message.isNullOrBlank() -> error.message!!.trim()
             else -> fallback.trim()
         }
-        return stripLegacySearchPrefix(raw)
-    }
-
-    internal fun stripLegacySearchPrefix(text: String): String {
-        var result = text.trim()
-        for (prefix in LEGACY_SEARCH_FAILURE_PREFIXES) {
-            if (result.startsWith(prefix)) {
-                result = result.removePrefix(prefix).trim()
-                break
-            }
-        }
-        return result
     }
 
     private fun isRefusedAccess(error: Throwable?): Boolean = when (error) {
@@ -141,31 +128,6 @@ object ConfigListPresentation {
         is RemoteOperationError.InvalidOrExpiredNacosPasswordToken -> true
         else -> false
     }
-
-    private fun unwrap(error: Throwable?): Throwable? {
-        var current = error
-        // Walk a short cause chain so a search-wrapper message does not hide a
-        // typed ConfigurationRequired or RemoteOperationError underneath. Stop
-        // at those types so a Connection(cause) is not reduced to its root
-        // RuntimeException for messaging or classification.
-        var depth = 0
-        while (current?.cause != null &&
-            current !is ConfigurationRequired &&
-            current !is RemoteOperationError &&
-            depth < 4
-        ) {
-            current = current.cause
-            depth++
-        }
-        return current
-    }
-
-    private val LEGACY_SEARCH_FAILURE_PREFIXES = listOf(
-        "搜索失败: ",
-        "搜索过程中发生错误: ",
-        "Search failed: ",
-        "Error during search: "
-    )
 }
 
 /**
@@ -201,24 +163,19 @@ object ConfigListCopy {
         message: (key: String, params: Array<out Any>) -> String
     ): String {
         val title = blockedTitle(state.reason, message)
-        val detail = state.detail?.trim().orEmpty()
-        return if (detail.isEmpty() || detail == title) title else "$title: $detail"
+        return FailureCopy.combine(title, state.detail.orEmpty(), title)
     }
 
     fun failedBody(
         state: ConfigListViewState.Failed,
         message: (key: String, params: Array<out Any>) -> String
     ): String {
-        val title = state.titleKey?.let { message(it, emptyArray()) }?.trim().orEmpty()
-        val detail = state.detail?.trim().orEmpty()
-        return when {
-            title.isNotEmpty() && detail.isNotEmpty() &&
-                (detail == title || detail.startsWith("$title:") || detail.startsWith("$title：")) ->
-                detail
-            title.isNotEmpty() && detail.isNotEmpty() -> "$title: $detail"
-            title.isNotEmpty() -> title
-            detail.isNotEmpty() -> detail
-            else -> message(ConfigListPresentation.SEARCH_FAILED_TITLE_KEY, emptyArray())
-        }
+        val title = state.titleKey?.let { message(it, emptyArray()) }.orEmpty()
+        val detail = state.detail.orEmpty()
+        return FailureCopy.combine(
+            title,
+            detail,
+            message(ConfigListPresentation.SEARCH_FAILED_TITLE_KEY, emptyArray())
+        )
     }
 }

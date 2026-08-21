@@ -6,7 +6,10 @@ import com.nanyin.nacos.search.models.CanonicalNacosEndpoint
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
+import com.nanyin.nacos.search.services.operations.CapabilityCoverage
 import com.nanyin.nacos.search.services.operations.ConfigurationCoordinate
+import com.nanyin.nacos.search.services.operations.ConfigurationDetailConfirmation
+import com.nanyin.nacos.search.services.operations.DetailReadResult
 import com.nanyin.nacos.search.services.operations.HistoryDetail
 import com.nanyin.nacos.search.services.operations.HistoryPage
 import com.nanyin.nacos.search.services.operations.HistoryQuery
@@ -15,7 +18,6 @@ import com.nanyin.nacos.search.services.operations.OperationGateway
 import com.nanyin.nacos.search.services.operations.OperationTarget
 import com.nanyin.nacos.search.services.operations.ProtocolAdapter
 import com.nanyin.nacos.search.services.operations.ProtocolCapabilities
-import com.nanyin.nacos.search.services.operations.CapabilityCoverage
 import com.nanyin.nacos.search.services.operations.PublishCommand
 import com.nanyin.nacos.search.services.operations.PublishOutcome
 import com.nanyin.nacos.search.services.operations.RemoteOperationError
@@ -37,16 +39,14 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Detail load and paintability at the single seam: a stub protocol adapter
- * beneath a real [OperationGateway] (issue #81). Replaces
- * [ConfigDetailPanelStaleTest]'s dedicated loader injection.
+ * Detail confirmation paintability at the single seam: a stub protocol adapter
+ * beneath a real [OperationGateway], mapped through [DetailController] (issue #235).
  */
 class DetailControllerTest {
 
     @Test
     fun `maps a successful detail read to Body with remote confidence`() = runBlocking {
-        val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to StubDetailAdapter()))
-        val outcome = controller(gateway).load(v1Target(), coordinate(), sessionEpoch = 0)
+        val outcome = present(confirmation().confirm("dev", coordinate()))
         assertInstanceOf(DetailViewState.Body::class.java, outcome)
         val body = outcome as DetailViewState.Body
         assertEquals("remote-content", body.configuration.content)
@@ -55,41 +55,33 @@ class DetailControllerTest {
 
     @Test
     fun `maps Authorization failure to Failed`() = runBlocking {
-        val gateway = OperationGateway(
-            mapOf(NacosApiGeneration.V1 to StubDetailAdapter(error = RemoteOperationError.Authorization(403)))
+        val confirmation = confirmation(
+            adapter = StubDetailAdapter(error = RemoteOperationError.Authorization(403))
         )
-        val outcome = controller(gateway).load(v1Target(), coordinate(), sessionEpoch = 0)
+        val outcome = present(confirmation.confirm("dev", coordinate()))
         assertInstanceOf(DetailViewState.Failed::class.java, outcome)
     }
 
     @Test
     fun `maps ConfigurationRequired to ConfigurationRequired state`() = runBlocking {
-        val gateway = OperationGateway(
-            mapOf(
-                NacosApiGeneration.V1 to StubDetailAdapter(
-                    error = ConfigurationRequired(listOf("Select a Nacos environment profile"))
-                )
-            )
-        )
-        val outcome = controller(gateway).load(v1Target(), coordinate(), sessionEpoch = 0)
+        val confirmation = confirmation(captureContext = { null })
+        val outcome = present(confirmation.confirm("dev", coordinate()))
         assertInstanceOf(DetailViewState.ConfigurationRequired::class.java, outcome)
     }
 
     @Test
     fun `null detail without cached body is Failed`() = runBlocking {
-        val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to StubDetailAdapter(detail = null)))
-        val outcome = controller(gateway).load(v1Target(), coordinate(), sessionEpoch = 0)
+        val confirmation = confirmation(adapter = StubDetailAdapter(detail = null))
+        val outcome = present(confirmation.confirm("dev", coordinate()))
         assertInstanceOf(DetailViewState.Failed::class.java, outcome)
     }
 
     @Test
     fun `drops stale results when the session epoch advances mid-load`() = runBlocking {
         val epoch = AtomicLong(0)
-        val gateway = OperationGateway(mapOf(NacosApiGeneration.V1 to StubDetailAdapter(onRead = {
-            epoch.set(1)
-        })))
-        val outcome = controller(gateway) { epoch.get() }
-            .load(v1Target(), coordinate(), sessionEpoch = 0)
+        val confirmation = confirmation(adapter = StubDetailAdapter(onRead = { epoch.set(1) }))
+        val result = confirmation.confirm("dev", coordinate())
+        val outcome = controller { epoch.get() }.present(result, issued())
         assertEquals(DetailViewState.Stale, outcome)
     }
 
@@ -101,7 +93,7 @@ class DetailControllerTest {
             freshUntilMillis = 1L,
             deepStaleAtMillis = 2L
         )
-        val plan = controller(OperationGateway(emptyMap())).planSelection(cached)
+        val plan = controller().planSelection(cached)
         assertEquals(DetailOverlay.Refreshing, plan.immediate?.overlay)
         assertEquals("# cached", plan.immediate?.configuration?.content)
         assertTrue(plan.shouldLoad)
@@ -117,13 +109,10 @@ class DetailControllerTest {
             freshUntilMillis = 1L,
             deepStaleAtMillis = 2L
         )
-        val plan = controller(OperationGateway(emptyMap())).planSelection(cached)
+        val plan = controller().planSelection(cached)
         assertEquals(DetailOverlay.Refreshing, plan.immediate?.overlay)
         assertEquals("# cached", plan.immediate?.configuration?.content)
         assertTrue(plan.shouldLoad)
-        // Not forced: the gateway detail cache misses on a stale entry, so the
-        // read reaches the server for this coordinate without bypassing a cache
-        // that may have been refreshed meanwhile.
         assertFalse(plan.forceRefresh)
         assertTrue(plan.keepCachedVisible)
     }
@@ -136,20 +125,17 @@ class DetailControllerTest {
             freshUntilMillis = 1L,
             deepStaleAtMillis = 2L
         )
-        val plan = controller(OperationGateway(emptyMap())).planSelection(cached)
+        val plan = controller().planSelection(cached)
         assertEquals("# fresh", plan.immediate?.configuration?.content)
         assertNull(plan.immediate?.overlay?.takeIf { it != DetailOverlay.None })
         assertTrue(plan.shouldLoad)
         assertFalse(plan.forceRefresh)
         assertTrue(plan.keepCachedVisible)
-        // keepCachedVisible + !forceRefresh is the quiet-confirm signal: the
-        // panel must reuse the editor and skip DaemonCodeAnalyzer.restart so
-        // navigation caret and gutter icons are not churned.
     }
 
     @Test
     fun `missing cache plan loads without an immediate body`() {
-        val plan = controller(OperationGateway(emptyMap())).planSelection(null)
+        val plan = controller().planSelection(null)
         assertNull(plan.immediate)
         assertTrue(plan.shouldLoad)
         assertFalse(plan.keepCachedVisible)
@@ -158,15 +144,9 @@ class DetailControllerTest {
     @Test
     fun `forceRefresh reaches the adapter even when cache would serve`() = runBlocking {
         val reached = AtomicBoolean(false)
-        val gateway = OperationGateway(
-            mapOf(NacosApiGeneration.V1 to StubDetailAdapter(onRead = { reached.set(true) }))
-        )
-        val outcome = controller(gateway).load(
-            v1Target(),
-            coordinate(),
-            sessionEpoch = 0,
-            forceRefresh = true,
-            useCache = true
+        val confirmation = confirmation(adapter = StubDetailAdapter(onRead = { reached.set(true) }))
+        val outcome = present(
+            confirmation.confirm("dev", coordinate(), forceRefresh = true, useCache = true)
         )
         assertTrue(reached.get())
         assertInstanceOf(DetailViewState.Body::class.java, outcome)
@@ -175,28 +155,24 @@ class DetailControllerTest {
     @Test
     fun `authoritative not-found with cached body records missing and keeps Deleted overlay`() = runBlocking {
         val recorded = AtomicReference<Long?>(null)
-        val gateway = OperationGateway(
-            mapOf(NacosApiGeneration.V1 to StubDetailAdapter(detail = null)),
-            observationSequence = ObservationSequence()
+        val retained = CacheService.CachedConfiguration(
+            configuration = config("# cached"),
+            freshness = CacheService.DetailFreshness.DEEP_STALE,
+            freshUntilMillis = 1L,
+            deepStaleAtMillis = 2L
         )
-        val cachedBody = DetailPresentation.body(
-            config("# cached"),
-            DetailPresentation.confidenceFromCache(CacheService.DetailFreshness.DEEP_STALE),
-            overlay = DetailOverlay.Refreshing
+        val confirmation = confirmation(
+            adapter = StubDetailAdapter(detail = null),
+            recordMissing = { _, _, _, _, observation -> recorded.set(observation) }
         )
-        val outcome = DetailController(
-            gateway = gateway,
-            presentation = gate(),
-            onAuthoritativeNotFound = { _, _, _, _, observation ->
-                recorded.set(observation)
-            }
-        ).load(
-            target = v1Target(),
-            coordinate = coordinate(),
-            sessionEpoch = 0,
-            forceRefresh = true,
-            keepCachedVisible = true,
-            cachedBody = cachedBody
+        val outcome = present(
+            confirmation.confirm(
+                namespaceId = "dev",
+                coordinate = coordinate(),
+                forceRefresh = true,
+                keepCachedVisible = true,
+                retained = retained
+            )
         )
         assertInstanceOf(DetailViewState.Body::class.java, outcome)
         assertEquals(DetailOverlay.Deleted, (outcome as DetailViewState.Body).overlay)
@@ -205,32 +181,58 @@ class DetailControllerTest {
 
     @Test
     fun `refresh failure with cached body keeps RefreshFailed overlay`() = runBlocking {
-        val gateway = OperationGateway(
-            mapOf(NacosApiGeneration.V1 to StubDetailAdapter(error = RemoteOperationError.Connection(RuntimeException("down"))))
+        val retained = CacheService.CachedConfiguration(
+            configuration = config("# cached"),
+            freshness = CacheService.DetailFreshness.DEEP_STALE,
+            freshUntilMillis = 1L,
+            deepStaleAtMillis = 2L
         )
-        val cachedBody = DetailPresentation.body(
-            config("# cached"),
-            DetailPresentation.confidenceFromCache(CacheService.DetailFreshness.DEEP_STALE)
+        val confirmation = confirmation(
+            adapter = StubDetailAdapter(error = RemoteOperationError.Connection(RuntimeException("down")))
         )
-        val outcome = controller(gateway).load(
-            target = v1Target(),
-            coordinate = coordinate(),
-            sessionEpoch = 0,
-            forceRefresh = true,
-            keepCachedVisible = true,
-            cachedBody = cachedBody
+        val outcome = present(
+            confirmation.confirm(
+                namespaceId = "dev",
+                coordinate = coordinate(),
+                forceRefresh = true,
+                keepCachedVisible = true,
+                retained = retained
+            )
         )
         assertInstanceOf(DetailViewState.Body::class.java, outcome)
         assertEquals(DetailOverlay.RefreshFailed, (outcome as DetailViewState.Body).overlay)
     }
 
-    private fun controller(
-        gateway: OperationGateway,
-        currentEpoch: () -> Long = { 0L }
-    ) = DetailController(gateway, gate(currentEpoch))
+    private fun present(result: DetailReadResult, currentEpoch: () -> Long = { 0L }) =
+        controller(currentEpoch).present(result, issued())
+
+    private fun controller(currentEpoch: () -> Long = { 0L }) =
+        DetailController(gate(currentEpoch))
+
+    private fun confirmation(
+        adapter: StubDetailAdapter = StubDetailAdapter(),
+        captureContext: suspend () -> NacosOperationContext? = { v1Context() },
+        recordMissing: (suspend (
+            AccessIdentity,
+            String?,
+            String,
+            String,
+            Long
+        ) -> Unit)? = null
+    ) = ConfigurationDetailConfirmation(
+        gateway = OperationGateway(
+            mapOf(NacosApiGeneration.V1 to adapter),
+            observationSequence = ObservationSequence()
+        ),
+        captureContext = captureContext,
+        resolveTarget = { context, namespaceId -> Result.success(OperationTarget(context, namespaceId)) },
+        recordMissing = recordMissing
+    )
 
     private fun gate(currentEpoch: () -> Long = { 0L }) =
         PresentationGate(currentEpoch) { presentedCoordinate() }
+
+    private fun issued() = PresentedResult(0, presentedCoordinate())
 
     private fun presentedCoordinate() = PresentedCoordinate.of("dev", "app.yaml", "G")
 
@@ -244,9 +246,9 @@ class DetailControllerTest {
         type = "yaml"
     )
 
-    private fun v1Target(): OperationTarget {
+    private fun v1Context(): NacosOperationContext {
         val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
-        val context = NacosOperationContext(
+        return NacosOperationContext(
             identity = AccessIdentity.ofProfile(
                 profileId = "p1",
                 accessRevision = 1,
@@ -262,7 +264,6 @@ class DetailControllerTest {
             accessRevision = 1,
             resolvedGeneration = NacosApiGeneration.V1
         )
-        return OperationTarget(context, "dev")
     }
 
     private class StubDetailAdapter(
@@ -277,7 +278,6 @@ class DetailControllerTest {
         private val onRead: (() -> Unit)? = null
     ) : ProtocolAdapter {
         override val capabilities = ProtocolCapabilities.NONE.copy(history = CapabilityCoverage.COMPLETE)
-
         override suspend fun probe(target: OperationTarget) = Result.success(Unit)
         override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery) =
             Result.success(SummaryPage(0, 1, 0, emptyList()))
@@ -289,11 +289,11 @@ class DetailControllerTest {
             if (error != null) return Result.failure(error)
             return Result.success(detail)
         }
-        override suspend fun publish(target: OperationTarget, command: PublishCommand): Result<PublishOutcome> =
+        override suspend fun publish(target: OperationTarget, command: PublishCommand) =
             Result.success(PublishOutcome.Written("true"))
-        override suspend fun listHistory(target: OperationTarget, query: HistoryQuery): Result<HistoryPage> =
+        override suspend fun listHistory(target: OperationTarget, query: HistoryQuery) =
             Result.success(HistoryPage(0, 1, 0, emptyList()))
-        override suspend fun readHistoryDetail(target: OperationTarget, historyId: String): Result<HistoryDetail> =
+        override suspend fun readHistoryDetail(target: OperationTarget, historyId: String) =
             Result.success(HistoryDetail(historyId, "app.yaml", "G", null, "body", "yaml", "md5", 1000L, "PUBLISH"))
     }
 }

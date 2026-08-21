@@ -11,17 +11,14 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
-import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.CacheSnapshot
-import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.NavigationDetailPrefetchService
 import com.nanyin.nacos.search.services.NamespaceIndexRefreshService
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.allowCrossNamespaceNavigation
 import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
 import com.nanyin.nacos.search.settings.selectedNacosNamespaceId
-import com.nanyin.nacos.search.settings.selectedNacosProfileId
 import kotlinx.coroutines.runBlocking
 import java.awt.BorderLayout
 import java.awt.Font
@@ -239,72 +236,19 @@ class NacosValueLineMarkerProvider internal constructor(
         val group = codeContext.group ?: "DEFAULT_GROUP"
         val project = anchor.project
         ApplicationManager.getApplication().executeOnPooledThread {
-            val apiService = ApplicationManager.getApplication().getService(NacosApiService::class.java)
-            val cacheService = ApplicationManager.getApplication().getService(CacheService::class.java)
             val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-            val profileId = project.selectedNacosProfileId(settings)
             val namespaceId = effectiveNamespaceId(project, codeContext)
             val accessIdentity = project.captureSelectedAccessIdentity(settings)
-            val operationContext = settings.captureOperationContext(profileId).getOrNull()
-            val cached = runBlocking {
-                cacheService.getConfigDetail(
-                    accessIdentity,
-                    namespaceId,
-                    dataId,
-                    group,
-                    allowStale = true
-                )
+            val result = runBlocking {
+                ApplicationManager.getApplication()
+                    .getService(NavigationDetailPrefetchService::class.java)
+                    .readForNavigation(project, accessIdentity, namespaceId, dataId, group)
+                    .await()
             }
-            if (cached != null) {
-                // The same reading the gutter decided with: a caret placed by
-                // the data id's format while the marker resolved by the site's
-                // declaration would land on a line for a key that never matched.
-                val lineIndex = keysUnderRuntimeFormat(
-                    cached,
-                    codeContext.runtimeFormatOverride(),
-                    coordinateNamespaceId = namespaceId
-                )[key]?.lineIndex
-                    ?: ConfigKeyExtractor.LINE_NOT_FOUND
-                // Lazy-load already chose [namespaceId] as the coordinate to
-                // fetch under — pass it through so go-to does not fall back to
-                // a missing payload tenant and switch the tool window to public
-                // (issue #190).
-                NacosConfigNavigator.navigate(project, cached, lineIndex, namespaceId)
-                return@executeOnPooledThread
-            }
-            val observed = runBlocking {
-                apiService.getConfiguration(
-                    dataId = dataId,
-                    group = group,
-                    namespaceId = namespaceId,
-                    useCache = true,
-                    operationContext = operationContext
-                ).getOrNull()
-            }
-            val config = observed?.value ?: return@executeOnPooledThread
-
-            // Nothing is written back here. The read above already cached the
-            // configuration through the gateway, and this layer now addresses
-            // the same key space it wrote under, so a write of our own would be
-            // a plain duplicate — and one this layer is not entitled to make
-            // (ADR-0052). It used to be neither, only because an AUTO profile
-            // left the two spaces apart (issue #72).
-
-            // Re-derive the identity: on an AUTO profile that read may have been
-            // the first to resolve the generation for this session, so the
-            // identity captured before it can no longer name where the entry
-            // landed. Publishing the index under the stale one would build it
-            // for a key space nothing writes to (ADR-0053).
-            val resolvedIdentity = project.captureSelectedAccessIdentity(settings)
-
-            // Rebuild the key index synchronously. We are on a pooled thread
-            // (never the highlighter/dispatch thread), so a blocking rebuild is
-            // safe and makes hasKey()/resolve() reflect the freshly cached
-            // config immediately.
-            ApplicationManager.getApplication()
-                .getService(NavigationIndexRefreshService::class.java)
-                .refresh(resolvedIdentity, project)
-
+            val config = result.body() ?: return@executeOnPooledThread
+            // The same reading the gutter decided with: a caret placed by
+            // the data id's format while the marker resolved by the site's
+            // declaration would land on a line for a key that never matched.
             val lineIndex = keysUnderRuntimeFormat(
                 config,
                 codeContext.runtimeFormatOverride(),
@@ -312,7 +256,6 @@ class NacosValueLineMarkerProvider internal constructor(
             )[key]?.lineIndex
                 ?: ConfigKeyExtractor.LINE_NOT_FOUND
             NacosConfigNavigator.navigate(project, config, lineIndex, namespaceId)
-
         }
     }
 
