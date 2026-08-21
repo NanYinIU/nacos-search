@@ -266,15 +266,7 @@ class NamespaceIndexRefreshServiceTest {
                 ): IndexOutcome {
                     requestCount.incrementAndGet()
                     if (!observed.isCompleted) observed.complete(request)
-                    return IndexOutcome.Complete(
-                        count = 0,
-                        state = com.nanyin.nacos.search.models.DatasetState(
-                            com.nanyin.nacos.search.models.DataSource.REMOTE,
-                            com.nanyin.nacos.search.models.DataFreshness.FRESH,
-                            com.nanyin.nacos.search.models.DatasetCompleteness.COMPLETE,
-                            System.currentTimeMillis()
-                        )
-                    )
+                    return IndexOutcome.Complete(count = 0)
                 }
             }
             val cacheService = CacheService(InMemoryCacheStore())
@@ -471,13 +463,7 @@ class NamespaceIndexRefreshServiceTest {
             outcomes.add(
                 IndexOutcome.Partial(
                     loaded = 1,
-                    expected = 2,
-                    state = com.nanyin.nacos.search.models.DatasetState(
-                        com.nanyin.nacos.search.models.DataSource.REMOTE,
-                        com.nanyin.nacos.search.models.DataFreshness.FRESH,
-                        com.nanyin.nacos.search.models.DatasetCompleteness.PARTIAL,
-                        System.currentTimeMillis()
-                    )
+                    expected = 2
                 )
             )
             service.requestIfNeeded(identity, "partial-ns", project = null)
@@ -491,15 +477,7 @@ class NamespaceIndexRefreshServiceTest {
             requestSignals.add(completeRequest)
             afterRefreshSignals.add(completeRefresh)
             outcomes.add(
-                IndexOutcome.Complete(
-                    count = 1,
-                    state = com.nanyin.nacos.search.models.DatasetState(
-                        com.nanyin.nacos.search.models.DataSource.REMOTE,
-                        com.nanyin.nacos.search.models.DataFreshness.FRESH,
-                        com.nanyin.nacos.search.models.DatasetCompleteness.COMPLETE,
-                        System.currentTimeMillis()
-                    )
-                )
+                IndexOutcome.Complete(count = 1)
             )
             service.requestIfNeeded(identity, "complete-ns", project = null)
             withTimeout(2_000L) { completeRequest.await() }

@@ -57,19 +57,3 @@ data class AccessIdentity(
 }
 
 enum class DataSource { REMOTE, CACHE }
-
-enum class DataFreshness { FRESH, STALE, UNKNOWN }
-
-/**
- * Snapshot of a dataset's three independent quality dimensions.
- *
- * - [source]: where the data came from (remote server vs. local cache)
- * - [freshness]: whether the TTL is still valid, expired but usable, or unknown
- * - [completeness]: whether all expected items were loaded successfully
- */
-data class DatasetState(
-    val source: DataSource,
-    val freshness: DataFreshness,
-    val completeness: DatasetCompleteness,
-    val fetchedAtMillis: Long?
-)

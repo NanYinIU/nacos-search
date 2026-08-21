@@ -656,7 +656,7 @@ class NacosSearchService(
                 val stoppingCause = when (outcome) {
                     is IndexOutcome.Failed -> outcome.error
                     is IndexOutcome.Partial -> outcome.stoppingCause
-                    else -> null
+                    is IndexOutcome.Complete, is IndexOutcome.Stale -> null
                 }
                 if (stoppingCause != null) {
                     rethrowIfCancellation(stoppingCause)
