@@ -19,24 +19,24 @@ class NacosSettingsTest {
 
     @Test
     fun `test default settings values`() {
-        assertEquals("http://localhost:8848", settings.serverUrl)
-        assertEquals("", settings.username)
-        assertEquals("", settings.password)
-        assertEquals("public", settings.namespace)
-        assertEquals(AuthMode.NACOS_PASSWORD, settings.authMode)
-        assertTrue(settings.enableTokenAuth)
+        assertTrue(settings.servers.isEmpty())
+        assertEquals("", settings.activeServerId)
+        assertEquals("", settings.serverUrl)
+        assertEquals("s_local", settings.resolveDefaultProfileId())
+        assertEquals("http://localhost:8848", settings.getMigrationDefaultProfile()?.canonicalEndpoint)
+        assertEquals(AuthMode.NACOS_PASSWORD, settings.getMigrationDefaultProfile()?.authMode)
         assertTrue(settings.cacheEnabled)
         assertEquals(5, settings.cacheTtlMinutes)
         assertEquals("en", settings.language)
-        assertFalse(settings.getActiveServer().allowCrossNamespaceNavigation)
+        assertFalse(settings.preferencesFor("s_local").allowCrossNamespaceNavigation)
     }
 
     @Test
     fun `getState strips passwords from the persisted snapshot`() {
-        settings.applyServers(
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(id = "s1", displayName = "One", serverUrl = "http://localhost:8848", password = "secret1"),
-                NacosServerConfig(id = "s2", displayName = "Two", serverUrl = "http://localhost:8849", password = "secret2")
+                profileIntentFixture(id = "s1", displayName = "One", serverUrl = "http://localhost:8848", password = "secret1"),
+                profileIntentFixture(id = "s2", displayName = "Two", serverUrl = "http://localhost:8849", password = "secret2")
             ),
             "s1"
         )
@@ -44,44 +44,9 @@ class NacosSettingsTest {
         val state = settings.getState()
 
         assertEquals("", state.password)
-        assertTrue(state.servers.all { it.password.isEmpty() })
-        // The live in-memory settings still carry the password for runtime use.
-        assertEquals("secret1", settings.getActiveServer().password)
-    }
-
-    @Test
-    fun `setActiveServer updates dual-write active id without rewriting migration seed`() {
-        settings.applyServers(
-            listOf(
-                NacosServerConfig(id = "s_local", displayName = "本地 Local", serverUrl = "http://localhost:8848"),
-                NacosServerConfig(id = "s_qa", displayName = "QA", serverUrl = "http://47.95.169.10:8848")
-            ),
-            "s_local"
-        )
-        assertEquals("s_local", settings.activeServerId)
-        assertEquals("s_local", settings.resolveDefaultProfileId())
-        val seed = settings.migratedDefaultProfileId
-
-        settings.setActiveServer("s_qa")
-
-        assertEquals("s_qa", settings.activeServerId)
-        // Seed is migration-owned (issue #104); switching active must not retarget
-        // the default a newly opened project would inherit.
-        assertEquals(seed, settings.migratedDefaultProfileId)
-        assertEquals("s_local", settings.resolveDefaultProfileId())
-        assertEquals("http://47.95.169.10:8848", settings.serverUrl)
-    }
-
-    @Test
-    fun `server config cross namespace navigation defaults off and copies`() {
-        val server = NacosServerConfig.createDefault()
-
-        assertFalse(server.allowCrossNamespaceNavigation)
-
-        server.allowCrossNamespaceNavigation = true
-        val copy = server.copyConfig()
-
-        assertTrue(copy.allowCrossNamespaceNavigation)
+        assertTrue(state.servers.isEmpty())
+        assertEquals("", state.activeServerId)
+        assertEquals("", state.serverUrl)
     }
 
     @Test
@@ -93,7 +58,7 @@ class NacosSettingsTest {
 
     @Test
     fun `test validate with empty server url`() {
-        settings.serverUrl = ""
+        settings.profiles.single().canonicalEndpoint = ""
         val errors = settings.validate()
         assertTrue(errors.contains("Server URL cannot be empty"))
         assertFalse(settings.isValid())
@@ -101,7 +66,7 @@ class NacosSettingsTest {
 
     @Test
     fun `test validate with invalid server url`() {
-        settings.serverUrl = "not a url"
+        settings.profiles.single().canonicalEndpoint = "not a url"
         val errors = settings.validate()
         assertTrue(errors.contains("Invalid server URL format"))
         assertFalse(settings.isValid())
@@ -165,7 +130,7 @@ class NacosSettingsTest {
 
         assertTrue(loaded.validate().isEmpty())
         assertTrue(loaded.isValid())
-        assertEquals("http://localhost:8848", loaded.getActiveProfile()?.canonicalEndpoint)
+        assertEquals("http://localhost:8848", loaded.getMigrationDefaultProfile()?.canonicalEndpoint)
     }
 
     @Test
@@ -190,14 +155,13 @@ class NacosSettingsTest {
 
     @Test
     fun `test resetToDefaults`() {
-        settings.serverUrl = "http://custom:8848"
-        settings.username = "user"
+        settings.profiles.single().canonicalEndpoint = "http://custom:8848"
         settings.cacheEnabled = false
 
         settings.resetToDefaults()
 
-        assertEquals("http://localhost:8848", settings.serverUrl)
-        assertEquals("", settings.username)
+        assertEquals("http://localhost:8848", settings.getMigrationDefaultProfile()?.canonicalEndpoint)
+        assertTrue(settings.servers.isEmpty())
         assertTrue(settings.cacheEnabled)
     }
 
@@ -211,9 +175,9 @@ class NacosSettingsTest {
     fun `test state persistence`() {
         // Persist via the profile write path — flat fields alone are not the
         // runtime source of truth after migration (issue #104).
-        settings.applyServers(
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "s_local",
                     displayName = "本地 Local",
                     serverUrl = "http://persist:8848"
@@ -226,21 +190,8 @@ class NacosSettingsTest {
         val newSettings = NacosSettings()
         newSettings.loadState(state)
 
-        assertEquals("http://persist:8848", newSettings.serverUrl)
-        assertEquals("http://persist:8848", newSettings.getActiveProfile()?.canonicalEndpoint)
-    }
-
-    @Test
-    fun `test active server sync updates flat connection mirrors`() {
-        val fast = com.nanyin.nacos.search.models.NacosServerConfig(
-            id = "fast",
-            displayName = "Fast Local",
-            serverUrl = "http://localhost:8848"
-        )
-        settings.applyServers(listOf(fast), "fast")
-
-        assertEquals("http://localhost:8848", settings.serverUrl)
-        assertEquals("fast", settings.activeServerId)
+        assertEquals("", newSettings.serverUrl)
+        assertEquals("http://persist:8848", newSettings.getMigrationDefaultProfile()?.canonicalEndpoint)
     }
 
     @Test
@@ -249,7 +200,7 @@ class NacosSettingsTest {
         settings.password = "secret"
         val str = settings.toString()
 
-        assertTrue(str.contains("serverUrl"))
+        assertTrue(str.contains("profiles"))
         assertFalse(str.contains("secret"))
     }
 
@@ -297,7 +248,7 @@ class NacosSettingsTest {
 
         val loaded = NacosSettings()
         loaded.loadState(restored)
-        assertEquals(AuthMode.ANONYMOUS, loaded.getActiveProfile()!!.authMode)
+        assertEquals(AuthMode.ANONYMOUS, loaded.getMigrationDefaultProfile()!!.authMode)
     }
 
     private fun stripAuthModeOptions(element: org.jdom.Element) {
@@ -311,9 +262,9 @@ class NacosSettingsTest {
 
     @Test
     fun `xml serializer round trips environment profiles without Instantiator failure`() {
-        settings.applyServers(
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "s_prod",
                     displayName = "Prod",
                     serverUrl = "http://47.95.169.10:8848",
@@ -324,7 +275,7 @@ class NacosSettingsTest {
             ),
             "s_prod"
         )
-        val profile = settings.getActiveProfile()
+        val profile = settings.getMigrationDefaultProfile()
         assertNotNull(profile)
         assertEquals("s_prod", profile!!.id)
         assertEquals("s_prod:v1", profile.credentialSlotId)
@@ -335,7 +286,7 @@ class NacosSettingsTest {
         val loaded = NacosSettings()
         loaded.loadState(restored)
 
-        val restoredProfile = loaded.getActiveProfile()
+        val restoredProfile = loaded.getMigrationDefaultProfile()
         assertNotNull(restoredProfile)
         assertEquals("s_prod", restoredProfile!!.id)
         assertEquals("Prod", restoredProfile.displayName)
@@ -347,22 +298,7 @@ class NacosSettingsTest {
 
     @Test
     fun `loadState drops blank-id profiles and remigrates from servers when schema is legacy`() {
-        settings.applyServers(
-            listOf(
-                NacosServerConfig(
-                    id = "s_ok",
-                    displayName = "OK",
-                    serverUrl = "http://localhost:8848",
-                    username = "nacos",
-                    password = "secret",
-                    authMode = AuthMode.NACOS_PASSWORD
-                )
-            ),
-            "s_ok"
-        )
-        // getState no longer persists servers (#153). Rebuild a legacy XML shape
-        // that still carries the server list so remigration has an upgrade input.
-        val state = settings.getState()
+        val state = NacosSettings()
         state.servers = mutableListOf(
             NacosServerConfig(
                 id = "s_ok",
@@ -389,7 +325,7 @@ class NacosSettingsTest {
         val loaded = NacosSettings()
         loaded.loadState(state)
 
-        val profile = loaded.getActiveProfile()
+        val profile = loaded.getMigrationDefaultProfile()
         assertNotNull(profile)
         assertEquals("s_ok", profile!!.id)
         assertEquals("OK", profile.displayName)
@@ -409,20 +345,7 @@ class NacosSettingsTest {
 
     @Test
     fun `loadState backfills missing profile credential slots from legacy server secrets`() {
-        settings.applyServers(
-            listOf(
-                NacosServerConfig(
-                    id = "s_auth",
-                    displayName = "Auth",
-                    serverUrl = "http://47.95.169.10:8848",
-                    username = "nacos",
-                    password = "correct-horse",
-                    authMode = AuthMode.NACOS_PASSWORD
-                )
-            ),
-            "s_auth"
-        )
-        val state = settings.getState()
+        val state = NacosSettings()
         // Profiles present under a legacy schema version with a missing slot —
         // the failure mode after Instantiator aborted mid-save.
         state.profiles = mutableListOf(
@@ -453,9 +376,9 @@ class NacosSettingsTest {
 
     @Test
     fun `captureOperationContext fails closed for missing explicit profile ids`() {
-        settings.applyServers(
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "s_live",
                     displayName = "Live",
                     serverUrl = "http://localhost:8848",
@@ -474,9 +397,9 @@ class NacosSettingsTest {
 
     @Test
     fun `pure getProfile does not remigrate when profiles were cleared in memory`() {
-        settings.applyServers(
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "s_only",
                     displayName = "Only",
                     serverUrl = "http://localhost:8848",
@@ -494,9 +417,9 @@ class NacosSettingsTest {
 
     @Test
     fun `project session healSelection seeds blank sessions once but never retargets explicit deleted ones`() {
-        settings.applyServers(
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "s_ok",
                     displayName = "OK",
                     serverUrl = "http://localhost:8848",
@@ -512,7 +435,7 @@ class NacosSettingsTest {
             namespaceId = "public",
             selectionWasExplicit = false
         )
-        blank.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
+        blank.ensureInitialized(settings.defaultPublishedEnvironment())
         assertEquals("s_ok", blank.selectedProfileId)
         assertTrue(blank.sessionInitialized)
 
@@ -521,7 +444,7 @@ class NacosSettingsTest {
             namespaceId = "public",
             selectionWasExplicit = true
         )
-        explicitDeleted.healSelection(settings.migrationDefaults()) { id -> settings.getProfile(id) != null }
+        explicitDeleted.ensureInitialized(settings.defaultPublishedEnvironment())
         assertEquals("ghost", explicitDeleted.selectedProfileId)
         assertTrue(explicitDeleted.sessionInitialized)
     }

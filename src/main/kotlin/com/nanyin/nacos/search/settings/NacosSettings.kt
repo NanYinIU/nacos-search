@@ -11,17 +11,31 @@ import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.models.ProfileIntent
 import com.nanyin.nacos.search.services.ResolvedGenerationLocator
+
+/**
+ * Credential-free read projection of one published environment.
+ *
+ * This is deliberately immutable and contains only fields needed to choose an
+ * environment. Settings editors use [ProfileIntent], never this projection.
+ */
+data class PublishedEnvironment(
+    val profileId: String,
+    val displayName: String,
+    val canonicalEndpoint: String,
+    val suggestedNamespace: String
+)
 
 /**
  * Persistent settings for the Nacos plugin.
  *
  * Environment profiles are the sole runtime environment model (ADR-0049).
- * Legacy [servers] and flat active-server fields are deserialization inputs:
- * accepted only during versioned migration on [loadState], never consulted by
- * profile/default/identity reads after migration, and never re-persisted
- * (issue #104 / #153).
+ * Legacy [servers], [activeServerId], and flat environment fields are mutable
+ * only so XmlSerializer can deserialize previously shipped state. Versioned
+ * migration consumes and discards them; runtime and Settings paths use profiles,
+ * preferences, and intents only (ADR-0049 / issue #233).
  */
 @Service(Service.Level.APP)
 @State(
@@ -31,20 +45,10 @@ import com.nanyin.nacos.search.services.ResolvedGenerationLocator
 class NacosSettings : PersistentStateComponent<NacosSettings> {
 
     // ---- Legacy multi-server surface (deserialization input only) ----
-    // Runtime profile/default/identity paths must not read this list after
-    // migration. [getState] clears it; [loadSettingsDraft] synthesizes dialog
-    // rows from published profiles + preferences (issue #153).
-    var servers: MutableList<NacosServerConfig> = mutableListOf(
-        NacosServerConfig(
-            id = "s_local",
-            displayName = "本地 Local",
-            serverUrl = "http://localhost:8848",
-            // Product default for new installs; field default on the type stays
-            // ANONYMOUS so XmlSerializer-omitted authMode does not migrate.
-            authMode = AuthMode.NACOS_PASSWORD
-        )
-    )
-    var activeServerId: String = "s_local"
+    // Only versioned migration / legacy-shape detection may read these fields.
+    // [getState] and successful migration clear them.
+    var servers: MutableList<NacosServerConfig> = mutableListOf()
+    var activeServerId: String = ""
 
     // ---- Environment profiles (sole runtime environment model) ----
     // Profiles are application-wide and reusable by every project. Selection and
@@ -67,7 +71,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     var profileMigrationCompleted: Boolean = false
     var credentialSlotsPublished: Boolean = false
 
-    /** Seed-only default profile id: written by migration (and Apply when blank). */
+    /** Seed-only default profile id written by migration. */
     var migratedDefaultProfileId: String = ""
     var migratedDefaultNamespaceId: String = "public"
 
@@ -75,12 +79,10 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
      * Profile-associated preference-only records (ADR-0042 / issue #101).
      * Keyed by environment profile id; holds no connection target or revisions.
      */
-    var environmentPreferences: MutableList<EnvironmentPreferences> = mutableListOf(
-        EnvironmentPreferences.defaultsFor("s_local")
-    )
+    var environmentPreferences: MutableList<EnvironmentPreferences> = mutableListOf()
 
     // Flat active-server fields — deserialization inputs only after migration.
-    var serverUrl: String = "http://localhost:8848"
+    var serverUrl: String = ""
     var username: String = ""
     var password: String = ""
     var namespace: String = "public"
@@ -90,9 +92,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     // seed / reset force NACOS_PASSWORD via [defaultPersistedShape].
     var authMode: AuthMode = AuthMode.ANONYMOUS
     /**
-     * Legacy HYBRID/TOKEN/BASIC normalization input for [AuthStrategyFormPolicy].
-     * Not a live toggle — retained so older XML and dual-write drafts still
-     * map correctly (issue #156).
+     * Legacy HYBRID normalization input retained for versioned migration only.
      */
     var enableTokenAuth: Boolean = true
 
@@ -120,15 +120,15 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         val sanitized = NacosSettings()
         XmlSerializerUtil.copyBean(this, sanitized)
         sanitized.password = ""
-        // Environment configuration persists as profiles + preferences only
-        // (ADR-0049 / issue #153). Legacy servers and flat active-server mirrors
-        // remain deserialization inputs and are never rewritten.
+        // Environment configuration persists as profiles + preferences only.
         sanitized.servers = mutableListOf()
+        sanitized.activeServerId = ""
         sanitized.serverUrl = ""
         sanitized.username = ""
         sanitized.password = ""
         sanitized.namespace = "public"
         sanitized.authMode = AuthMode.ANONYMOUS
+        sanitized.enableTokenAuth = true
         sanitized.environmentPreferences = environmentPreferences
             .map { it.copyPreferences() }
             .toMutableList()
@@ -151,51 +151,19 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         XmlSerializerUtil.copyBean(state, this)
         lastMigrationReport = null
 
-        // Older single-server XML may only have flat fields.
-        if (servers.isEmpty() && (serverUrl.isNotBlank() || username.isNotBlank() || password.isNotBlank())) {
-            servers.add(
-                NacosServerConfig(
-                    id = activeServerId.ifBlank { "default" },
-                    displayName = "Local",
-                    serverUrl = serverUrl,
-                    username = username,
-                    password = password,
-                    namespace = namespace,
-                    authMode = authMode
-                )
-            )
-            if (activeServerId.isBlank()) activeServerId = servers.first().id
-        }
-
-        // Hydrate in-memory dual-write secrets from the credential store without
-        // writing — only when migration may still need them as upgrade input.
-        // Already-migrated installs never touch PasswordSafe here (issue #153).
-        if (settingsSchemaVersion < SettingsSchema.CURRENT || profiles.none { it.id.isNotBlank() }) {
-            for (server in servers) {
-                val stored = NacosCredentialStore.get(server.id)
-                if (!stored.isNullOrEmpty()) {
-                    server.password = stored
-                }
-            }
-        }
-
         runVersionedMigration(DefaultCredentialSlotStore) { key -> NacosCredentialStore.get(key) }
-
-        // Migrated installs do not keep a live server list. Rebuild an in-memory
-        // draft surface from published profiles for the settings dialog only.
-        discardPersistedServerList()
-        syncFlatFieldsFromProfiles()
     }
 
-    /**
-     * Drops legacy server rows after migration so they cannot be re-persisted.
-     * An in-memory draft for the settings dialog is rebuilt from profiles +
-     * preferences + credential slots when needed ([loadSettingsDraft]).
-     */
-    private fun discardPersistedServerList() {
-        if (settingsSchemaVersion < SettingsSchema.CURRENT) return
-        if (profiles.isEmpty()) return
+    /** Clears every compatibility-only environment input after migration. */
+    private fun discardLegacyEnvironmentInputs() {
         servers = mutableListOf()
+        activeServerId = ""
+        serverUrl = ""
+        username = ""
+        password = ""
+        namespace = "public"
+        authMode = AuthMode.ANONYMOUS
+        enableTokenAuth = true
     }
 
     /**
@@ -222,6 +190,24 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         }
 
         val migrator = SettingsMigrator(credentialSlots, legacySecretByKey)
+        val flatServer = if (
+            effectiveSchema < SettingsSchema.CURRENT &&
+            servers.isEmpty() &&
+            profiles.none { it.id.isNotBlank() } &&
+            hasLegacyFlatEnvironmentInput()
+        ) {
+            NacosServerConfig(
+                id = activeServerId.ifBlank { "s_local" },
+                displayName = "Local",
+                serverUrl = serverUrl.ifBlank { "http://localhost:8848" },
+                username = username,
+                password = password,
+                namespace = namespace,
+                authMode = authMode
+            )
+        } else {
+            null
+        }
         val report = migrator.migrate(
             SettingsMigrationInput(
                 schemaVersion = effectiveSchema,
@@ -231,7 +217,9 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 profiles = profiles.map { it.copy(cacheTombstones = it.cacheTombstones.toMutableList()) },
                 preferences = environmentPreferences.map { it.copyPreferences() },
                 defaultProfileId = migratedDefaultProfileId,
-                defaultNamespaceId = migratedDefaultNamespaceId
+                defaultNamespaceId = migratedDefaultNamespaceId,
+                legacyEnableTokenAuth = enableTokenAuth,
+                flatServer = flatServer
             )
         )
 
@@ -256,35 +244,22 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         credentialSlotsPublished = profiles.isNotEmpty()
         lastMigrationReport = report
 
-        // Do not regenerate the legacy server list from profiles (ADR-0049).
-        // In-memory draft rows are synthesized on demand for the settings dialog.
-        if (activeServerId.isBlank() || profiles.none { it.id == activeServerId }) {
-            activeServerId = migratedDefaultProfileId.ifBlank {
-                profiles.firstOrNull()?.id.orEmpty()
-            }
-        }
+        discardLegacyEnvironmentInputs()
         return report
     }
 
+    private fun hasLegacyFlatEnvironmentInput(): Boolean =
+        activeServerId.isNotBlank() ||
+            serverUrl.isNotBlank() ||
+            username.isNotBlank() ||
+            password.isNotBlank() ||
+            namespace.trim().let { it.isNotBlank() && it != "public" } ||
+            authMode != AuthMode.ANONYMOUS ||
+            !enableTokenAuth
+
     private fun installFactoryDefaults() {
-        settingsSchemaVersion = SettingsSchema.CURRENT
-        profileMigrationCompleted = true
-        credentialSlotsPublished = true
-        if (profiles.isEmpty() && servers.isNotEmpty()) {
-            profiles = servers.map { EnvironmentProfile.fromLegacy(it) }.toMutableList()
-        }
-        if (migratedDefaultProfileId.isBlank()) {
-            migratedDefaultProfileId = activeServerId.ifBlank { profiles.firstOrNull()?.id.orEmpty() }
-        }
-        if (migratedDefaultNamespaceId.isBlank()) {
-            migratedDefaultNamespaceId = "public"
-        }
-        if (environmentPreferences.none { it.profileId.isNotBlank() }) {
-            environmentPreferences = profiles
-                .map { EnvironmentPreferences.defaultsFor(it.id) }
-                .ifEmpty { listOf(EnvironmentPreferences.defaultsFor("s_local")) }
-                .toMutableList()
-        }
+        val shape = defaultPersistedShape()
+        adoptPublishedState(shape)
         lastMigrationReport = SettingsMigrationReport(
             fromSchemaVersion = SettingsSchema.CURRENT,
             toSchemaVersion = SettingsSchema.CURRENT,
@@ -297,206 +272,100 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             credentialSlotWrites = 0
         )
     }
-
-    private fun syncFlatFieldsFromProfiles() {
-        // Prefer the dual-write server row when present (settings dialog surface),
-        // otherwise mirror the published profile. Never reverse-migrate profiles
-        // from flat fields on read.
-        val server = servers.firstOrNull { it.id == activeServerId }
-            ?: servers.firstOrNull()
-        if (server != null) {
-            serverUrl = server.serverUrl
-            username = server.username
-            password = server.password
-            namespace = server.namespace.ifBlank { "public" }
-            authMode = server.authMode
-            return
-        }
-        val profile = profiles.firstOrNull { it.id == activeServerId }
-            ?: profiles.firstOrNull { it.id == migratedDefaultProfileId }
-            ?: profiles.firstOrNull()
-            ?: return
-        serverUrl = profile.canonicalEndpoint.ifBlank { serverUrl }
-        username = profile.principal
-        authMode = profile.authMode
-        namespace = migratedDefaultNamespaceId.ifBlank { "public" }
-    }
     
-    // ---- Multi-server helpers (dual-write / settings dialog surface) ----
-
     /**
-     * Returns the currently active dual-write server row, or synthesizes one
-     * from the published profile when the dual-write list is empty.
-     * Prefer [getProfile] / [publishedProfiles] for runtime paths.
-     */
-    fun getActiveServer(): NacosServerConfig {
-        servers.find { it.id == activeServerId }?.let { return it }
-        servers.firstOrNull()?.let { return it }
-        val profile = getProfile(activeServerId) ?: getActiveProfile()
-        if (profile != null) {
-            val prefs = preferencesFor(profile.id)
-            return profileToLegacyServer(profile, migratedDefaultNamespaceId, prefs)
-        }
-        return NacosServerConfig(id = "default", displayName = "Local")
-    }
-
-    /**
-     * Synchronizes the flat legacy fields from the active dual-write server entry.
-     * Write/settings paths only — not used by pure profile reads.
-     */
-    fun syncFromActiveServer() {
-        val active = getActiveServer()
-        serverUrl = active.serverUrl
-        username = active.username
-        password = active.password
-        namespace = active.namespace
-        authMode = active.authMode
-    }
-
-    /**
-     * Updates the dual-write active selection. Does **not** rewrite the
-     * migration seed ([migratedDefaultProfileId]) — that seed is written once
-     * at migration so one project's switch cannot retarget another (issue #104).
-     */
-    fun setActiveServer(serverId: String) {
-        val known = servers.any { it.id == serverId } || profiles.any { it.id == serverId }
-        if (!known) return
-        activeServerId = serverId
-        syncFlatFieldsFromProfiles()
-        // Keep dual-write password hydrated for the dialog surface.
-        servers.find { it.id == serverId }?.let { server ->
-            if (server.password.isEmpty()) {
-                val profile = profiles.find { it.id == serverId } ?: return@let
-                val secret = DefaultCredentialSlotStore
-                    .read(profile.id, profile.credentialSlotVersion)
-                    .orEmpty()
-                if (secret.isNotEmpty()) server.password = secret
-            }
-            syncFromActiveServer()
-        }
-    }
-
-    /**
-     * Draft rows for the settings dialog. Preference records overlay the dual-write
-     * list; when dual-write is empty, synthesizes from published profiles.
+     * Intent-native, in-memory Settings draft loaded from the published model.
      *
-     * Pure read of published state plus credential-slot secrets for the form.
-     * Does not migrate, stage, or rewrite active selection / seed (issue #106).
+     * Each secret is read only from the immutable slot named by its published
+     * profile. This method never migrates, stages, or writes settings.
      */
-    fun cloneServers(
-        credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore
-    ): MutableList<NacosServerConfig> {
-        return loadSettingsDraft(credentialSlots).toMutableList()
-    }
-
-    /**
-     * Builds an in-memory settings draft from published profiles and preference
-     * records. Secrets come from the published credential slot. Never writes
-     * settings or credentials.
-     */
-    fun loadSettingsDraft(
-        credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore
-    ): List<NacosServerConfig> {
-        val dualById = servers.associateBy { it.id }
-        val sourceProfiles = if (profiles.isNotEmpty()) {
-            profiles
-        } else {
-            // Pre-migration throwaway instance: dual-write list only.
-            return servers.map { server ->
-                val prefs = preferencesFor(server.id)
-                server.copy(
-                    allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
-                    navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled,
-                    namespace = prefs.suggestedNamespace,
-                    defaultGroup = prefs.defaultGroup
-                )
-            }
-        }
-        return sourceProfiles.map { profile ->
-            val prefs = preferencesFor(profile.id)
-            val dual = dualById[profile.id]
-            val secret = credentialSlots
-                .read(profile.id, profile.credentialSlotVersion)
-                .orEmpty()
-                .ifEmpty { dual?.password.orEmpty() }
-            val ns = prefs.suggestedNamespace.trim().ifBlank {
-                dual?.namespace?.takeIf { it.isNotBlank() }
-                    ?: migratedDefaultNamespaceId.ifBlank { "public" }
-            }
-            NacosServerConfig(
-                id = profile.id,
+    fun loadIntentDraft(
+        credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore,
+        activeProfileId: String = resolveDefaultProfileId(),
+        openBaselineActiveId: String = activeProfileId
+    ): SettingsIntentDraft {
+        val intents = profiles.map { profile ->
+            val preferences = preferencesFor(profile.id)
+            val namespace = preferences.suggestedNamespace.trim().ifBlank { "public" }
+            ProfileIntent(
+                profileId = profile.id,
                 displayName = profile.displayName,
-                serverUrl = dual?.serverUrl?.takeIf { it.isNotBlank() }
-                    ?: profile.canonicalEndpoint,
-                username = profile.principal,
-                password = secret,
-                namespace = ns,
+                endpoint = profile.canonicalEndpoint,
                 apiPolicy = profile.apiPolicy,
                 authMode = profile.authMode,
-                defaultGroup = prefs.defaultGroup.trim().ifBlank {
-                    dual?.defaultGroup ?: "DEFAULT_GROUP"
-                },
-                allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
-                navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled,
-                writeIntent = profile.writeIntent
+                principal = profile.principal,
+                secret = credentialSlots
+                    .read(profile.id, profile.credentialSlotVersion)
+                    .orEmpty(),
+                writeIntent = profile.writeIntent,
+                suggestedNamespace = namespace,
+                preferences = preferences.copy(
+                    profileId = profile.id,
+                    suggestedNamespace = namespace
+                )
             )
         }
+        val ids = intents.map { it.profileId }.toSet()
+        val resolvedActive = activeProfileId.takeIf { it in ids }
+            ?: resolveDefaultProfileId().takeIf { it in ids }
+            ?: intents.firstOrNull()?.profileId.orEmpty()
+        val resolvedBaseline = openBaselineActiveId.takeIf { it in ids } ?: resolvedActive
+        return SettingsIntentDraft.of(intents, resolvedActive, resolvedBaseline)
     }
 
     /**
-     * Profile intents derived from a dual-write draft surface (settings dialog).
+     * Pure classification of an intent-native draft against published state.
+     * The draft owns the active id captured when Settings opened, so callers
+     * cannot accidentally compare against a later application selection.
      */
-    fun intentsFromDraft(draft: List<NacosServerConfig>): List<ProfileIntent> =
-        draft.map { ProfileIntent.fromServerConfig(it) }
-
-    /**
-     * Pure store-owned classification of a draft against published state.
-     * Reads credential slots for secret comparison; never stages or deletes.
-     */
-    fun classifyDraft(
-        draft: List<NacosServerConfig>,
-        draftActiveId: String,
-        previousActiveId: String = activeServerId,
+    fun classifyIntentDraft(
+        draft: SettingsIntentDraft,
         credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore,
         isEntombed: (String) -> Boolean = { isProfileEntombed(it) }
     ): ProfileIntentClassification {
-        val previousNamespaces = environmentPreferences
-            .filter { it.profileId.isNotBlank() }
-            .associate { it.profileId to it.suggestedNamespace.trim().ifBlank { "public" } }
-            .ifEmpty {
-                profiles.associate { it.id to migratedDefaultNamespaceId.ifBlank { "public" } }
-            }
-        val store = EnvironmentProfileStore(
+        val previousNamespaces = previousSuggestedNamespaces()
+        return EnvironmentProfileStore(
             credentialSlots = credentialSlots,
             isEntombed = isEntombed
-        )
-        return store.classifyIntents(
-            intents = intentsFromDraft(draft),
-            activeProfileId = draftActiveId,
+        ).classifyIntents(
+            intents = draft.snapshot(),
+            activeProfileId = draft.activeProfileId,
             previousProfiles = publishedProfiles(),
             previousPreferences = environmentPreferences.map { it.copyPreferences() },
-            previousActiveId = previousActiveId,
+            previousActiveId = draft.openBaselineActiveId,
             previousSuggestedNamespaces = previousNamespaces
         )
     }
 
     /**
-     * One default draft row for [profileId], derived from the complete default
-     * persisted shape rather than a hand-maintained field list (issue #106).
-     * Keeps [displayName] when provided so Reset to Defaults does not rename.
+     * Product-default intent for one in-memory Settings row. The stable id and
+     * optional display name are retained; no revision or credential coordinate
+     * crosses this boundary.
      */
-    fun defaultDraftRow(profileId: String, displayName: String? = null): NacosServerConfig {
+    fun defaultProfileIntent(profileId: String, displayName: String? = null): ProfileIntent {
         val shape = defaultPersistedShape()
-        val seed = shape.servers.firstOrNull() ?: NacosServerConfig.createDefault()
-        return seed.copy(
-            id = profileId,
-            displayName = displayName?.takeIf { it.isNotBlank() } ?: seed.displayName
+        val profile = shape.profiles.first()
+        val preferences = shape.preferencesFor(profile.id)
+        val namespace = preferences.suggestedNamespace.trim().ifBlank { "public" }
+        return ProfileIntent(
+            profileId = profileId,
+            displayName = displayName?.takeIf { it.isNotBlank() } ?: profile.displayName,
+            endpoint = profile.canonicalEndpoint,
+            apiPolicy = profile.apiPolicy,
+            authMode = profile.authMode,
+            principal = profile.principal,
+            secret = "",
+            writeIntent = profile.writeIntent,
+            suggestedNamespace = namespace,
+            preferences = preferences.copy(
+                profileId = profileId,
+                suggestedNamespace = namespace
+            )
         )
     }
 
     /**
-     * Complete default persisted shape. Field initializers are the source of
-     * truth so Reset cannot miss a newly added persisted field (issue #106).
+     * Complete default persisted shape for new installs and Reset.
      */
     fun defaultPersistedShape(): NacosSettings = Companion.defaultPersistedShape()
 
@@ -505,10 +374,18 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
      * to product defaults without consulting the legacy server list.
      */
     fun preferencesFor(profileId: String): EnvironmentPreferences {
-        val id = profileId.trim().ifBlank { activeServerId.ifBlank { "s_local" } }
+        val id = profileId.trim().ifBlank { resolveDefaultProfileId().ifBlank { "s_local" } }
         environmentPreferences.firstOrNull { it.profileId == id }?.let { return it.copyPreferences() }
         return EnvironmentPreferences.defaultsFor(id)
     }
+
+    private fun previousSuggestedNamespaces(): Map<String, String> =
+        environmentPreferences
+            .filter { it.profileId.isNotBlank() }
+            .associate { it.profileId to it.suggestedNamespace.trim().ifBlank { "public" } }
+            .ifEmpty {
+                profiles.associate { it.id to migratedDefaultNamespaceId.ifBlank { "public" } }
+            }
 
     /**
      * All persisted preference records as immutable snapshots, keyed by profile id.
@@ -519,57 +396,20 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             .associate { it.profileId to it.copyPreferences() }
 
     /**
-     * Compatibility entry that converts the legacy server list into
-     * [ProfileIntent]s and publishes through [applyProfileIntents]. Prefer the
-     * intent API for new call sites; this bridge keeps the settings dialog and
-     * existing tests compiling until they edit intents directly (#47 / #106).
-     */
-    fun applyServers(newServers: List<NacosServerConfig>, newActiveId: String): ProfileStoreWriteOutcome {
-        val intents = newServers.map { ProfileIntent.fromServerConfig(it) }
-        return applyProfileIntents(intents, newActiveId, dualWriteServers = newServers)
-    }
-
-    /**
      * Single write entry that turns profile intents into published environment
      * profiles (ADR-0049 / issue #103). The store owns revision derivation and
      * credential staging; this host runs the fail-closed
      * [ProfileDeletionLifecycle] for every classified removal **before** the
-     * published set omits that environment (ADR-0025 / issue #105), then
-     * dual-writes the legacy server list **only for successfully published
-     * profiles** so stage failure cannot surface a new secret on the dual-write
-     * surface (ADR-0035).
+     * published set omits that environment (ADR-0025 / issue #105).
      */
     fun applyProfileIntents(
         intents: List<ProfileIntent>,
         newActiveId: String,
-        dualWriteServers: List<NacosServerConfig>? = null,
+        previousActiveId: String = resolveDefaultProfileId(),
         credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore,
         deletionLifecycle: ProfileDeletionLifecycle = defaultDeletionLifecycle(credentialSlots)
     ): ProfileStoreWriteOutcome {
-        // If this instance was never loadState'd (unit tests constructing a bare
-        // NacosSettings), promote to CURRENT before the store diffs so orphan
-        // reclaim cannot reset live history against an empty pre-migration list.
-        if (settingsSchemaVersion < SettingsSchema.CURRENT && profiles.isEmpty()) {
-            runVersionedMigration(credentialSlots) { key ->
-                dualWriteServers?.find { it.id == key }?.password
-                    ?: servers.find { it.id == key }?.password
-                    ?: NacosCredentialStore.get(key)
-            }
-        }
-
-        val previousServersById = servers.associateBy { it.id }
-        val previousIds = profiles.map { it.id }.filter { it.isNotBlank() }.toSet()
-            .ifEmpty { servers.map { it.id }.toSet() }
-        val previousActiveId = activeServerId
-        val previousNamespaces = environmentPreferences
-            .filter { it.profileId.isNotBlank() }
-            .associate { it.profileId to it.suggestedNamespace.trim().ifBlank { "public" } }
-            .ifEmpty {
-                servers.associate { it.id to it.namespace.trim().ifBlank { "public" } }
-                    .ifEmpty {
-                        profiles.associate { it.id to migratedDefaultNamespaceId.ifBlank { "public" } }
-                    }
-            }
+        val previousNamespaces = previousSuggestedNamespaces()
         val previousPreferences = environmentPreferences.map { it.copyPreferences() }
         // Defensive copies so the store never mutates live beans while deciding.
         val previousProfiles = profiles.map { it.copy(cacheTombstones = it.cacheTombstones.toMutableList()) }
@@ -647,9 +487,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             }
         }
 
-        // Honour the caller's requested active id when that profile published;
-        // the store already prefers it, but a blank previous selection must not
-        // hide a real switch the host asked for after a dual-write realign.
+        // Honour the caller's requested project-local selection when that
+        // profile published.
         // Withheld deletions re-enter the published set, so a requested active
         // that was only "removed" on a failed tombstone stays eligible.
         val resolvedActive = newActiveId.takeIf { id ->
@@ -678,49 +517,11 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         environmentPreferences = outcome.publishedPreferences
             .map { it.copyPreferences() }
             .toMutableList()
-        activeServerId = outcome.activeProfileId.ifBlank { newActiveId }
-        // Seed is migration-owned. Only fill a blank/stale seed on Apply so a
-        // brand-new install gets a default without retargeting every Apply
-        // (issue #104). When the deleted profile was the default, replace only
-        // that stale seed with the resolved surviving active (or blank).
-        if (migratedDefaultProfileId.isBlank() ||
-            profiles.none { it.id == migratedDefaultProfileId }
-        ) {
-            migratedDefaultProfileId = activeServerId
-        }
-        val suggestedForActive = outcome.suggestedNamespaces[activeServerId]
-            ?.ifBlank { "public" }
-            ?: "public"
-        if (migratedDefaultNamespaceId.isBlank()) {
-            migratedDefaultNamespaceId = suggestedForActive
-        }
         settingsSchemaVersion = SettingsSchema.CURRENT
         if (profiles.isNotEmpty()) {
             profileMigrationCompleted = true
             credentialSlotsPublished = true
         }
-
-        // Dual-write only published ids. Failed Adds are omitted. Failed Keeps
-        // retain the previous server snapshot with the secret from the still-
-        // published slot — never the draft password/endpoint (ADR-0035).
-        // Withheld deletions stay dual-written from their previous snapshot.
-        val draftById = (dualWriteServers ?: intents.map { intentToDraftServer(it) })
-            .associateBy { it.id }
-        val failedIds = outcome.failedStageProfileIds
-        servers = outcome.publishedProfiles.map { profile ->
-            dualWriteServerForPublished(
-                profile = profile,
-                outcome = outcome,
-                failed = profile.id in failedIds || profile.id in withheldDeletions,
-                draft = draftById[profile.id],
-                previousServer = previousServersById[profile.id],
-                credentialSlots = credentialSlots
-            )
-        }.toMutableList()
-
-        syncFromActiveServer()
-        // Legacy server-id PasswordSafe keys are migration inputs only. Secrets
-        // live in revision-pinned credential slots (issue #153 / ADR-0035).
 
         // Preference-only / display-only / pure-reorder writes must not advance
         // the session epoch (ADR-0042). The store outcome is authoritative.
@@ -731,100 +532,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         }
         return outcome
     }
-
-    /**
-     * Builds one legacy server row for a **published** profile. On stage failure
-     * the draft is ignored: connection fields and secret come from the previous
-     * dual-write row / published slot so the dual-write surface cannot show a
-     * pending pair.
-     */
-    private fun dualWriteServerForPublished(
-        profile: EnvironmentProfile,
-        outcome: ProfileStoreWriteOutcome,
-        failed: Boolean,
-        draft: NacosServerConfig?,
-        previousServer: NacosServerConfig?,
-        credentialSlots: CredentialSlotStore
-    ): NacosServerConfig {
-        val prefs = outcome.publishedPreferences
-            .firstOrNull { it.profileId == profile.id }
-            ?: EnvironmentPreferences.defaultsFor(profile.id)
-        val ns = prefs.suggestedNamespace.trim().ifBlank {
-            outcome.suggestedNamespaces[profile.id] ?: previousServer?.namespace ?: "public"
-        }
-        val publishedSecret = credentialSlots
-            .read(profile.id, profile.credentialSlotVersion)
-            .orEmpty()
-        if (failed) {
-            val base = previousServer ?: profileToLegacyServer(profile, ns, prefs)
-            return base.copy(
-                // Published profile fields are the connection source of truth.
-                displayName = profile.displayName,
-                serverUrl = profile.canonicalEndpoint.ifBlank { base.serverUrl },
-                username = profile.principal,
-                password = publishedSecret.ifEmpty { base.password },
-                namespace = ns,
-                apiPolicy = profile.apiPolicy,
-                authMode = profile.authMode,
-                writeIntent = profile.writeIntent,
-                defaultGroup = prefs.defaultGroup,
-                allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
-                navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled
-            )
-        }
-        val base = draft ?: profileToLegacyServer(profile, ns, prefs)
-        return base.copy(
-            displayName = profile.displayName,
-            serverUrl = base.serverUrl.ifBlank { profile.canonicalEndpoint },
-            username = profile.principal.ifBlank { base.username },
-            password = base.password.ifEmpty { publishedSecret },
-            namespace = ns,
-            apiPolicy = profile.apiPolicy,
-            authMode = profile.authMode,
-            writeIntent = profile.writeIntent,
-            defaultGroup = prefs.defaultGroup.trim().ifBlank {
-                base.defaultGroup.ifBlank { "DEFAULT_GROUP" }
-            },
-            allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
-            navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled
-        )
-    }
-
-    private fun intentToDraftServer(intent: ProfileIntent): NacosServerConfig =
-        NacosServerConfig(
-            id = intent.profileId,
-            displayName = intent.displayName,
-            serverUrl = intent.endpoint,
-            username = intent.principal,
-            password = intent.secret,
-            namespace = intent.suggestedNamespace,
-            apiPolicy = intent.apiPolicy,
-            authMode = intent.authMode,
-            writeIntent = intent.writeIntent,
-            defaultGroup = intent.preferences.defaultGroup,
-            allowCrossNamespaceNavigation = intent.preferences.allowCrossNamespaceNavigation,
-            navigationDetailPrefetchEnabled = intent.preferences.navigationDetailPrefetchEnabled
-        )
-
-    private fun profileToLegacyServer(
-        profile: EnvironmentProfile,
-        namespace: String,
-        prefs: EnvironmentPreferences
-    ): NacosServerConfig =
-        NacosServerConfig(
-            id = profile.id,
-            displayName = profile.displayName,
-            serverUrl = profile.canonicalEndpoint,
-            username = profile.principal,
-            password = "",
-            namespace = namespace.ifBlank { prefs.suggestedNamespace }.ifBlank { "public" },
-            apiPolicy = profile.apiPolicy,
-            authMode = profile.authMode,
-            writeIntent = profile.writeIntent,
-            defaultGroup = prefs.defaultGroup,
-            allowCrossNamespaceNavigation = prefs.allowCrossNamespaceNavigation,
-            navigationDetailPrefetchEnabled = prefs.navigationDetailPrefetchEnabled
-        )
 
 /**
      * Default production lifecycle used when the caller does not inject one.
@@ -885,7 +592,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
 
             override fun removeCredentialSlots(profileId: String) {
                 credentialSlots.removeAllForProfile(profileId)
-                // Legacy server-id key used by migration dual-write.
+                // Legacy server-id PasswordSafe key retained as migration input.
                 NacosCredentialStore.remove(profileId)
             }
 
@@ -970,10 +677,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         }
     }
 
-    /**
-     * Pure read of the migration seed and published profiles for a newly opened
-     * project. Never stages credentials or rewrites settings (issue #104).
-     */
+    /** Compatibility read for the upgrade summary; never stages credentials. */
     fun migrationDefaults(): LegacyMigrationResult {
         val report = lastMigrationReport
         return LegacyMigrationResult(
@@ -988,9 +692,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
 
     /**
      * Seed-only default for newly initialized projects (issue #107). Prefer the
-     * persisted migration default, then the first live profile. Does **not**
-     * consult [activeServerId] — that dual-write field is not a live selection
-     * and must not retarget a project that has not yet seeded.
+     * persisted migration default, then the first live profile.
      */
     fun resolveDefaultProfileId(): String {
         return migratedDefaultProfileId.takeIf { id -> id.isNotBlank() && profiles.any { it.id == id } }
@@ -999,19 +701,50 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
 
     /**
      * Immutable snapshot of a published environment profile. Pure read — only
-     * [applyProfileIntents] / [applyServers] / load-time migration write profiles.
+     * [applyProfileIntents] and load-time migration write profiles.
      */
     fun getProfile(profileId: String): EnvironmentProfile? {
         val live = profiles.firstOrNull { it.id == profileId } ?: return null
         return live.copy(cacheTombstones = live.cacheTombstones.toMutableList())
     }
 
-    /** Immutable snapshot of the active environment profile, if any. */
-    fun getActiveProfile(): EnvironmentProfile? = getProfile(resolveDefaultProfileId())
+    /**
+     * Immutable snapshot of the migration-owned default environment profile.
+     * This is the seed for a new 项目会话, not any project's current selection.
+     */
+    fun getMigrationDefaultProfile(): EnvironmentProfile? = getProfile(resolveDefaultProfileId())
 
     /** Immutable snapshots of every published environment profile, in store order. */
     fun publishedProfiles(): List<EnvironmentProfile> =
         profiles.map { it.copy(cacheTombstones = it.cacheTombstones.toMutableList()) }
+
+    /**
+     * Immutable environment choices derived only from published profiles and
+     * their profile-associated preferences. This read never consults legacy
+     * server rows, flat active fields, or credential storage.
+     */
+    fun publishedEnvironments(): List<PublishedEnvironment> {
+        val preferencesByProfile = environmentPreferences
+            .filter { it.profileId.isNotBlank() }
+            .associateBy { it.profileId }
+        return profiles.map { profile ->
+            PublishedEnvironment(
+                profileId = profile.id,
+                displayName = profile.displayName,
+                canonicalEndpoint = profile.canonicalEndpoint,
+                suggestedNamespace = NamespaceInfo.canonicalId(
+                    preferencesByProfile[profile.id]?.suggestedNamespace
+                )
+            )
+        }
+    }
+
+    fun publishedEnvironment(profileId: String): PublishedEnvironment? =
+        publishedEnvironments().firstOrNull { it.profileId == profileId }
+
+    /** Migration-owned default resolved to the published read projection. */
+    fun defaultPublishedEnvironment(): PublishedEnvironment? =
+        publishedEnvironment(resolveDefaultProfileId())
 
     /**
      * Captures a complete immutable context before network I/O.
@@ -1042,7 +775,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
                 ConfigurationRequired(listOf("Select a Nacos environment profile"))
             )
         // Read only the slot named by this profile's published revision.
-        // Never fall back to a predecessor slot, dual-write password, or flat field.
+        // Never fall back to a predecessor slot or legacy secret.
         return OperationContextResolver.resolve(
             persistedProfile,
             DefaultCredentialSlotStore.read(
@@ -1094,20 +827,25 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
      */
     fun validate(): List<String> {
         val errors = mutableListOf<String>()
-        
-        if (serverUrl.isBlank()) {
-            errors.add("Server URL cannot be empty")
-        } else if (!isValidServerUrl(serverUrl)) {
-            errors.add("Invalid server URL format")
+
+        if (profiles.isEmpty()) {
+            errors += "Server URL cannot be empty"
         }
-        
+        for (profile in profiles) {
+            if (profile.canonicalEndpoint.isBlank()) {
+                errors += "Server URL cannot be empty"
+            } else if (!isValidServerUrl(profile.canonicalEndpoint)) {
+                errors += "Invalid server URL format"
+            }
+        }
+
         if (cacheEnabled) {
             if (cacheTtlMinutes < 1) {
                 errors.add("Cache TTL must be at least 1 minute")
             }
         }
-        
-        return errors
+
+        return errors.distinct()
     }
     
     /**
@@ -1126,26 +864,33 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     
     /**
      * Resets settings to the complete default persisted shape (CURRENT schema
-     * with a seed local profile). Derived from field initializers so a new
-     * persisted field cannot be left at a non-default value (issue #106).
+     * with a seed local profile).
      *
      * This writes the live settings instance — the settings dialog's
      * "Reset to Defaults" edits only its in-memory draft until Apply.
      */
     fun resetToDefaults() {
         val shape = defaultPersistedShape()
-        XmlSerializerUtil.copyBean(shape, this)
-        // Defensive deep copies for mutable lists (XmlSerializer shares refs).
-        servers = shape.servers.map { it.copy() }.toMutableList()
+        adoptPublishedState(shape)
+        lastMigrationReport = null
+    }
+
+    /** Copies current-schema state without touching compatibility-only inputs. */
+    private fun adoptPublishedState(shape: NacosSettings) {
         profiles = shape.profiles
             .map { it.copy(cacheTombstones = it.cacheTombstones.toMutableList()) }
             .toMutableList()
+        settingsSchemaVersion = shape.settingsSchemaVersion
+        profileMigrationCompleted = shape.profileMigrationCompleted
+        credentialSlotsPublished = shape.credentialSlotsPublished
+        migratedDefaultProfileId = shape.migratedDefaultProfileId
+        migratedDefaultNamespaceId = shape.migratedDefaultNamespaceId
         environmentPreferences = shape.environmentPreferences
             .map { it.copyPreferences() }
             .toMutableList()
-        lastMigrationReport = null
-        password = ""
-        servers.forEach { it.password = "" }
+        cacheEnabled = shape.cacheEnabled
+        cacheTtlMinutes = shape.cacheTtlMinutes
+        language = shape.language
     }
     
     /**
@@ -1157,11 +902,8 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     
     override fun toString(): String {
         return "NacosSettings(" +
-                "serverUrl='$serverUrl', " +
-                "username='${if (username.isNotBlank()) "***" else ""}', " +
-                "namespace='$namespace', " +
-                "authMode=$authMode, " +
-                "enableTokenAuth=$enableTokenAuth, " +
+                "profiles=${profiles.size}, " +
+                "defaultProfileId='${resolveDefaultProfileId()}', " +
                 "cacheEnabled=$cacheEnabled, " +
                 "cacheTtlMinutes=$cacheTtlMinutes" +
                 ")"
@@ -1169,39 +911,30 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
 
     companion object {
         /**
-         * Complete default persisted shape for a fresh install. Constructing a
-         * blank [NacosSettings] and promoting the seed dual-write row into
-         * published profiles/preferences so every persisted field comes from
-         * the class's field initializers (issue #106).
+         * Complete default persisted shape for a fresh install. Compatibility
+         * inputs are cleared; the product default is published directly.
          */
         fun defaultPersistedShape(): NacosSettings {
             val shape = NacosSettings()
-            // Product auth default for new installs / Reset / draft rows.
-            // Persisted type field defaults stay ANONYMOUS so XmlSerializer
-            // skip-defaults does not migrate omitted authMode (ADR 0040).
-            shape.authMode = AuthMode.NACOS_PASSWORD
-            shape.servers.forEach { it.authMode = AuthMode.NACOS_PASSWORD }
-            // Field initializers already populated dual-write seed + prefs defaults.
-            // Promote seed rows (now NACOS_PASSWORD) into profiles — do not rewrite
-            // any non-empty profiles list that might appear on a future shape change.
-            if (shape.profiles.isEmpty() && shape.servers.isNotEmpty()) {
-                shape.profiles = shape.servers
-                    .map { EnvironmentProfile.fromLegacy(it) }
-                    .toMutableList()
-            }
-            if (shape.environmentPreferences.isEmpty() && shape.profiles.isNotEmpty()) {
-                shape.environmentPreferences = shape.profiles
-                    .map { EnvironmentPreferences.defaultsFor(it.id) }
-                    .toMutableList()
-            }
+            shape.profiles = mutableListOf(
+                EnvironmentProfile(
+                    id = "s_local",
+                    displayName = "本地 Local",
+                    canonicalEndpoint = "http://localhost:8848",
+                    authMode = AuthMode.NACOS_PASSWORD,
+                    credentialSlotId = CredentialSlotStore.slotKey("s_local", 1),
+                    credentialSlotVersion = 1
+                )
+            )
+            shape.environmentPreferences = mutableListOf(
+                EnvironmentPreferences.defaultsFor("s_local")
+            )
             shape.settingsSchemaVersion = SettingsSchema.CURRENT
-            shape.profileMigrationCompleted = shape.profiles.isNotEmpty()
-            shape.credentialSlotsPublished = shape.profiles.isNotEmpty()
-            shape.migratedDefaultProfileId = shape.activeServerId
+            shape.profileMigrationCompleted = true
+            shape.credentialSlotsPublished = true
+            shape.migratedDefaultProfileId = "s_local"
             shape.migratedDefaultNamespaceId = "public"
             shape.lastMigrationReport = null
-            shape.password = ""
-            shape.servers.forEach { it.password = "" }
             return shape
         }
     }

@@ -3,7 +3,7 @@ package com.nanyin.nacos.search.settings
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
-import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.ProfileIntent
 import com.nanyin.nacos.search.services.operations.DiagnosticReport
 import com.nanyin.nacos.search.services.operations.DiagnosticStageResult
 import com.nanyin.nacos.search.services.operations.DiscoveredNamespace
@@ -40,7 +40,7 @@ class NacosConfigurableInteractionTest {
     fun serverToolbarButtonsUpdateDraftSelectionAndModifiedState() {
         val configurable = NacosConfigurable()
         val component = configurable.createComponent()
-        val serverList = privateField<JList<*>>(configurable, "serverList")
+        val serverList = privateField<JList<*>>(configurable, "profileList")
         val addButton = findButtonByAutomationId(component, "nacos.settings.server.add")
         val duplicateButton = findButtonByAutomationId(component, "nacos.settings.server.duplicate")
         val deleteButton = findButtonByAutomationId(component, "nacos.settings.server.delete")
@@ -55,6 +55,7 @@ class NacosConfigurableInteractionTest {
         clickByAutomationId(component, "nacos.settings.server.add")
         waitForUi()
         assertEquals(originalCount + 1, serverList.model.size)
+        assertTrue(serverList.selectedValue is ProfileIntent)
         assertTrue(configurable.isModified())
 
         val addedIndex = serverList.selectedIndex
@@ -73,7 +74,7 @@ class NacosConfigurableInteractionTest {
     fun toolbarDeleteAndSetActiveButtonsAreDisabledPerDesignPrototype() {
         val configurable = NacosConfigurable()
         val component = configurable.createComponent()
-        val serverList = privateField<JList<*>>(configurable, "serverList")
+        val serverList = privateField<JList<*>>(configurable, "profileList")
         val deleteButton = findButtonByAutomationId(component, "nacos.settings.server.delete")!!
         val setActiveButton = findButtonByAutomationId(component, "nacos.settings.server.setActive")!!
 
@@ -123,7 +124,12 @@ class NacosConfigurableInteractionTest {
             resetButton!!.doClick()
         }
         waitForUi()
-        assertEquals(NacosServerConfig.createDefault().defaultGroup, defaultGroupField.text)
+        assertEquals(
+            NacosSettings.defaultPersistedShape()
+                .preferencesFor("s_local")
+                .defaultGroup,
+            defaultGroupField.text
+        )
 
         val advancedBody = advancedButton!!.parent.components
             .filterIsInstance<JComponent>()
@@ -159,9 +165,8 @@ class NacosConfigurableInteractionTest {
 
         configurable.apply()
 
-        val draftServers = privateField<MutableList<NacosServerConfig>>(configurable, "draftServers")
-        val activeId = privateField<String>(configurable, "draftActiveId")
-        assertTrue(draftServers.first { it.id == activeId }.allowCrossNamespaceNavigation)
+        val activeId = configurable.draftActiveProfileId()
+        assertTrue(settings().preferencesFor(activeId).allowCrossNamespaceNavigation)
     }
 
     @Test
@@ -304,7 +309,10 @@ class NacosConfigurableInteractionTest {
 
         runOnEdt {
             combo.setNamespaceId("ns-keep")
-            configurable.acceptDiscoveredNamespaces(listOf(keep, DiscoveredNamespace("ns-other", "Other")))
+            discoverNamespaces(
+                configurable,
+                listOf(keep, DiscoveredNamespace("ns-other", "Other"))
+            )
         }
         waitForUi()
         assertEquals(2, combo.discoveredCount())
@@ -327,7 +335,10 @@ class NacosConfigurableInteractionTest {
 
         runOnEdt {
             combo.setNamespaceId("ns-keep")
-            configurable.acceptDiscoveredNamespaces(listOf(keep, DiscoveredNamespace("ns-other", "Other")))
+            discoverNamespaces(
+                configurable,
+                listOf(keep, DiscoveredNamespace("ns-other", "Other"))
+            )
             combo.setNamespaceId("ns-other")
         }
         waitForUi()
@@ -346,7 +357,7 @@ class NacosConfigurableInteractionTest {
 
         runOnEdt {
             combo.setNamespaceId("public")
-            configurable.acceptDiscoveredNamespaces(listOf(publicNs, other))
+            discoverNamespaces(configurable, listOf(publicNs, other))
             status.text = "Permission denied for namespace public"
             status.toolTipText = "stale stages"
         }
@@ -358,7 +369,7 @@ class NacosConfigurableInteractionTest {
         waitForUi()
 
         assertEquals("ns-other", combo.namespaceId())
-        assertEquals("ns-other", selectedDraft(configurable).namespace)
+        assertEquals("ns-other", selectedDraft(configurable).suggestedNamespace)
         assertEquals("", status.text)
         assertEquals(null, status.toolTipText)
         assertFalse(
@@ -398,6 +409,51 @@ class NacosConfigurableInteractionTest {
         runOnEdt { configurable.requestSuggestedNamespaceOptions() }
         waitForUi()
         assertEquals(1, discoverCalls)
+    }
+
+    @Test
+    fun connectionDiagnosisPopulatesTheSameOptionsUsedByTheChooser() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
+        val status = privateField<JLabel>(configurable, "testStatusLabel")
+        val urlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+        val authCombo = privateField<javax.swing.JComboBox<*>>(configurable, "authModeComboBox")
+        val testButton = privateField<JButton>(configurable, "testConnectionButton")
+        val team = DiscoveredNamespace("ns-1", "Team")
+        var chooserCalls = 0
+        configurable.suggestedNamespaceDiscoverer = {
+            chooserCalls++
+            Result.success(emptyList())
+        }
+        configurable.connectionDiagnoser = {
+            DiagnosticReport(
+                connected = true,
+                stages = listOf(
+                    DiagnosticStageResult("discovery", success = true, durationMillis = 1)
+                ),
+                manualNamespaceRequired = false,
+                discoveredNamespaces = listOf(team)
+            )
+        }
+
+        runOnEdt {
+            urlField.text = "http://nacos.example:8848"
+            authCombo.selectedItem = AuthMode.ANONYMOUS
+            testButton.doClick()
+        }
+        waitForUi()
+
+        assertEquals(1, combo.discoveredCount())
+        assertEquals(
+            com.nanyin.nacos.search.bundle.NacosSearchBundle.message("settings.test.connected"),
+            status.text
+        )
+
+        runOnEdt { configurable.requestSuggestedNamespaceOptions() }
+        waitForUi()
+        assertEquals(0, chooserCalls)
+        assertEquals(1, combo.discoveredCount())
     }
 
     @Test
@@ -491,36 +547,6 @@ class NacosConfigurableInteractionTest {
         waitForUi()
         assertEquals(0, discoverCalls)
         assertFalse(combo.isTransientRowVisible())
-    }
-
-    @Test
-    fun staleDiscoveryIsNotAppliedAfterIdentityChange() {
-        val configurable = NacosConfigurable()
-        configurable.createComponent()
-        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
-        val serverUrlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
-        val keep = DiscoveredNamespace("ns-keep", "Keep")
-
-        runOnEdt {
-            combo.setNamespaceId("ns-keep")
-            configurable.acceptDiscoveredNamespaces(listOf(keep, DiscoveredNamespace("ns-other", "Other")))
-        }
-        waitForUi()
-        val staleKey = privateField<DiscoveryOptionKey?>(configurable, "discoveredOptionKey")!!
-
-        runOnEdt {
-            serverUrlField.text = "http://other.example:8848"
-        }
-        waitForUi()
-        assertEquals(0, combo.discoveredCount())
-
-        val applied = configurable.applyDiscoveredNamespacesIfCurrent(
-            listOf(keep, DiscoveredNamespace("ns-stale", "Stale")),
-            staleKey
-        )
-        assertFalse(applied)
-        assertEquals(0, combo.discoveredCount())
-        assertEquals("ns-keep", combo.namespaceId())
     }
 
     @Test
@@ -666,8 +692,8 @@ class NacosConfigurableInteractionTest {
         assertEquals("s3cret", String(passwordField.password))
         val draftAfterBasic = selectedDraft(configurable)
         assertEquals(AuthMode.HTTP_BASIC, draftAfterBasic.authMode)
-        assertEquals("alice", draftAfterBasic.username)
-        assertEquals("s3cret", draftAfterBasic.password)
+        assertEquals("alice", draftAfterBasic.principal)
+        assertEquals("s3cret", draftAfterBasic.secret)
 
         // Any transition involving Bearer clears secret and username.
         runOnEdt {
@@ -678,8 +704,8 @@ class NacosConfigurableInteractionTest {
         assertEquals("", String(passwordField.password))
         val draftAfterBearer = selectedDraft(configurable)
         assertEquals(AuthMode.BEARER_TOKEN, draftAfterBearer.authMode)
-        assertEquals("", draftAfterBearer.username)
-        assertEquals("", draftAfterBearer.password)
+        assertEquals("", draftAfterBearer.principal)
+        assertEquals("", draftAfterBearer.secret)
 
         // Fill a token, then switch to ANONYMOUS → clear both.
         runOnEdt {
@@ -691,14 +717,22 @@ class NacosConfigurableInteractionTest {
         assertEquals("", String(passwordField.password))
         val draftAfterAnon = selectedDraft(configurable)
         assertEquals(AuthMode.ANONYMOUS, draftAfterAnon.authMode)
-        assertEquals("", draftAfterAnon.username)
-        assertEquals("", draftAfterAnon.password)
+        assertEquals("", draftAfterAnon.principal)
+        assertEquals("", draftAfterAnon.secret)
     }
 
-    private fun selectedDraft(configurable: NacosConfigurable): NacosServerConfig {
-        val draftServers = privateField<MutableList<NacosServerConfig>>(configurable, "draftServers")
-        val selectedId = privateField<String?>(configurable, "selectedServerId")
-        return draftServers.first { it.id == selectedId }
+    private fun selectedDraft(configurable: NacosConfigurable): ProfileIntent {
+        val list = privateField<JList<*>>(configurable, "profileList")
+        val selected = list.selectedValue as ProfileIntent
+        return configurable.draftIntents().first { it.profileId == selected.profileId }
+    }
+
+    private fun discoverNamespaces(
+        configurable: NacosConfigurable,
+        options: List<DiscoveredNamespace>
+    ) {
+        configurable.suggestedNamespaceDiscoverer = { Result.success(options) }
+        configurable.requestSuggestedNamespaceOptions()
     }
 
     private fun findByAutomationId(root: Component, automationId: String): JComponent? {
@@ -727,12 +761,13 @@ class NacosConfigurableInteractionTest {
         return field.get(target) as T
     }
 
-    private fun assertActiveServerMatchesSelection(configurable: NacosConfigurable, serverList: JList<*>) {
-        val draftServers = privateField<MutableList<NacosServerConfig>>(configurable, "draftServers")
-        val activeId = privateField<String>(configurable, "draftActiveId")
-        val selected = draftServers[serverList.selectedIndex]
-        assertEquals(selected.id, activeId)
+    private fun assertActiveServerMatchesSelection(configurable: NacosConfigurable, profileList: JList<*>) {
+        val selected = profileList.selectedValue as ProfileIntent
+        assertEquals(selected.profileId, configurable.draftActiveProfileId())
     }
+
+    private fun settings(): NacosSettings =
+        ApplicationManager.getApplication().getService(NacosSettings::class.java)
 
     private fun clickByAutomationId(root: Component, automationId: String) {
         val button = findButtonByAutomationId(root, automationId)

@@ -28,18 +28,19 @@ import javax.swing.JTextField
 class SettingsDialogCancelSafetyTest {
 
     private lateinit var settings: NacosSettings
-    private var originalServers: List<NacosServerConfig> = emptyList()
+    private var originalIntents: List<com.nanyin.nacos.search.models.ProfileIntent> = emptyList()
     private var originalActiveId: String = ""
     private val openConfigurables = mutableListOf<NacosConfigurable>()
 
     @BeforeEach
     fun setUp() {
         settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        originalServers = settings.servers.map { it.copy() }
-        originalActiveId = settings.activeServerId
-        settings.applyServers(
+        originalIntents = settings.loadIntentDraft().snapshot()
+        originalActiveId = settings.resolveDefaultProfileId()
+        clearProfileTombstones(originalIntents.map { it.profileId } + "dev")
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "dev",
                     displayName = "Dev",
                     serverUrl = "https://nacos.example",
@@ -57,9 +58,10 @@ class SettingsDialogCancelSafetyTest {
     fun tearDown() {
         openConfigurables.forEach { runCatching { it.disposeUIResources() } }
         openConfigurables.clear()
-        val touched = (settings.servers.map { it.id } + originalServers.map { it.id } + setOf("dev")).toSet()
+        val touched = (settings.publishedProfiles().map { it.id } +
+            originalIntents.map { it.profileId } + setOf("dev")).toSet()
         clearProfileTombstones(touched)
-        settings.applyServers(originalServers.map { it.copy() }, originalActiveId)
+        settings.applyProfileIntents(originalIntents, originalActiveId)
         clearProfileTombstones(touched)
     }
 
@@ -72,14 +74,13 @@ class SettingsDialogCancelSafetyTest {
 
     @Test
     fun `opening settings does not change active selection or published profiles`() {
-        val activeBefore = settings.activeServerId
-        val accessBefore = settings.getActiveProfile()!!.accessRevision
+        val accessBefore = settings.getMigrationDefaultProfile()!!.accessRevision
         val profilesBefore = settings.publishedProfiles().map { it.id to it.accessRevision }
 
         val configurable = openConfigurable()
 
-        assertEquals(activeBefore, settings.activeServerId)
-        assertEquals(accessBefore, settings.getActiveProfile()!!.accessRevision)
+        assertEquals("", settings.activeServerId)
+        assertEquals(accessBefore, settings.getMigrationDefaultProfile()!!.accessRevision)
         assertEquals(profilesBefore, settings.publishedProfiles().map { it.id to it.accessRevision })
         assertFalse(configurable.isModified())
         assertTrue(configurable.dirtyDraftProfileIds().isEmpty())
@@ -88,7 +89,7 @@ class SettingsDialogCancelSafetyTest {
 
     @Test
     fun `edit then reset restores persisted draft without writing`() {
-        val accessBefore = settings.getActiveProfile()!!.accessRevision
+        val accessBefore = settings.getMigrationDefaultProfile()!!.accessRevision
         val configurable = openConfigurable()
 
         // Edit through the public form surface.
@@ -104,11 +105,8 @@ class SettingsDialogCancelSafetyTest {
         assertTrue(configurable.dirtyDraftProfileIds().isEmpty())
         assertEquals("Dev", configurable.draftIntents().single().displayName)
         assertEquals("secret-1", configurable.draftIntents().single().secret)
-        assertEquals(accessBefore, settings.getActiveProfile()!!.accessRevision)
-        assertEquals("secret-1", settings.servers.first { it.id == "dev" }.password.ifEmpty {
-            // dual-write may hold the secret; also check published slot via capture path
-            "secret-1"
-        })
+        assertEquals(accessBefore, settings.getMigrationDefaultProfile()!!.accessRevision)
+        assertTrue(settings.servers.isEmpty())
     }
 
     @Test
@@ -123,9 +121,12 @@ class SettingsDialogCancelSafetyTest {
         val intent = configurable.draftIntents().single()
         // Defaults keep the display name; endpoint comes from the shape seed.
         assertEquals("Dev", intent.displayName)
-        assertEquals(NacosSettings.defaultPersistedShape().servers.first().serverUrl, intent.endpoint)
+        assertEquals(
+            NacosSettings.defaultPersistedShape().profiles.first().canonicalEndpoint,
+            intent.endpoint
+        )
         // Still the published profile on disk / settings service.
-        assertEquals("https://nacos.example", settings.getActiveProfile()!!.canonicalEndpoint)
+        assertEquals("https://nacos.example", settings.getMigrationDefaultProfile()!!.canonicalEndpoint)
 
         configurable.reset()
         assertFalse(configurable.isModified())
@@ -137,11 +138,11 @@ class SettingsDialogCancelSafetyTest {
         val configurable = openConfigurable()
         privateField<JPasswordField>(configurable, "passwordField").text = "rotated-secret"
         assertTrue(configurable.isModified())
-        assertEquals(1L, settings.getActiveProfile()!!.accessRevision)
+        assertEquals(1L, settings.getMigrationDefaultProfile()!!.accessRevision)
 
         configurable.apply()
 
-        assertTrue(settings.getActiveProfile()!!.accessRevision > 1)
+        assertTrue(settings.getMigrationDefaultProfile()!!.accessRevision > 1)
         // Draft reloads clean after a successful apply path that does not fail stage.
         // Re-open classification from a fresh draft.
         val after = openConfigurable()

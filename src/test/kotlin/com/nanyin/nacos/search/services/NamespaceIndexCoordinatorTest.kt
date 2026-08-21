@@ -76,16 +76,16 @@ class NamespaceIndexCoordinatorTest {
     fun `captured index request keeps original identity after settings switch`() {
         val settings = com.intellij.openapi.application.ApplicationManager.getApplication()
             .getService(com.nanyin.nacos.search.settings.NacosSettings::class.java)
-        val originalServers = settings.servers.map { it.copy() }
-        val originalActive = settings.activeServerId
+        val originalIntents = settings.loadIntentDraft().snapshot()
+        val originalActive = settings.resolveDefaultProfileId()
         val testProfileId = "server-a"
         try {
             // Lift any residual tombstone so this test can publish under a stable id
             // even after a prior class removed the same profile id (ADR-0025).
-            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
-            settings.applyServers(
+            clearProfileTombstones(listOf(testProfileId) + originalIntents.map { it.profileId })
+            settings.applyProfileIntents(
                 listOf(
-                    com.nanyin.nacos.search.models.NacosServerConfig(
+                    com.nanyin.nacos.search.settings.profileIntentFixture(
                         id = testProfileId,
                         serverUrl = "http://a:8848",
                         username = "alice",
@@ -97,16 +97,16 @@ class NamespaceIndexCoordinatorTest {
             )
 
             val captured = settings.captureNamespaceIndexRequest("ns-a")
-            settings.servers[0].serverUrl = "http://b:8848"
-            settings.servers[0].username = "bob"
+            settings.serverUrl = "http://b:8848"
+            settings.username = "bob"
 
             assertEquals("http://a:8848", captured.operationContext.endpoint.value)
             assertEquals("alice", captured.operationContext.identity.principal)
             assertEquals(testProfileId, captured.key.identity.profileId)
             assertEquals(captured.operationContext.endpoint.value, captured.key.identity.canonicalEndpoint)
-            assertNotEquals(settings.getActiveServer().serverUrl, captured.operationContext.endpoint.value)
+            assertNotEquals(settings.serverUrl, captured.operationContext.endpoint.value)
         } finally {
-            restorePublishedServers(settings, originalServers, originalActive, extraIds = listOf(testProfileId))
+            restorePublishedIntents(settings, originalIntents, originalActive, extraIds = listOf(testProfileId))
         }
     }
 
@@ -114,19 +114,19 @@ class NamespaceIndexCoordinatorTest {
     fun `captured index request keeps configured cache TTL`() {
         val settings = com.intellij.openapi.application.ApplicationManager.getApplication()
             .getService(com.nanyin.nacos.search.settings.NacosSettings::class.java)
-        val originalServers = settings.servers.map { it.copy() }
-        val originalActive = settings.activeServerId
+        val originalIntents = settings.loadIntentDraft().snapshot()
+        val originalActive = settings.resolveDefaultProfileId()
         val originalCacheTtlMinutes = settings.cacheTtlMinutes
         val testProfileId = "server-ttl"
         try {
             // Flat fields are not a runtime source after migration (#104): publish
             // a profile so captureOperationContext can succeed, and lift tombstones
             // left by other ApplicationRule tests that removed the same ids.
-            clearProfileTombstones(listOf(testProfileId) + originalServers.map { it.id })
+            clearProfileTombstones(listOf(testProfileId) + originalIntents.map { it.profileId })
             settings.cacheTtlMinutes = 17
-            settings.applyServers(
+            settings.applyProfileIntents(
                 listOf(
-                    com.nanyin.nacos.search.models.NacosServerConfig(
+                    com.nanyin.nacos.search.settings.profileIntentFixture(
                         id = testProfileId,
                         serverUrl = "http://ttl:8848",
                         authMode = AuthMode.ANONYMOUS
@@ -140,24 +140,25 @@ class NamespaceIndexCoordinatorTest {
             assertEquals(17L * 60 * 1000, captured.cacheTtlMillis)
         } finally {
             settings.cacheTtlMinutes = originalCacheTtlMinutes
-            restorePublishedServers(settings, originalServers, originalActive, extraIds = listOf(testProfileId))
+            restorePublishedIntents(settings, originalIntents, originalActive, extraIds = listOf(testProfileId))
         }
     }
 
     /** Lift tombstones then republish so later tests can capture again. */
-    private fun restorePublishedServers(
+    private fun restorePublishedIntents(
         settings: com.nanyin.nacos.search.settings.NacosSettings,
-        originalServers: List<com.nanyin.nacos.search.models.NacosServerConfig>,
+        originalIntents: List<com.nanyin.nacos.search.models.ProfileIntent>,
         originalActive: String,
         extraIds: List<String> = emptyList()
     ) {
-        // applyServers entombs removed ids and never lifts them on restore
+        // Profile publication entombs removed ids and never lifts them on restore
         // (by design for production). Clear first so the restored rows can
         // re-enter the published set; clear again so the temporary test ids
         // do not block a later class that reuses them.
-        clearProfileTombstones(originalServers.map { it.id } + extraIds)
-        settings.applyServers(originalServers, originalActive)
-        clearProfileTombstones(originalServers.map { it.id } + extraIds)
+        val originalIds = originalIntents.map { it.profileId }
+        clearProfileTombstones(originalIds + extraIds)
+        settings.applyProfileIntents(originalIntents, originalActive)
+        clearProfileTombstones(originalIds + extraIds)
     }
 
     private fun clearProfileTombstones(profileIds: List<String>) {

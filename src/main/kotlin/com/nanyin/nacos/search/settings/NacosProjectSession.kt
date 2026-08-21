@@ -37,36 +37,24 @@ data class NacosProjectSessionState(
     var sessionInitialized: Boolean = false
 ) {
     /**
-     * Reads the stable migration default exactly once for a blank session and
-     * persists the resulting project-local selection. Subsequent calls are no-ops
-     * even when the shared seed later moves (issue #107).
+     * Seeds a blank project from the migration-selected published environment.
+     * Subsequent calls are no-ops even when the shared seed later moves; the
+     * suggested Namespace belongs to that profile's preference record.
      */
-    fun ensureInitialized(defaults: LegacyMigrationResult) {
+    fun ensureInitialized(defaultEnvironment: PublishedEnvironment?) {
         if (sessionInitialized) return
         if (selectedProfileId.isNotBlank() || selectionWasExplicit) {
             sessionInitialized = true
             return
         }
-        selectedProfileId = defaults.defaultProfileId
-        namespaceId = defaults.defaultNamespaceId.ifBlank { "public" }
+        selectedProfileId = defaultEnvironment?.profileId.orEmpty()
+        namespaceId = NamespaceInfo.canonicalId(defaultEnvironment?.suggestedNamespace)
         sessionInitialized = true
-    }
-
-    /** @see ensureInitialized */
-    fun seedIfNew(defaults: LegacyMigrationResult) = ensureInitialized(defaults)
-
-    /**
-     * Ensures the session is initialized. Never retargets a missing profile —
-     * leave the stale id for profile-unavailable (ADR-0025 / #107).
-     */
-    @Suppress("UNUSED_PARAMETER")
-    fun healSelection(defaults: LegacyMigrationResult, profileExists: (String) -> Boolean) {
-        ensureInitialized(defaults)
     }
 
     fun select(profileId: String, namespace: String) {
         selectedProfileId = profileId
-        namespaceId = namespace.ifBlank { "public" }
+        namespaceId = NamespaceInfo.canonicalId(namespace)
         selectionWasExplicit = true
         sessionInitialized = true
     }
@@ -107,20 +95,21 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
         }
     }
 
-    fun seedIfNew(defaults: LegacyMigrationResult) = sessionState.ensureInitialized(defaults)
+    fun ensureInitialized(defaultEnvironment: PublishedEnvironment?) =
+        sessionState.ensureInitialized(defaultEnvironment)
 
-    fun ensureInitialized(defaults: LegacyMigrationResult) = sessionState.ensureInitialized(defaults)
+    fun ensureInitialized(settings: NacosSettings) =
+        ensureInitialized(settings.defaultPublishedEnvironment())
 
     fun healSelection(settings: NacosSettings) {
-        val defaults = settings.migrationDefaults()
-        sessionState.healSelection(defaults) { profileId -> settings.getProfile(profileId) != null }
+        sessionState.ensureInitialized(settings.defaultPublishedEnvironment())
     }
 
     fun select(profileId: String, namespace: String) = sessionState.select(profileId, namespace)
 
     /**
      * Project-local environment adoption (issue #107). Updates only this
-     * session — never [NacosSettings.activeServerId] or the migration seed.
+     * session — never the application migration seed.
      *
      * [namespaceId] semantics (ADR-0015 / public spelling):
      * - **null (omitted)** — keep the current Namespace when the profile is
@@ -137,11 +126,22 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
         val sameProfile = profileId == sessionState.selectedProfileId
         val ns = when {
             // Explicit argument, including blank/"public" for the public Namespace.
-            namespaceId != null -> namespaceId.ifBlank { NamespaceInfo.PUBLIC }
-            sameProfile && sessionState.namespaceId.isNotBlank() -> sessionState.namespaceId
+            namespaceId != null -> NamespaceInfo.canonicalId(namespaceId)
+            sameProfile && sessionState.namespaceId.isNotBlank() ->
+                NamespaceInfo.canonicalId(sessionState.namespaceId)
             else -> NamespaceInfo.PUBLIC
         }
         select(profileId, ns)
+    }
+
+    /**
+     * Adopts a published environment and its suggested Namespace. Re-adopting
+     * the selected profile preserves this project's explicit Namespace.
+     */
+    fun adoptEnvironment(environment: PublishedEnvironment) {
+        val namespace = environment.suggestedNamespace
+            .takeUnless { environment.profileId == sessionState.selectedProfileId }
+        adoptEnvironment(environment.profileId, namespace)
     }
 
     fun markUpgradeSummaryShown(schemaVersion: Int = SettingsSchema.CURRENT) {
@@ -185,14 +185,14 @@ internal fun resolveProjectNamespaceId(
 
 /**
  * PSI/UI helpers that read the project-selected profile and namespace.
- * Tool-window selection lives here; app-wide [NacosSettings.activeServerId] and
- * NamespaceService must not retarget another project's navigation.
+ * Tool-window selection lives here; application defaults and NamespaceService
+ * must not retarget another project's navigation.
  */
 internal fun Project.selectedNacosProfileId(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
 ): String {
     val session = getService(NacosProjectSession::class.java) ?: return settings.resolveDefaultProfileId()
-    session.ensureInitialized(settings.migrationDefaults())
+    session.ensureInitialized(settings)
     return session.sessionState.selectedProfileId
 }
 
@@ -200,7 +200,7 @@ internal fun Project.selectedNacosNamespaceId(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
 ): String? {
     val session = getService(NacosProjectSession::class.java) ?: return null
-    session.ensureInitialized(settings.migrationDefaults())
+    session.ensureInitialized(settings)
     return resolveProjectNamespaceId(session.sessionState)
 }
 
@@ -247,8 +247,7 @@ internal fun Project.allowCrossNamespaceNavigation(
  * Reads the navigation detail prefetch preference for this project's selected
  * environment at call time (ADR-0042): the toggle is not captured into the
  * operation context, so the prefetch observes cancellation / disable itself.
- * Resolved from the profile-associated preference record (issue #101), not the
- * legacy server entry.
+ * Resolved from the profile-associated preference record (issue #101).
  */
 internal fun Project.navigationDetailPrefetchEnabled(
     settings: NacosSettings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
@@ -258,11 +257,11 @@ internal fun Project.navigationDetailPrefetchEnabled(
 }
 
 internal fun NacosSettings.navigationDetailPrefetchEnabled(profileId: String? = null): Boolean {
-    val id = profileId?.takeIf { it.isNotBlank() } ?: activeServerId
+    val id = profileId?.takeIf { it.isNotBlank() } ?: resolveDefaultProfileId()
     return preferencesFor(id).navigationDetailPrefetchEnabled
 }
 
 internal fun NacosSettings.allowCrossNamespaceNavigation(profileId: String? = null): Boolean {
-    val id = profileId?.takeIf { it.isNotBlank() } ?: activeServerId
+    val id = profileId?.takeIf { it.isNotBlank() } ?: resolveDefaultProfileId()
     return preferencesFor(id).allowCrossNamespaceNavigation
 }

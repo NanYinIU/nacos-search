@@ -7,8 +7,8 @@ package com.nanyin.nacos.search.models
  * Contains no connection target, credential, or derived revision. Changing these
  * values must publish the preference-only settings notification and must not
  * advance the profile revision, access revision, or project session epoch
- * (ADR-0042, issue #101). This record is the runtime source of truth so the
- * legacy server list can later become a deserialization-only input (ADR-0049).
+ * (ADR-0042, issue #101). This record is the runtime source of truth; the
+ * legacy server list is a migration-only deserialization input (ADR-0049).
  */
 data class EnvironmentPreferences(
     /** Stable environment profile id this preference record belongs to. */
@@ -43,14 +43,5 @@ data class EnvironmentPreferences(
     companion object {
         fun defaultsFor(profileId: String): EnvironmentPreferences =
             EnvironmentPreferences(profileId = profileId)
-
-        fun fromLegacyServer(server: NacosServerConfig): EnvironmentPreferences =
-            EnvironmentPreferences(
-                profileId = server.id.ifBlank { "default" },
-                allowCrossNamespaceNavigation = server.allowCrossNamespaceNavigation,
-                navigationDetailPrefetchEnabled = server.navigationDetailPrefetchEnabled,
-                suggestedNamespace = server.namespace.trim().ifBlank { "public" },
-                defaultGroup = server.defaultGroup.trim().ifBlank { "DEFAULT_GROUP" }
-            )
     }
 }

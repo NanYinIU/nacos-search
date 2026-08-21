@@ -42,9 +42,9 @@ class NacosSearchServiceCancelTest {
         // EnvironmentProfile (ADR-0049), not the flat legacy mirror.
         ApplicationManager.getApplication().getService(NacosSettings::class.java).apply {
             resetToDefaults()
-            applyServers(
+            applyProfileIntents(
                 listOf(
-                    com.nanyin.nacos.search.models.NacosServerConfig(
+                    com.nanyin.nacos.search.settings.profileIntentFixture(
                         id = "s_local",
                         displayName = "Local",
                         serverUrl = "https://nacos.example",
@@ -183,7 +183,7 @@ class NacosSearchServiceCancelTest {
                     dataId = "stale.yaml",
                     group = "DEFAULT_GROUP",
                     namespace = ns,
-                    serverId = settings.activeServerId,
+                    serverId = context.identity.profileId,
                     operationContext = context
                 ),
                 api

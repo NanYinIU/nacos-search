@@ -51,34 +51,4 @@ data class ProfileIntent(
      * Changes advance neither profile nor access revision.
      */
     val preferences: EnvironmentPreferences = EnvironmentPreferences()
-) {
-    companion object {
-        /**
-         * Bridge from the settings dual-write draft row into a profile intent.
-         * The dialog holds dual-write rows that map 1:1 to intents (issue #106);
-         * revisions and credential-slot identity are never present on this type.
-         */
-        fun fromServerConfig(server: NacosServerConfig): ProfileIntent {
-            val id = server.id.ifBlank { "default" }
-            val suggested = server.namespace.ifBlank { "public" }
-            return ProfileIntent(
-                profileId = id,
-                displayName = server.displayName,
-                endpoint = server.serverUrl,
-                apiPolicy = server.apiPolicy,
-                authMode = server.authMode,
-                principal = server.username.trim(),
-                secret = server.password,
-                writeIntent = server.writeIntent,
-                suggestedNamespace = suggested,
-                preferences = EnvironmentPreferences(
-                    profileId = id,
-                    allowCrossNamespaceNavigation = server.allowCrossNamespaceNavigation,
-                    navigationDetailPrefetchEnabled = server.navigationDetailPrefetchEnabled,
-                    suggestedNamespace = suggested,
-                    defaultGroup = server.defaultGroup.trim().ifBlank { "DEFAULT_GROUP" }
-                )
-            )
-        }
-    }
-}
+)

@@ -72,13 +72,16 @@ class NavigationDetailPrefetchServiceTest {
         settings = com.intellij.openapi.application.ApplicationManager.getApplication()
             .getService(NacosSettings::class.java)
         settings.resetToDefaults()
-        // Align active server id with the identity profile so the toggle lookup
-        // by profileId sees the same entry. Publish preference record via applyServers.
-        val server = settings.getActiveServer().copy(
+        // Publish the same profile id the prefetch identity addresses.
+        val intent = com.nanyin.nacos.search.settings.profileIntentFixture(
             id = identity.profileId,
+            serverUrl = identity.canonicalEndpoint,
+            username = identity.principal,
+            password = "admin",
+            authMode = identity.authMode,
             navigationDetailPrefetchEnabled = true
         )
-        settings.applyServers(listOf(server), identity.profileId)
+        settings.applyProfileIntents(listOf(intent), identity.profileId)
 
         project = mock()
         whenever(project.isDisposed).thenReturn(false)
@@ -216,10 +219,15 @@ class NavigationDetailPrefetchServiceTest {
 
     @Test
     fun `toggle off produces no detail requests`() = runBlocking {
-        val servers = settings.cloneServers().map {
-            it.copy(navigationDetailPrefetchEnabled = false)
+        val draft = settings.loadIntentDraft()
+        val disabled = draft.update(identity.profileId) {
+            it.copy(
+                preferences = it.preferences.copy(
+                    navigationDetailPrefetchEnabled = false
+                )
+            )
         }
-        settings.applyServers(servers, settings.activeServerId)
+        settings.applyProfileIntents(disabled.snapshot(), disabled.activeProfileId)
         val api = mock<NacosApiService>()
         val cache = CacheService(InMemoryCacheStore())
         cache.clearAll()
@@ -469,22 +477,24 @@ class NavigationDetailPrefetchServiceTest {
 
     @Test
     fun `prefetch toggle does not bump profile revision`() {
-        val profileBefore = settings.getActiveProfile()!!
+        val profileBefore = settings.getMigrationDefaultProfile()!!
         val revisionBefore = profileBefore.profileRevision
         val accessBefore = profileBefore.accessRevision
 
-        // Preference-only write path: applyServers with same connection fields.
-        val servers = settings.cloneServers().map {
-            it.copy(navigationDetailPrefetchEnabled = false)
+        val draft = settings.loadIntentDraft()
+        val disabled = draft.update(identity.profileId) {
+            it.copy(
+                preferences = it.preferences.copy(
+                    navigationDetailPrefetchEnabled = false
+                )
+            )
         }
-        settings.applyServers(servers, settings.activeServerId)
+        settings.applyProfileIntents(disabled.snapshot(), disabled.activeProfileId)
 
-        val profileAfter = settings.getActiveProfile()!!
+        val profileAfter = settings.getMigrationDefaultProfile()!!
         assertEquals(revisionBefore, profileAfter.profileRevision)
         assertEquals(accessBefore, profileAfter.accessRevision)
-        assertFalse(settings.preferencesFor(settings.activeServerId).navigationDetailPrefetchEnabled)
-        // Dual-write surface stays aligned for the settings dialog.
-        assertFalse(settings.getActiveServer().navigationDetailPrefetchEnabled)
+        assertFalse(settings.preferencesFor(identity.profileId).navigationDetailPrefetchEnabled)
     }
 
     @Test

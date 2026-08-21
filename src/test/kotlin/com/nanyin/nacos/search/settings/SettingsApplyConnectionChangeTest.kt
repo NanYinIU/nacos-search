@@ -2,8 +2,10 @@ package com.nanyin.nacos.search.settings
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.junit5.TestApplication
+import com.intellij.util.ui.UIUtil
 import com.nanyin.nacos.search.models.NacosApiPolicy
 import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.ProfileIntent
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -24,17 +26,18 @@ import javax.swing.JTextField
 class SettingsApplyConnectionChangeTest {
 
     private lateinit var settings: NacosSettings
-    private var originalServers: List<NacosServerConfig> = emptyList()
+    private var originalIntents: List<ProfileIntent> = emptyList()
     private var originalActiveId: String = ""
 
     @BeforeEach
     fun setUp() {
         settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
-        originalServers = settings.servers.map { it.copy() }
-        originalActiveId = settings.activeServerId
-        settings.applyServers(
+        originalIntents = settings.loadIntentDraft().snapshot()
+        originalActiveId = settings.resolveDefaultProfileId()
+        clearProfileTombstones(originalIntents.map { it.profileId } + listOf("dev", "prod"))
+        settings.applyProfileIntents(
             listOf(
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "dev",
                     displayName = "Dev",
                     serverUrl = "https://nacos.example",
@@ -43,7 +46,7 @@ class SettingsApplyConnectionChangeTest {
                     authMode = AuthMode.NACOS_PASSWORD,
                     apiPolicy = NacosApiPolicy.AUTO
                 ),
-                NacosServerConfig(
+                profileIntentFixture(
                     id = "prod",
                     displayName = "Prod",
                     serverUrl = "https://prod.example",
@@ -59,12 +62,13 @@ class SettingsApplyConnectionChangeTest {
 
     @AfterEach
     fun tearDown() {
-        // applyServers entombs removed ids permanently (issue #105). Lift
+        // Publication entombs removed ids permanently (issue #105). Lift
         // originals before restore so they can re-publish, then lift fixture
         // ids entombed by the restore so the next setUp can reuse "dev"/"prod".
-        val touched = (settings.servers.map { it.id } + originalServers.map { it.id }).toSet()
+        val touched = (settings.publishedProfiles().map { it.id } +
+            originalIntents.map { it.profileId }).toSet()
         clearProfileTombstones(touched)
-        settings.applyServers(originalServers.map { it.copy() }, originalActiveId)
+        settings.applyProfileIntents(originalIntents, originalActiveId)
         clearProfileTombstones(touched)
     }
 
@@ -77,7 +81,7 @@ class SettingsApplyConnectionChangeTest {
         }
         assertEquals(listOf("settingsChanged"), events)
         // Access revision must advance; credential itself never enters a signature.
-        assertTrue(settings.getActiveProfile()!!.accessRevision > 1)
+        assertTrue(settings.getMigrationDefaultProfile()!!.accessRevision > 1)
     }
 
     @Test
@@ -94,14 +98,14 @@ class SettingsApplyConnectionChangeTest {
 
     @Test
     fun `display-name-only change publishes preferences-only`() {
-        val before = settings.getActiveProfile()!!.accessRevision
+        val before = settings.getMigrationDefaultProfile()!!.accessRevision
         val events = recordNotifications {
             val configurable = openConfigurable()
             privateField<JTextField>(configurable, "displayNameField").text = "Dev (renamed)"
             configurable.apply()
         }
         assertEquals(listOf("preferencesChanged"), events)
-        assertEquals(before, settings.getActiveProfile()!!.accessRevision)
+        assertEquals(before, settings.getMigrationDefaultProfile()!!.accessRevision)
     }
 
     @Test
@@ -109,29 +113,34 @@ class SettingsApplyConnectionChangeTest {
         // Namespace is not part of the access revision, but it selects which
         // dataset the tool window shows: preferences-only would leave the list
         // on the previous namespace's configurations.
-        val before = settings.getActiveProfile()!!.accessRevision
+        val before = settings.getMigrationDefaultProfile()!!.accessRevision
         val events = recordNotifications {
             val configurable = openConfigurable()
             privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo").setNamespaceId("dev-ns")
             configurable.apply()
         }
         assertEquals(listOf("settingsChanged"), events)
-        assertEquals("dev-ns", settings.getActiveServer().namespace)
+        assertEquals("dev-ns", settings.preferencesFor("dev").suggestedNamespace)
         // The credential/endpoint identity did not change, so the revision holds.
-        assertEquals(before, settings.getActiveProfile()!!.accessRevision)
+        assertEquals(before, settings.getMigrationDefaultProfile()!!.accessRevision)
     }
 
     @Test
     fun `switching the active environment publishes connection-changed`() {
         val events = recordNotifications {
             val configurable = openConfigurable()
-            val activeField = configurable.javaClass.getDeclaredField("draftActiveId")
-            activeField.isAccessible = true
-            activeField.set(configurable, "prod")
+            val rows = configurable.draftIntents()
+            val list = privateField<javax.swing.JList<ProfileIntent>>(configurable, "profileList")
+            UIUtil.invokeAndWaitIfNeeded(Runnable {
+                list.selectedIndex = rows.indexOfFirst { it.profileId == "prod" }
+                privateField<javax.swing.JButton>(configurable, "setActiveProfileButton").doClick()
+            })
+            assertEquals("prod", configurable.draftActiveProfileId())
             configurable.apply()
         }
         assertEquals(listOf("settingsChanged"), events)
-        assertEquals("prod", settings.activeServerId)
+        assertEquals("", settings.activeServerId)
+        assertEquals(setOf("dev", "prod"), settings.publishedProfiles().map { it.id }.toSet())
     }
 
     private fun openConfigurable(): NacosConfigurable {

@@ -36,7 +36,7 @@ data class ProfileStoreWriteOutcome(
      * Profiles whose pending publication was withheld because credential
      * staging failed. The previous published pair remains active for each
      * Keep/Unchanged failure; failed Adds are absent from [publishedProfiles].
-     * Host dual-write and Apply UX must honor this set (ADR-0035).
+     * The host publisher and Apply UX must honor this set (ADR-0035).
      */
     val failedStageProfileIds: Set<String> = emptySet(),
     /**

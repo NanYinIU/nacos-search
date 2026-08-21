@@ -13,13 +13,13 @@ import com.intellij.openapi.ui.popup.PopupStep
 import com.intellij.openapi.ui.popup.util.BaseListPopupStep
 import com.intellij.util.ui.JBUI
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
-import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.NacosLanguageListener
 import com.nanyin.nacos.search.services.operations.DraftGuard
 import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.settings.NacosConfigurable
-import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosProjectSession
+import com.nanyin.nacos.search.settings.NacosSettings
+import com.nanyin.nacos.search.settings.PublishedEnvironment
 import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
@@ -39,7 +39,7 @@ import com.nanyin.nacos.search.Edt
  * (dev / sit / uat ...) without opening the settings dialog.
  *
  * Renders the active environment name and opens a [ListPopup] with all
- * configured servers (the active one checked) plus a "Manage connections…"
+ * published environments (the selected one checked) plus a "Manage connections…"
  * entry that opens [NacosConfigurable].
  */
 class EnvironmentSwitcher(
@@ -91,29 +91,20 @@ class EnvironmentSwitcher(
     }
 
     /**
-     * Re-reads the active server from settings and updates the button label.
+     * Re-reads the project-selected published environment and updates the label.
      * Call after settings change (e.g. switching environment or applying settings).
      */
     fun refresh() {
-        projectSession?.ensureInitialized(settings.migrationDefaults())
-        val selectedProfileId = projectSession?.sessionState?.selectedProfileId.orEmpty()
-        val active = when {
-            selectedProfileId.isNotBlank() ->
-                settings.cloneServers().firstOrNull { it.id == selectedProfileId }
-            // No project session service (standalone tests): display-only fallback.
-            // An initialized project session never falls through here (issue #107).
-            projectSession == null ->
-                settings.cloneServers().firstOrNull { it.id == settings.activeServerId }
-                    ?: settings.getActiveServer()
-            else -> null
-        }
+        projectSession?.ensureInitialized(settings)
+        val selectedProfileId = projectSession?.sessionState?.selectedProfileId
+            ?: settings.resolveDefaultProfileId()
+        val active = settings.publishedEnvironment(selectedProfileId)
         val name = when {
             active != null -> active.displayName.ifBlank {
-                active.serverUrl.ifBlank { NacosSearchBundle.message("toolwindow.env.none") }
+                active.canonicalEndpoint.ifBlank { NacosSearchBundle.message("toolwindow.env.none") }
             }
             selectedProfileId.isNotBlank() ->
-                settings.getProfile(selectedProfileId)?.displayName?.takeIf { it.isNotBlank() }
-                    ?: selectedProfileId
+                selectedProfileId
             else -> NacosSearchBundle.message("toolwindow.env.none")
         }
         envButton.icon = null
@@ -126,22 +117,20 @@ class EnvironmentSwitcher(
 
     private fun showPopup() {
         if (!envButton.isShowing) return
-        projectSession?.ensureInitialized(settings.migrationDefaults())
-        val activeId = projectSession?.sessionState?.selectedProfileId.orEmpty()
-            .ifBlank {
-                if (projectSession == null) settings.activeServerId else ""
-            }
-        val entries = settings.cloneServers()
-            .map { EnvEntry.Server(it, it.id == activeId) } + EnvEntry.Manage
+        projectSession?.ensureInitialized(settings)
+        val activeId = projectSession?.sessionState?.selectedProfileId
+            ?: settings.resolveDefaultProfileId()
+        val entries = settings.publishedEnvironments()
+            .map { EnvEntry.Environment(it, it.profileId == activeId) } + EnvEntry.Manage
         val popup = JBPopupFactory.getInstance().createListPopup(EnvListStep(entries))
         popup.setMinimumSize(Dimension(240, 0))
         popup.showUnderneathOf(envButton)
     }
 
-    private fun handleSelectServer(entry: EnvEntry.Server) {
+    private fun handleSelectEnvironment(entry: EnvEntry.Environment) {
         if (entry.active) return
-        if (!entry.config.isValidUrl()) {
-            val name = entry.config.displayName.ifBlank { entry.config.serverUrl }
+        if (!settings.isValidServerUrl(entry.environment.canonicalEndpoint)) {
+            val name = entry.displayText()
             val choice = Messages.showDialog(
                 this,
                 NacosSearchBundle.message("toolwindow.env.invalid", name),
@@ -159,20 +148,17 @@ class EnvironmentSwitcher(
         // ADR-0027: switching environment must not discard a dirty draft silently.
         // Ask before mutating selection so cancel leaves env and draft unchanged.
         if (!admitEnvDraftGuard(
-                project.service<EditSessionService>().guardEnvironmentSwitch(entry.config.id),
+                project.service<EditSessionService>().guardEnvironmentSwitch(entry.environment.profileId),
                 "config.detail.draft.discard.environment"
             )
         ) return
         // Project-local only — never write the application-wide migration seed
-        // or dual-write active id (issue #107 / ADR-0004). Pass this
-        // environment's suggested Namespace so the previous server's id is not
+        // or compatibility inputs (issue #107 / ADR-0004). Pass this
+        // environment's 建议 Namespace so the previous Namespace id is not
         // reused against a different Nacos (configs would load empty/wrong).
-        projectSession?.adoptEnvironment(
-            entry.config.id,
-            entry.config.namespace.ifBlank { "public" }
-        )
+        projectSession?.adoptEnvironment(entry.environment)
         project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)?.bump()
-        onSelectionChanged?.invoke(entry.config.id)
+        onSelectionChanged?.invoke(entry.environment.profileId)
         refresh()
     }
 
@@ -191,19 +177,19 @@ class EnvironmentSwitcher(
         BaseListPopupStep<EnvEntry>(null, items) {
         override fun getTextFor(value: EnvEntry): String = value.displayText()
         override fun getIconFor(value: EnvEntry): Icon? = when (value) {
-            is EnvEntry.Server -> if (value.active) AllIcons.Actions.Checked else null
+            is EnvEntry.Environment -> if (value.active) AllIcons.Actions.Checked else null
             is EnvEntry.Manage -> AllIcons.General.Settings
         }
         // Draw a separator above the "Manage connections" entry.
         override fun getSeparatorAbove(value: EnvEntry): ListSeparator? =
             if (value is EnvEntry.Manage) ListSeparator() else null
         override fun getDefaultOptionIndex(): Int =
-            items.indexOfFirst { it is EnvEntry.Server && it.active }.coerceAtLeast(0)
+            items.indexOfFirst { it is EnvEntry.Environment && it.active }.coerceAtLeast(0)
         override fun onChosen(selectedValue: EnvEntry?, finalChoice: Boolean): PopupStep<*>? {
             // Defer dialogs / selection work out of handleSelect so focus is not
             // stolen while the popup is still tearing down (PopupImplUtil).
             return when (selectedValue) {
-                is EnvEntry.Server -> doFinalStep { handleSelectServer(selectedValue) }
+                is EnvEntry.Environment -> doFinalStep { handleSelectEnvironment(selectedValue) }
                 is EnvEntry.Manage -> doFinalStep { openSettings() }
                 null -> null
             }
@@ -212,9 +198,9 @@ class EnvironmentSwitcher(
 
     private sealed class EnvEntry {
         abstract fun displayText(): String
-        class Server(val config: NacosServerConfig, val active: Boolean) : EnvEntry() {
+        class Environment(val environment: PublishedEnvironment, val active: Boolean) : EnvEntry() {
             override fun displayText(): String =
-                config.displayName.ifBlank { config.serverUrl }
+                environment.displayName.ifBlank { environment.canonicalEndpoint }
         }
         object Manage : EnvEntry() {
             override fun displayText(): String =
