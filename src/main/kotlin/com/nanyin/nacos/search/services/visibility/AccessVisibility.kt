@@ -157,26 +157,6 @@ internal class AccessVisibility(
     fun isConfigurationReadBlocked(identity: AccessIdentity, namespaceId: String?): Boolean =
         configurationVisibility(identity, namespaceId) is ConfigurationVisibility.Blocked
 
-    fun identityAuthBlock(identity: AccessIdentity): AccessVisibilityRecord? =
-        identityAuthBlocks[VisibilityScopes.identityAuthKey(identity)]
-
-    fun namespaceConfigReadBlock(identity: AccessIdentity, namespaceId: String): AccessVisibilityRecord? =
-        capabilityBlocks[VisibilityScopes.configurationReadKey(identity, namespaceId)]
-
-    // --- Optional-capability blocks (issue #125) ---
-    //
-    // Capability state only: configuration-read surfaces never consult these
-    // records. A matching newer success clears only its own capability + scope.
-
-    fun publishAuthBlock(identity: AccessIdentity, namespaceId: String): AccessVisibilityRecord? =
-        capabilityBlocks[VisibilityScopes.publishKey(identity, namespaceId)]
-
-    fun discoveryAuthBlock(identity: AccessIdentity): AccessVisibilityRecord? =
-        capabilityBlocks[VisibilityScopes.discoveryKey(identity)]
-
-    fun historyAuthBlock(identity: AccessIdentity, namespaceId: String): AccessVisibilityRecord? =
-        capabilityBlocks[VisibilityScopes.historyKey(identity, namespaceId)]
-
     /**
      * Canonical Namespace ids whose configuration reads are authorization-
      * blocked for [identity]. Empty when the identity-wide authentication gate
@@ -195,29 +175,6 @@ internal class AccessVisibility(
             .filter { it.startsWith(prefix) }
             .mapTo(linkedSetOf()) { it.removePrefix(prefix) }
     }
-
-    /**
-     * Snapshot of every identity-wide auth block currently held in memory.
-     * For tests and lifecycle enumeration; not a public API for UI.
-     */
-    fun identityAuthBlocks(): Map<String, AccessVisibilityRecord> =
-        identityAuthBlocks.toMap()
-
-    /** Snapshot of every Namespace-scoped configuration-read authorization block. */
-    fun namespaceConfigReadBlocks(): Map<String, AccessVisibilityRecord> =
-        capabilityBlocks.filterValues { it.capability == AccessVisibilityRecord.CONFIGURATION_READ }
-
-    /** Snapshot of every publish authorization block (capability state only). */
-    fun publishAuthBlocks(): Map<String, AccessVisibilityRecord> =
-        capabilityBlocks.filterValues { it.capability == AccessVisibilityRecord.PUBLISH }
-
-    /** Snapshot of every namespace-discovery authorization block (capability state only). */
-    fun discoveryAuthBlocks(): Map<String, AccessVisibilityRecord> =
-        capabilityBlocks.filterValues { it.capability == AccessVisibilityRecord.NAMESPACE_DISCOVERY }
-
-    /** Snapshot of every history authorization block (capability state only). */
-    fun historyAuthBlocks(): Map<String, AccessVisibilityRecord> =
-        capabilityBlocks.filterValues { it.capability == AccessVisibilityRecord.HISTORY }
 
     override suspend fun reportCompleted(observation: CompletedObservation): Boolean {
         // Cache hits and non-remote outcomes never reach here; still guard.

@@ -1551,7 +1551,7 @@ private fun setupEventHandlers() {
                         render(DetailViewState.Stale)
                         return@withContext
                     }
-                    render(detailController.fromPublishResult(result, session.draftContent))
+                    render(DetailPresentation.fromPublishResult(result, session.draftContent))
                 }
             }
             return
@@ -1562,7 +1562,7 @@ private fun setupEventHandlers() {
                 val prepareResult = editSessions.requestPublish() ?: return@launch
                 when (val state = prepareResult.state) {
                     is PublishState.AwaitingConfirmation -> {
-                        render(detailController.fromPublishState(state, session.draftContent))
+                        render(DetailPresentation.fromPublishState(state, session.draftContent))
                         val target = state.namedTarget
                         val confirm = withContext(Dispatchers.Main) {
                             com.intellij.openapi.ui.Messages.showYesNoDialog(
@@ -1589,7 +1589,7 @@ private fun setupEventHandlers() {
                                     is PublishState.Publishing,
                                     is PublishState.Verifying -> {
                                         withContext(Dispatchers.Main) {
-                                            render(detailController.fromPublishState(phase))
+                                            render(DetailPresentation.fromPublishState(phase))
                                         }
                                     }
                                     else -> Unit
@@ -1620,7 +1620,7 @@ private fun setupEventHandlers() {
                                 render(DetailViewState.Stale)
                                 return@withContext
                             }
-                            render(detailController.fromPublishResult(publishResult, session.draftContent))
+                            render(DetailPresentation.fromPublishResult(publishResult, session.draftContent))
                         }
                     }
                     is PublishState.Dirty -> {
@@ -1643,7 +1643,7 @@ private fun setupEventHandlers() {
                                 render(DetailViewState.Stale)
                                 return@withContext
                             }
-                            render(detailController.fromPublishResult(prepareResult, session.draftContent))
+                            render(DetailPresentation.fromPublishResult(prepareResult, session.draftContent))
                         }
                     }
                 }

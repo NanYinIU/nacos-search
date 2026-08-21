@@ -1,13 +1,10 @@
 package com.nanyin.nacos.search.ui
 
 import com.nanyin.nacos.search.models.CacheConfidence
-import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.operations.ConfigurationDetailConfirmation
 import com.nanyin.nacos.search.services.operations.DetailReadResult
 import com.nanyin.nacos.search.services.operations.Observed
-import com.nanyin.nacos.search.services.operations.PublishResult
-import com.nanyin.nacos.search.services.operations.PublishState
 
 /**
  * Maps operation-layer 配置详情 confirmation into the closed [DetailViewState]
@@ -85,17 +82,4 @@ class DetailController(
             }
         }
     }
-
-    fun fromPublishState(
-        state: PublishState,
-        draftContent: String = "",
-        verifiedDetail: NacosConfiguration? = null
-    ): DetailViewState = DetailPresentation.fromPublishState(state, draftContent, verifiedDetail)
-
-    fun fromPublishResult(result: PublishResult, draftContent: String): DetailViewState =
-        DetailPresentation.fromPublishResult(result, draftContent)
-
-    fun empty(): DetailViewState = DetailPresentation.empty()
-
-    fun loading(): DetailViewState = DetailPresentation.loading()
 }

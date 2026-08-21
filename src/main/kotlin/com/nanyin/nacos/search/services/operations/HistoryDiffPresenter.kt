@@ -1,18 +1,15 @@
 package com.nanyin.nacos.search.services.operations
 
-import com.intellij.diff.DiffManager
 import com.intellij.diff.DiffRequestPanel
 import com.intellij.diff.contents.DocumentContent
 import com.intellij.diff.requests.DiffRequest
 import com.intellij.diff.requests.ErrorDiffRequest
 import com.intellij.diff.requests.MessageDiffRequest
-import com.intellij.diff.requests.NoDiffRequest
 import com.intellij.diff.requests.SimpleDiffRequest
 import com.intellij.diff.util.DiffUserDataKeys
 import com.intellij.openapi.editor.impl.DocumentImpl
 import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.fileTypes.FileTypeManager
-import com.intellij.openapi.project.Project
 
 /**
  * Shows an IntelliJ Diff between two read-only history sides.
@@ -43,28 +40,12 @@ object HistoryDiffPresenter {
         panel.setRequest(toDiffRequest(request))
     }
 
-    /** Brief loading placeholder while history content is fetched. */
-    fun showLoading(panel: DiffRequestPanel, message: String) {
-        showEmpty(panel, message)
-    }
-
     fun showEmpty(panel: DiffRequestPanel, message: String) {
         panel.setRequest(MessageDiffRequest(message))
     }
 
     fun showError(panel: DiffRequestPanel, message: String) {
         panel.setRequest(ErrorDiffRequest(message))
-    }
-
-    fun showNone(panel: DiffRequestPanel) {
-        panel.setRequest(NoDiffRequest.INSTANCE)
-    }
-
-    /**
-     * Builds and shows the diff dialog for [request] within [project].
-     */
-    fun show(project: Project?, request: HistoryDiffRequest) {
-        DiffManager.getInstance().showDiff(project, toDiffRequest(request))
     }
 
     private fun createContent(side: HistoryDiffSide): DocumentContent {

@@ -31,12 +31,6 @@ object DetailPresentation {
     const val LOAD_FAILED_TITLE_KEY = "config.detail.failed"
     const val SAVE_FAILED_TITLE_KEY = "error.config.save.failed"
 
-    fun empty(): DetailViewState = DetailViewState.Empty
-
-    fun loading(): DetailViewState = DetailViewState.Loading
-
-    fun stale(): DetailViewState = DetailViewState.Stale
-
     fun body(
         configuration: NacosConfiguration,
         confidence: CacheConfidence? = null,

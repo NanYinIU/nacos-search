@@ -224,7 +224,7 @@ class HistoryBrowserDialog(
     }
 
     private fun loadHistoryVsCurrent(entry: HistoryEntry, epoch: Long) {
-        HistoryDiffPresenter.showLoading(diffPanel, NacosSearchBundle.message("history.diff.loading"))
+        HistoryDiffPresenter.showEmpty(diffPanel, NacosSearchBundle.message("history.diff.loading"))
         scope.launch {
             val detail = controller.loadDetail(target, coordinate, entry.id, sessionEpoch).getOrElse { error ->
                 onDialogUi(diffPresentation) {
@@ -251,7 +251,7 @@ class HistoryBrowserDialog(
     }
 
     private fun loadHistoryVsHistory(left: HistoryEntry, right: HistoryEntry, epoch: Long) {
-        HistoryDiffPresenter.showLoading(diffPanel, NacosSearchBundle.message("history.diff.loading"))
+        HistoryDiffPresenter.showEmpty(diffPanel, NacosSearchBundle.message("history.diff.loading"))
         scope.launch {
             val leftDetail = controller.loadDetail(target, coordinate, left.id, sessionEpoch).getOrElse {
                 onDialogUi(diffPresentation) {

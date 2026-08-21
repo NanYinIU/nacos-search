@@ -524,7 +524,7 @@ class ProfileDeletionLifecycleTest {
     }
 
     @Test
-    fun `markSelectedProfileUnavailable blocks healSelection auto-retarget`() {
+    fun `markSelectedProfileUnavailable blocks ensureInitialized auto-retarget`() {
         val live = profileIntentFixture(
             id = "live",
             displayName = "Live",
@@ -539,7 +539,7 @@ class ProfileDeletionLifecycleTest {
         // Non-explicit session pointing at a now-deleted profile: an initialized
         // (or non-blank) selection must not retarget to "live" (issue #107 /
         // ADR-0025). markSelectedProfileUnavailable is the production seam after
-        // deletion; healSelection alone must also leave the stale id.
+        // deletion; ensureInitialized alone must also leave the stale id.
         val session = NacosProjectSessionState().apply {
             selectedProfileId = "deleted"
             namespaceId = "public"
@@ -555,7 +555,7 @@ class ProfileDeletionLifecycleTest {
         projectSession.sessionState.selectionWasExplicit = false
         assertTrue(projectSession.markSelectedProfileUnavailable("deleted"))
         assertTrue(projectSession.sessionState.selectionWasExplicit)
-        projectSession.healSelection(settings)
+        projectSession.ensureInitialized(settings)
         assertEquals("deleted", projectSession.sessionState.selectedProfileId)
     }
 

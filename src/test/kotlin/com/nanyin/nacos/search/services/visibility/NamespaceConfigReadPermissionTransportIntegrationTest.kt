@@ -116,7 +116,7 @@ class NamespaceConfigReadPermissionTransportIntegrationTest {
         )
         assertTrue(
             cache.accessVisibility().isConfigurationReadBlocked(context.identity, blockedNs),
-            "gateway report must block namespace; blocks=${cache.accessVisibility().namespaceConfigReadBlocks().keys}"
+            "gateway report must block namespace"
         )
         assertFalse(cache.accessVisibility().isIdentityAuthBlocked(context.identity))
         assertFalse(cache.accessVisibility().isConfigurationReadBlocked(context.identity, openNs))
@@ -185,10 +185,6 @@ class NamespaceConfigReadPermissionTransportIntegrationTest {
         assertTrue(cache.accessVisibility().isConfigurationReadBlocked(context.identity, namespace))
         assertNull(
             cache.getConfigDetail(context.identity, namespace, "secret.properties", "DEFAULT_GROUP")
-        )
-        // Payload retained under the store.
-        assertNotNull(
-            cache.accessVisibility().namespaceConfigReadBlock(context.identity, namespace)
         )
     }
 

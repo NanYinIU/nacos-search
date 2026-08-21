@@ -36,12 +36,6 @@ class DetailPresentationTest {
     }
 
     @Test
-    fun `empty and loading are distinct closed members`() {
-        assertEquals(DetailViewState.Empty, DetailPresentation.empty())
-        assertEquals(DetailViewState.Loading, DetailPresentation.loading())
-    }
-
-    @Test
     fun `body carries cache age dimensions without resolving wording`() {
         val confidence = DetailPresentation.confidenceFromCache(
             CacheService.DetailFreshness.DEEP_STALE,
@@ -179,11 +173,6 @@ class DetailPresentationTest {
             DetailViewState.Failed::class.java,
             DetailPresentation.fromPublishState(PublishState.Dirty)
         )
-    }
-
-    @Test
-    fun `stale is a closed member`() {
-        assertEquals(DetailViewState.Stale, DetailPresentation.stale())
     }
 
     @Test

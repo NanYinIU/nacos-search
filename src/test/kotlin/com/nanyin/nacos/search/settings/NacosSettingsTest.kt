@@ -416,7 +416,7 @@ class NacosSettingsTest {
     }
 
     @Test
-    fun `project session healSelection seeds blank sessions once but never retargets explicit deleted ones`() {
+    fun `project session ensureInitialized seeds blank sessions once but never retargets explicit deleted ones`() {
         settings.applyProfileIntents(
             listOf(
                 profileIntentFixture(
