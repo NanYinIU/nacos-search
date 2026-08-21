@@ -81,7 +81,7 @@ class SettingsApplyConnectionChangeTest {
         }
         assertEquals(listOf("settingsChanged"), events)
         // Access revision must advance; credential itself never enters a signature.
-        assertTrue(settings.getActiveProfile()!!.accessRevision > 1)
+        assertTrue(settings.getMigrationDefaultProfile()!!.accessRevision > 1)
     }
 
     @Test
@@ -98,14 +98,14 @@ class SettingsApplyConnectionChangeTest {
 
     @Test
     fun `display-name-only change publishes preferences-only`() {
-        val before = settings.getActiveProfile()!!.accessRevision
+        val before = settings.getMigrationDefaultProfile()!!.accessRevision
         val events = recordNotifications {
             val configurable = openConfigurable()
             privateField<JTextField>(configurable, "displayNameField").text = "Dev (renamed)"
             configurable.apply()
         }
         assertEquals(listOf("preferencesChanged"), events)
-        assertEquals(before, settings.getActiveProfile()!!.accessRevision)
+        assertEquals(before, settings.getMigrationDefaultProfile()!!.accessRevision)
     }
 
     @Test
@@ -113,7 +113,7 @@ class SettingsApplyConnectionChangeTest {
         // Namespace is not part of the access revision, but it selects which
         // dataset the tool window shows: preferences-only would leave the list
         // on the previous namespace's configurations.
-        val before = settings.getActiveProfile()!!.accessRevision
+        val before = settings.getMigrationDefaultProfile()!!.accessRevision
         val events = recordNotifications {
             val configurable = openConfigurable()
             privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo").setNamespaceId("dev-ns")
@@ -122,7 +122,7 @@ class SettingsApplyConnectionChangeTest {
         assertEquals(listOf("settingsChanged"), events)
         assertEquals("dev-ns", settings.preferencesFor("dev").suggestedNamespace)
         // The credential/endpoint identity did not change, so the revision holds.
-        assertEquals(before, settings.getActiveProfile()!!.accessRevision)
+        assertEquals(before, settings.getMigrationDefaultProfile()!!.accessRevision)
     }
 
     @Test
@@ -130,10 +130,10 @@ class SettingsApplyConnectionChangeTest {
         val events = recordNotifications {
             val configurable = openConfigurable()
             val rows = configurable.draftIntents()
-            val list = privateField<javax.swing.JList<ProfileIntent>>(configurable, "serverList")
+            val list = privateField<javax.swing.JList<ProfileIntent>>(configurable, "profileList")
             UIUtil.invokeAndWaitIfNeeded(Runnable {
                 list.selectedIndex = rows.indexOfFirst { it.profileId == "prod" }
-                privateField<javax.swing.JButton>(configurable, "setActiveServerButton").doClick()
+                privateField<javax.swing.JButton>(configurable, "setActiveProfileButton").doClick()
             })
             assertEquals("prod", configurable.draftActiveProfileId())
             configurable.apply()

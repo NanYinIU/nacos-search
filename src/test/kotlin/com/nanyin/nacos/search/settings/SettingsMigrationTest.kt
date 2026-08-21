@@ -209,7 +209,7 @@ class SettingsMigrationTest {
             state.resolveDefaultProfileId()
             state.migrationDefaults()
             state.preferencesFor("s1")
-            state.getActiveProfile()
+            state.getMigrationDefaultProfile()
         }
 
         assertEquals(beforeProfiles, state.profiles.map { snapshot(it) })

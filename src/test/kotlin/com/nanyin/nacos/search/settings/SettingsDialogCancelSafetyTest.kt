@@ -74,13 +74,13 @@ class SettingsDialogCancelSafetyTest {
 
     @Test
     fun `opening settings does not change active selection or published profiles`() {
-        val accessBefore = settings.getActiveProfile()!!.accessRevision
+        val accessBefore = settings.getMigrationDefaultProfile()!!.accessRevision
         val profilesBefore = settings.publishedProfiles().map { it.id to it.accessRevision }
 
         val configurable = openConfigurable()
 
         assertEquals("", settings.activeServerId)
-        assertEquals(accessBefore, settings.getActiveProfile()!!.accessRevision)
+        assertEquals(accessBefore, settings.getMigrationDefaultProfile()!!.accessRevision)
         assertEquals(profilesBefore, settings.publishedProfiles().map { it.id to it.accessRevision })
         assertFalse(configurable.isModified())
         assertTrue(configurable.dirtyDraftProfileIds().isEmpty())
@@ -89,7 +89,7 @@ class SettingsDialogCancelSafetyTest {
 
     @Test
     fun `edit then reset restores persisted draft without writing`() {
-        val accessBefore = settings.getActiveProfile()!!.accessRevision
+        val accessBefore = settings.getMigrationDefaultProfile()!!.accessRevision
         val configurable = openConfigurable()
 
         // Edit through the public form surface.
@@ -105,7 +105,7 @@ class SettingsDialogCancelSafetyTest {
         assertTrue(configurable.dirtyDraftProfileIds().isEmpty())
         assertEquals("Dev", configurable.draftIntents().single().displayName)
         assertEquals("secret-1", configurable.draftIntents().single().secret)
-        assertEquals(accessBefore, settings.getActiveProfile()!!.accessRevision)
+        assertEquals(accessBefore, settings.getMigrationDefaultProfile()!!.accessRevision)
         assertTrue(settings.servers.isEmpty())
     }
 
@@ -126,7 +126,7 @@ class SettingsDialogCancelSafetyTest {
             intent.endpoint
         )
         // Still the published profile on disk / settings service.
-        assertEquals("https://nacos.example", settings.getActiveProfile()!!.canonicalEndpoint)
+        assertEquals("https://nacos.example", settings.getMigrationDefaultProfile()!!.canonicalEndpoint)
 
         configurable.reset()
         assertFalse(configurable.isModified())
@@ -138,11 +138,11 @@ class SettingsDialogCancelSafetyTest {
         val configurable = openConfigurable()
         privateField<JPasswordField>(configurable, "passwordField").text = "rotated-secret"
         assertTrue(configurable.isModified())
-        assertEquals(1L, settings.getActiveProfile()!!.accessRevision)
+        assertEquals(1L, settings.getMigrationDefaultProfile()!!.accessRevision)
 
         configurable.apply()
 
-        assertTrue(settings.getActiveProfile()!!.accessRevision > 1)
+        assertTrue(settings.getMigrationDefaultProfile()!!.accessRevision > 1)
         // Draft reloads clean after a successful apply path that does not fail stage.
         // Re-open classification from a fresh draft.
         val after = openConfigurable()

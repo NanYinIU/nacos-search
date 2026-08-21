@@ -447,6 +447,49 @@ class LegacySettingsContractTest {
         assertEquals(writesBeforeSecond, slots.writes.size)
     }
 
+    @Test
+    fun `published environment projection ignores leftover legacy server rows`() {
+        val profileId = "projection-live"
+        val settings = publishedSettings(
+            profiles = listOf(
+                EnvironmentProfile(
+                    id = profileId,
+                    displayName = "Published QA",
+                    canonicalEndpoint = "https://qa.example",
+                    credentialSlotVersion = 17
+                )
+            ),
+            preferences = listOf(
+                EnvironmentPreferences(profileId = profileId, suggestedNamespace = "  team-qa  ")
+            ),
+            defaultProfileId = profileId
+        ).apply {
+            servers = mutableListOf(
+                NacosServerConfig(
+                    id = profileId,
+                    displayName = "Legacy row",
+                    serverUrl = "http://legacy.invalid",
+                    password = "must-not-be-read",
+                    namespace = "legacy-namespace"
+                )
+            )
+            activeServerId = "legacy-active"
+        }
+
+        assertEquals(
+            listOf(
+                PublishedEnvironment(
+                    profileId = profileId,
+                    displayName = "Published QA",
+                    canonicalEndpoint = "https://qa.example",
+                    suggestedNamespace = "team-qa"
+                )
+            ),
+            settings.publishedEnvironments()
+        )
+        assertEquals(profileId, settings.defaultPublishedEnvironment()?.profileId)
+    }
+
     private fun publishedSettings(
         profiles: List<EnvironmentProfile>,
         preferences: List<EnvironmentPreferences>,

@@ -23,8 +23,8 @@ class NacosSettingsTest {
         assertEquals("", settings.activeServerId)
         assertEquals("", settings.serverUrl)
         assertEquals("s_local", settings.resolveDefaultProfileId())
-        assertEquals("http://localhost:8848", settings.getActiveProfile()?.canonicalEndpoint)
-        assertEquals(AuthMode.NACOS_PASSWORD, settings.getActiveProfile()?.authMode)
+        assertEquals("http://localhost:8848", settings.getMigrationDefaultProfile()?.canonicalEndpoint)
+        assertEquals(AuthMode.NACOS_PASSWORD, settings.getMigrationDefaultProfile()?.authMode)
         assertTrue(settings.cacheEnabled)
         assertEquals(5, settings.cacheTtlMinutes)
         assertEquals("en", settings.language)
@@ -130,7 +130,7 @@ class NacosSettingsTest {
 
         assertTrue(loaded.validate().isEmpty())
         assertTrue(loaded.isValid())
-        assertEquals("http://localhost:8848", loaded.getActiveProfile()?.canonicalEndpoint)
+        assertEquals("http://localhost:8848", loaded.getMigrationDefaultProfile()?.canonicalEndpoint)
     }
 
     @Test
@@ -160,7 +160,7 @@ class NacosSettingsTest {
 
         settings.resetToDefaults()
 
-        assertEquals("http://localhost:8848", settings.getActiveProfile()?.canonicalEndpoint)
+        assertEquals("http://localhost:8848", settings.getMigrationDefaultProfile()?.canonicalEndpoint)
         assertTrue(settings.servers.isEmpty())
         assertTrue(settings.cacheEnabled)
     }
@@ -191,7 +191,7 @@ class NacosSettingsTest {
         newSettings.loadState(state)
 
         assertEquals("", newSettings.serverUrl)
-        assertEquals("http://persist:8848", newSettings.getActiveProfile()?.canonicalEndpoint)
+        assertEquals("http://persist:8848", newSettings.getMigrationDefaultProfile()?.canonicalEndpoint)
     }
 
     @Test
@@ -248,7 +248,7 @@ class NacosSettingsTest {
 
         val loaded = NacosSettings()
         loaded.loadState(restored)
-        assertEquals(AuthMode.ANONYMOUS, loaded.getActiveProfile()!!.authMode)
+        assertEquals(AuthMode.ANONYMOUS, loaded.getMigrationDefaultProfile()!!.authMode)
     }
 
     private fun stripAuthModeOptions(element: org.jdom.Element) {
@@ -275,7 +275,7 @@ class NacosSettingsTest {
             ),
             "s_prod"
         )
-        val profile = settings.getActiveProfile()
+        val profile = settings.getMigrationDefaultProfile()
         assertNotNull(profile)
         assertEquals("s_prod", profile!!.id)
         assertEquals("s_prod:v1", profile.credentialSlotId)
@@ -286,7 +286,7 @@ class NacosSettingsTest {
         val loaded = NacosSettings()
         loaded.loadState(restored)
 
-        val restoredProfile = loaded.getActiveProfile()
+        val restoredProfile = loaded.getMigrationDefaultProfile()
         assertNotNull(restoredProfile)
         assertEquals("s_prod", restoredProfile!!.id)
         assertEquals("Prod", restoredProfile.displayName)
@@ -325,7 +325,7 @@ class NacosSettingsTest {
         val loaded = NacosSettings()
         loaded.loadState(state)
 
-        val profile = loaded.getActiveProfile()
+        val profile = loaded.getMigrationDefaultProfile()
         assertNotNull(profile)
         assertEquals("s_ok", profile!!.id)
         assertEquals("OK", profile.displayName)

@@ -40,7 +40,7 @@ class NacosConfigurableInteractionTest {
     fun serverToolbarButtonsUpdateDraftSelectionAndModifiedState() {
         val configurable = NacosConfigurable()
         val component = configurable.createComponent()
-        val serverList = privateField<JList<*>>(configurable, "serverList")
+        val serverList = privateField<JList<*>>(configurable, "profileList")
         val addButton = findButtonByAutomationId(component, "nacos.settings.server.add")
         val duplicateButton = findButtonByAutomationId(component, "nacos.settings.server.duplicate")
         val deleteButton = findButtonByAutomationId(component, "nacos.settings.server.delete")
@@ -74,7 +74,7 @@ class NacosConfigurableInteractionTest {
     fun toolbarDeleteAndSetActiveButtonsAreDisabledPerDesignPrototype() {
         val configurable = NacosConfigurable()
         val component = configurable.createComponent()
-        val serverList = privateField<JList<*>>(configurable, "serverList")
+        val serverList = privateField<JList<*>>(configurable, "profileList")
         val deleteButton = findButtonByAutomationId(component, "nacos.settings.server.delete")!!
         val setActiveButton = findButtonByAutomationId(component, "nacos.settings.server.setActive")!!
 
@@ -722,7 +722,7 @@ class NacosConfigurableInteractionTest {
     }
 
     private fun selectedDraft(configurable: NacosConfigurable): ProfileIntent {
-        val list = privateField<JList<*>>(configurable, "serverList")
+        val list = privateField<JList<*>>(configurable, "profileList")
         val selected = list.selectedValue as ProfileIntent
         return configurable.draftIntents().first { it.profileId == selected.profileId }
     }
@@ -761,8 +761,8 @@ class NacosConfigurableInteractionTest {
         return field.get(target) as T
     }
 
-    private fun assertActiveServerMatchesSelection(configurable: NacosConfigurable, serverList: JList<*>) {
-        val selected = serverList.selectedValue as ProfileIntent
+    private fun assertActiveServerMatchesSelection(configurable: NacosConfigurable, profileList: JList<*>) {
+        val selected = profileList.selectedValue as ProfileIntent
         assertEquals(selected.profileId, configurable.draftActiveProfileId())
     }
 

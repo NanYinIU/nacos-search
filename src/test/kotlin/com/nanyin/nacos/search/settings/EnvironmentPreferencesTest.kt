@@ -214,8 +214,8 @@ class EnvironmentPreferencesNotificationTest {
 
     @Test
     fun `navigation prefetch toggle publishes preferences-only and keeps revisions`() {
-        val beforeProfile = settings.getActiveProfile()!!.profileRevision
-        val beforeAccess = settings.getActiveProfile()!!.accessRevision
+        val beforeProfile = settings.getMigrationDefaultProfile()!!.profileRevision
+        val beforeAccess = settings.getMigrationDefaultProfile()!!.accessRevision
         val events = recordNotifications {
             val configurable = NacosConfigurable()
             configurable.createComponent()
@@ -223,16 +223,16 @@ class EnvironmentPreferencesNotificationTest {
             configurable.apply()
         }
         assertEquals(listOf("preferencesChanged"), events)
-        assertEquals(beforeProfile, settings.getActiveProfile()!!.profileRevision)
-        assertEquals(beforeAccess, settings.getActiveProfile()!!.accessRevision)
+        assertEquals(beforeProfile, settings.getMigrationDefaultProfile()!!.profileRevision)
+        assertEquals(beforeAccess, settings.getMigrationDefaultProfile()!!.accessRevision)
         assertFalse(settings.navigationDetailPrefetchEnabled("dev"))
         assertFalse(settings.preferencesFor("dev").navigationDetailPrefetchEnabled)
     }
 
     @Test
     fun `cross-namespace toggle publishes preferences-only and keeps revisions`() {
-        val beforeProfile = settings.getActiveProfile()!!.profileRevision
-        val beforeAccess = settings.getActiveProfile()!!.accessRevision
+        val beforeProfile = settings.getMigrationDefaultProfile()!!.profileRevision
+        val beforeAccess = settings.getMigrationDefaultProfile()!!.accessRevision
         val events = recordNotifications {
             val configurable = NacosConfigurable()
             configurable.createComponent()
@@ -240,8 +240,8 @@ class EnvironmentPreferencesNotificationTest {
             configurable.apply()
         }
         assertEquals(listOf("preferencesChanged"), events)
-        assertEquals(beforeProfile, settings.getActiveProfile()!!.profileRevision)
-        assertEquals(beforeAccess, settings.getActiveProfile()!!.accessRevision)
+        assertEquals(beforeProfile, settings.getMigrationDefaultProfile()!!.profileRevision)
+        assertEquals(beforeAccess, settings.getMigrationDefaultProfile()!!.accessRevision)
         assertTrue(settings.allowCrossNamespaceNavigation("dev"))
         assertTrue(settings.preferencesFor("dev").allowCrossNamespaceNavigation)
     }

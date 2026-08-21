@@ -191,7 +191,7 @@ class AccessSafetyTest {
             newActiveId = "dev",
             credentialSlots = slots
         )
-        val profile = requireNotNull(settings.getActiveProfile())
+        val profile = requireNotNull(settings.getMigrationDefaultProfile())
         // Even a stale deserialization input carrying the secret cannot become
         // a fallback for the revision-pinned slot (ADR-0035 / #233).
         settings.servers = mutableListOf(

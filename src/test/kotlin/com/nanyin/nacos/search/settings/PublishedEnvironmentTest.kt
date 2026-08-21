@@ -3,7 +3,6 @@ package com.nanyin.nacos.search.settings
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.EnvironmentProfile
-import com.nanyin.nacos.search.models.NacosServerConfig
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Test
@@ -29,15 +28,6 @@ class PublishedEnvironmentTest {
                 EnvironmentPreferences(
                     profileId = profileId,
                     suggestedNamespace = "  team-qa  "
-                )
-            )
-            servers = mutableListOf(
-                NacosServerConfig(
-                    id = profileId,
-                    displayName = "Legacy row",
-                    serverUrl = "http://legacy.invalid",
-                    password = "must-not-be-read",
-                    namespace = "legacy-namespace"
                 )
             )
         }
@@ -93,7 +83,6 @@ class PublishedEnvironmentTest {
             )
             migratedDefaultProfileId = "prod"
             migratedDefaultNamespaceId = "legacy-global"
-            activeServerId = "dev"
         }
 
         assertEquals(

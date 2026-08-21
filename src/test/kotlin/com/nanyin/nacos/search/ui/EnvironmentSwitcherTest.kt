@@ -6,7 +6,6 @@ import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.EnvironmentProfile
-import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.services.operations.EditEnvironment
 import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.services.operations.OperationGateway
@@ -44,15 +43,6 @@ class EnvironmentSwitcherTest {
                 EnvironmentPreferences(profileId = profileId, suggestedNamespace = "prod-team")
             )
             migratedDefaultProfileId = profileId
-            activeServerId = "legacy-active"
-            servers = mutableListOf(
-                NacosServerConfig(
-                    id = "legacy-active",
-                    displayName = "Legacy Active",
-                    serverUrl = "http://legacy.invalid",
-                    password = "must-not-be-read"
-                )
-            )
         }
         val switcher = EnvironmentSwitcher(project(), settings)
 

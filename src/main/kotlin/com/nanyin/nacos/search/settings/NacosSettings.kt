@@ -323,12 +323,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore,
         isEntombed: (String) -> Boolean = { isProfileEntombed(it) }
     ): ProfileIntentClassification {
-        val previousNamespaces = environmentPreferences
-            .filter { it.profileId.isNotBlank() }
-            .associate { it.profileId to it.suggestedNamespace.trim().ifBlank { "public" } }
-            .ifEmpty {
-                profiles.associate { it.id to migratedDefaultNamespaceId.ifBlank { "public" } }
-            }
+        val previousNamespaces = previousSuggestedNamespaces()
         return EnvironmentProfileStore(
             credentialSlots = credentialSlots,
             isEntombed = isEntombed
@@ -384,6 +379,14 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         return EnvironmentPreferences.defaultsFor(id)
     }
 
+    private fun previousSuggestedNamespaces(): Map<String, String> =
+        environmentPreferences
+            .filter { it.profileId.isNotBlank() }
+            .associate { it.profileId to it.suggestedNamespace.trim().ifBlank { "public" } }
+            .ifEmpty {
+                profiles.associate { it.id to migratedDefaultNamespaceId.ifBlank { "public" } }
+            }
+
     /**
      * All persisted preference records as immutable snapshots, keyed by profile id.
      */
@@ -406,12 +409,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         credentialSlots: CredentialSlotStore = DefaultCredentialSlotStore,
         deletionLifecycle: ProfileDeletionLifecycle = defaultDeletionLifecycle(credentialSlots)
     ): ProfileStoreWriteOutcome {
-        val previousNamespaces = environmentPreferences
-            .filter { it.profileId.isNotBlank() }
-            .associate { it.profileId to it.suggestedNamespace.trim().ifBlank { "public" } }
-            .ifEmpty {
-                profiles.associate { it.id to "public" }
-            }
+        val previousNamespaces = previousSuggestedNamespaces()
         val previousPreferences = environmentPreferences.map { it.copyPreferences() }
         // Defensive copies so the store never mutates live beans while deciding.
         val previousProfiles = profiles.map { it.copy(cacheTombstones = it.cacheTombstones.toMutableList()) }
@@ -710,8 +708,11 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
         return live.copy(cacheTombstones = live.cacheTombstones.toMutableList())
     }
 
-    /** Immutable snapshot of the active environment profile, if any. */
-    fun getActiveProfile(): EnvironmentProfile? = getProfile(resolveDefaultProfileId())
+    /**
+     * Immutable snapshot of the migration-owned default environment profile.
+     * This is the seed for a new 项目会话, not any project's current selection.
+     */
+    fun getMigrationDefaultProfile(): EnvironmentProfile? = getProfile(resolveDefaultProfileId())
 
     /** Immutable snapshots of every published environment profile, in store order. */
     fun publishedProfiles(): List<EnvironmentProfile> =

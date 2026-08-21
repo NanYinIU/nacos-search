@@ -37,10 +37,10 @@ import javax.swing.event.DocumentListener
 import javax.swing.event.ListSelectionListener
 import com.intellij.openapi.application.ModalityState
 /**
- * Master-detail settings configurable for multi-server management.
+ * Master-detail settings configurable for environment-profile management.
  *
  * Left panel: environment list (add / duplicate / delete / set active).
- * Right panel: detail form for the selected server (URL, credentials,
+ * Right panel: detail form for the selected 档案意图 (URL, credentials,
  * namespace, auth mode, advanced params).
  *
  * Intent-only draft model (ADR-0049 / issue #231): the dialog edits
@@ -66,11 +66,11 @@ class NacosConfigurable @JvmOverloads constructor(
     private lateinit var intentDraft: SettingsIntentDraft
 
     // ---- Left panel (master) ----
-    private lateinit var serverList: JBList<ProfileIntent>
-    private lateinit var serverListModel: DefaultListModel<ProfileIntent>
+    private lateinit var profileList: JBList<ProfileIntent>
+    private lateinit var profileListModel: DefaultListModel<ProfileIntent>
     private lateinit var footerLabel: JLabel
-    private lateinit var deleteServerButton: JButton
-    private lateinit var setActiveServerButton: JButton
+    private lateinit var deleteProfileButton: JButton
+    private lateinit var setActiveProfileButton: JButton
 
     // ---- Right panel (detail) form fields ----
     private lateinit var detailTitleLabel: JLabel
@@ -113,8 +113,8 @@ class NacosConfigurable @JvmOverloads constructor(
     // Language
     private lateinit var languageComboBox: JComboBox<LanguageService.SupportedLanguage>
 
-    // Selected server id currently displayed in the detail form
-    private var selectedServerId: String? = null
+    // Selected profile id currently displayed in the detail form
+    private var selectedProfileId: String? = null
     private var loadingForm = false
     /** Strategy currently reflected by the form (for switch-effect deltas). */
     private var displayedAuthMode: AuthMode = AuthMode.NACOS_PASSWORD
@@ -122,7 +122,7 @@ class NacosConfigurable @JvmOverloads constructor(
     private var mainPanel: JComponent? = null
     private val docListener = SimpleDocumentListener { commitDetailFormToDraft() }
     private val listSelectionListener = ListSelectionListener { e ->
-        if (!e.valueIsAdjusting) onServerSelected()
+        if (!e.valueIsAdjusting) onProfileSelected()
     }
 
     override fun getDisplayName(): String = NacosSearchBundle.message("settings.title")
@@ -131,11 +131,11 @@ class NacosConfigurable @JvmOverloads constructor(
         initializeDraft()
         buildComponents()
         mainPanel = buildPanel()
-        selectActiveServerInList()
+        selectActiveProfileInList()
         loadDraftIntoForm()
         // Initialize toolbar button enabled states (Delete / Set Active) to match
         // the design prototype's disabled rules from the first render.
-        refreshServerListDecorations()
+        refreshProfileListDecorations()
         updateApplyEnabledState()
         return mainPanel!!
     }
@@ -156,7 +156,7 @@ class NacosConfigurable @JvmOverloads constructor(
         if (rows.isEmpty()) {
             val default = settings.defaultProfileIntent("default", "Local")
             intentDraft = SettingsIntentDraft.of(listOf(default), default.profileId)
-            selectedServerId = intentDraft.activeProfileId
+            selectedProfileId = intentDraft.activeProfileId
             return
         }
         // Blue-dot = environment for the current project. Capture it only in
@@ -167,7 +167,7 @@ class NacosConfigurable @JvmOverloads constructor(
             migrationDefaultProfileId = settings.resolveDefaultProfileId()
         )
         intentDraft = SettingsIntentDraft.of(rows, preferred, preferred)
-        selectedServerId = intentDraft.activeProfileId
+        selectedProfileId = intentDraft.activeProfileId
     }
 
     /**
@@ -351,7 +351,7 @@ class NacosConfigurable @JvmOverloads constructor(
     }
 
     private fun selectedDraft(): ProfileIntent? =
-        intentDraft.snapshot().find { it.profileId == selectedServerId }
+        intentDraft.snapshot().find { it.profileId == selectedProfileId }
 
     /** Row dirty dots from the store-owned intent classification. */
     private fun computeDirtyIds(): Set<String> = dirtyDraftProfileIds()
@@ -419,13 +419,13 @@ class NacosConfigurable @JvmOverloads constructor(
         val updated = selectedDraft() ?: return
         synchronizeSettingsDiscoveryIntent(updated)
         // Refresh the list display so name/host changes show immediately
-        val idx = (0 until serverListModel.size())
-            .firstOrNull { serverListModel.getElementAt(it).profileId == updated.profileId }
+        val idx = (0 until profileListModel.size())
+            .firstOrNull { profileListModel.getElementAt(it).profileId == updated.profileId }
             ?: -1
         if (idx >= 0) {
-            serverListModel.setElementAt(updated, idx)
+            profileListModel.setElementAt(updated, idx)
         }
-        refreshServerListDecorations()
+        refreshProfileListDecorations()
         updateDetailHeader(updated)
         updateApplyEnabledState()
     }
@@ -513,19 +513,19 @@ class NacosConfigurable @JvmOverloads constructor(
         footerLabel.text = NacosSearchBundle.message("settings.servers.stats", rows.size, activeName)
     }
 
-   private fun refreshServerListDecorations() {
-       if (!::serverList.isInitialized) return
-       serverList.cellRenderer = ServerListRenderer(intentDraft.activeProfileId, computeDirtyIds())
+   private fun refreshProfileListDecorations() {
+       if (!::profileList.isInitialized) return
+       profileList.cellRenderer = ProfileListRenderer(intentDraft.activeProfileId, computeDirtyIds())
        updateFooter()
-       serverList.repaint()
+       profileList.repaint()
         // Toolbar button enabled states (match design prototype):
         //  - Delete disabled when only one server remains
         //  - Set Active disabled when the selected server is already active
-        if (::deleteServerButton.isInitialized) {
-            deleteServerButton.isEnabled = intentDraft.snapshot().size > 1
+        if (::deleteProfileButton.isInitialized) {
+            deleteProfileButton.isEnabled = intentDraft.snapshot().size > 1
         }
-        if (::setActiveServerButton.isInitialized) {
-            setActiveServerButton.isEnabled = selectedServerId != intentDraft.activeProfileId
+        if (::setActiveProfileButton.isInitialized) {
+            setActiveProfileButton.isEnabled = selectedProfileId != intentDraft.activeProfileId
         }
    }
 
@@ -537,12 +537,12 @@ class NacosConfigurable @JvmOverloads constructor(
         activeBadgeLabel.isVisible = intent.profileId == intentDraft.activeProfileId
     }
 
-    private fun selectActiveServerInList() {
+    private fun selectActiveProfileInList() {
         val rows = intentDraft.snapshot()
         val activeIdx = rows.indexOfFirst { it.profileId == intentDraft.activeProfileId }
         when {
-            activeIdx >= 0 -> serverList.selectedIndex = activeIdx
-            rows.isNotEmpty() -> serverList.selectedIndex = 0
+            activeIdx >= 0 -> profileList.selectedIndex = activeIdx
+            rows.isNotEmpty() -> profileList.selectedIndex = 0
         }
     }
 
@@ -552,11 +552,11 @@ class NacosConfigurable @JvmOverloads constructor(
 
     private fun buildComponents() {
         // --- Left panel list ---
-        serverListModel = DefaultListModel()
-        intentDraft.snapshot().forEach { serverListModel.addElement(it) }
-        serverList = JBList(serverListModel).apply {
+        profileListModel = DefaultListModel()
+        intentDraft.snapshot().forEach { profileListModel.addElement(it) }
+        profileList = JBList(profileListModel).apply {
             selectionMode = ListSelectionModel.SINGLE_SELECTION
-            cellRenderer = ServerListRenderer(intentDraft.activeProfileId, computeDirtyIds())
+            cellRenderer = ProfileListRenderer(intentDraft.activeProfileId, computeDirtyIds())
             fixedCellHeight = 46
             addListSelectionListener(listSelectionListener)
         }
@@ -720,7 +720,7 @@ class NacosConfigurable @JvmOverloads constructor(
         panel.add(headerPanel, BorderLayout.NORTH)
 
         // List
-        panel.add(JBScrollPane(serverList).apply {
+        panel.add(JBScrollPane(profileList).apply {
             border = JBUI.Borders.empty()
             verticalScrollBar.unitIncrement = 8
         }, BorderLayout.CENTER)
@@ -741,7 +741,7 @@ class NacosConfigurable @JvmOverloads constructor(
         panel.add(footerPanel, BorderLayout.SOUTH)
 
         // Periodically refresh footer + list renderer on draft changes
-        serverListModel.addListDataListener(object : javax.swing.event.ListDataListener {
+        profileListModel.addListDataListener(object : javax.swing.event.ListDataListener {
             override fun intervalAdded(e: javax.swing.event.ListDataEvent) { updateFooter() }
             override fun intervalRemoved(e: javax.swing.event.ListDataEvent) { updateFooter() }
             override fun contentsChanged(e: javax.swing.event.ListDataEvent) { updateFooter() }
@@ -763,12 +763,12 @@ class NacosConfigurable @JvmOverloads constructor(
         buttonBar.border = JBUI.Borders.emptyTop(6)
 
         // Use IntelliJ monoline icons per design guide (no emoji/text symbols)
-        val addButton = iconButton(AllIcons.General.Add, NacosSearchBundle.message("settings.servers.add"), "nacos.settings.server.add") { addServer() }
-        val duplicateButton = iconButton(AllIcons.Actions.Copy, NacosSearchBundle.message("settings.servers.duplicate"), "nacos.settings.server.duplicate") { duplicateServer() }
-       val deleteButton = iconButton(AllIcons.General.Remove, NacosSearchBundle.message("settings.servers.delete"), "nacos.settings.server.delete") { deleteServer() }
+        val addButton = iconButton(AllIcons.General.Add, NacosSearchBundle.message("settings.servers.add"), "nacos.settings.server.add") { addProfile() }
+        val duplicateButton = iconButton(AllIcons.Actions.Copy, NacosSearchBundle.message("settings.servers.duplicate"), "nacos.settings.server.duplicate") { duplicateProfile() }
+       val deleteButton = iconButton(AllIcons.General.Remove, NacosSearchBundle.message("settings.servers.delete"), "nacos.settings.server.delete") { deleteProfile() }
        val setActiveButton = iconButton(AllIcons.Actions.Checked, NacosSearchBundle.message("settings.servers.set.active"), "nacos.settings.server.setActive") { markDraftActive() }
-        deleteServerButton = deleteButton
-        setActiveServerButton = setActiveButton
+        deleteProfileButton = deleteButton
+        setActiveProfileButton = setActiveButton
 
        buttonBar.add(addButton)
         buttonBar.add(duplicateButton)
@@ -1011,26 +1011,26 @@ class NacosConfigurable @JvmOverloads constructor(
     // List actions
     // ------------------------------------------------------------------
 
-    private fun addServer() {
+    private fun addProfile() {
         val newIntent = settings.defaultProfileIntent(generateProfileId())
         intentDraft = intentDraft.add(newIntent)
-        serverListModel.addElement(newIntent)
-        serverList.selectedIndex = serverListModel.size() - 1
-        refreshServerListDecorations()
+        profileListModel.addElement(newIntent)
+        profileList.selectedIndex = profileListModel.size() - 1
+        refreshProfileListDecorations()
         displayNameField.requestFocusInWindow()
     }
 
-    private fun duplicateServer() {
+    private fun duplicateProfile() {
         val current = selectedDraft() ?: return
         val newProfileId = generateProfileId()
         intentDraft = intentDraft.duplicate(current.profileId, newProfileId)
         val copy = intentDraft.snapshot().first { it.profileId == newProfileId }
-        serverListModel.addElement(copy)
-        serverList.selectedIndex = serverListModel.size() - 1
-        refreshServerListDecorations()
+        profileListModel.addElement(copy)
+        profileList.selectedIndex = profileListModel.size() - 1
+        refreshProfileListDecorations()
     }
 
-    private fun deleteServer() {
+    private fun deleteProfile() {
         val current = selectedDraft() ?: return
         val rows = intentDraft.snapshot()
         if (rows.size <= 1) {
@@ -1052,26 +1052,26 @@ class NacosConfigurable @JvmOverloads constructor(
         // Settings (P0 has no draft shelf).
         val idx = rows.indexOfFirst { it.profileId == current.profileId }
         intentDraft = intentDraft.remove(current.profileId)
-        serverListModel.removeElementAt(idx)
+        profileListModel.removeElementAt(idx)
         val newIdx = minOf(idx, intentDraft.snapshot().size - 1).coerceAtLeast(0)
-        serverList.selectedIndex = newIdx
-        refreshServerListDecorations()
+        profileList.selectedIndex = newIdx
+        refreshProfileListDecorations()
         updateApplyEnabledState()
     }
 
     private fun markDraftActive() {
         val current = selectedDraft() ?: return
         intentDraft = intentDraft.selectActive(current.profileId)
-        refreshServerListDecorations()
+        refreshProfileListDecorations()
         updateDetailHeader(current)
         updateApplyEnabledState()
     }
 
-    private fun onServerSelected() {
-        val intent = serverList.selectedValue ?: return
-        selectedServerId = intent.profileId
+    private fun onProfileSelected() {
+        val intent = profileList.selectedValue ?: return
+        selectedProfileId = intent.profileId
         loadDraftIntoForm()
-        refreshServerListDecorations()
+        refreshProfileListDecorations()
     }
 
     private fun loadDraftIntoForm() {
@@ -1099,12 +1099,12 @@ class NacosConfigurable @JvmOverloads constructor(
             )
             if (normalized != selected) {
                 intentDraft = intentDraft.replace(selected.profileId, normalized)
-                val idx = (0 until serverListModel.size())
+                val idx = (0 until profileListModel.size())
                     .firstOrNull {
-                        serverListModel.getElementAt(it).profileId == selected.profileId
+                        profileListModel.getElementAt(it).profileId == selected.profileId
                     }
                     ?: -1
-                if (idx >= 0) serverListModel.setElementAt(normalized, idx)
+                if (idx >= 0) profileListModel.setElementAt(normalized, idx)
             }
             displayNameField.text = normalized.displayName
             serverUrlField.text = normalized.endpoint
@@ -1149,9 +1149,9 @@ class NacosConfigurable @JvmOverloads constructor(
         val idx = intentDraft.snapshot().indexOfFirst { it.profileId == keepId }
         if (idx >= 0) {
             intentDraft = intentDraft.reset(keepId, reset)
-            serverListModel.setElementAt(reset, idx)
+            profileListModel.setElementAt(reset, idx)
             loadDraftIntoForm()
-            refreshServerListDecorations()
+            refreshProfileListDecorations()
             updateApplyEnabledState()
         }
     }
@@ -1193,7 +1193,7 @@ class NacosConfigurable @JvmOverloads constructor(
             )
             // Select the offending server
             val idx = snapshot.indexOf(activeIntent)
-            if (idx >= 0) serverList.selectedIndex = idx
+            if (idx >= 0) profileList.selectedIndex = idx
             throw java.lang.IllegalStateException("Invalid server URL")
         }
 
@@ -1244,16 +1244,16 @@ class NacosConfigurable @JvmOverloads constructor(
             // Reload draft from what actually published so the form cannot keep
             // showing a deleted environment as applied when it was withheld.
             initializeDraft()
-            serverListModel.clear()
-            intentDraft.snapshot().forEach { serverListModel.addElement(it) }
-            refreshServerListDecorations()
-            selectActiveServerInList()
+            profileListModel.clear()
+            intentDraft.snapshot().forEach { profileListModel.addElement(it) }
+            refreshProfileListDecorations()
+            selectActiveProfileInList()
             loadDraftIntoForm()
         } else {
             // Successful publish: re-baseline the open active id so isModified
             // is false for the active selection Apply just committed (#106).
             intentDraft = intentDraft.rebaseline()
-            refreshServerListDecorations()
+            refreshProfileListDecorations()
         }
 
         // Align this project's session to the draft blue-dot — project-local
@@ -1320,18 +1320,18 @@ class NacosConfigurable @JvmOverloads constructor(
         // Configurable Reset / Cancel: restore the persisted draft in memory
         // only — no settings, credential, seed, or project-selection write.
         initializeDraft()
-        if (!::serverListModel.isInitialized) return
-        serverListModel.clear()
-        intentDraft.snapshot().forEach { serverListModel.addElement(it) }
-        refreshServerListDecorations()
-        selectActiveServerInList()
+        if (!::profileListModel.isInitialized) return
+        profileListModel.clear()
+        intentDraft.snapshot().forEach { profileListModel.addElement(it) }
+        refreshProfileListDecorations()
+        selectActiveProfileInList()
         loadDraftIntoForm()
     }
 
     private fun updateApplyEnabledState() {
         // Intellij Configurable handles Apply button enable/disable based on isModified()
         // We just trigger a re-check by firing a dummy change
-        serverList.repaint()
+        profileList.repaint()
     }
 
     // ------------------------------------------------------------------
@@ -1559,7 +1559,7 @@ class NacosConfigurable @JvmOverloads constructor(
     // List cell renderer
     // ------------------------------------------------------------------
 
-    private class ServerListRenderer(
+    private class ProfileListRenderer(
         private val activeId: String,
         private val dirtyIds: Set<String> = emptySet()
     ) : DefaultListCellRenderer() {
@@ -1617,7 +1617,7 @@ class NacosConfigurable @JvmOverloads constructor(
 }
 
 /**
- * Blue-dot id for the Settings server list: prefer the project tool-window
+ * Blue-dot id for the Settings profile list: prefer the project tool-window
  * selection when it still exists in [intents], otherwise the migration-owned
  * default, otherwise the first row.
  */

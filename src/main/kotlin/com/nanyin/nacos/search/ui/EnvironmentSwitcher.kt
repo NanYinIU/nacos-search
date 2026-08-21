@@ -154,7 +154,7 @@ class EnvironmentSwitcher(
         ) return
         // Project-local only — never write the application-wide migration seed
         // or compatibility inputs (issue #107 / ADR-0004). Pass this
-        // environment's suggested Namespace so the previous server's id is not
+        // environment's 建议 Namespace so the previous Namespace id is not
         // reused against a different Nacos (configs would load empty/wrong).
         projectSession?.adoptEnvironment(entry.environment)
         project.getService(com.nanyin.nacos.search.services.ProjectSessionEpochs::class.java)?.bump()

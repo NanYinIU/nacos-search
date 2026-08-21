@@ -215,7 +215,7 @@ Passwords are **not** stored in the settings XML. Current credentials live in im
 
 ### Settings & Persistence
 
-`NacosSettings` is a `PersistentStateComponent` stored in `nacos-search.xml`. It contains published profiles, environment preferences, the migration-owned project seed, cache settings, and language. `NacosConfigurable` provides the Swing UI for `Settings/Preferences > Tools > Nacos Search` and fires `NacosSettingsListener` events so the tool window reacts to preference-only changes without a full cache reload. Opening, cancelling, or resetting the dialog changes only its intent draft until Apply.
+`NacosSettings` is a `PersistentStateComponent` stored in `nacos-search.xml`. It contains published profiles, environment preferences, the migration-owned project seed, cache settings, and language. `NacosConfigurable` provides the Swing UI for `Settings/Preferences > Tools > Nacos Search` and fires `NacosSettingsListener` events so the tool window reacts to preference-only changes without a full cache reload. Opening, cancelling, or resetting the dialog changes only its intent draft until Apply. Apply publishes intents without rewriting the migration seed; when opened from a project it may realign that project's 项目会话 to the blue-dot (issue #107).
 
 ### UI Layer
 

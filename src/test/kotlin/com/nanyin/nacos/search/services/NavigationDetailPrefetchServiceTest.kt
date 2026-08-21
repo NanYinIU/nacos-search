@@ -477,7 +477,7 @@ class NavigationDetailPrefetchServiceTest {
 
     @Test
     fun `prefetch toggle does not bump profile revision`() {
-        val profileBefore = settings.getActiveProfile()!!
+        val profileBefore = settings.getMigrationDefaultProfile()!!
         val revisionBefore = profileBefore.profileRevision
         val accessBefore = profileBefore.accessRevision
 
@@ -491,7 +491,7 @@ class NavigationDetailPrefetchServiceTest {
         }
         settings.applyProfileIntents(disabled.snapshot(), disabled.activeProfileId)
 
-        val profileAfter = settings.getActiveProfile()!!
+        val profileAfter = settings.getMigrationDefaultProfile()!!
         assertEquals(revisionBefore, profileAfter.profileRevision)
         assertEquals(accessBefore, profileAfter.accessRevision)
         assertFalse(settings.preferencesFor(identity.profileId).navigationDetailPrefetchEnabled)
