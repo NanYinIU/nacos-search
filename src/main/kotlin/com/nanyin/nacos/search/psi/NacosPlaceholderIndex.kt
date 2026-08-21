@@ -8,8 +8,6 @@ import com.intellij.util.indexing.FileContent
 import com.intellij.util.indexing.ID
 import com.intellij.util.io.DataExternalizer
 import com.intellij.util.io.KeyDescriptor
-import java.io.DataInput
-import java.io.DataOutput
 
 /**
  * Persistent file-based index mapping Spring/Nacos placeholder keys
@@ -20,8 +18,10 @@ import java.io.DataOutput
  * O(keys) in-memory hash lookups, keeping 100k-line-codebase config-detail
  * opening well under one second.
  *
- * The [Indexer] uses a lightweight regex rather than PSI (which would be too
- * slow during indexing). False positives are filtered by PSI verification in
+ * The [Indexer] locates `@Value` / `@NacosValue` argument lists with a
+ * lightweight regex rather than PSI (which would be too slow during indexing),
+ * then reuses [PlaceholderParser] for the `${key[:default]}` grammar. False
+ * positives are filtered by PSI verification in
  * [NacosConfigKeyReferenceSearcher] at query time.
  */
 class NacosPlaceholderIndex : FileBasedIndexExtension<String, PlaceholderMarker>() {
@@ -37,9 +37,10 @@ class NacosPlaceholderIndex : FileBasedIndexExtension<String, PlaceholderMarker>
     override fun getInputFilter(): FileBasedIndex.InputFilter =
         FileBasedIndex.InputFilter { file -> file.fileType is JavaFileType }
 
-    override fun getKeyDescriptor(): KeyDescriptor<String> = StringKeyDescriptor
+    override fun getKeyDescriptor(): KeyDescriptor<String> = FileIndexStringKeyDescriptor
 
-    override fun getValueExternalizer(): DataExternalizer<PlaceholderMarker> = MarkerExternalizer
+    override fun getValueExternalizer(): DataExternalizer<PlaceholderMarker> =
+        placeholderMarkerExternalizer
 
     companion object {
         val INDEX_ID: ID<String, PlaceholderMarker> = ID.create("nacos.placeholder.keys")
@@ -52,12 +53,12 @@ object PlaceholderMarker {
 }
 
 /**
- * Text-based extractor: finds ${...} tokens near @Value / @NacosValue
- * and emits the key portion. Avoids PSI in the indexing hot path.
+ * Text-based extractor: finds `@Value` / `@NacosValue` argument lists and
+ * emits keys decided by [PlaceholderParser]. Avoids PSI in the indexing hot path.
  */
 object Indexer : DataIndexer<String, PlaceholderMarker, FileContent> {
-    private val annotationPlaceholder = Regex(
-        """@(?:[\w.]*\.)?(?:Value|NacosValue)\s*\([^)]*?\$\{([^}]*)\}"""
+    private val valueAnnotation = Regex(
+        """@(?:[\w.]*\.)?(?:NacosValue|Value)\s*\(([^)]*)\)"""
     )
 
     override fun map(inputData: FileContent): MutableMap<String, PlaceholderMarker> {
@@ -73,38 +74,14 @@ object Indexer : DataIndexer<String, PlaceholderMarker, FileContent> {
      * in [text]. Testable without FileContent or Void interop.
      */
     fun extractPlaceholderKeys(text: String): Set<String> {
+        if (text.isEmpty()) return emptySet()
         val result = linkedSetOf<String>()
-        for (match in annotationPlaceholder.findAll(text)) {
-            val inner = match.groupValues[1].trim()
-            if (inner.isEmpty()) continue
-            val colon = inner.indexOf(':')
-            val key = if (colon >= 0) inner.substring(0, colon).trim() else inner
-            if (key.isNotEmpty()) {
-                result.add(key)
-            }
+        for (match in valueAnnotation.findAll(text)) {
+            PlaceholderParser.parse(match.groupValues[1])?.let { result.add(it.key) }
         }
         return result
     }
 }
 
-private object StringKeyDescriptor : KeyDescriptor<String> {
-    override fun getHashCode(value: String?): Int = value?.hashCode() ?: 0
-    override fun isEqual(a: String?, b: String?): Boolean = a == b
-    override fun save(out: DataOutput, value: String?) {
-        out.writeUTF(value ?: "")
-    }
-    override fun read(input: DataInput): String = input.readUTF()
-}
-
-private object MarkerExternalizer : DataExternalizer<PlaceholderMarker> {
-    override fun save(out: DataOutput, value: PlaceholderMarker) {
-        out.writeByte(MARKER)
-    }
-
-    override fun read(input: DataInput): PlaceholderMarker {
-        check(input.readUnsignedByte() == MARKER) { "Invalid placeholder marker" }
-        return PlaceholderMarker
-    }
-
-    private const val MARKER = 1
-}
+private val placeholderMarkerExternalizer =
+    FileIndexMarkerExternalizer(PlaceholderMarker, "Invalid placeholder marker")

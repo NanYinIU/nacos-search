@@ -8,8 +8,6 @@ import com.intellij.util.indexing.FileContent
 import com.intellij.util.indexing.ID
 import com.intellij.util.io.DataExternalizer
 import com.intellij.util.io.KeyDescriptor
-import java.io.DataInput
-import java.io.DataOutput
 
 /**
  * Persistent file-based index mapping declared configuration-source data ids
@@ -38,9 +36,10 @@ class NacosDeclaredSourceIndex : FileBasedIndexExtension<String, DeclaredSourceM
     override fun getInputFilter(): FileBasedIndex.InputFilter =
         FileBasedIndex.InputFilter { file -> file.fileType is JavaFileType }
 
-    override fun getKeyDescriptor(): KeyDescriptor<String> = DeclaredSourceKeyDescriptor
+    override fun getKeyDescriptor(): KeyDescriptor<String> = FileIndexStringKeyDescriptor
 
-    override fun getValueExternalizer(): DataExternalizer<DeclaredSourceMarker> = DeclaredSourceMarkerExternalizer
+    override fun getValueExternalizer(): DataExternalizer<DeclaredSourceMarker> =
+        declaredSourceMarkerExternalizer
 
     companion object {
         val INDEX_ID: ID<String, DeclaredSourceMarker> = ID.create("nacos.declared.sources")
@@ -108,24 +107,5 @@ object DeclaredSourceIndexer : DataIndexer<String, DeclaredSourceMarker, FileCon
     }
 }
 
-private object DeclaredSourceKeyDescriptor : KeyDescriptor<String> {
-    override fun getHashCode(value: String?): Int = value?.hashCode() ?: 0
-    override fun isEqual(a: String?, b: String?): Boolean = a == b
-    override fun save(out: DataOutput, value: String?) {
-        out.writeUTF(value ?: "")
-    }
-    override fun read(input: DataInput): String = input.readUTF()
-}
-
-private object DeclaredSourceMarkerExternalizer : DataExternalizer<DeclaredSourceMarker> {
-    override fun save(out: DataOutput, value: DeclaredSourceMarker) {
-        out.writeByte(MARKER)
-    }
-
-    override fun read(input: DataInput): DeclaredSourceMarker {
-        check(input.readUnsignedByte() == MARKER) { "Invalid declared-source marker" }
-        return DeclaredSourceMarker
-    }
-
-    private const val MARKER = 1
-}
+private val declaredSourceMarkerExternalizer =
+    FileIndexMarkerExternalizer(DeclaredSourceMarker, "Invalid declared-source marker")
