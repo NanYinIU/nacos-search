@@ -796,6 +796,36 @@ class AccessVisibilityTest {
     }
 
     @Test
+    fun `configuration read refusal leaves existing publish discovery and history blocks standing`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
+        val identity = identity("dev")
+        visibility.reportCompleted(publishFailure(identity, "team-a", observation = 1))
+        visibility.reportCompleted(discoveryFailure(identity, observation = 2))
+        visibility.reportCompleted(historyFailure(identity, "team-a", observation = 3))
+
+        assertTrue(visibility.reportCompleted(authzFailure(identity, "team-a", observation = 4)))
+
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
+        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(visibility.discoveryAuthBlock(identity))
+        assertNotNull(visibility.historyAuthBlock(identity, "team-a"))
+        val persisted = store.loadVisibilityRecords().values.map { it.capability }.toSet()
+        assertEquals(
+            setOf(
+                AccessVisibilityRecord.CONFIGURATION_READ,
+                AccessVisibilityRecord.PUBLISH,
+                AccessVisibilityRecord.NAMESPACE_DISCOVERY,
+                AccessVisibilityRecord.HISTORY
+            ),
+            persisted
+        )
+        assertTrue(visibility.reportCompleted(publishFailure(identity, "team-b", observation = 5)))
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
+        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+    }
+
+    @Test
     fun `rejected older capability observation changes neither memory nor durable state`() = runBlocking {
         val counted = CountingVisibilityStore(InMemoryCacheStore())
         val visibility = AccessVisibility(counted)

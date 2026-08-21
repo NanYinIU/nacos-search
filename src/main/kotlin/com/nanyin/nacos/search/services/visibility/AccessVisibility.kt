@@ -318,7 +318,7 @@ internal class AccessVisibility(
         // is checked once inside the pipeline.
         val identityScope = identityAuthScopeChain(identity)
         val identityAccepted = highWater.accepts(identityScope, observation)
-        val target = capabilityTarget(operationClass, identity, namespaceId)
+        val target = capabilityScope(operationClass, identity, namespaceId)
 
         // Any authenticated success under the same complete identity clears
         // an identity-wide authentication block (ADR-0019 / issue #123).
@@ -352,7 +352,7 @@ internal class AccessVisibility(
         // (issue #48 / #124 / #125 / #237). An optional-capability denial
         // never creates a configuration-read or authentication block.
         if (error !is RemoteOperationError.Authorization) return false
-        val target = capabilityTarget(operationClass, identity, namespaceId) ?: return false
+        val target = capabilityScope(operationClass, identity, namespaceId) ?: return false
         return applyCapabilityMutationLocked(
             target,
             observation,
@@ -389,7 +389,7 @@ internal class AccessVisibility(
      * cannot land (fail closed: memory and the capability mark stay put).
      */
     private suspend fun applyCapabilityMutationLocked(
-        target: CapabilityTarget,
+        target: CapabilityScope,
         observation: Long,
         mutation: CapabilityMutation
     ): Boolean {
@@ -479,17 +479,17 @@ internal class AccessVisibility(
     )
 
     /**
-     * Resolve the one capability-scoped coordinate for [operationClass].
+     * Resolve the one capability-scoped visibility gate for [operationClass].
      * Null when the class has no capability record ([AUTHENTICATED_CONTACT])
      * or a Namespace-scoped class was reported without a namespace.
      */
-    private fun capabilityTarget(
+    private fun capabilityScope(
         operationClass: ProtocolCapability,
         identity: AccessIdentity,
         namespaceId: String?
-    ): CapabilityTarget? {
+    ): CapabilityScope? {
         val key = VisibilityScopes.capabilityKey(operationClass, identity, namespaceId) ?: return null
-        return CapabilityTarget(
+        return CapabilityScope(
             identity = identity,
             key = key,
             scopeChain = capabilityScopeChain(identity, key),
@@ -502,7 +502,7 @@ internal class AccessVisibility(
         )
     }
 
-    private data class CapabilityTarget(
+    private data class CapabilityScope(
         val identity: AccessIdentity,
         val key: String,
         val scopeChain: List<String>,
