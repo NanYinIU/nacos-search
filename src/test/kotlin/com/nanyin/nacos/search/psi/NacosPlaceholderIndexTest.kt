@@ -30,6 +30,30 @@ class NacosPlaceholderIndexTest {
     }
 
     @Test
+    fun `indexed keys match parser decisions for defaults malformed nested punctuation and multiples`() {
+        val samples = listOf(
+            "\${app.name}" to "app.name",
+            "\${timeout:3000}" to "timeout",
+            "\${url:http://host:8080/path}" to "url",
+            "\${cron:0 0 0 * * ?}" to "cron",
+            "\${a.b} \${c.d}" to "a.b",
+            "\${}" to null,
+            "\${:x}" to null,
+            "\${oops" to null,
+            "plain text" to null,
+        )
+        for ((text, expected) in samples) {
+            assertEquals(expected, PlaceholderParser.parse(text)?.key, "parser: $text")
+            val indexed = Indexer.extractPlaceholderKeys("""@Value("$text")""")
+            if (expected == null) {
+                assertTrue(indexed.isEmpty(), "indexer should yield no key for $text, got $indexed")
+            } else {
+                assertEquals(setOf(expected), indexed, "indexer: $text")
+            }
+        }
+    }
+
+    @Test
     fun `extracts key from Value annotation`() {
         val keys = Indexer.extractPlaceholderKeys(
             """@org.springframework.beans.factory.annotation.Value("${'$'}{app.timeout}") private String t;"""
