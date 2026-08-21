@@ -53,12 +53,14 @@ object NoOpVisibilityReporter : VisibilityReporter {
  * module for read decisions and does not own the confirmation-state machine
  * (ADR-0044 / ADR-0050).
  *
- * Capability blocks (publish / discovery / history, issue #125) affect **only
- * their own capability state**: configuration-list, detail, local-search, and
- * snapshot surfaces never consult them, so a write or optional-capability
- * denial cannot hide data the user can still read. A success clears only the
- * matching capability and scope, never an unrelated configuration-read or
- * authentication block.
+ * Capability blocks (configuration-read, publish, discovery, history) affect
+ * **only their own capability state**. Configuration-list, detail, local-search,
+ * and snapshot surfaces consult configuration-read (and identity-wide auth)
+ * only, so a write or optional-capability denial cannot hide data the user can
+ * still read (issue #125). Apply and clear for those four capabilities share
+ * one internal pipeline (issue #237): high-water check and durable-store
+ * ordering run once per accepted mutation. A success clears only the matching
+ * capability and scope.
  *
  * Blocks persist through [CacheStore]; the observation high-water is
  * process-local and empty after reconstruction. Cache hits never report here
@@ -72,10 +74,8 @@ internal class AccessVisibility(
     private val logger = thisLogger()
     private val mutex = Mutex()
     private val identityAuthBlocks = ConcurrentHashMap<String, AccessVisibilityRecord>()
-    private val namespaceConfigReadBlocks = ConcurrentHashMap<String, AccessVisibilityRecord>()
-    private val publishAuthBlocks = ConcurrentHashMap<String, AccessVisibilityRecord>()
-    private val discoveryAuthBlocks = ConcurrentHashMap<String, AccessVisibilityRecord>()
-    private val historyAuthBlocks = ConcurrentHashMap<String, AccessVisibilityRecord>()
+    /** Capability-scoped records keyed by [VisibilityScopes.capabilityKey]. */
+    private val capabilityBlocks = ConcurrentHashMap<String, AccessVisibilityRecord>()
     private val generation = AtomicLong(0)
 
     /**
@@ -95,17 +95,14 @@ internal class AccessVisibility(
         mutex.withLock {
             val loaded = store.loadVisibilityRecords()
             identityAuthBlocks.clear()
-            namespaceConfigReadBlocks.clear()
-            publishAuthBlocks.clear()
-            discoveryAuthBlocks.clear()
-            historyAuthBlocks.clear()
+            capabilityBlocks.clear()
             loaded.forEach { (key, record) ->
                 when (record.capability) {
                     AccessVisibilityRecord.IDENTITY_AUTH -> identityAuthBlocks[key] = record
-                    AccessVisibilityRecord.CONFIGURATION_READ -> namespaceConfigReadBlocks[key] = record
-                    AccessVisibilityRecord.PUBLISH -> publishAuthBlocks[key] = record
-                    AccessVisibilityRecord.NAMESPACE_DISCOVERY -> discoveryAuthBlocks[key] = record
-                    AccessVisibilityRecord.HISTORY -> historyAuthBlocks[key] = record
+                    AccessVisibilityRecord.CONFIGURATION_READ,
+                    AccessVisibilityRecord.PUBLISH,
+                    AccessVisibilityRecord.NAMESPACE_DISCOVERY,
+                    AccessVisibilityRecord.HISTORY -> capabilityBlocks[key] = record
                 }
             }
         }
@@ -140,7 +137,7 @@ internal class AccessVisibility(
         val identityDecision = configurationVisibility(identity)
         if (identityDecision is ConfigurationVisibility.Blocked) return identityDecision
         val ns = NamespaceInfo.canonicalId(namespaceId)
-        val nsRecord = namespaceConfigReadBlocks[VisibilityScopes.configurationReadKey(identity, ns)]
+        val nsRecord = capabilityBlocks[VisibilityScopes.configurationReadKey(identity, ns)]
             ?: return ConfigurationVisibility.Visible
         return ConfigurationVisibility.Blocked(
             reason = nsRecord.refusal(),
@@ -164,21 +161,21 @@ internal class AccessVisibility(
         identityAuthBlocks[VisibilityScopes.identityAuthKey(identity)]
 
     fun namespaceConfigReadBlock(identity: AccessIdentity, namespaceId: String): AccessVisibilityRecord? =
-        namespaceConfigReadBlocks[VisibilityScopes.configurationReadKey(identity, namespaceId)]
+        capabilityBlocks[VisibilityScopes.configurationReadKey(identity, namespaceId)]
 
     // --- Optional-capability blocks (issue #125) ---
     //
     // Capability state only: configuration-read surfaces never consult these
-    // maps. A matching newer success clears only its own capability + scope.
+    // records. A matching newer success clears only its own capability + scope.
 
     fun publishAuthBlock(identity: AccessIdentity, namespaceId: String): AccessVisibilityRecord? =
-        publishAuthBlocks[VisibilityScopes.publishKey(identity, namespaceId)]
+        capabilityBlocks[VisibilityScopes.publishKey(identity, namespaceId)]
 
     fun discoveryAuthBlock(identity: AccessIdentity): AccessVisibilityRecord? =
-        discoveryAuthBlocks[VisibilityScopes.discoveryKey(identity)]
+        capabilityBlocks[VisibilityScopes.discoveryKey(identity)]
 
     fun historyAuthBlock(identity: AccessIdentity, namespaceId: String): AccessVisibilityRecord? =
-        historyAuthBlocks[VisibilityScopes.historyKey(identity, namespaceId)]
+        capabilityBlocks[VisibilityScopes.historyKey(identity, namespaceId)]
 
     /**
      * Canonical Namespace ids whose configuration reads are authorization-
@@ -193,9 +190,8 @@ internal class AccessVisibility(
      * (issue #126).
      */
     fun configurationReadBlockedNamespaces(identity: AccessIdentity): Set<String> {
-        if (namespaceConfigReadBlocks.isEmpty()) return emptySet()
         val prefix = VisibilityScopes.configurationReadKeyPrefix(identity)
-        return namespaceConfigReadBlocks.keys.asSequence()
+        return capabilityBlocks.keys.asSequence()
             .filter { it.startsWith(prefix) }
             .mapTo(linkedSetOf()) { it.removePrefix(prefix) }
     }
@@ -209,39 +205,41 @@ internal class AccessVisibility(
 
     /** Snapshot of every Namespace-scoped configuration-read authorization block. */
     fun namespaceConfigReadBlocks(): Map<String, AccessVisibilityRecord> =
-        namespaceConfigReadBlocks.toMap()
+        capabilityBlocks.filterValues { it.capability == AccessVisibilityRecord.CONFIGURATION_READ }
 
     /** Snapshot of every publish authorization block (capability state only). */
     fun publishAuthBlocks(): Map<String, AccessVisibilityRecord> =
-        publishAuthBlocks.toMap()
+        capabilityBlocks.filterValues { it.capability == AccessVisibilityRecord.PUBLISH }
 
     /** Snapshot of every namespace-discovery authorization block (capability state only). */
     fun discoveryAuthBlocks(): Map<String, AccessVisibilityRecord> =
-        discoveryAuthBlocks.toMap()
+        capabilityBlocks.filterValues { it.capability == AccessVisibilityRecord.NAMESPACE_DISCOVERY }
 
     /** Snapshot of every history authorization block (capability state only). */
     fun historyAuthBlocks(): Map<String, AccessVisibilityRecord> =
-        historyAuthBlocks.toMap()
+        capabilityBlocks.filterValues { it.capability == AccessVisibilityRecord.HISTORY }
 
     override suspend fun reportCompleted(observation: CompletedObservation): Boolean {
         // Cache hits and non-remote outcomes never reach here; still guard.
         if (observation.observation <= 0L) return false
-        return when (val outcome = observation.outcome) {
-            is ObservationOutcome.Success ->
-                acceptSuccess(
-                    observation.identity,
-                    observation.observation,
-                    observation.operationClass,
-                    observation.namespaceId
-                )
-            is ObservationOutcome.RemoteFailure ->
-                acceptFailure(
-                    observation.identity,
-                    observation.observation,
-                    observation.operationClass,
-                    observation.namespaceId,
-                    outcome.error
-                )
+        return mutex.withLock {
+            when (val outcome = observation.outcome) {
+                is ObservationOutcome.Success ->
+                    applySuccessLocked(
+                        observation.identity,
+                        observation.observation,
+                        observation.operationClass,
+                        observation.namespaceId
+                    )
+                is ObservationOutcome.RemoteFailure ->
+                    applyFailureLocked(
+                        observation.identity,
+                        observation.observation,
+                        observation.operationClass,
+                        observation.namespaceId,
+                        outcome.error
+                    )
+            }
         }
     }
 
@@ -254,21 +252,11 @@ internal class AccessVisibility(
     suspend fun purgeProfile(profileId: String) {
         val id = profileId.trim()
         if (id.isBlank()) return
-        val prefixes = listOf(
-            "vis|auth|v2|$id|",
-            "vis|cfgread|v2|$id|",
-            "vis|publish|v2|$id|",
-            "vis|discovery|v2|$id|",
-            "vis|history|v2|$id|"
-        )
+        val prefixes = VisibilityScopes.profileKeyPrefixes(id)
         mutex.withLock {
-            val memoryKeys = (
-                identityAuthBlocks.keys +
-                    namespaceConfigReadBlocks.keys +
-                    publishAuthBlocks.keys +
-                    discoveryAuthBlocks.keys +
-                    historyAuthBlocks.keys
-                ).filter { key -> prefixes.any { key.startsWith(it) } }.toSet()
+            val memoryKeys = (identityAuthBlocks.keys + capabilityBlocks.keys)
+                .filter { key -> prefixes.any { key.startsWith(it) } }
+                .toSet()
             if (memoryKeys.isEmpty()) {
                 // Still reclaim any orphaned store records for this profile.
                 store.loadVisibilityRecords().keys
@@ -278,10 +266,7 @@ internal class AccessVisibility(
             }
             memoryKeys.forEach { key ->
                 identityAuthBlocks.remove(key)
-                namespaceConfigReadBlocks.remove(key)
-                publishAuthBlocks.remove(key)
-                discoveryAuthBlocks.remove(key)
-                historyAuthBlocks.remove(key)
+                capabilityBlocks.remove(key)
             }
             generation.incrementAndGet()
             memoryKeys.forEach { key ->
@@ -304,17 +289,10 @@ internal class AccessVisibility(
      */
     suspend fun onUserClear(observation: Long) {
         mutex.withLock {
-            val hadBlocks = identityAuthBlocks.isNotEmpty() ||
-                namespaceConfigReadBlocks.isNotEmpty() ||
-                publishAuthBlocks.isNotEmpty() ||
-                discoveryAuthBlocks.isNotEmpty() ||
-                historyAuthBlocks.isNotEmpty()
+            val hadBlocks = identityAuthBlocks.isNotEmpty() || capabilityBlocks.isNotEmpty()
             if (hadBlocks) {
                 identityAuthBlocks.clear()
-                namespaceConfigReadBlocks.clear()
-                publishAuthBlocks.clear()
-                discoveryAuthBlocks.clear()
-                historyAuthBlocks.clear()
+                capabilityBlocks.clear()
                 generation.incrementAndGet()
             }
             // Collapse every per-scope mark into the global clear mark so
@@ -327,83 +305,40 @@ internal class AccessVisibility(
         }
     }
 
-    private suspend fun acceptSuccess(
+    private suspend fun applySuccessLocked(
         identity: AccessIdentity,
         observation: Long,
         operationClass: ProtocolCapability,
         namespaceId: String?
     ): Boolean {
-        return mutex.withLock {
-            // Decide both halves against the *current* marks before raising any.
-            // Raising the identity mark first would make the capability chain
-            // (which includes that mark) reject the same observation with
-            // sequence <= mark (ADR-0020 / issue #124).
-            val identityScope = identityAuthScopeChain(identity)
-            val identityAccepted = highWater.accepts(identityScope, observation)
+        // Decide identity against the *current* marks before raising it.
+        // Raising the identity mark first would make the capability chain
+        // (which includes that mark) reject the same observation with
+        // sequence <= mark (ADR-0020 / issue #124). Capability high-water
+        // is checked once inside the pipeline.
+        val identityScope = identityAuthScopeChain(identity)
+        val identityAccepted = highWater.accepts(identityScope, observation)
+        val target = capabilityTarget(operationClass, identity, namespaceId)
 
-            val ns = namespaceIdForScope(operationClass)?.let { NamespaceInfo.canonicalId(namespaceId) }
-            val capabilityChain = capabilityChainFor(operationClass, identity, ns)
-            val capabilityAccepted = capabilityChain != null && highWater.accepts(capabilityChain, observation)
-
-            if (!identityAccepted && !capabilityAccepted) return@withLock false
-
-            // Any authenticated success under the same complete identity clears
-            // an identity-wide authentication block (ADR-0019 / issue #123).
-            if (identityAccepted) {
-                val key = VisibilityScopes.identityAuthKey(identity)
-                if (identityAuthBlocks.containsKey(key)) {
-                    try {
-                        store.removeVisibilityRecord(key)
-                    } catch (e: Exception) {
-                        logger.warn("Failed to clear visibility record; keeping block: $key", e)
-                        return@withLock false
-                    }
-                    identityAuthBlocks.remove(key)
-                    generation.incrementAndGet()
-                }
-            }
-
-            // A success clears only the matching capability and scope (issue
-            // #124 / #125): a configuration-read success clears that identity +
-            // Namespace read block, a publish success only its publish block,
-            // and so on. No success of one capability can clear another
-            // capability's block; authenticated contact clears nothing
-            // capability-scoped (it only proves authentication).
-            if (capabilityAccepted && capabilityChain != null) {
-                val key = capabilityBlockKeyFor(operationClass, identity, ns)
-                val blocks = capabilityBlocksFor(operationClass)
-                if (key != null && blocks != null && blocks.containsKey(key)) {
-                    try {
-                        store.removeVisibilityRecord(key)
-                    } catch (e: Exception) {
-                        logger.warn("Failed to clear capability visibility record; keeping block: $key", e)
-                        // Identity clear (if any) already landed; still fail
-                        // closed for the capability half so we do not raise its
-                        // mark. Raise the identity mark alone when that half
-                        // was accepted.
-                        if (identityAccepted) {
-                            highWater.raise(identityScope.last(), observation)
-                        }
-                        return@withLock identityAccepted
-                    }
-                    blocks.remove(key)
-                    generation.incrementAndGet()
-                }
-            }
-
-            // Raise only after durable apply. Raise both when both accepted so a
-            // single success advances identity and capability ordering together.
-            if (identityAccepted) {
-                highWater.raise(identityScope.last(), observation)
-            }
-            if (capabilityAccepted && capabilityChain != null) {
-                highWater.raise(capabilityChain.last(), observation)
-            }
-            true
+        // Any authenticated success under the same complete identity clears
+        // an identity-wide authentication block (ADR-0019 / issue #123).
+        if (identityAccepted && !durableRemove(VisibilityScopes.identityAuthKey(identity), identityAuthBlocks)) {
+            return false
         }
+
+        // A success clears only the matching capability and scope (issue
+        // #124 / #125 / #237). Authenticated contact has no capability target.
+        val capabilityLanded = target?.let {
+            applyCapabilityMutationLocked(it, observation, CapabilityMutation.Clear)
+        } ?: false
+        if (!identityAccepted && !capabilityLanded) return false
+        if (identityAccepted) {
+            highWater.raise(identityScope.last(), observation)
+        }
+        return true
     }
 
-    private suspend fun acceptFailure(
+    private suspend fun applyFailureLocked(
         identity: AccessIdentity,
         observation: Long,
         operationClass: ProtocolCapability,
@@ -411,175 +346,109 @@ internal class AccessVisibility(
         error: RemoteOperationError
     ): Boolean {
         identityAuthReason(error)?.let { reason ->
-            return applyIdentityAuthBlock(identity, observation, reason, error.message)
+            return applyIdentityAuthBlockLocked(identity, observation, reason, error.message)
         }
         // Authorization denials scope to the capability that was denied
-        // (issue #48 / #124 / #125). Configuration-read, publish, and history
-        // are additionally Namespace-scoped; discovery is identity-scoped. An
-        // optional-capability denial never creates a configuration-read or
-        // authentication block, so readable data stays visible.
+        // (issue #48 / #124 / #125 / #237). An optional-capability denial
+        // never creates a configuration-read or authentication block.
         if (error !is RemoteOperationError.Authorization) return false
-        return when (operationClass) {
-            ProtocolCapability.CONFIGURATION_READ -> applyNamespaceConfigReadBlock(
-                identity, observation, namespaceId ?: return false, error.message
-            )
-            ProtocolCapability.PUBLISH -> applyPublishAuthBlock(
-                identity, observation, namespaceId ?: return false, error.message
-            )
-            ProtocolCapability.NAMESPACE_DISCOVERY ->
-                applyDiscoveryAuthBlock(identity, observation, error.message)
-            ProtocolCapability.HISTORY -> applyHistoryAuthBlock(
-                identity, observation, namespaceId ?: return false, error.message
-            )
-            // A probe denial proves nothing about a capability; it never
-            // creates a block.
-            ProtocolCapability.AUTHENTICATED_CONTACT -> false
-        }
+        val target = capabilityTarget(operationClass, identity, namespaceId) ?: return false
+        return applyCapabilityMutationLocked(
+            target,
+            observation,
+            CapabilityMutation.Block(error.message)
+        )
     }
 
-    private suspend fun applyIdentityAuthBlock(
+    private suspend fun applyIdentityAuthBlockLocked(
         identity: AccessIdentity,
         observation: Long,
         reason: AccessRefusalReason,
         detail: String?
     ): Boolean {
         val scope = identityAuthScopeChain(identity)
-        return mutex.withLock {
-            if (!highWater.accepts(scope, observation)) return@withLock false
-            val key = VisibilityScopes.identityAuthKey(identity)
-            val record = AccessVisibilityRecord.identityAuth(
-                identity = identity,
-                reason = reason,
-                detail = detail,
-                recordedAtMillis = currentTimeMillis()
-            )
-            // Memory first: fail closed even if the store write throws.
-            identityAuthBlocks[key] = record
-            generation.incrementAndGet()
-            try {
-                store.putVisibilityRecord(key, record)
-            } catch (e: Exception) {
-                logger.warn("Failed to persist visibility record; keeping in-memory block: $key", e)
+        if (!highWater.accepts(scope, observation)) return false
+        val key = VisibilityScopes.identityAuthKey(identity)
+        val record = AccessVisibilityRecord.identityAuth(
+            identity = identity,
+            reason = reason,
+            detail = detail,
+            recordedAtMillis = currentTimeMillis()
+        )
+        persistBlock(key, record, identityAuthBlocks)
+        highWater.raise(scope.last(), observation)
+        return true
+    }
+
+    /**
+     * One capability-scoped mutation. Caller holds [mutex]. High-water check,
+     * durable-store ordering, and raise run here and nowhere else for
+     * configuration-read, publish, discovery, and history (issue #237).
+     *
+     * Returns false when the observation is rejected, or when a durable clear
+     * cannot land (fail closed: memory and the capability mark stay put).
+     */
+    private suspend fun applyCapabilityMutationLocked(
+        target: CapabilityTarget,
+        observation: Long,
+        mutation: CapabilityMutation
+    ): Boolean {
+        if (!highWater.accepts(target.scopeChain, observation)) return false
+        when (mutation) {
+            is CapabilityMutation.Block -> {
+                persistBlock(
+                    target.key,
+                    AccessVisibilityRecord.capabilityAuthz(
+                        identity = target.identity,
+                        capability = target.capability,
+                        namespaceId = target.namespaceId,
+                        detail = mutation.detail,
+                        recordedAtMillis = currentTimeMillis()
+                    ),
+                    capabilityBlocks
+                )
             }
-            highWater.raise(scope.last(), observation)
-            true
+            CapabilityMutation.Clear -> {
+                if (!durableRemove(target.key, capabilityBlocks)) return false
+            }
+        }
+        highWater.raise(target.scopeChain.last(), observation)
+        return true
+    }
+
+    /** Memory first: fail closed even if the store write throws. */
+    private suspend fun persistBlock(
+        key: String,
+        record: AccessVisibilityRecord,
+        into: ConcurrentHashMap<String, AccessVisibilityRecord>
+    ) {
+        into[key] = record
+        generation.incrementAndGet()
+        try {
+            store.putVisibilityRecord(key, record)
+        } catch (e: Exception) {
+            logger.warn("Failed to persist visibility record; keeping in-memory block: $key", e)
         }
     }
 
-    private suspend fun applyNamespaceConfigReadBlock(
-        identity: AccessIdentity,
-        observation: Long,
-        namespaceId: String,
-        detail: String?
+    /**
+     * Store first: a failed remove must not drop the in-memory block or raise
+     * the mark. True when there was nothing to remove or the remove landed.
+     */
+    private suspend fun durableRemove(
+        key: String,
+        from: ConcurrentHashMap<String, AccessVisibilityRecord>
     ): Boolean {
-        val ns = NamespaceInfo.canonicalId(namespaceId)
-        val scope = capabilityScopeChain(identity, VisibilityScopes.configurationReadScope(identity, ns))
-        return mutex.withLock {
-            if (!highWater.accepts(scope, observation)) return@withLock false
-            val key = VisibilityScopes.configurationReadKey(identity, ns)
-            val record = AccessVisibilityRecord.configurationReadAuthz(
-                identity = identity,
-                namespaceId = ns,
-                detail = detail,
-                recordedAtMillis = currentTimeMillis()
-            )
-            namespaceConfigReadBlocks[key] = record
-            generation.incrementAndGet()
-            try {
-                store.putVisibilityRecord(key, record)
-            } catch (e: Exception) {
-                logger.warn("Failed to persist namespace visibility record; keeping in-memory block: $key", e)
-            }
-            highWater.raise(scope.last(), observation)
-            true
+        if (!from.containsKey(key)) return true
+        try {
+            store.removeVisibilityRecord(key)
+        } catch (e: Exception) {
+            logger.warn("Failed to clear visibility record; keeping block: $key", e)
+            return false
         }
-    }
-
-    /** Publish authorization block: identity + Namespace capability state only (issue #125). */
-    private suspend fun applyPublishAuthBlock(
-        identity: AccessIdentity,
-        observation: Long,
-        namespaceId: String,
-        detail: String?
-    ): Boolean {
-        val ns = NamespaceInfo.canonicalId(namespaceId)
-        val scope = capabilityScopeChain(identity, VisibilityScopes.publishScope(identity, ns))
-        return mutex.withLock {
-            if (!highWater.accepts(scope, observation)) return@withLock false
-            val key = VisibilityScopes.publishKey(identity, ns)
-            val record = AccessVisibilityRecord.publishAuthz(
-                identity = identity,
-                namespaceId = ns,
-                detail = detail,
-                recordedAtMillis = currentTimeMillis()
-            )
-            publishAuthBlocks[key] = record
-            generation.incrementAndGet()
-            try {
-                store.putVisibilityRecord(key, record)
-            } catch (e: Exception) {
-                logger.warn("Failed to persist publish visibility record; keeping in-memory block: $key", e)
-            }
-            highWater.raise(scope.last(), observation)
-            true
-        }
-    }
-
-    /** Namespace-discovery authorization block: identity-scoped capability state only (issue #125). */
-    private suspend fun applyDiscoveryAuthBlock(
-        identity: AccessIdentity,
-        observation: Long,
-        detail: String?
-    ): Boolean {
-        val scope = capabilityScopeChain(identity, VisibilityScopes.discoveryScope(identity))
-        return mutex.withLock {
-            if (!highWater.accepts(scope, observation)) return@withLock false
-            val key = VisibilityScopes.discoveryKey(identity)
-            val record = AccessVisibilityRecord.discoveryAuthz(
-                identity = identity,
-                detail = detail,
-                recordedAtMillis = currentTimeMillis()
-            )
-            discoveryAuthBlocks[key] = record
-            generation.incrementAndGet()
-            try {
-                store.putVisibilityRecord(key, record)
-            } catch (e: Exception) {
-                logger.warn("Failed to persist discovery visibility record; keeping in-memory block: $key", e)
-            }
-            highWater.raise(scope.last(), observation)
-            true
-        }
-    }
-
-    /** History authorization block: identity + Namespace capability state only (issue #125). */
-    private suspend fun applyHistoryAuthBlock(
-        identity: AccessIdentity,
-        observation: Long,
-        namespaceId: String,
-        detail: String?
-    ): Boolean {
-        val ns = NamespaceInfo.canonicalId(namespaceId)
-        val scope = capabilityScopeChain(identity, VisibilityScopes.historyScope(identity, ns))
-        return mutex.withLock {
-            if (!highWater.accepts(scope, observation)) return@withLock false
-            val key = VisibilityScopes.historyKey(identity, ns)
-            val record = AccessVisibilityRecord.historyAuthz(
-                identity = identity,
-                namespaceId = ns,
-                detail = detail,
-                recordedAtMillis = currentTimeMillis()
-            )
-            historyAuthBlocks[key] = record
-            generation.incrementAndGet()
-            try {
-                store.putVisibilityRecord(key, record)
-            } catch (e: Exception) {
-                logger.warn("Failed to persist history visibility record; keeping in-memory block: $key", e)
-            }
-            highWater.raise(scope.last(), observation)
-            true
-        }
+        from.remove(key)
+        generation.incrementAndGet()
+        return true
     }
 
     private fun identityAuthReason(error: RemoteOperationError): AccessRefusalReason? = when (error) {
@@ -601,9 +470,7 @@ internal class AccessVisibility(
     /**
      * Scope chain for one capability scope: global clear → identity auth mark →
      * capability mark (and optional Namespace) (ADR-0020). A completion must
-     * outrank every mark on the chain; it raises only its own (last) mark. The
-     * same chain shape serves configuration-read, publish, discovery, and
-     * history authorization; only the leaf scope differs.
+     * outrank every mark on the chain; it raises only its own (last) mark.
      */
     private fun capabilityScopeChain(identity: AccessIdentity, capabilityScope: String): List<String> = listOf(
         GLOBAL_CLEAR_SCOPE,
@@ -611,63 +478,42 @@ internal class AccessVisibility(
         capabilityScope
     )
 
-    /** True when [operationClass]'s block is scoped to a canonical Namespace. */
-    private fun namespaceIdForScope(operationClass: ProtocolCapability): Boolean = when (operationClass) {
-        ProtocolCapability.CONFIGURATION_READ,
-        ProtocolCapability.PUBLISH,
-        ProtocolCapability.HISTORY -> true
-        ProtocolCapability.NAMESPACE_DISCOVERY,
-        ProtocolCapability.AUTHENTICATED_CONTACT -> false
-    }
-
     /**
-     * The success-clear chain for [operationClass] under [identity] and the
-     * canonical [namespaceId] (null when the class is not Namespace-scoped or
-     * no coordinate was reported). Null when the class has no capability scope
-     * ([AUTHENTICATED_CONTACT]) or the coordinate is missing.
+     * Resolve the one capability-scoped coordinate for [operationClass].
+     * Null when the class has no capability record ([AUTHENTICATED_CONTACT])
+     * or a Namespace-scoped class was reported without a namespace.
      */
-    private fun capabilityChainFor(
+    private fun capabilityTarget(
         operationClass: ProtocolCapability,
         identity: AccessIdentity,
         namespaceId: String?
-    ): List<String>? = when (operationClass) {
-        ProtocolCapability.CONFIGURATION_READ ->
-            namespaceId?.let { capabilityScopeChain(identity, VisibilityScopes.configurationReadScope(identity, it)) }
-        ProtocolCapability.PUBLISH ->
-            namespaceId?.let { capabilityScopeChain(identity, VisibilityScopes.publishScope(identity, it)) }
-        ProtocolCapability.NAMESPACE_DISCOVERY ->
-            capabilityScopeChain(identity, VisibilityScopes.discoveryScope(identity))
-        ProtocolCapability.HISTORY ->
-            namespaceId?.let { capabilityScopeChain(identity, VisibilityScopes.historyScope(identity, it)) }
-        ProtocolCapability.AUTHENTICATED_CONTACT -> null
+    ): CapabilityTarget? {
+        val key = VisibilityScopes.capabilityKey(operationClass, identity, namespaceId) ?: return null
+        return CapabilityTarget(
+            identity = identity,
+            key = key,
+            scopeChain = capabilityScopeChain(identity, key),
+            capability = operationClass.name,
+            namespaceId = if (VisibilityScopes.namespaceScoped(operationClass)) {
+                NamespaceInfo.canonicalId(namespaceId)
+            } else {
+                null
+            }
+        )
     }
 
-    /** The storage-key prefix for [operationClass]'s clear target, or null when not capability-scoped. */
-    private fun capabilityBlockKeyFor(
-        operationClass: ProtocolCapability,
-        identity: AccessIdentity,
-        namespaceId: String?
-    ): String? = when (operationClass) {
-        ProtocolCapability.CONFIGURATION_READ ->
-            namespaceId?.let { VisibilityScopes.configurationReadKey(identity, it) }
-        ProtocolCapability.PUBLISH ->
-            namespaceId?.let { VisibilityScopes.publishKey(identity, it) }
-        ProtocolCapability.NAMESPACE_DISCOVERY ->
-            VisibilityScopes.discoveryKey(identity)
-        ProtocolCapability.HISTORY ->
-            namespaceId?.let { VisibilityScopes.historyKey(identity, it) }
-        ProtocolCapability.AUTHENTICATED_CONTACT -> null
-    }
+    private data class CapabilityTarget(
+        val identity: AccessIdentity,
+        val key: String,
+        val scopeChain: List<String>,
+        val capability: String,
+        val namespaceId: String?
+    )
 
-    /** The in-memory block map [operationClass] clears on success, or null when not capability-scoped. */
-    private fun capabilityBlocksFor(operationClass: ProtocolCapability): ConcurrentHashMap<String, AccessVisibilityRecord>? =
-        when (operationClass) {
-            ProtocolCapability.CONFIGURATION_READ -> namespaceConfigReadBlocks
-            ProtocolCapability.PUBLISH -> publishAuthBlocks
-            ProtocolCapability.NAMESPACE_DISCOVERY -> discoveryAuthBlocks
-            ProtocolCapability.HISTORY -> historyAuthBlocks
-            ProtocolCapability.AUTHENTICATED_CONTACT -> null
-        }
+    private sealed interface CapabilityMutation {
+        data class Block(val detail: String?) : CapabilityMutation
+        object Clear : CapabilityMutation
+    }
 
     companion object {
         /**
