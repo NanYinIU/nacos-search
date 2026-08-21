@@ -30,6 +30,12 @@ class ConfigurationDetailConfirmation(
         group: String
     ) -> CacheService.CachedConfiguration? = { _, _, _, _ -> null }
 ) {
+    private val coordinateRead = ConfigurationCoordinateRead(
+        gateway = gateway,
+        captureContext = { captureContext() },
+        resolveTarget = resolveTarget
+    )
+
     fun consult(
         identity: AccessIdentity,
         cacheNamespaceId: String?,
@@ -45,47 +51,48 @@ class ConfigurationDetailConfirmation(
         keepCachedVisible: Boolean = false,
         retained: CacheService.CachedConfiguration? = null
     ): DetailReadResult {
-        val context = captureContext()
-            ?: return DetailReadResult.ConfigurationIncomplete()
-        val target = resolveTarget(context, namespaceId).getOrElse { error ->
-            return retainedFailure(error, keepCachedVisible, retained)
-        }
-        val result = gateway.readDetail(
-            target = target,
+        val remote = coordinateRead.readRemote(
+            namespaceId = namespaceId,
             coordinate = coordinate,
             forceRefresh = forceRefresh,
             useCache = useCache
         )
-        return result.fold(
-            onSuccess = { observed ->
-                val detail = observed.value
+        return remote.fold(
+            onSuccess = { read ->
+                val detail = read.observed.value
                 when {
                     detail != null -> DetailReadResult.Present(
                         configuration = detail,
-                        observation = observed.observation,
-                        servedFromCache = observed.observation == Observed.NO_OBSERVATION
+                        observation = read.observed.observation,
+                        servedFromCache = read.observed.observation == Observed.NO_OBSERVATION
                     )
                     keepCachedVisible && retained != null -> {
                         recordMissing?.invoke(
-                            target.context.identity,
-                            target.namespaceId,
+                            read.target.context.identity,
+                            read.target.namespaceId,
                             coordinate.dataId,
                             coordinate.group,
-                            observed.observation
+                            read.observed.observation
                         )
                         DetailReadResult.AuthoritativeNotFound(
                             retained = retained,
-                            observation = observed.observation
+                            observation = read.observed.observation
                         )
                     }
                     else -> DetailReadResult.Failed(
                         error = null,
                         fallbackMessage = "Configuration not found",
-                        observation = observed.observation
+                        observation = read.observed.observation
                     )
                 }
             },
-            onFailure = { error -> retainedFailure(error, keepCachedVisible, retained) }
+            onFailure = { error ->
+                if (error is ConfigurationRequired && !keepCachedVisible) {
+                    DetailReadResult.ConfigurationIncomplete(error.reasons)
+                } else {
+                    retainedFailure(error, keepCachedVisible, retained)
+                }
+            }
         )
     }
 
