@@ -11,7 +11,6 @@ import com.nanyin.nacos.search.services.operations.EditStart
 import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.services.operations.PublishResult
 import com.nanyin.nacos.search.services.operations.PublishState
-import com.nanyin.nacos.search.services.operations.RemoteOperationError
 import com.nanyin.nacos.search.services.operations.WriteIntent
 import com.nanyin.nacos.search.settings.ConfigurationRequired
 
@@ -160,7 +159,7 @@ object DetailPresentation {
         fallbackMessage: String,
         titleKey: String? = LOAD_FAILED_TITLE_KEY
     ): DetailViewState {
-        val root = unwrap(error)
+        val root = FailureCopy.unwrap(error)
         return when {
             root is ConfigurationRequired -> DetailViewState.ConfigurationRequired(
                 detail = root.reasons.firstOrNull()?.takeIf { it.isNotBlank() }
@@ -206,20 +205,6 @@ object DetailPresentation {
             else -> fallback.trim()
         }
     }
-
-    private fun unwrap(error: Throwable?): Throwable? {
-        var current = error
-        var depth = 0
-        while (current?.cause != null &&
-            current !is ConfigurationRequired &&
-            current !is RemoteOperationError &&
-            depth < 4
-        ) {
-            current = current.cause
-            depth++
-        }
-        return current
-    }
 }
 
 /**
@@ -252,20 +237,16 @@ object DetailCopy {
         state: DetailViewState.Failed,
         message: (key: String, params: Array<out Any>) -> String
     ): String {
-        val title = state.titleKey?.let { message(it, emptyArray()) }?.trim().orEmpty()
+        val title = state.titleKey?.let { message(it, emptyArray()) }.orEmpty()
         val structured = state.detailKey?.let {
             if (state.detailParams.isEmpty()) message(it, emptyArray())
             else message(it, state.detailParams.toTypedArray())
-        }?.trim().orEmpty()
-        val detail = structured.ifEmpty { state.detail?.trim().orEmpty() }
-        return when {
-            title.isNotEmpty() && detail.isNotEmpty() &&
-                (detail == title || detail.startsWith("$title:") || detail.startsWith("$title：")) ->
-                detail
-            title.isNotEmpty() && detail.isNotEmpty() -> "$title: $detail"
-            title.isNotEmpty() -> title
-            detail.isNotEmpty() -> detail
-            else -> message(DetailPresentation.LOAD_FAILED_TITLE_KEY, emptyArray())
-        }
+        }.orEmpty()
+        val detail = structured.ifEmpty { state.detail.orEmpty() }
+        return FailureCopy.combine(
+            title,
+            detail,
+            message(DetailPresentation.LOAD_FAILED_TITLE_KEY, emptyArray())
+        )
     }
 }

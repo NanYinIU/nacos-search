@@ -219,10 +219,10 @@ class ConfigListPresentationTest {
     }
 
     @Test
-    fun `strips legacy Chinese search prefix from fallback detail`() {
+    fun `search failure detail is the throwable message not a prefixed fallback`() {
         val state = ConfigListPresentation.fromSearchState(
             NacosSearchService.SearchState.Error(
-                "搜索失败: Connection failed",
+                "Connection failed",
                 Exception("Connection failed")
             )
         )
@@ -237,10 +237,10 @@ class ConfigListPresentationTest {
     }
 
     @Test
-    fun `strips legacy Chinese prefix when throwable message is blank`() {
+    fun `blank throwable message keeps the caller fallback as the detail`() {
         val state = ConfigListPresentation.fromFailure(
             error = RuntimeException(""),
-            fallbackMessage = "搜索过程中发生错误: boom",
+            fallbackMessage = "boom",
             titleKey = ConfigListPresentation.SEARCH_FAILED_TITLE_KEY
         )
 
