@@ -150,6 +150,21 @@ data class AccessVisibilityRecord(
             namespaceId: String,
             detail: String? = null,
             recordedAtMillis: Long
+        ): AccessVisibilityRecord = capabilityAuthz(
+            identity, CONFIGURATION_READ, namespaceId, detail, recordedAtMillis
+        )
+
+        /**
+         * One capability-scoped authorization record. [capability] is a
+         * [ProtocolCapability] name; [namespaceId] is canonical when the
+         * capability is Namespace-scoped and null when it is not.
+         */
+        internal fun capabilityAuthz(
+            identity: AccessIdentity,
+            capability: String,
+            namespaceId: String?,
+            detail: String? = null,
+            recordedAtMillis: Long
         ): AccessVisibilityRecord = AccessVisibilityRecord(
             profileId = identity.profileId,
             accessRevision = identity.accessRevision,
@@ -157,8 +172,8 @@ data class AccessVisibilityRecord(
             resolvedGeneration = identity.resolvedGeneration.name,
             authMode = identity.authMode.name,
             principal = identity.principal,
-            capability = CONFIGURATION_READ,
-            namespaceId = NamespaceInfo.canonicalId(namespaceId),
+            capability = capability,
+            namespaceId = namespaceId?.let { NamespaceInfo.canonicalId(it) },
             refusalReason = AccessRefusalReason.AUTHORIZATION.name,
             detail = detail?.take(200),
             recordedAtMillis = recordedAtMillis
@@ -174,18 +189,8 @@ data class AccessVisibilityRecord(
             namespaceId: String,
             detail: String? = null,
             recordedAtMillis: Long
-        ): AccessVisibilityRecord = AccessVisibilityRecord(
-            profileId = identity.profileId,
-            accessRevision = identity.accessRevision,
-            canonicalEndpoint = identity.canonicalEndpoint,
-            resolvedGeneration = identity.resolvedGeneration.name,
-            authMode = identity.authMode.name,
-            principal = identity.principal,
-            capability = PUBLISH,
-            namespaceId = NamespaceInfo.canonicalId(namespaceId),
-            refusalReason = AccessRefusalReason.AUTHORIZATION.name,
-            detail = detail?.take(200),
-            recordedAtMillis = recordedAtMillis
+        ): AccessVisibilityRecord = capabilityAuthz(
+            identity, PUBLISH, namespaceId, detail, recordedAtMillis
         )
 
         /**
@@ -198,18 +203,8 @@ data class AccessVisibilityRecord(
             identity: AccessIdentity,
             detail: String? = null,
             recordedAtMillis: Long
-        ): AccessVisibilityRecord = AccessVisibilityRecord(
-            profileId = identity.profileId,
-            accessRevision = identity.accessRevision,
-            canonicalEndpoint = identity.canonicalEndpoint,
-            resolvedGeneration = identity.resolvedGeneration.name,
-            authMode = identity.authMode.name,
-            principal = identity.principal,
-            capability = NAMESPACE_DISCOVERY,
-            namespaceId = null,
-            refusalReason = AccessRefusalReason.AUTHORIZATION.name,
-            detail = detail?.take(200),
-            recordedAtMillis = recordedAtMillis
+        ): AccessVisibilityRecord = capabilityAuthz(
+            identity, NAMESPACE_DISCOVERY, namespaceId = null, detail, recordedAtMillis
         )
 
         /**
@@ -222,18 +217,8 @@ data class AccessVisibilityRecord(
             namespaceId: String,
             detail: String? = null,
             recordedAtMillis: Long
-        ): AccessVisibilityRecord = AccessVisibilityRecord(
-            profileId = identity.profileId,
-            accessRevision = identity.accessRevision,
-            canonicalEndpoint = identity.canonicalEndpoint,
-            resolvedGeneration = identity.resolvedGeneration.name,
-            authMode = identity.authMode.name,
-            principal = identity.principal,
-            capability = HISTORY,
-            namespaceId = NamespaceInfo.canonicalId(namespaceId),
-            refusalReason = AccessRefusalReason.AUTHORIZATION.name,
-            detail = detail?.take(200),
-            recordedAtMillis = recordedAtMillis
+        ): AccessVisibilityRecord = capabilityAuthz(
+            identity, HISTORY, namespaceId, detail, recordedAtMillis
         )
     }
 }
@@ -267,13 +252,10 @@ internal object VisibilityScopes {
         identityAuthKey(record.toAccessIdentity())
 
     fun configurationReadKeyPrefix(identity: AccessIdentity): String =
-        "vis|cfgread|${CacheCoordinate.identityPrefix(identity)}|"
+        "vis|${storageToken(ProtocolCapability.CONFIGURATION_READ)}|${CacheCoordinate.identityPrefix(identity)}|"
 
     fun configurationReadKey(identity: AccessIdentity, namespaceId: String): String =
-        configurationReadKeyPrefix(identity) + NamespaceInfo.canonicalId(namespaceId)
-
-    fun configurationReadScope(identity: AccessIdentity, namespaceId: String): String =
-        configurationReadKey(identity, namespaceId)
+        capabilityKey(ProtocolCapability.CONFIGURATION_READ, identity, namespaceId)!!
 
     fun configurationReadKey(record: AccessVisibilityRecord): String {
         val ns = record.namespaceId
@@ -282,29 +264,62 @@ internal object VisibilityScopes {
     }
 
     /**
-     * Foreign-key prefix for every capability scope under one identity.
-     * [CacheCoordinate.identityPrefix] already carries the `v2` schema marker;
-     * mirror the `vis|auth|…` / `vis|cfgread|…` key shapes, which prefix the
-     * identity directly.
+     * Persisted key token for [capability]. These strings are on-disk schema:
+     * renaming one orphans restored blocks. [AUTHENTICATED_CONTACT] has no
+     * capability-scoped record.
      */
-    private fun capabilityKeyPrefix(capability: String, identity: AccessIdentity): String =
-        "vis|$capability|${CacheCoordinate.identityPrefix(identity)}"
+    fun storageToken(capability: ProtocolCapability): String? = when (capability) {
+        ProtocolCapability.CONFIGURATION_READ -> "cfgread"
+        ProtocolCapability.PUBLISH -> "publish"
+        ProtocolCapability.NAMESPACE_DISCOVERY -> "discovery"
+        ProtocolCapability.HISTORY -> "history"
+        ProtocolCapability.AUTHENTICATED_CONTACT -> null
+    }
+
+    /** True when the capability's block is scoped to a canonical Namespace. */
+    fun namespaceScoped(capability: ProtocolCapability): Boolean = when (capability) {
+        ProtocolCapability.CONFIGURATION_READ,
+        ProtocolCapability.PUBLISH,
+        ProtocolCapability.HISTORY -> true
+        ProtocolCapability.NAMESPACE_DISCOVERY,
+        ProtocolCapability.AUTHENTICATED_CONTACT -> false
+    }
+
+    /**
+     * Storage key (and high-water leaf) for one capability scope. Null when
+     * [capability] has no capability-scoped record, or when a Namespace-scoped
+     * capability was reported without a namespace.
+     */
+    fun capabilityKey(
+        capability: ProtocolCapability,
+        identity: AccessIdentity,
+        namespaceId: String?
+    ): String? {
+        val token = storageToken(capability) ?: return null
+        val base = "vis|$token|${CacheCoordinate.identityPrefix(identity)}"
+        return if (namespaceScoped(capability)) {
+            namespaceId?.let { "$base|${NamespaceInfo.canonicalId(it)}" }
+        } else {
+            base
+        }
+    }
+
+    fun profileKeyPrefixes(profileId: String): List<String> {
+        val tokens = buildList {
+            add("auth")
+            for (capability in ProtocolCapability.values()) {
+                storageToken(capability)?.let { add(it) }
+            }
+        }
+        return tokens.map { token -> "vis|$token|v2|$profileId|" }
+    }
 
     fun publishKey(identity: AccessIdentity, namespaceId: String): String =
-        "${capabilityKeyPrefix("publish", identity)}|${NamespaceInfo.canonicalId(namespaceId)}"
-
-    fun publishScope(identity: AccessIdentity, namespaceId: String): String =
-        publishKey(identity, namespaceId)
+        capabilityKey(ProtocolCapability.PUBLISH, identity, namespaceId)!!
 
     fun discoveryKey(identity: AccessIdentity): String =
-        capabilityKeyPrefix("discovery", identity)
-
-    fun discoveryScope(identity: AccessIdentity): String =
-        discoveryKey(identity)
+        capabilityKey(ProtocolCapability.NAMESPACE_DISCOVERY, identity, namespaceId = null)!!
 
     fun historyKey(identity: AccessIdentity, namespaceId: String): String =
-        "${capabilityKeyPrefix("history", identity)}|${NamespaceInfo.canonicalId(namespaceId)}"
-
-    fun historyScope(identity: AccessIdentity, namespaceId: String): String =
-        historyKey(identity, namespaceId)
+        capabilityKey(ProtocolCapability.HISTORY, identity, namespaceId)!!
 }

@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Identity-wide authentication blocks: ordering, persistence, restart, and
@@ -772,6 +773,145 @@ class AccessVisibilityTest {
         // A newer failure after clear still records.
         assertTrue(visibility.reportCompleted(publishFailure(identity, "team-a", observation = 11)))
         assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+    }
+
+    @Test
+    fun `configuration read authorization does not record publish discovery or history blocks`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
+        val identity = identity("dev")
+
+        assertTrue(visibility.reportCompleted(authzFailure(identity, "team-a", observation = 1)))
+
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
+        assertNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNull(visibility.discoveryAuthBlock(identity))
+        assertNull(visibility.historyAuthBlock(identity, "team-a"))
+        val persisted = store.loadVisibilityRecords()
+        assertEquals(1, persisted.size)
+        assertEquals(
+            AccessVisibilityRecord.CONFIGURATION_READ,
+            persisted.values.single().capability
+        )
+    }
+
+    @Test
+    fun `configuration read refusal leaves existing publish discovery and history blocks standing`() = runBlocking {
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
+        val identity = identity("dev")
+        visibility.reportCompleted(publishFailure(identity, "team-a", observation = 1))
+        visibility.reportCompleted(discoveryFailure(identity, observation = 2))
+        visibility.reportCompleted(historyFailure(identity, "team-a", observation = 3))
+
+        assertTrue(visibility.reportCompleted(authzFailure(identity, "team-a", observation = 4)))
+
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
+        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(visibility.discoveryAuthBlock(identity))
+        assertNotNull(visibility.historyAuthBlock(identity, "team-a"))
+        val persisted = store.loadVisibilityRecords().values.map { it.capability }.toSet()
+        assertEquals(
+            setOf(
+                AccessVisibilityRecord.CONFIGURATION_READ,
+                AccessVisibilityRecord.PUBLISH,
+                AccessVisibilityRecord.NAMESPACE_DISCOVERY,
+                AccessVisibilityRecord.HISTORY
+            ),
+            persisted
+        )
+        assertTrue(visibility.reportCompleted(publishFailure(identity, "team-b", observation = 5)))
+        assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
+        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+    }
+
+    @Test
+    fun `rejected older capability observation changes neither memory nor durable state`() = runBlocking {
+        val counted = CountingVisibilityStore(InMemoryCacheStore())
+        val visibility = AccessVisibility(counted)
+        val identity = identity("dev")
+
+        assertTrue(visibility.reportCompleted(publishFailure(identity, "team-a", observation = 5)))
+        assertEquals(1, counted.puts.get())
+        assertEquals(0, counted.removes.get())
+        val afterBlock = counted.delegate.loadVisibilityRecords()
+
+        assertFalse(visibility.reportCompleted(publishFailure(identity, "team-a", observation = 3)))
+        // Identity ordering may still advance on a success; the capability
+        // record must not move (issue #237 / ADR-0020).
+        visibility.reportCompleted(publishSuccess(identity, "team-a", observation = 3))
+
+        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertEquals(1, counted.puts.get(), "rejected older observations must not put again")
+        assertEquals(0, counted.removes.get(), "rejected older observations must not remove")
+        assertEquals(afterBlock, counted.delegate.loadVisibilityRecords())
+    }
+
+    @Test
+    fun `accepted capability block and matching clear each touch the store once`() = runBlocking {
+        val counted = CountingVisibilityStore(InMemoryCacheStore())
+        val visibility = AccessVisibility(counted)
+        val identity = identity("dev")
+
+        assertTrue(visibility.reportCompleted(authzFailure(identity, "team-a", observation = 1)))
+        assertTrue(visibility.reportCompleted(publishFailure(identity, "team-a", observation = 2)))
+        assertTrue(visibility.reportCompleted(discoveryFailure(identity, observation = 3)))
+        assertTrue(visibility.reportCompleted(historyFailure(identity, "team-a", observation = 4)))
+        assertEquals(4, counted.puts.get())
+        assertEquals(0, counted.removes.get())
+
+        assertTrue(visibility.reportCompleted(success(identity, observation = 5, namespaceId = "team-a")))
+        assertTrue(visibility.reportCompleted(publishSuccess(identity, "team-a", observation = 6)))
+        assertTrue(visibility.reportCompleted(discoverySuccess(identity, observation = 7)))
+        assertTrue(visibility.reportCompleted(historySuccess(identity, "team-a", observation = 8)))
+
+        assertEquals(4, counted.puts.get(), "clears must not write a replacement record")
+        assertEquals(4, counted.removes.get())
+        assertTrue(counted.delegate.loadVisibilityRecords().isEmpty())
+        assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
+        assertNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNull(visibility.discoveryAuthBlock(identity))
+        assertNull(visibility.historyAuthBlock(identity, "team-a"))
+    }
+
+    @Test
+    fun `failed store remove keeps a capability block fail closed`() = runBlocking {
+        val delegate = InMemoryCacheStore()
+        val store = object : CacheStore by delegate {
+            override suspend fun removeVisibilityRecord(key: String) {
+                throw java.io.IOException("disk full")
+            }
+        }
+        val visibility = AccessVisibility(store)
+        val identity = identity("dev")
+        visibility.reportCompleted(publishFailure(identity, "team-a", observation = 1))
+        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+
+        visibility.reportCompleted(publishSuccess(identity, "team-a", observation = 2))
+
+        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(delegate.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
+        // Capability high-water must not rise on a failed durable clear, so a
+        // later matching success is not locked out of retrying the remove.
+        visibility.reportCompleted(publishSuccess(identity, "team-a", observation = 3))
+        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+    }
+
+    private class CountingVisibilityStore(
+        val delegate: InMemoryCacheStore
+    ) : CacheStore by delegate {
+        val puts = AtomicInteger(0)
+        val removes = AtomicInteger(0)
+
+        override suspend fun putVisibilityRecord(key: String, record: AccessVisibilityRecord) {
+            puts.incrementAndGet()
+            delegate.putVisibilityRecord(key, record)
+        }
+
+        override suspend fun removeVisibilityRecord(key: String) {
+            removes.incrementAndGet()
+            delegate.removeVisibilityRecord(key)
+        }
     }
 
     private fun identity(
