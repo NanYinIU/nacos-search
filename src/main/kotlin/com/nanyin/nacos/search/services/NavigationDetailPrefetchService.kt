@@ -296,19 +296,15 @@ class NavigationDetailPrefetchService internal constructor(
      * server: a gutter pass runs on every keystroke and must never become one
      * request per pass.
      *
-     * @param operationContext unused; capture lives in the shared coordinate
-     * read. Kept so existing callers compile.
      * @return the body once it is in cache, or null when nothing was started —
      * prefetch disabled, or this coordinate's attempt window is still claimed.
      */
-    @Suppress("UNUSED_PARAMETER")
     fun requestCoordinate(
         project: Project,
         identity: AccessIdentity,
         namespaceId: String?,
         dataId: String,
-        group: String?,
-        operationContext: NacosOperationContext? = null
+        group: String?
     ): Deferred<NacosConfiguration?>? {
         if (dataId.isBlank()) return null
         if (!settings.navigationDetailPrefetchEnabled(identity.profileId)) return null
@@ -355,8 +351,9 @@ class NavigationDetailPrefetchService internal constructor(
      * cache. Null when the read failed or the configuration does not exist —
      * neither is coverage.
      *
-     * Shared by the project-wide sweep and [requestCoordinate] so the gap-fill
-     * rule has one implementation.
+     * Shared by the project-wide declared-source sweep so the gap-fill rule
+     * has one implementation. Gutter refresh and click navigation use
+     * [ConfigurationCoordinateRead] instead.
      */
     @OptIn(CacheWriteAccess::class)
     private suspend fun readAndCacheDetail(

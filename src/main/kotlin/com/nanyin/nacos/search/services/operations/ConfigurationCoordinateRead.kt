@@ -106,7 +106,7 @@ class ConfigurationCoordinateRead(
         prepare: (suspend () -> PreparedCoordinate)? = null
     ): Deferred<CoordinateReadResult>? {
         val workScope = scope ?: return null
-        val key = FlightKey(identity, namespaceId.orEmpty(), dataId, group)
+        val key = FlightKey(identity, namespaceId.orEmpty(), dataId, flightGroup(group))
         val now = nowMillis()
         val inflight = flights[key]?.takeIf { it.isActive }
         if (inflight != null) {
@@ -133,7 +133,7 @@ class ConfigurationCoordinateRead(
         publish: (AccessIdentity) -> Unit = onRemoteFetched
     ): Deferred<CoordinateReadResult> {
         val workScope = requireNotNull(scope) { "navigation requires a CoroutineScope" }
-        val key = FlightKey(identity, namespaceId.orEmpty(), dataId, group)
+        val key = FlightKey(identity, namespaceId.orEmpty(), dataId, flightGroup(group))
         flights[key]?.takeIf { it.isActive }?.let { return it }
         return startFlight(workScope, key, allowStaleCache = true, publish = publish, prepare = null)
     }
@@ -181,6 +181,8 @@ class ConfigurationCoordinateRead(
         flights.values.forEach { it.cancel() }
         flights.clear()
     }
+
+    private fun flightGroup(group: String): String = group.ifBlank { "DEFAULT_GROUP" }
 
     private data class FlightKey(
         val identity: AccessIdentity,

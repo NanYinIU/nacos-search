@@ -382,12 +382,12 @@ class NavigationDetailPrefetchServiceTest {
         val reader = coordinateReader { dataId -> reads += dataId }
         val svc = service(mock(), cache, setOf("declared.properties", "noise.properties"), reader)
         val body = withTimeout(5_000) {
-            svc.requestCoordinate(project, identity, "dev", "declared.properties", null, context)!!.await()
+            svc.requestCoordinate(project, identity, "dev", "declared.properties", null)!!.await()
         }
 
         assertEquals("new.key=1", body?.content)
         assertEquals(listOf("declared.properties"), reads)
-        assertNull(svc.requestCoordinate(project, identity, "dev", "declared.properties", null, context))
+        assertNull(svc.requestCoordinate(project, identity, "dev", "declared.properties", null))
         assertEquals(listOf("declared.properties"), reads)
         svc.dispose()
     }
@@ -404,11 +404,11 @@ class NavigationDetailPrefetchServiceTest {
         val svc = service(mock(), cache, setOf("declared.properties"), reader)
         assertNull(
             withTimeout(5_000) {
-                svc.requestCoordinate(project, identity, "dev", "declared.properties", "DEFAULT_GROUP", context)!!
+                svc.requestCoordinate(project, identity, "dev", "declared.properties", "DEFAULT_GROUP")!!
                     .await()
             }
         )
-        assertNull(svc.requestCoordinate(project, identity, "dev", "declared.properties", "DEFAULT_GROUP", context))
+        assertNull(svc.requestCoordinate(project, identity, "dev", "declared.properties", "DEFAULT_GROUP"))
         assertEquals(1, reads.get())
         svc.dispose()
     }

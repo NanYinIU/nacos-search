@@ -67,8 +67,10 @@ class ConfigurationCoordinateReadTest {
     @Test
     fun `concurrent background requests coalesce to one attempt per TTL`() = runBlocking {
         val reads = AtomicInteger(0)
+        val published = AtomicInteger(0)
         val reader = reader(
-            adapter = StubDetailAdapter(onRead = { reads.incrementAndGet() })
+            adapter = StubDetailAdapter(onRead = { reads.incrementAndGet() }),
+            onRemoteFetched = { published.incrementAndGet() }
         )
         val first = reader.background(identity(), "dev", "app.yaml", "G")
         val second = reader.background(identity(), "dev", "app.yaml", "G")
@@ -76,7 +78,32 @@ class ConfigurationCoordinateReadTest {
         assertNull(second)
         first!!.await()
         assertEquals(1, reads.get())
+        assertEquals(1, published.get())
         assertNull(reader.background(identity(), "dev", "app.yaml", "G"))
+    }
+
+    @Test
+    fun `blank group and DEFAULT_GROUP share one flight so a click can join`() = runBlocking {
+        val reads = AtomicInteger(0)
+        val published = AtomicInteger(0)
+        val gate = CompletableDeferred<Unit>()
+        val reader = reader(
+            adapter = StubDetailAdapter(
+                onRead = {
+                    reads.incrementAndGet()
+                    gate.await()
+                }
+            ),
+            onRemoteFetched = { published.incrementAndGet() },
+            scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        )
+        val background = reader.background(identity(), "dev", "app.yaml", "")!!
+        val joined = reader.navigation(identity(), "dev", "app.yaml", "DEFAULT_GROUP")
+        gate.complete(Unit)
+        withTimeout(5_000) { background.await() }
+        withTimeout(5_000) { joined.await() }
+        assertEquals(1, reads.get())
+        assertEquals(1, published.get())
     }
 
     @Test
