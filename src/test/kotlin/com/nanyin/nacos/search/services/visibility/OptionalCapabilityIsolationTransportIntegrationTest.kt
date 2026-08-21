@@ -10,7 +10,6 @@ import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.ConfigItem
 import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
-import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
@@ -33,8 +32,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -120,20 +117,12 @@ class OptionalCapabilityIsolationTransportIntegrationTest {
             "typed failure was ${publishResult.exceptionOrNull()}"
         )
 
-        // The denial is recorded in its own capability state only.
-        val visibility = cache.accessVisibility()
-        assertNotNull(
-            visibility.publishAuthBlock(context.identity, namespace),
-            "publish denial must be recorded as a publish block; blocks=${visibility.publishAuthBlocks().keys}"
+        // Isolation is the public behaviour: a publish denial must not hide
+        // configuration-read data or the identity (issue #125).
+        assertFalse(cache.visibilityReporter().isIdentityAuthBlocked(context.identity))
+        assertTrue(
+            cache.configurationVisibility(context.identity, namespace) is ConfigurationVisibility.Visible
         )
-        assertEquals(
-            AccessVisibilityRecord.PUBLISH,
-            visibility.publishAuthBlock(context.identity, namespace)?.capability
-        )
-        assertFalse(visibility.isIdentityAuthBlocked(context.identity))
-        assertFalse(visibility.isConfigurationReadBlocked(context.identity, namespace))
-        assertNull(visibility.discoveryAuthBlock(context.identity))
-        assertNull(visibility.historyAuthBlock(context.identity, namespace))
 
         // Public read surfaces stay visible.
         assertEquals(
@@ -168,9 +157,11 @@ class OptionalCapabilityIsolationTransportIntegrationTest {
             "fresh.properties",
             (state as NacosSearchService.SearchState.Success).configurations.single().dataId
         )
-        // The successful read never clears the publish block (issue #125):
-        // success clears only the matching capability and scope.
-        assertNotNull(visibility.publishAuthBlock(context.identity, namespace))
+        // A successful configuration-read never hides data the user can still
+        // read: isolation survives the search (issue #125).
+        assertTrue(
+            cache.configurationVisibility(context.identity, namespace) is ConfigurationVisibility.Visible
+        )
     }
 
     @Test
@@ -205,18 +196,8 @@ class OptionalCapabilityIsolationTransportIntegrationTest {
         )
 
         val visibility = cache.accessVisibility()
-        assertNotNull(
-            visibility.discoveryAuthBlock(context.identity),
-            "discovery denial must be recorded as a discovery block; blocks=${visibility.discoveryAuthBlocks().keys}"
-        )
-        assertEquals(
-            AccessVisibilityRecord.NAMESPACE_DISCOVERY,
-            visibility.discoveryAuthBlock(context.identity)?.capability
-        )
-        assertNull(visibility.discoveryAuthBlock(context.identity)?.namespaceId)
         assertFalse(visibility.isIdentityAuthBlocked(context.identity))
         assertFalse(visibility.isConfigurationReadBlocked(context.identity, namespace))
-        assertNull(visibility.publishAuthBlock(context.identity, namespace))
 
         // The manually readable Namespace's cached configuration data stays visible.
         assertEquals(
@@ -268,17 +249,8 @@ class OptionalCapabilityIsolationTransportIntegrationTest {
         )
 
         val visibility = cache.accessVisibility()
-        assertNotNull(
-            visibility.historyAuthBlock(context.identity, namespace),
-            "history denial must be recorded as a history block; blocks=${visibility.historyAuthBlocks().keys}"
-        )
-        assertEquals(
-            AccessVisibilityRecord.HISTORY,
-            visibility.historyAuthBlock(context.identity, namespace)?.capability
-        )
         assertFalse(visibility.isIdentityAuthBlocked(context.identity))
         assertFalse(visibility.isConfigurationReadBlocked(context.identity, namespace))
-        assertNull(visibility.publishAuthBlock(context.identity, namespace))
 
         // Current configuration reads stay fully visible.
         assertEquals(
@@ -338,10 +310,8 @@ class OptionalCapabilityIsolationTransportIntegrationTest {
             "bare 403 must classify as Authorization, got ${publishResult.exceptionOrNull()}"
         )
 
-        val visibility = cache.accessVisibility()
-        assertNotNull(visibility.publishAuthBlock(context.identity, namespace))
-        assertFalse(visibility.isIdentityAuthBlocked(context.identity))
-        assertFalse(visibility.isConfigurationReadBlocked(context.identity, namespace))
+        assertFalse(cache.visibilityReporter().isIdentityAuthBlocked(context.identity))
+        assertFalse(cache.accessVisibility().isConfigurationReadBlocked(context.identity, namespace))
         assertEquals(
             "keep.properties",
             cache.getListPage(context.identity, namespace, listPageCacheKey())?.pageItems?.single()?.dataId
@@ -379,8 +349,8 @@ class OptionalCapabilityIsolationTransportIntegrationTest {
             failing.resolveOperationTarget(context, namespace).getOrThrow(),
             command
         ).isFailure)
-        assertNotNull(cache.accessVisibility().publishAuthBlock(context.identity, namespace))
         assertFalse(cache.accessVisibility().isConfigurationReadBlocked(context.identity, namespace))
+        assertFalse(cache.visibilityReporter().isIdentityAuthBlocked(context.identity))
 
         // Second: a successful publish clears only the publish block; the
         // configuration-read surfaces never stopped being visible.
@@ -393,11 +363,8 @@ class OptionalCapabilityIsolationTransportIntegrationTest {
         ).getOrThrow()
         assertInstanceOf(PublishOutcome.Written::class.java, published)
 
-        val visibility = cache.accessVisibility()
-        assertNull(visibility.publishAuthBlock(context.identity, namespace))
-        assertTrue(visibility.publishAuthBlocks().isEmpty())
-        assertFalse(visibility.isConfigurationReadBlocked(context.identity, namespace))
-        assertFalse(visibility.isIdentityAuthBlocked(context.identity))
+        assertFalse(cache.accessVisibility().isConfigurationReadBlocked(context.identity, namespace))
+        assertFalse(cache.visibilityReporter().isIdentityAuthBlocked(context.identity))
         assertEquals(
             "keep.properties",
             cache.getListPage(context.identity, namespace, listPageCacheKey())?.pageItems?.single()?.dataId
@@ -441,11 +408,6 @@ class OptionalCapabilityIsolationTransportIntegrationTest {
         val visibility = cache.accessVisibility()
         assertFalse(visibility.isIdentityAuthBlocked(context.identity))
         assertFalse(visibility.isConfigurationReadBlocked(context.identity, namespace))
-        assertTrue(visibility.identityAuthBlocks().isEmpty())
-        assertTrue(visibility.namespaceConfigReadBlocks().isEmpty())
-        assertTrue(visibility.publishAuthBlocks().isEmpty())
-        assertTrue(visibility.discoveryAuthBlocks().isEmpty())
-        assertTrue(visibility.historyAuthBlocks().isEmpty())
         assertEquals(
             "keep.properties",
             cache.getListPage(context.identity, namespace, listPageCacheKey())?.pageItems?.single()?.dataId

@@ -86,8 +86,8 @@ class ProjectLocalSelectionTest {
 
         // Restored sessions must not re-seed from a moved application default.
         val movedSeed = environment(profileId = "ghost", suggestedNamespace = "moved")
-        alphaRestored.ensureInitialized(movedSeed)
-        betaRestored.ensureInitialized(movedSeed)
+        alphaRestored.sessionState.ensureInitialized(movedSeed)
+        betaRestored.sessionState.ensureInitialized(movedSeed)
         assertEquals("prod", alphaRestored.sessionState.selectedProfileId)
         assertEquals("ns-alpha", alphaRestored.sessionState.namespaceId)
         assertEquals("dev", betaRestored.sessionState.selectedProfileId)
@@ -133,7 +133,7 @@ class ProjectLocalSelectionTest {
     @Test
     fun `adopting a different environment without a namespace does not keep the previous servers namespace`() {
         val session = NacosProjectSession()
-        session.ensureInitialized(environment(profileId = "dev", suggestedNamespace = "ns-local-uuid"))
+        session.sessionState.ensureInitialized(environment(profileId = "dev", suggestedNamespace = "ns-local-uuid"))
         assertEquals("ns-local-uuid", session.sessionState.namespaceId)
 
         // Switcher / settings must pass the new environment's suggested Namespace.
@@ -148,7 +148,7 @@ class ProjectLocalSelectionTest {
     @Test
     fun `adopting the same environment without a namespace keeps the current Namespace`() {
         val session = NacosProjectSession()
-        session.ensureInitialized(environment(profileId = "dev", suggestedNamespace = "team-a"))
+        session.sessionState.ensureInitialized(environment(profileId = "dev", suggestedNamespace = "team-a"))
         session.select("dev", "team-custom")
 
         session.adoptEnvironment("dev")
@@ -173,7 +173,7 @@ class ProjectLocalSelectionTest {
         )
         val session = NacosProjectSession()
 
-        session.ensureInitialized(dev)
+        session.sessionState.ensureInitialized(dev)
         session.adoptEnvironment(prod)
         assertEquals("prod", session.sessionState.selectedProfileId)
         assertEquals("team-prod", session.sessionState.namespaceId)
@@ -190,7 +190,7 @@ class ProjectLocalSelectionTest {
         // must not be treated as "omitted" or the previous tenant sticks and
         // gutter ranking stays on the old Namespace (#193).
         val session = NacosProjectSession()
-        session.ensureInitialized(environment(profileId = "dev", suggestedNamespace = "team-a"))
+        session.sessionState.ensureInitialized(environment(profileId = "dev", suggestedNamespace = "team-a"))
         session.select("dev", "team-a")
 
         session.adoptEnvironment("dev", "")
@@ -202,7 +202,7 @@ class ProjectLocalSelectionTest {
     @Test
     fun `adopting public via literal public id leaves public on the session`() {
         val session = NacosProjectSession()
-        session.ensureInitialized(environment(profileId = "dev", suggestedNamespace = "team-a"))
+        session.sessionState.ensureInitialized(environment(profileId = "dev", suggestedNamespace = "team-a"))
         session.select("dev", "team-a")
 
         session.adoptEnvironment("dev", "public")
@@ -236,7 +236,7 @@ class ProjectLocalSelectionTest {
             sessionInitialized = false
         )
         val component = NacosProjectSession().also { it.loadState(loaded) }
-        component.ensureInitialized(environment(profileId = "dev", suggestedNamespace = "public"))
+        component.sessionState.ensureInitialized(environment(profileId = "dev", suggestedNamespace = "public"))
 
         assertTrue(component.sessionState.sessionInitialized)
         assertEquals("prod", component.sessionState.selectedProfileId)

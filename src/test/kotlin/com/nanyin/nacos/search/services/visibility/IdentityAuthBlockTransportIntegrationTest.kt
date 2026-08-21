@@ -102,7 +102,7 @@ class IdentityAuthBlockTransportIntegrationTest {
         )
         assertTrue(
             cache.accessVisibility().isIdentityAuthBlocked(context.identity),
-            "gateway report must block identity; blocks=${cache.accessVisibility().identityAuthBlocks().keys}"
+            "gateway report must block identity"
         )
 
         val service = NacosSearchService(apiProvider = { api })

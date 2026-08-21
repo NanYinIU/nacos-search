@@ -48,30 +48,6 @@ class LanguageServiceTest {
     }
 
     @Test
-    fun `test getCurrentLocale`() {
-        settings.language = "zh"
-        assertEquals(java.util.Locale.CHINESE, languageService.getCurrentLocale())
-
-        settings.language = "en"
-        assertEquals(java.util.Locale.ENGLISH, languageService.getCurrentLocale())
-    }
-
-    @Test
-    fun `test isLanguageSupported`() {
-        assertTrue(languageService.isLanguageSupported("en"))
-        assertTrue(languageService.isLanguageSupported("zh"))
-        assertFalse(languageService.isLanguageSupported("fr"))
-    }
-
-    @Test
-    fun `test getSupportedLanguages`() {
-        val languages = languageService.getSupportedLanguages()
-        assertEquals(2, languages.size)
-        assertTrue(languages.contains(LanguageService.SupportedLanguage.ENGLISH))
-        assertTrue(languages.contains(LanguageService.SupportedLanguage.CHINESE))
-    }
-
-    @Test
     fun `test language change publishes on the language topic`() {
         val subscription = Disposer.newDisposable("language-topic-test")
         try {
@@ -83,13 +59,6 @@ class LanguageServiceTest {
         } finally {
             Disposer.dispose(subscription)
         }
-    }
-
-    @Test
-    fun `test getMessage returns localized string`() {
-        val message = languageService.getMessage("common.ready")
-        assertNotNull(message)
-        assertTrue(message.isNotEmpty())
     }
 
     @Test

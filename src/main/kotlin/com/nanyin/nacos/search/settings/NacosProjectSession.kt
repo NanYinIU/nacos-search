@@ -95,15 +95,8 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
         }
     }
 
-    fun ensureInitialized(defaultEnvironment: PublishedEnvironment?) =
-        sessionState.ensureInitialized(defaultEnvironment)
-
     fun ensureInitialized(settings: NacosSettings) =
-        ensureInitialized(settings.defaultPublishedEnvironment())
-
-    fun healSelection(settings: NacosSettings) {
         sessionState.ensureInitialized(settings.defaultPublishedEnvironment())
-    }
 
     fun select(profileId: String, namespace: String) = sessionState.select(profileId, namespace)
 
@@ -153,8 +146,8 @@ class NacosProjectSession : PersistentStateComponent<NacosProjectSessionState> {
     /**
      * Profile-deletion posture (ADR-0025 / design §13.6): keep the stale
      * [NacosProjectSessionState.selectedProfileId] and force
-     * [NacosProjectSessionState.selectionWasExplicit] so [healSelection] will
-     * not silently retarget to another environment. Returns false when this
+     * [NacosProjectSessionState.selectionWasExplicit] so [ensureInitialized]
+     * will not silently retarget to another environment. Returns false when this
      * session is not currently selecting [profileId].
      */
     fun markSelectedProfileUnavailable(profileId: String): Boolean {

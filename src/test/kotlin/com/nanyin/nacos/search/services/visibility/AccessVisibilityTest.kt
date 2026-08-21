@@ -26,7 +26,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `terminal authentication failure creates identity-wide block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         val applied = visibility.reportCompleted(
@@ -43,7 +44,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `invalid or expired nacos password token creates identity-wide block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         visibility.reportCompleted(
@@ -62,7 +64,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `connection failure does not create a block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         val applied = visibility.reportCompleted(
@@ -82,7 +85,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `newer matching success clears the block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
         visibility.reportCompleted(authFailure(identity, observation = 1))
         assertTrue(visibility.isIdentityAuthBlocked(identity))
@@ -95,7 +99,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `older late failure cannot re-block after newer success`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         visibility.reportCompleted(success(identity, observation = 5))
@@ -107,7 +112,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `older late success cannot clear after newer refusal`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         visibility.reportCompleted(authFailure(identity, observation = 5))
@@ -119,7 +125,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `second identity at same endpoint remains unaffected`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val alice = identity("dev", principal = "alice")
         val bob = identity("dev", principal = "bob")
 
@@ -131,7 +138,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `identity differing only by resolved generation remains unaffected`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val v1 = identity("dev", generation = NacosApiGeneration.V1)
         val v3 = identity("dev", generation = NacosApiGeneration.V3)
 
@@ -143,7 +151,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `advancing access revision addresses a new unblocked identity`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val old = identity("dev", accessRevision = 1)
         val next = identity("dev", accessRevision = 2)
 
@@ -175,7 +184,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `zero observation cannot clear a block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
         visibility.reportCompleted(authFailure(identity, observation = 1))
 
@@ -212,7 +222,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `success without a prior block still returns true when observation is accepted`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         val accepted = visibility.reportCompleted(success(identity, observation = 1))
@@ -267,7 +278,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `configuration list authorization blocks only that identity and namespace`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         assertTrue(visibility.reportCompleted(authzFailure(identity, "team-a", observation = 1)))
@@ -285,7 +297,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `configuration detail authorization produces the same namespace block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         // Detail and list share CONFIGURATION_READ + namespace; either source is enough.
@@ -299,7 +312,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `same namespace under another identity remains visible`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val alice = identity("dev", principal = "alice")
         val bob = identity("dev", principal = "bob")
 
@@ -311,7 +325,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `newer matching configuration read success clears the namespace block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
         visibility.reportCompleted(authzFailure(identity, "team-a", observation = 1))
         assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
@@ -326,7 +341,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `success in another namespace does not clear the blocked namespace`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
         visibility.reportCompleted(authzFailure(identity, "team-a", observation = 1))
 
@@ -341,7 +357,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `publish success does not clear a namespace configuration-read block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
         visibility.reportCompleted(authzFailure(identity, "team-a", observation = 1))
 
@@ -363,7 +380,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `success for another identity does not clear the namespace block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val alice = identity("dev", principal = "alice")
         val bob = identity("dev", principal = "bob")
         visibility.reportCompleted(authzFailure(alice, "team-a", observation = 1))
@@ -376,7 +394,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `older late namespace failure cannot re-block after newer success`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         visibility.reportCompleted(success(identity, observation = 5, namespaceId = "team-a"))
@@ -388,7 +407,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `older late success cannot clear after newer namespace refusal`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         visibility.reportCompleted(authzFailure(identity, "team-a", observation = 5))
@@ -398,12 +418,13 @@ class AccessVisibilityTest {
         visibility.reportCompleted(success(identity, observation = 3, namespaceId = "team-a"))
 
         assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
-        assertNotNull(visibility.namespaceConfigReadBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.configurationReadKey(identity, "team-a")])
     }
 
     @Test
     fun `authoritative not-found does not create a namespace block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         val applied = visibility.reportCompleted(
@@ -422,7 +443,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `cancellation does not create a namespace block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         val applied = visibility.reportCompleted(
@@ -441,7 +463,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `publish authorization does not create a configuration-read namespace block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         val applied = visibility.reportCompleted(
@@ -457,7 +480,7 @@ class AccessVisibilityTest {
         // Issue #125: the denial is recorded in the publish capability's own
         // state, but never in the configuration-read or identity-wide state.
         assertTrue(applied)
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
         assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
         assertFalse(visibility.isIdentityAuthBlocked(identity))
     }
@@ -484,7 +507,8 @@ class AccessVisibilityTest {
 
     @Test
     fun `blank and public namespace spellings share one block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         visibility.reportCompleted(authzFailure(identity, "", observation = 1))
@@ -518,16 +542,17 @@ class AccessVisibilityTest {
 
     @Test
     fun `publish authorization denial blocks only the publish capability`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         val applied = visibility.reportCompleted(publishFailure(identity, "team-a", observation = 1))
 
         assertTrue(applied, "publish denial must be recorded in its own capability state")
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
         assertEquals(
             AccessVisibilityRecord.PUBLISH,
-            visibility.publishAuthBlock(identity, "team-a")?.capability
+            store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")]?.capability
         )
         // Configuration-read surfaces never consult the publish block.
         assertFalse(visibility.isIdentityAuthBlocked(identity))
@@ -535,47 +560,49 @@ class AccessVisibilityTest {
         assertFalse(visibility.isConfigurationReadBlocked(identity, "team-b"))
         assertTrue(visibility.configurationVisibility(identity, "team-a") is ConfigurationVisibility.Visible)
         // Other capability blocks unaffected.
-        assertNull(visibility.discoveryAuthBlock(identity))
-        assertNull(visibility.historyAuthBlock(identity, "team-a"))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.discoveryKey(identity)])
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.historyKey(identity, "team-a")])
     }
 
     @Test
     fun `namespace discovery authorization denial blocks only the discovery capability`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         val applied = visibility.reportCompleted(discoveryFailure(identity, observation = 1))
 
         assertTrue(applied)
-        assertNotNull(visibility.discoveryAuthBlock(identity))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.discoveryKey(identity)])
         assertEquals(
             AccessVisibilityRecord.NAMESPACE_DISCOVERY,
-            visibility.discoveryAuthBlock(identity)?.capability
+            store.loadVisibilityRecords()[VisibilityScopes.discoveryKey(identity)]?.capability
         )
-        assertNull(visibility.discoveryAuthBlock(identity)?.namespaceId)
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.discoveryKey(identity)]?.namespaceId)
         assertFalse(visibility.isIdentityAuthBlocked(identity))
         assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
-        assertNull(visibility.publishAuthBlock(identity, "team-a"))
-        assertNull(visibility.historyAuthBlock(identity, "team-a"))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.historyKey(identity, "team-a")])
     }
 
     @Test
     fun `history authorization denial blocks only the history capability`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         val applied = visibility.reportCompleted(historyFailure(identity, "team-a", observation = 1))
 
         assertTrue(applied)
-        assertNotNull(visibility.historyAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.historyKey(identity, "team-a")])
         assertEquals(
             AccessVisibilityRecord.HISTORY,
-            visibility.historyAuthBlock(identity, "team-a")?.capability
+            store.loadVisibilityRecords()[VisibilityScopes.historyKey(identity, "team-a")]?.capability
         )
         assertFalse(visibility.isIdentityAuthBlocked(identity))
         assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
-        assertNull(visibility.publishAuthBlock(identity, "team-a"))
-        assertNull(visibility.discoveryAuthBlock(identity))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.discoveryKey(identity)])
     }
 
     @Test
@@ -585,15 +612,15 @@ class AccessVisibilityTest {
         val identity = identity("dev")
         visibility.reportCompleted(publishFailure(identity, "team-a", observation = 1))
         visibility.reportCompleted(historyFailure(identity, "team-a", observation = 2))
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
         assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
 
         val cleared = visibility.reportCompleted(publishSuccess(identity, "team-a", observation = 3))
 
         assertTrue(cleared)
-        assertNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
         // Matching scope only: the history block and any readable data survive.
-        assertNotNull(visibility.historyAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.historyKey(identity, "team-a")])
         assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
         // Store record is gone.
         assertNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
@@ -601,33 +628,36 @@ class AccessVisibilityTest {
 
     @Test
     fun `publish success in another namespace does not clear a publish block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
         visibility.reportCompleted(publishFailure(identity, "team-a", observation = 1))
 
         val accepted = visibility.reportCompleted(publishSuccess(identity, "team-b", observation = 2))
 
         assertTrue(accepted) // ordering advanced for team-b
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
-        assertNull(visibility.publishAuthBlock(identity, "team-b"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-b")])
     }
 
     @Test
     fun `configuration read success does not clear a publish block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
         visibility.reportCompleted(publishFailure(identity, "team-a", observation = 1))
 
         val accepted = visibility.reportCompleted(success(identity, observation = 2, namespaceId = "team-a"))
 
         assertTrue(accepted)
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
         assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
     }
 
     @Test
     fun `discovery success clears only the discovery block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
         visibility.reportCompleted(discoveryFailure(identity, observation = 1))
         visibility.reportCompleted(publishFailure(identity, "team-a", observation = 2))
@@ -635,30 +665,32 @@ class AccessVisibilityTest {
         val cleared = visibility.reportCompleted(discoverySuccess(identity, observation = 3))
 
         assertTrue(cleared)
-        assertNull(visibility.discoveryAuthBlock(identity))
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.discoveryKey(identity)])
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
         assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
     }
 
     @Test
     fun `history success clears only the matching history block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
         visibility.reportCompleted(historyFailure(identity, "team-a", observation = 1))
 
         val cleared = visibility.reportCompleted(historySuccess(identity, "team-a", observation = 3))
 
         assertTrue(cleared)
-        assertNull(visibility.historyAuthBlock(identity, "team-a"))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.historyKey(identity, "team-a")])
         // A history success in another namespace must not clear this one.
         visibility.reportCompleted(historyFailure(identity, "team-a", observation = 4))
         visibility.reportCompleted(historySuccess(identity, "team-b", observation = 5))
-        assertNotNull(visibility.historyAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.historyKey(identity, "team-a")])
     }
 
     @Test
     fun `probe success does not clear a configuration read block`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
         visibility.reportCompleted(authzFailure(identity, "team-a", observation = 1))
 
@@ -668,12 +700,13 @@ class AccessVisibilityTest {
         // clears no capability scope.
         assertTrue(accepted)
         assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
-        assertNotNull(visibility.namespaceConfigReadBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.configurationReadKey(identity, "team-a")])
     }
 
     @Test
     fun `authentication failure from a capability operation still blocks the identity`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         val applied = visibility.reportCompleted(
@@ -688,7 +721,7 @@ class AccessVisibilityTest {
 
         assertTrue(applied)
         assertTrue(visibility.isIdentityAuthBlocked(identity))
-        assertNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
     }
 
     @Test
@@ -697,38 +730,40 @@ class AccessVisibilityTest {
         val first = AccessVisibility(store, ObservationHighWater())
         val identity = identity("dev")
         first.reportCompleted(publishFailure(identity, "team-a", observation = 10))
-        assertNotNull(first.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
 
         val second = AccessVisibility(store, ObservationHighWater())
         second.hydrateFromStore()
 
-        assertNotNull(second.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
         val cleared = second.reportCompleted(publishSuccess(identity, "team-a", observation = 1))
         assertTrue(cleared)
-        assertNull(second.publishAuthBlock(identity, "team-a"))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
     }
 
     @Test
     fun `older late capability failure cannot re-block after newer capability success`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         visibility.reportCompleted(publishSuccess(identity, "team-a", observation = 5))
         val reblocked = visibility.reportCompleted(publishFailure(identity, "team-a", observation = 3))
 
         assertFalse(reblocked)
-        assertNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
     }
 
     @Test
     fun `older late capability success cannot clear after newer capability refusal`() = runBlocking {
-        val visibility = AccessVisibility(InMemoryCacheStore())
+        val store = InMemoryCacheStore()
+        val visibility = AccessVisibility(store)
         val identity = identity("dev")
 
         visibility.reportCompleted(publishFailure(identity, "team-a", observation = 5))
         visibility.reportCompleted(publishSuccess(identity, "team-a", observation = 3))
 
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
     }
 
     @Test
@@ -742,8 +777,8 @@ class AccessVisibilityTest {
 
         visibility.purgeProfile("dev")
 
-        assertNull(visibility.publishAuthBlock(dev, "team-a"))
-        assertNotNull(visibility.discoveryAuthBlock(sit))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(dev, "team-a")])
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.discoveryKey(sit)])
         assertTrue(
             store.loadVisibilityRecords().keys.none {
                 it.startsWith("vis|publish|v2|dev|") ||
@@ -760,19 +795,19 @@ class AccessVisibilityTest {
         val identity = identity("dev")
         visibility.reportCompleted(publishFailure(identity, "team-a", observation = 1))
         visibility.reportCompleted(discoveryFailure(identity, observation = 2))
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
 
         store.clear()
         visibility.onUserClear(observation = 10)
 
-        assertNull(visibility.publishAuthBlock(identity, "team-a"))
-        assertNull(visibility.discoveryAuthBlock(identity))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.discoveryKey(identity)])
         // A failure that started before clear must not re-block.
         assertFalse(visibility.reportCompleted(publishFailure(identity, "team-a", observation = 5)))
-        assertNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
         // A newer failure after clear still records.
         assertTrue(visibility.reportCompleted(publishFailure(identity, "team-a", observation = 11)))
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
     }
 
     @Test
@@ -784,9 +819,9 @@ class AccessVisibilityTest {
         assertTrue(visibility.reportCompleted(authzFailure(identity, "team-a", observation = 1)))
 
         assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
-        assertNull(visibility.publishAuthBlock(identity, "team-a"))
-        assertNull(visibility.discoveryAuthBlock(identity))
-        assertNull(visibility.historyAuthBlock(identity, "team-a"))
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.discoveryKey(identity)])
+        assertNull(store.loadVisibilityRecords()[VisibilityScopes.historyKey(identity, "team-a")])
         val persisted = store.loadVisibilityRecords()
         assertEquals(1, persisted.size)
         assertEquals(
@@ -807,9 +842,9 @@ class AccessVisibilityTest {
         assertTrue(visibility.reportCompleted(authzFailure(identity, "team-a", observation = 4)))
 
         assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
-        assertNotNull(visibility.discoveryAuthBlock(identity))
-        assertNotNull(visibility.historyAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.discoveryKey(identity)])
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.historyKey(identity, "team-a")])
         val persisted = store.loadVisibilityRecords().values.map { it.capability }.toSet()
         assertEquals(
             setOf(
@@ -822,7 +857,7 @@ class AccessVisibilityTest {
         )
         assertTrue(visibility.reportCompleted(publishFailure(identity, "team-b", observation = 5)))
         assertTrue(visibility.isConfigurationReadBlocked(identity, "team-a"))
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
     }
 
     @Test
@@ -841,7 +876,7 @@ class AccessVisibilityTest {
         // record must not move (issue #237 / ADR-0020).
         visibility.reportCompleted(publishSuccess(identity, "team-a", observation = 3))
 
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(counted.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
         assertEquals(1, counted.puts.get(), "rejected older observations must not put again")
         assertEquals(0, counted.removes.get(), "rejected older observations must not remove")
         assertEquals(afterBlock, counted.delegate.loadVisibilityRecords())
@@ -869,9 +904,9 @@ class AccessVisibilityTest {
         assertEquals(4, counted.removes.get())
         assertTrue(counted.delegate.loadVisibilityRecords().isEmpty())
         assertFalse(visibility.isConfigurationReadBlocked(identity, "team-a"))
-        assertNull(visibility.publishAuthBlock(identity, "team-a"))
-        assertNull(visibility.discoveryAuthBlock(identity))
-        assertNull(visibility.historyAuthBlock(identity, "team-a"))
+        assertNull(counted.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
+        assertNull(counted.loadVisibilityRecords()[VisibilityScopes.discoveryKey(identity)])
+        assertNull(counted.loadVisibilityRecords()[VisibilityScopes.historyKey(identity, "team-a")])
     }
 
     @Test
@@ -885,16 +920,16 @@ class AccessVisibilityTest {
         val visibility = AccessVisibility(store)
         val identity = identity("dev")
         visibility.reportCompleted(publishFailure(identity, "team-a", observation = 1))
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
 
         visibility.reportCompleted(publishSuccess(identity, "team-a", observation = 2))
 
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
         assertNotNull(delegate.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
         // Capability high-water must not rise on a failed durable clear, so a
         // later matching success is not locked out of retrying the remove.
         visibility.reportCompleted(publishSuccess(identity, "team-a", observation = 3))
-        assertNotNull(visibility.publishAuthBlock(identity, "team-a"))
+        assertNotNull(store.loadVisibilityRecords()[VisibilityScopes.publishKey(identity, "team-a")])
     }
 
     private class CountingVisibilityStore(

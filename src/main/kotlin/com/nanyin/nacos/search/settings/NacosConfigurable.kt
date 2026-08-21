@@ -175,7 +175,7 @@ class NacosConfigurable @JvmOverloads constructor(
      * sole open project when this configurable was constructed without one
      * (IDE Preferences → Tools → Nacos Search).
      *
-     * Pure read of the session selection — does not call [NacosProjectSession.healSelection]
+     * Pure read of the session selection — does not call [NacosProjectSession.ensureInitialized]
      * so opening Settings cannot write project state (issue #106).
      */
     private fun resolveProjectProfileId(): String? {

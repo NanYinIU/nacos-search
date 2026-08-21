@@ -44,13 +44,6 @@ class LanguageService {
     }
     
     /**
-     * Get current locale
-     */
-    fun getCurrentLocale(): Locale {
-        return getCurrentLanguage().locale
-    }
-    
-    /**
      * Notify all listeners about language change.
      *
      * One mechanism only: subscribers take [NacosLanguageListener.TOPIC]. Each
@@ -89,26 +82,5 @@ class LanguageService {
                 javax.swing.JOptionPane.INFORMATION_MESSAGE
             )
         }
-    }
-    
-    /**
-     * Get localized message using current language
-     */
-    fun getMessage(key: String, vararg params: Any): String {
-        return NacosSearchBundle.message(key, *params)
-    }
-    
-    /**
-     * Check if a language is supported
-     */
-    fun isLanguageSupported(languageCode: String): Boolean {
-        return SupportedLanguage.values().any { it.code == languageCode }
-    }
-    
-    /**
-     * Get all supported languages
-     */
-    fun getSupportedLanguages(): List<SupportedLanguage> {
-        return SupportedLanguage.values().toList()
     }
 }

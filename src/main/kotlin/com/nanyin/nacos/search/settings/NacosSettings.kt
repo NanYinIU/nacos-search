@@ -654,7 +654,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     /**
      * Move open projects that still select [profileId] to the profile-unavailable
      * state: keep the stale selection, force [NacosProjectSessionState.selectionWasExplicit]
-     * so [healSelection] cannot auto-retarget (ADR-0025), clear resolved
+     * so [NacosProjectSession.ensureInitialized] cannot auto-retarget (ADR-0025), clear resolved
      * generation, and advance the session epoch so in-flight work detaches.
      */
     private fun markProjectSessionsProfileUnavailable(profileId: String) {
