@@ -1,0 +1,26 @@
+LIVE_PERF endpoint=http://127.0.0.1:8848
+BENCH cold_index env=A ns=public ms=105 count>=80
+BENCH cold_index env=A ns=perf-dev ms=33 count>=120
+BENCH cold_index env=A ns=perf-qa ms=16 count>=120
+BENCH cold_index env=A ns=perf-prod ms=25 count>=200
+BENCH warm_cache_read env=A ns=public ms=0
+BENCH warm_cache_read env=A ns=perf-dev ms=0
+BENCH warm_cache_read env=A ns=perf-qa ms=0
+BENCH warm_cache_read env=A ns=perf-prod ms=0
+BENCH ns_switch env=A to=perf-prod ms=0
+BENCH ns_switch env=A to=perf-dev ms=0
+BENCH ns_switch env=A to=public ms=0
+BENCH ns_switch env=A to=perf-qa ms=0
+BENCH ns_switch env=A to=perf-prod ms=0
+BENCH env_isolation ok (B misses all A indexes)
+BENCH cold_index env=B ns=public ms=12
+BENCH cold_index env=B ns=perf-dev ms=17
+BENCH env_switch_back_to_A warm_read ms=0
+BENCH coordinator_manual_refresh ns=perf-qa ms=14
+
+HTTP_BASELINE tenant=public pages=1 items=80 ms=29.2
+HTTP_BASELINE tenant=perf-dev pages=2 items=120 ms=9.5
+HTTP_BASELINE tenant=perf-qa pages=2 items=120 ms=6.1
+HTTP_BASELINE tenant=perf-prod pages=2 items=200 ms=7.7
+SEED public=80 perf-dev=120 perf-qa=120 perf-prod=200
+NACOS=2.5.3 standalone ANONYMOUS http://127.0.0.1:8848

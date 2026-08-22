@@ -1,0 +1,13 @@
+LIVE_LARGE_PERF endpoint=http://127.0.0.1:8848 ns=perf-bulk-1 minCount=1000
+BENCH large_cold_index ns=perf-bulk-1 count=1205 ms=7511 heapMb=850 deltaMb=738
+BENCH large_warm_index_read ms=0
+BENCH large_cold_detail_x32 ms=102 contentBytes=7964640 heapMb=958 deltaMb=108
+BENCH large_warm_detail_x32 ms=0
+BENCH large_key_extract lines≈10000 keys=9997 ms=46
+BENCH large_env_isolation ok
+BENCH large_cold_index env=B count>=1000 ms=4919
+BENCH large_env_switch_back_A warm ms=0
+
+SEED ns=perf-bulk-1 count=1205 content≈249KB/file lines≈10000
+SEED_CMD: python parallel POST /v1/cs/configs ×1200 (~19s wall)
+NOTE: namespace quota UI shows 200 but standalone accepts more
