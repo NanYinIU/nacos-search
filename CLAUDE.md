@@ -18,7 +18,7 @@ The plugin declares a right-side tool window (`Nacos Search`), a settings page u
 
 ## Common Commands
 
-Use the Gradle wrapper for all build operations. AI agents and automation **must invoke `./gradlew`, never the system `gradle` command**. The wrapper distribution is declared only in `gradle/wrapper/gradle-wrapper.properties`; inspect the current version with `./gradlew --version`. Invoking a separately installed Gradle builds with a different version and creates version-specific entries under `~/.gradle/caches/` and `~/.gradle/daemon/`.
+Use the Gradle wrapper for all build operations. AI agents and automation **must invoke `./gradlew`, never the system `gradle` command**. The wrapper distribution is declared only in `gradle/wrapper/gradle-wrapper.properties`; inspect the current version with `./gradlew --version`. Invoking a separately installed Gradle may build with a different version and create version-specific entries under `~/.gradle/caches/` and `~/.gradle/daemon/`.
 
 ```bash
 # Build the installable plugin distribution
