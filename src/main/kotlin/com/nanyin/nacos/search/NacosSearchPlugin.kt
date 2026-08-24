@@ -83,6 +83,8 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
                         settings.captureAccessIdentity(profileId, locator)
                     )
                     logger.info("Loaded ${cachedConfigs.size} configurations from cache")
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     logger.error("Error loading cached configurations", e)
                 }
@@ -112,6 +114,8 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
                             if (cachedConfigs.isEmpty()) {
                                 loadInitialData(project, profileId)
                             }
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             logger.error("Error checking cached configurations", e)
                             loadInitialData(project, profileId)
@@ -120,6 +124,8 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
                 } else {
                     logger.warn("Failed to connect to Nacos server: ${connectionResult.exceptionOrNull()?.message}")
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 logger.error("Error testing connection to Nacos server", e)
             }

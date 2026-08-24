@@ -832,6 +832,7 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
      * application-wide seed. Publication still requires every edited endpoint
      * to parse.
      */
+    @JvmOverloads
     fun validate(profileId: String? = null): List<String> {
         val errors = mutableListOf<String>()
 
