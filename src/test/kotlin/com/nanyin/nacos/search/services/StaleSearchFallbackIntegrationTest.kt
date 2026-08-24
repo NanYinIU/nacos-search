@@ -464,7 +464,7 @@ class StaleSearchFallbackIntegrationTest {
         namespace: NamespaceInfo,
         context: com.nanyin.nacos.search.settings.NacosOperationContext
     ) = NacosSearchService.SearchRequest(
-        dataId = "*",
+        searchContent = true,
         namespace = namespace,
         forceRefresh = true,
         operationContext = context,

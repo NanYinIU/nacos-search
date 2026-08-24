@@ -30,14 +30,16 @@ import kotlin.coroutines.coroutineContext
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Service for handling real-time fuzzy search with pagination.
+ * Service for handling Data ID substring search with pagination.
  *
  * It holds the session context every search targets (ADR-0046) and is given a
  * new one through [adoptSession] when the project session changes. Callers
  * express intent — [search], [searchAsYouType], [reload], [nextPage],
  * [previousPage], [changePageSize] — and render what [searchState] publishes.
  * Naming a target is this service's job, which is why assembling a
- * [SearchRequest] requires [SearchRequestAssembly].
+ * [SearchRequest] requires [SearchRequestAssembly]. The visible search box is
+ * one case-insensitive literal Data ID containment; `*` and `?` are ordinary
+ * characters, not glob or regular-expression syntax.
  */
 @Service(Service.Level.PROJECT)
 @OptIn(SearchRequestAssembly::class)
@@ -107,8 +109,12 @@ class NacosSearchService(
         val query: String = "",
         val searchContent: Boolean = false,
         val forceRefresh: Boolean = false,
-        val caseSensitive: Boolean = false,
-        val useRegex: Boolean = false,
+        /**
+         * When true, [dataId] is case-insensitive literal containment judged
+         * against the namespace index, so `*` and `?` stay ordinary characters.
+         * The visible search box always sets this; a raw list request does not.
+         */
+        val dataIdSubstring: Boolean = false,
         val namespace: NamespaceInfo? = null,
         val pageNo: Int = 1,
         val pageSize: Int = 10,
@@ -122,48 +128,12 @@ class NacosSearchService(
         val operationContext: NacosOperationContext? = null
     ) {
         /**
-         * Determines if this is a fuzzy search based on dataId content
+         * Data ID substring search is judged locally so `*` and `?` stay
+         * literal and case folding is ours, not the server's LIKE dialect.
+         * Empty Data ID keeps the remote unfiltered (or Group-only) listing.
          */
-        fun isFuzzySearch(): Boolean {
-            return dataId.contains("*") || dataId.contains("?")
-        }
-        
-        /**
-         * Determines if this is a prefix fuzzy search (starts with *)
-         */
-        fun isPrefixFuzzySearch(): Boolean {
-            return dataId.startsWith("*") && dataId.length > 1
-        }
-        
-        /**
-         * Determines if this is a wildcard-only search (just *)
-         */
-        fun isWildcardOnlySearch(): Boolean {
-            return dataId.trim() == "*"
-        }
-        
-        /**
-         * Gets the processed dataId for API calls
-         * For prefix searches like "*config", returns "config"
-         * For wildcard-only searches, returns empty string
-         */
-        fun getProcessedDataId(): String {
-            return when {
-                isWildcardOnlySearch() -> ""
-                isPrefixFuzzySearch() -> dataId.substring(1)
-                else -> dataId
-            }
-        }
-        
-        /**
-         * Gets the appropriate search mode for Nacos API
-         */
-        fun getSearchMode(): String {
-            return if (isFuzzySearch()) "blur" else "accurate"
-        }
-
         fun requiresLocalIndex(): Boolean {
-            return searchContent || isWildcardOnlySearch() || isPrefixFuzzySearch() || useRegex
+            return searchContent || dataIdSubstring
         }
 
         internal fun fullNamespaceTrigger(): IndexTrigger? =
@@ -172,15 +142,14 @@ class NacosSearchService(
         fun toCacheKey(): String {
             return listOf(
                 "namespace=${namespace?.namespaceId.orEmpty()}",
-                "dataId=${getProcessedDataId()}",
+                "dataId=$dataId",
                 "group=$group",
                 "appName=$appName",
                 "configTags=$configTags",
                 "query=$query",
                 "searchContent=$searchContent",
-                "caseSensitive=$caseSensitive",
-                "useRegex=$useRegex",
-                "search=${getSearchMode()}",
+                "dataIdSubstring=$dataIdSubstring",
+                "search=accurate",
                 "pageNo=$pageNo",
                 "pageSize=$pageSize"
             ).joinToString("|")
@@ -282,15 +251,13 @@ class NacosSearchService(
     }
 
     /**
-     * Debounced type-ahead search for [query]. Routed through the local index so
-     * a partial data id or group matches — Nacos "accurate" mode only matches an
-     * exact data id, which made typing a partial name return nothing.
+     * Debounced type-ahead search for the same [criteria] [search] uses.
+     * A non-empty Data ID is judged locally as case-insensitive literal
+     * containment so a partial name matches without becoming a glob or regex.
      */
-    fun searchAsYouType(query: String, coroutineScope: CoroutineScope) {
+    fun searchAsYouType(criteria: SearchCriteria, coroutineScope: CoroutineScope) {
         val session = held
-        val request = blankRequest(session.context)
-            .copy(dataId = query, query = query, useRegex = true)
-        searchWithDebounce(request, apiProvider(), coroutineScope, session)
+        searchWithDebounce(requestFor(criteria, session.context), apiProvider(), coroutineScope, session)
     }
 
     /**
@@ -409,12 +376,9 @@ class NacosSearchService(
         criteria: SearchCriteria,
         session: SearchSessionContext
     ): SearchRequest = blankRequest(session).copy(
-        dataId = criteria.dataId.ifBlank { criteria.query },
+        dataId = criteria.dataId,
         group = criteria.group,
-        query = criteria.query,
-        searchContent = criteria.searchContent,
-        caseSensitive = criteria.caseSensitive,
-        useRegex = criteria.useRegex
+        dataIdSubstring = criteria.dataId.isNotBlank()
     )
 
     /**
@@ -515,11 +479,11 @@ class NacosSearchService(
                 namespaceId = request.namespace?.namespaceId,
                 pageNo = request.pageNo,
                 pageSize = request.pageSize,
-                dataId = request.getProcessedDataId(),
+                dataId = request.dataId,
                 group = request.group,
                 appName = request.appName,
                 configTags = request.configTags,
-                searchMode = request.getSearchMode(),
+                searchMode = "accurate",
                 useCache = settings.cacheEnabled,
                 forceRefresh = request.forceRefresh
             )
@@ -528,11 +492,11 @@ class NacosSearchService(
                 namespaceId = request.namespace?.namespaceId,
                 pageNo = request.pageNo,
                 pageSize = request.pageSize,
-                dataId = request.getProcessedDataId(),
+                dataId = request.dataId,
                 group = request.group,
                 appName = request.appName,
                 configTags = request.configTags,
-                searchMode = request.getSearchMode(),
+                searchMode = "accurate",
                 useCache = settings.cacheEnabled,
                 forceRefresh = request.forceRefresh,
                 operationContext = context
@@ -907,11 +871,11 @@ class NacosSearchService(
         return listOf(
             "appName=$appName",
             "config_tags=$configTags",
-            "dataId=${getProcessedDataId()}",
+            "dataId=$dataId",
             "group=$group",
             "pageNo=$pageNo",
             "pageSize=$pageSize",
-            "search=${getSearchMode()}"
+            "search=accurate"
         ).joinToString("|")
     }
 
@@ -945,29 +909,14 @@ class NacosSearchService(
     }
 
     private fun NacosConfiguration.matchesRequest(request: SearchRequest): Boolean {
-        fun String.containsPattern(pattern: String): Boolean {
-            if (pattern.isBlank()) return true
-            return if (request.useRegex) {
-                try {
-                    Regex(pattern, if (request.caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE))
-                        .containsMatchIn(this)
-                } catch (_: Exception) {
-                    contains(pattern, ignoreCase = !request.caseSensitive)
-                }
-            } else {
-                contains(pattern, ignoreCase = !request.caseSensitive)
-            }
+        if (request.dataId.isNotBlank() && !dataId.contains(request.dataId, ignoreCase = true)) {
+            return false
         }
-
-        val processedDataId = request.getProcessedDataId()
-        if (processedDataId.isNotBlank() && !dataId.containsPattern(processedDataId)) return false
-        if (request.group.isNotBlank() && !group.containsPattern(request.group)) return false
-        if (request.query.isNotBlank()) {
-            val targetMatches = dataId.containsPattern(request.query) ||
-                    group.containsPattern(request.query) ||
-                    (tenantId?.contains(request.query, ignoreCase = !request.caseSensitive) == true)
-            val contentMatches = request.searchContent && content.containsPattern(request.query)
-            if (!targetMatches && !contentMatches) return false
+        if (request.group.isNotBlank() && group != request.group) return false
+        if (request.searchContent && request.query.isNotBlank() &&
+            !content.contains(request.query, ignoreCase = true)
+        ) {
+            return false
         }
         return true
     }

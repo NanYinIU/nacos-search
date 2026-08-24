@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "com.nanyin.nacos.search"
-version = "1.4.1"
+version = "1.4.2"
 val ideaLocalPath = providers.environmentVariable("IDEA_LOCAL_PATH")
     .orElse("")
     .get()
@@ -140,13 +140,18 @@ tasks {
             <ul>
                 <li>Connect to Nacos server via Open API</li>
                 <li>Local caching of configuration data</li>
-                <li>Search across dataId, group, and content</li>
+                <li>Case-insensitive Data ID substring search and group filtering</li>
                 <li>Namespace and group filtering</li>
                 <li>Seamless IntelliJ IDEA integration</li>
             </ul>
         """.trimIndent())
 
        changeNotes.set("""
+            <h3>1.4.2</h3>
+            <ul>
+                <li><b>Search</b>: the Data ID box is one case-insensitive substring. Enter search and live search use the same predicate; <code>*</code> and <code>?</code> are literal characters, not wildcards or regular expressions. Group filtering stays independent.</li>
+                <li><b>搜索</b>：Data ID 搜索框改为不区分大小写的子串匹配。按 Enter 与实时搜索使用同一谓词；<code>*</code> 和 <code>?</code> 是普通字符，不再当作通配符或正则。Group 过滤保持独立。</li>
+            </ul>
             <h3>1.4.1</h3>
             <ul>
                 <li><b>Compatibility</b>: removed the IDE upper bound, so the plugin installs on IntelliJ IDEA 2026.2 and later instead of stopping at 2026.1.</li>

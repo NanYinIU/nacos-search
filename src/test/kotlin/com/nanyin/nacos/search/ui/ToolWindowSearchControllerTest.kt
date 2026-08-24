@@ -1,14 +1,18 @@
+@file:OptIn(com.nanyin.nacos.search.services.CacheWriteAccess::class)
+
 package com.nanyin.nacos.search.ui
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.junit5.TestApplication
 import com.nanyin.nacos.search.models.ConfigItem
 import com.nanyin.nacos.search.models.ConfigListResponse
-import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
 import com.nanyin.nacos.search.models.SearchCriteria
+import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.NacosApiService
 import com.nanyin.nacos.search.services.NacosSearchService
+import com.nanyin.nacos.search.services.replaceNamespaceIndex
 import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.NacosOperationContext
@@ -24,7 +28,6 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -91,13 +94,17 @@ class ToolWindowSearchControllerTest {
         val service = NacosSearchService(apiProvider = { api.service })
         val controller = controllerFor(service)
         controller.openNamespace(namespace("ns-a"))
+        seedNamespace("ns-a")
 
-        controller.search(SearchCriteria(dataId = "app.yaml", query = "app", searchContent = false))
+        controller.search(SearchCriteria(dataId = "app.yaml"))
 
-        val call = api.calls.last()
-        assertEquals("ns-a", call.namespaceId)
-        assertEquals("app.yaml", call.dataId)
-        assertSame(service.sessionContext().operationContext, call.operationContext)
+        assertEquals("ns-a", service.sessionContext().namespaceId)
+        val state = service.searchState.value
+        assertTrue(state is NacosSearchService.SearchState.Success, "search did not succeed: $state")
+        assertEquals(
+            listOf("app.yaml"),
+            (state as NacosSearchService.SearchState.Success).configurations.map { it.dataId }
+        )
     }
 
     @Test
@@ -110,9 +117,10 @@ class ToolWindowSearchControllerTest {
         val captures = mutableListOf<String>()
         val controller = controllerFor(service, captures)
         controller.openNamespace(namespace("ns-a"))
+        seedNamespace("ns-a")
         val afterAdoption = captures.size
 
-        controller.search(SearchCriteria(dataId = "app.yaml", searchContent = false))
+        controller.search(SearchCriteria(dataId = "app.yaml"))
         controller.nextPage()
         controller.previousPage()
         controller.changePageSize(50)
@@ -128,28 +136,33 @@ class ToolWindowSearchControllerTest {
         val service = NacosSearchService(apiProvider = { api.service })
         val controller = controllerFor(service)
         controller.openNamespace(namespace("ns-a"))
+        seedNamespace("ns-a")
 
         controller.changePageSize(50)
-        controller.search(SearchCriteria(dataId = "app.yaml", searchContent = false))
+        controller.search(SearchCriteria(dataId = "app.yaml"))
 
         assertEquals(50, service.paginationState.value.pageSize)
-        assertEquals(50, api.calls.last().pageSize)
     }
 
     @Test
     fun `next page asks for the following page of the same search`() = runBlocking {
-        val api = RecordingApi(pagesAvailable = 3, totalCount = 30)
+        val api = RecordingApi()
         val service = NacosSearchService(apiProvider = { api.service })
         val controller = controllerFor(service)
         controller.openNamespace(namespace("ns-a"))
-        controller.search(SearchCriteria(dataId = "app.yaml", searchContent = false))
+        seedNamespace("ns-a", count = 25)
 
+        controller.search(SearchCriteria(dataId = "app"))
         controller.nextPage()
 
-        val call = api.calls.last()
-        assertEquals(2, call.pageNo)
-        assertEquals("app.yaml", call.dataId)
-        assertEquals("ns-a", call.namespaceId)
+        assertEquals("ns-a", service.sessionContext().namespaceId)
+        assertEquals(2, service.paginationState.value.currentPage)
+        val state = service.searchState.value
+        assertTrue(state is NacosSearchService.SearchState.Success, "search did not succeed: $state")
+        assertEquals(
+            (11..20).map { "app-$it.yaml" },
+            (state as NacosSearchService.SearchState.Success).configurations.map { it.dataId }
+        )
     }
 
     @Test
@@ -240,7 +253,8 @@ class ToolWindowSearchControllerTest {
         val service = NacosSearchService(apiProvider = { api.service })
         val controller = controllerFor(service)
         controller.openNamespace(namespace("ns-a"))
-        controller.search(SearchCriteria(dataId = "app.yaml", searchContent = false))
+        seedNamespace("ns-a")
+        controller.search(SearchCriteria(dataId = "app.yaml"))
         assertTrue(service.searchState.value is NacosSearchService.SearchState.Success)
 
         controller.leaveEnvironment()
@@ -265,6 +279,21 @@ class ToolWindowSearchControllerTest {
         settings.captureOperationContext(profileId).getOrNull()
 
     private fun namespace(id: String) = NamespaceInfo(namespaceId = id, namespaceName = id)
+
+    private suspend fun seedNamespace(namespaceId: String, count: Int = 1) {
+        val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
+        val context = checkNotNull(settings.captureOperationContext().getOrNull())
+        val configs = (1..count).map { index ->
+            NacosConfiguration(
+                dataId = if (count == 1) "app.yaml" else "app-$index.yaml",
+                group = "DEFAULT_GROUP",
+                tenantId = namespaceId,
+                content = "k=v",
+                type = "yaml"
+            )
+        }
+        cache.replaceNamespaceIndex(context.identity, namespaceId, configs, ttl = 600_000L)
+    }
 
     private data class ListCall(
         val namespaceId: String?,

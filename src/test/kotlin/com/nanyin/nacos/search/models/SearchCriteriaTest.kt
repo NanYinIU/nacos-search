@@ -9,30 +9,18 @@ class SearchCriteriaTest {
     fun `default values match session-owned search defaults`() {
         val criteria = SearchCriteria()
 
-        assertEquals("", criteria.query)
-        assertEquals("", criteria.group)
         assertEquals("", criteria.dataId)
-        assertFalse(criteria.useRegex)
-        assertFalse(criteria.caseSensitive)
-        assertTrue(criteria.searchContent)
+        assertEquals("", criteria.group)
     }
 
     @Test
     fun `custom values are retained`() {
         val criteria = SearchCriteria(
-            query = "test query",
-            group = "test-group",
             dataId = "test-data-id",
-            useRegex = true,
-            caseSensitive = true,
-            searchContent = false
+            group = "test-group"
         )
 
-        assertEquals("test query", criteria.query)
-        assertEquals("test-group", criteria.group)
         assertEquals("test-data-id", criteria.dataId)
-        assertTrue(criteria.useRegex)
-        assertTrue(criteria.caseSensitive)
-        assertFalse(criteria.searchContent)
+        assertEquals("test-group", criteria.group)
     }
 }

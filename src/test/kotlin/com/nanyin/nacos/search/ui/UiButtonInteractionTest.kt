@@ -4,9 +4,11 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
+import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.SearchCriteria
 import com.nanyin.nacos.search.services.operations.EditEnvironment
 import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.services.operations.OperationGateway
@@ -30,6 +32,7 @@ import org.mockito.kotlin.mock
 import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JComponent
+import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JTextField
@@ -71,7 +74,7 @@ class UiButtonInteractionTest {
         assertTrue(groupFilterButton.preferredSize.width >= groupFilterButton.minimumSize.width)
         assertTrue(groupFilterButton.preferredSize.width > 90)
 
-        panel.onSearchRequested = { calls.add("search:${it.query}") }
+        panel.onSearchRequested = { calls.add("search:${it.dataId}") }
         panel.onSearchCleared = { calls.add("clear") }
 
         runOnEdt {
@@ -84,6 +87,140 @@ class UiButtonInteractionTest {
 
         assertEquals(listOf("search:demo", "clear"), calls)
         assertEquals("", panel.getSearchQuery())
+        Disposer.dispose(panel)
+    }
+
+    @Test
+    fun enterAndLiveSearchAssembleTheSameDataIdCriteria() {
+        val panel = SearchPanel(mockProject)
+        val searchField = privateField<JTextField>(panel, "searchField")
+        var enter: SearchCriteria? = null
+        var live: SearchCriteria? = null
+        panel.onSearchRequested = { enter = it }
+        panel.onRealTimeSearch = { live = it }
+
+        runOnEdt {
+            searchField.text = "APP*"
+            pressEnter(searchField)
+        }
+
+        assertEquals(SearchCriteria(dataId = "APP*"), live)
+        assertEquals(live, enter)
+        Disposer.dispose(panel)
+    }
+
+    @Test
+    fun searchPlaceholderDoesNotAdvertiseWildcards() {
+        val placeholder = NacosSearchBundle.message("search.placeholder")
+        assertFalse(placeholder.contains("*"))
+        assertFalse(placeholder.contains("wildcard", ignoreCase = true))
+        assertFalse(placeholder.contains("通配"))
+    }
+
+    @Test
+    fun emptyHitsDoNotDropSelectedGroupFromLaterLiveSearch() {
+        // Same sequence the window uses: unfiltered listing populates the
+        // Namespace facet, then an empty hit page is absorbed and pushed to
+        // the picker. Sibling groups must stay, and later live search must
+        // still carry the selected Group.
+        val facet = NamespaceGroupFacet()
+        val panel = SearchPanel(mockProject)
+        val searchField = privateField<JTextField>(panel, "searchField")
+        val lives = mutableListOf<SearchCriteria>()
+        panel.onRealTimeSearch = { lives += it }
+
+        runOnEdt {
+            panel.setAvailableGroups(
+                facet.absorb("ns-a", listOf("DEFAULT_GROUP", "PROD_GROUP")),
+                "ns-a"
+            )
+            setPrivateField(panel, "selectedGroup", "PROD_GROUP")
+            panel.setAvailableGroups(facet.absorb("ns-a", emptyList()), "ns-a")
+            searchField.text = "nomatch"
+        }
+
+        val groupsAfterEmpty = privateField<List<String>>(panel, "availableGroups")
+        assertEquals("PROD_GROUP", lives.last().group)
+        assertTrue("PROD_GROUP" in groupsAfterEmpty)
+        assertTrue("DEFAULT_GROUP" in groupsAfterEmpty)
+
+        runOnEdt { searchField.text = "nomatch2" }
+
+        assertEquals("PROD_GROUP", lives.last().group)
+        assertEquals("PROD_GROUP", privateField<String>(panel, "selectedGroup"))
+        Disposer.dispose(panel)
+    }
+
+    @Test
+    fun emptyGroupOptionsDoNotResetSelection() {
+        val panel = SearchPanel(mockProject)
+
+        runOnEdt {
+            setPrivateField(panel, "selectedGroup", "PROD_GROUP")
+            panel.setAvailableGroups(emptyList())
+        }
+
+        assertEquals("PROD_GROUP", privateField<String>(panel, "selectedGroup"))
+        assertTrue("PROD_GROUP" in privateField<List<String>>(panel, "availableGroups"))
+        Disposer.dispose(panel)
+    }
+
+    @Test
+    fun switchingNamespaceResetsGroupSelection() {
+        val facet = NamespaceGroupFacet()
+        val panel = SearchPanel(mockProject)
+        val allLabel = NacosSearchBundle.message("search.group.filter.all")
+
+        runOnEdt {
+            panel.setAvailableGroups(facet.absorb("ns-a", listOf("PROD_GROUP")), "ns-a")
+            setPrivateField(panel, "selectedGroup", "PROD_GROUP")
+            panel.setAvailableGroups(facet.absorb("ns-b", listOf("OTHER_GROUP")), "ns-b")
+        }
+
+        assertEquals(allLabel, privateField<String>(panel, "selectedGroup"))
+        assertTrue("PROD_GROUP" !in privateField<List<String>>(panel, "availableGroups"))
+        assertTrue("OTHER_GROUP" in privateField<List<String>>(panel, "availableGroups"))
+        Disposer.dispose(panel)
+    }
+
+    @Test
+    fun clearAllCriteriaResetsGroupFilter() {
+        val panel = SearchPanel(mockProject)
+        val allLabel = NacosSearchBundle.message("search.group.filter.all")
+
+        runOnEdt {
+            setPrivateField(panel, "selectedGroup", "PROD_GROUP")
+            panel.clearAllCriteria()
+        }
+
+        assertEquals(allLabel, privateField<String>(panel, "selectedGroup"))
+        Disposer.dispose(panel)
+    }
+
+    @Test
+    fun dataIdHighlightUsesLiteralSubstringIncludingStarAndQuestion() {
+        val panel = ConfigListPanel(mockProject)
+        val starred = NacosConfiguration(dataId = "star*db.yaml", group = "DEFAULT_GROUP", content = "k=v")
+        val database = NacosConfiguration(dataId = "database.yaml", group = "DEFAULT_GROUP", content = "k=v")
+        val questioned = NacosConfiguration(dataId = "x?app.yaml", group = "DEFAULT_GROUP", content = "k=v")
+        panel.render(
+            ConfigListViewState.Results(
+                listOf(starred, database, questioned),
+                status = ListStatus.Dataset(
+                    com.nanyin.nacos.search.models.CacheConfidence.remoteConfirmed(
+                        now = 1L,
+                        completeness = com.nanyin.nacos.search.models.DatasetCompleteness.COMPLETE
+                    )
+                )
+            )
+        )
+
+        panel.setSearchQuery("*db")
+        assertTrue(highlightedDataId(panel, starred).contains("<b>*db</b>"), highlightedDataId(panel, starred))
+        assertFalse(highlightedDataId(panel, database).contains("<b>"), highlightedDataId(panel, database))
+
+        panel.setSearchQuery("?app")
+        assertTrue(highlightedDataId(panel, questioned).contains("<b>?app</b>"), highlightedDataId(panel, questioned))
         Disposer.dispose(panel)
     }
 
@@ -389,6 +526,18 @@ class UiButtonInteractionTest {
         val field = target.javaClass.getDeclaredField(name)
         field.isAccessible = true
         return field.get(target) as T
+    }
+
+    private fun setPrivateField(target: Any, name: String, value: Any?) {
+        val field = target.javaClass.getDeclaredField(name)
+        field.isAccessible = true
+        field.set(target, value)
+    }
+
+    private fun highlightedDataId(panel: ConfigListPanel, config: NacosConfiguration): String {
+        val list = privateField<JList<NacosConfiguration>>(panel, "configList")
+        val component = list.cellRenderer.getListCellRendererComponent(list, config, 0, false, false)
+        return privateField<JLabel>(component, "dataIdLabel").text
     }
 
     private fun pressEnter(field: JTextField) {

@@ -281,11 +281,11 @@ class NacosApiService(
      * @param namespaceId Namespace ID (tenant), null for public namespace
      * @param pageNo Page number for pagination
      * @param pageSize Number of items per page
-     * @param dataId Data ID for search (supports wildcards for fuzzy search)
+     * @param dataId Data ID filter sent to the Nacos list API
      * @param group Group for search
      * @param appName Application name for search
      * @param configTags Configuration tags for search
-     * @param searchMode Search mode ("accurate" for exact match, "blur" for fuzzy search)
+     * @param searchMode Search mode ("accurate" for exact match, "blur" for Nacos LIKE)
      * @param useCache Whether to use cache for individual configurations (default: true)
      */
     suspend fun listConfigurations(

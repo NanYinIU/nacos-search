@@ -22,6 +22,7 @@ import com.nanyin.nacos.search.models.ConfigItem
 import com.nanyin.nacos.search.models.ConfigListResponse
 import com.nanyin.nacos.search.models.NacosConfiguration
 import com.nanyin.nacos.search.models.NamespaceInfo
+import com.nanyin.nacos.search.models.SearchCriteria
 import com.nanyin.nacos.search.services.operations.Observed
 import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.settings.AuthMode
@@ -60,21 +61,20 @@ class NacosSearchServiceTest {
     }
 
     @Test
-    fun `search request normalizes wildcard and prefix fuzzy dataId`() {
-        val wildcard = NacosSearchService.SearchRequest(dataId = "*")
-        assertEquals("", wildcard.getProcessedDataId())
-        assertEquals("blur", wildcard.getSearchMode())
-        assertTrue(wildcard.requiresLocalIndex())
+    fun `search request treats star and question mark as literal Data ID text`() {
+        val star = NacosSearchService.SearchRequest(dataId = "*")
+        assertEquals("*", star.dataId)
+        assertFalse(star.requiresLocalIndex())
 
         val prefix = NacosSearchService.SearchRequest(dataId = "*config")
-        assertEquals("config", prefix.getProcessedDataId())
-        assertEquals("blur", prefix.getSearchMode())
-        assertTrue(prefix.requiresLocalIndex())
+        assertEquals("*config", prefix.dataId)
+        assertFalse(prefix.requiresLocalIndex())
 
-        val exact = NacosSearchService.SearchRequest(dataId = "app.yaml", group = "DEFAULT_GROUP")
-        assertEquals("app.yaml", exact.getProcessedDataId())
-        assertEquals("accurate", exact.getSearchMode())
-        assertFalse(exact.requiresLocalIndex())
+        val substring = NacosSearchService.SearchRequest(dataId = "*", dataIdSubstring = true)
+        assertTrue(substring.requiresLocalIndex())
+
+        val empty = NacosSearchService.SearchRequest(group = "DEFAULT_GROUP")
+        assertFalse(empty.requiresLocalIndex())
     }
 
     @Test
@@ -85,7 +85,7 @@ class NacosSearchServiceTest {
         )
         assertEquals(
             IndexTrigger.SEARCH,
-            NacosSearchService.SearchRequest(dataId = "*config").fullNamespaceTrigger()
+            NacosSearchService.SearchRequest(dataId = "app", dataIdSubstring = true).fullNamespaceTrigger()
         )
         assertEquals(
             null,
@@ -98,10 +98,10 @@ class NacosSearchServiceTest {
     }
 
     @Test
-    fun `regex and content-paged searches route to coordinator`() {
+    fun `content search and Data ID substring route to coordinator`() {
         assertEquals(
             IndexTrigger.SEARCH,
-            NacosSearchService.SearchRequest(useRegex = true).fullNamespaceTrigger()
+            NacosSearchService.SearchRequest(searchContent = true).fullNamespaceTrigger()
         )
         // Content search takes priority over paging — still routes to coordinator
         assertEquals(
@@ -112,10 +112,9 @@ class NacosSearchServiceTest {
                 pageSize = 20
             ).fullNamespaceTrigger()
         )
-        // Plain wildcard-only search without content or regex also routes
         assertEquals(
             IndexTrigger.SEARCH,
-            NacosSearchService.SearchRequest(dataId = "*").fullNamespaceTrigger()
+            NacosSearchService.SearchRequest(dataId = "*", dataIdSubstring = true).fullNamespaceTrigger()
         )
     }
 
@@ -189,15 +188,13 @@ class NacosSearchServiceTest {
             group = "DEFAULT_GROUP",
             query = "timeout",
             searchContent = true,
-            caseSensitive = false,
-            useRegex = true,
             pageNo = 2,
             pageSize = 50
         )
         val second = first.copy(pageNo = 3)
 
         assertEquals(
-            "namespace=|dataId=app|group=DEFAULT_GROUP|appName=|configTags=|query=timeout|searchContent=true|caseSensitive=false|useRegex=true|search=accurate|pageNo=2|pageSize=50",
+            "namespace=|dataId=app|group=DEFAULT_GROUP|appName=|configTags=|query=timeout|searchContent=true|dataIdSubstring=false|search=accurate|pageNo=2|pageSize=50",
             first.toCacheKey()
         )
         assertTrue(first.toCacheKey() != second.toCacheKey())
@@ -247,7 +244,8 @@ class NacosSearchServiceTest {
         val service = NacosSearchService()
         service.performSearch(
             NacosSearchService.SearchRequest(
-                dataId = "*",
+                dataId = "app",
+                dataIdSubstring = true,
                 namespace = NamespaceInfo.createPublicNamespace(),
                 operationContext = context
             ),
@@ -279,7 +277,8 @@ class NacosSearchServiceTest {
         val service = NacosSearchService()
         service.performSearch(
             NacosSearchService.SearchRequest(
-                dataId = "*",
+                dataId = "app",
+                dataIdSubstring = true,
                 namespace = NamespaceInfo.createPublicNamespace(),
                 operationContext = context
             ),
@@ -381,7 +380,8 @@ class NacosSearchServiceTest {
         val service = NacosSearchService(indexRequester = requester)
         service.performSearch(
             NacosSearchService.SearchRequest(
-                dataId = "*",
+                dataId = "app",
+                dataIdSubstring = true,
                 namespace = NamespaceInfo.createPublicNamespace(),
                 operationContext = context
             ),
@@ -488,7 +488,7 @@ class NacosSearchServiceTest {
         service.adoptSession(sessionFor(settings, "ns-a"))
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
-        service.searchAsYouType("app", scope)
+        service.searchAsYouType(SearchCriteria(dataId = "app"), scope)
         service.adoptSession(sessionFor(settings, "ns-b"))
         delay(600) // well past the 300ms debounce window
 
