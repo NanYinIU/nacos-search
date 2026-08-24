@@ -77,7 +77,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     // State
     private var currentNamespace: NamespaceInfo? = null
     private var currentConfiguration: NacosConfiguration? = null
-    // Stashed (config, line) consumed after a namespace switch reloads the list.
+    private val groupFacet = NamespaceGroupFacet()
     private var pendingNavigationTarget: Pair<NacosConfiguration, Int>? = null
     private var isSearching = false
 
@@ -541,8 +541,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
      * panel itself already rendered the closed state.
      */
     private fun onConfigurationListPresented(configurations: List<NacosConfiguration>) {
-        // Populate group filter with unique groups from current results
-        searchPanel.setAvailableGroups(configurations.map { it.group }.filter { it.isNotBlank() })
+        refreshGroupOptions(configurations)
         // An empty result list says nothing about the configuration being
         // edited, so it never discards a draft — and it never prompts either:
         // search is debounced, and a few keystrokes that match nothing must not
@@ -560,6 +559,31 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             pendingNavigationTarget = null
             configListPanel.selectConfiguration(targetConfig)
             currentConfiguration = targetConfig
+        }
+    }
+
+    /**
+     * Group picker options come from the Namespace dataset, not from the
+     * current filtered hit page. An empty Data ID search must not revert
+     * the selected Group to All.
+     */
+    private fun refreshGroupOptions(presented: List<NacosConfiguration>) {
+        val session = searchController.sessionContext()
+        val namespaceId = session.namespaceId
+        searchPanel.setAvailableGroups(groupFacet.absorb(namespaceId, presented.map { it.group }))
+        val identity = session.operationContext?.identity ?: return
+        coroutineScope.launch(Dispatchers.IO) {
+            val index = try {
+                ApplicationManager.getApplication()
+                    .getService(CacheService::class.java)
+                    .getNamespaceIndex(identity, namespaceId, allowStale = true)
+            } catch (_: Exception) {
+                null
+            } ?: return@launch
+            Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
+                if (searchController.sessionContext().namespaceId != namespaceId) return@invokeOnEdt
+                searchPanel.setAvailableGroups(groupFacet.absorb(namespaceId, index.map { it.group }))
+            }
         }
     }
     

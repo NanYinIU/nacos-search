@@ -32,6 +32,7 @@ import org.mockito.kotlin.mock
 import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JComponent
+import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JTextField
@@ -114,6 +115,56 @@ class UiButtonInteractionTest {
         assertFalse(placeholder.contains("*"))
         assertFalse(placeholder.contains("wildcard", ignoreCase = true))
         assertFalse(placeholder.contains("通配"))
+    }
+
+    @Test
+    fun emptyHitsDoNotDropSelectedGroupFromLaterLiveSearch() {
+        val panel = SearchPanel(mockProject)
+        val searchField = privateField<JTextField>(panel, "searchField")
+        val lives = mutableListOf<SearchCriteria>()
+        panel.onRealTimeSearch = { lives += it }
+
+        runOnEdt {
+            setPrivateField(panel, "selectedGroup", "PROD_GROUP")
+            panel.setAvailableGroups(emptyList())
+            searchField.text = "nomatch"
+        }
+
+        assertEquals("PROD_GROUP", lives.last().group)
+        assertTrue("PROD_GROUP" in privateField<List<String>>(panel, "availableGroups"))
+
+        runOnEdt { searchField.text = "nomatch2" }
+
+        assertEquals("PROD_GROUP", lives.last().group)
+        assertEquals("PROD_GROUP", privateField<String>(panel, "selectedGroup"))
+        Disposer.dispose(panel)
+    }
+
+    @Test
+    fun dataIdHighlightUsesLiteralSubstringIncludingStarAndQuestion() {
+        val panel = ConfigListPanel(mockProject)
+        val starred = NacosConfiguration(dataId = "star*db.yaml", group = "DEFAULT_GROUP", content = "k=v")
+        val database = NacosConfiguration(dataId = "database.yaml", group = "DEFAULT_GROUP", content = "k=v")
+        val questioned = NacosConfiguration(dataId = "x?app.yaml", group = "DEFAULT_GROUP", content = "k=v")
+        panel.render(
+            ConfigListViewState.Results(
+                listOf(starred, database, questioned),
+                status = ListStatus.Dataset(
+                    com.nanyin.nacos.search.models.CacheConfidence.remoteConfirmed(
+                        now = 1L,
+                        completeness = com.nanyin.nacos.search.models.DatasetCompleteness.COMPLETE
+                    )
+                )
+            )
+        )
+
+        panel.setSearchQuery("*db")
+        assertTrue(highlightedDataId(panel, starred).contains("<b>*db</b>"), highlightedDataId(panel, starred))
+        assertFalse(highlightedDataId(panel, database).contains("<b>"), highlightedDataId(panel, database))
+
+        panel.setSearchQuery("?app")
+        assertTrue(highlightedDataId(panel, questioned).contains("<b>?app</b>"), highlightedDataId(panel, questioned))
+        Disposer.dispose(panel)
     }
 
     @Test
@@ -418,6 +469,18 @@ class UiButtonInteractionTest {
         val field = target.javaClass.getDeclaredField(name)
         field.isAccessible = true
         return field.get(target) as T
+    }
+
+    private fun setPrivateField(target: Any, name: String, value: Any?) {
+        val field = target.javaClass.getDeclaredField(name)
+        field.isAccessible = true
+        field.set(target, value)
+    }
+
+    private fun highlightedDataId(panel: ConfigListPanel, config: NacosConfiguration): String {
+        val list = privateField<JList<NacosConfiguration>>(panel, "configList")
+        val component = list.cellRenderer.getListCellRendererComponent(list, config, 0, false, false)
+        return privateField<JLabel>(component, "dataIdLabel").text
     }
 
     private fun pressEnter(field: JTextField) {

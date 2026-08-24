@@ -13,8 +13,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -159,17 +160,31 @@ class NacosSearchServiceDataIdSearchTest {
             config("star*.yaml"),
             config("what?.yaml")
         )
-        val criteria = SearchCriteria(dataId = "APP", group = "PROD_GROUP")
+        val enterCriteria = SearchCriteria(dataId = "APP", group = "PROD_GROUP")
+        val otherCriteria = SearchCriteria(dataId = "what")
 
-        service.search(criteria)
+        service.search(enterCriteria)
         val entered = resultIds(service)
+        assertEquals(setOf("app-prod.yaml"), entered)
+
+        // Move the published result away from [entered] so waiting for that
+        // set cannot succeed on the previous Enter search's Success.
+        service.search(otherCriteria)
+        assertEquals(setOf("what?.yaml"), resultIds(service))
 
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         try {
-            service.searchAsYouType(criteria, scope)
-            awaitSuccess(service)
-            assertEquals(entered, resultIds(service))
-            assertEquals(setOf("app-prod.yaml"), entered)
+            service.searchAsYouType(enterCriteria, scope)
+            val live = withTimeout(3_000) {
+                service.searchState.first { state ->
+                    state is NacosSearchService.SearchState.Success &&
+                        state.configurations.map { it.dataId }.toSet() == entered
+                }
+            }
+            assertEquals(
+                entered,
+                (live as NacosSearchService.SearchState.Success).configurations.map { it.dataId }.toSet()
+            )
         } finally {
             scope.cancel()
         }
@@ -201,15 +216,6 @@ class NacosSearchServiceDataIdSearchTest {
         val state = service.searchState.value
         assertTrue(state is NacosSearchService.SearchState.Success, "search did not succeed: $state")
         return (state as NacosSearchService.SearchState.Success).configurations.map { it.dataId }.toSet()
-    }
-
-    private suspend fun awaitSuccess(service: NacosSearchService) {
-        val deadline = System.currentTimeMillis() + 3_000
-        while (service.searchState.value !is NacosSearchService.SearchState.Success &&
-            System.currentTimeMillis() < deadline
-        ) {
-            delay(50)
-        }
     }
 
     private fun listingApi(dataId: String): NacosApiService {

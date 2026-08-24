@@ -509,7 +509,7 @@ class ConfigListPanel(private val project: Project) : JPanel(BorderLayout()), Na
          * string so the JLabel stays in consistent HTML rendering mode.
          */
         private fun highlightDataId(dataId: String, isSelected: Boolean): String {
-            val query = currentSearchQuery.trim().trimStart('*').trimStart('?')
+            val query = currentSearchQuery.trim()
             if (query.isEmpty() || query.length < 2) {
                 return "<html>${escapeHtml(dataId)}</html>"
             }

@@ -227,12 +227,15 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
      */
     fun setAvailableGroups(groups: List<String>) {
         val allLabel = NacosSearchBundle.message("search.group.filter.all")
-        availableGroups = if (groups.isEmpty()) listOf(allLabel) else listOf(allLabel) + groups.distinct().sorted()
-        // Reset selection if the previously selected group is no longer available
-        if (selectedGroup != allLabel && selectedGroup !in groups) {
-            selectedGroup = allLabel
-            updateGroupFilterLabel()
-        }
+        val incoming = groups.filter { it.isNotBlank() && it != allLabel }.distinct()
+        val withSelection =
+            if (selectedGroup != allLabel && selectedGroup.isNotBlank() && selectedGroup !in incoming) {
+                incoming + selectedGroup
+            } else {
+                incoming
+            }
+        availableGroups = listOf(allLabel) + withSelection.sorted()
+        updateGroupFilterLabel()
     }
 
     /**
