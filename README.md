@@ -144,13 +144,13 @@ private boolean paymentEnabled;
 | IntelliJ IDEA | `2022.3`（build 223）及之后（无上限） |
 | Java / Gradle Toolchain | Java 17 |
 | Kotlin | 2.0.21 |
-| Gradle | 9.0.0 |
+| Gradle | 仓库 Wrapper（见 `gradle/wrapper/gradle-wrapper.properties`） |
 
 代码导航依赖 IntelliJ Java 插件，目前仅为 Java PSI 注册；Nacos 配置搜索与查看功能不受此限制。
 
 ## 开发指南
 
-仓库固定使用 Gradle Wrapper（当前为 Gradle 9.0.0），所有构建命令均在项目根目录执行。开发者、AI Agent 和其他自动化工具都必须使用 `./gradlew`，不要直接调用系统中的 `gradle`；后者可能是其他版本（例如 Homebrew 安装的 9.3.1），会使用错误版本构建并在 `~/.gradle/caches/`、`~/.gradle/daemon/` 下产生对应版本的缓存。
+仓库固定使用 Gradle Wrapper，版本以 `gradle/wrapper/gradle-wrapper.properties` 为准（可用 `./gradlew --version` 查看）。所有构建命令均在项目根目录执行。开发者、AI Agent 和其他自动化工具都必须使用 `./gradlew`，不要直接调用系统中的 `gradle`；系统 Gradle 可能是其他版本，会使用错误版本构建并在 `~/.gradle/caches/`、`~/.gradle/daemon/` 下产生对应版本的缓存。
 
 ```bash
 # 编译主代码和测试代码

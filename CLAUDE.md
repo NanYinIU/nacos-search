@@ -10,7 +10,7 @@ This is **Nacos Search**, an IntelliJ IDEA platform plugin that lets developers 
 - **Version**: sourced from `build.gradle.kts` (currently `1.4.1`) — bump it there and update the `pluginDescription` / `changeNotes` blocks in `build.gradle.kts` (`patchPluginXml`) when releasing. Those are the single source; `META-INF/plugin.xml` does not duplicate them.
 - **Target Platform**: IntelliJ IDEA Community Edition (`sinceBuild = 223`, no `untilBuild` — open-ended so Marketplace does not hide the plugin from newer IDEs)
 - **JDK**: Java 17
-- **Gradle**: 9.0.0
+- **Gradle**: repository wrapper (`gradle/wrapper/gradle-wrapper.properties`; inspect with `./gradlew --version`)
 - **Kotlin**: 2.0.21
 - **IntelliJ Platform Gradle Plugin**: 2.16.0
 
@@ -18,7 +18,7 @@ The plugin declares a right-side tool window (`Nacos Search`), a settings page u
 
 ## Common Commands
 
-Use the Gradle wrapper for all build operations. AI agents and automation **must invoke `./gradlew`, never the system `gradle` command**. The wrapper pins Gradle 9.0.0; the machine may also have another version installed (for example Homebrew Gradle 9.3.1), and invoking it directly builds with the wrong version and creates version-specific entries under `~/.gradle/caches/` and `~/.gradle/daemon/`.
+Use the Gradle wrapper for all build operations. AI agents and automation **must invoke `./gradlew`, never the system `gradle` command**. The wrapper distribution is declared only in `gradle/wrapper/gradle-wrapper.properties`; inspect the current version with `./gradlew --version`. Invoking a separately installed Gradle may build with a different version and create version-specific entries under `~/.gradle/caches/` and `~/.gradle/daemon/`.
 
 ```bash
 # Build the installable plugin distribution
