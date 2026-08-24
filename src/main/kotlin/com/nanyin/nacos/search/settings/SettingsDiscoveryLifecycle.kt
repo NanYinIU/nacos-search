@@ -4,6 +4,7 @@ import com.nanyin.nacos.search.models.ProfileIntent
 import com.nanyin.nacos.search.services.operations.DiagnosticReport
 import com.nanyin.nacos.search.services.operations.DiagnosticSnapshot
 import com.nanyin.nacos.search.services.operations.DiscoveredNamespace
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 
 /**
@@ -63,7 +64,13 @@ class SettingsDiscoveryLifecycle(
         val (flight, ownsFlight) = flightAndOwnership
         val result = if (ownsFlight) {
             try {
-                discoverNamespaces(derived.snapshot).also { flight.completion.complete(it) }
+                val discovered = discoverNamespaces(derived.snapshot)
+                val packed = discovered.exceptionOrNull()
+                if (packed is CancellationException) throw packed
+                discovered.also { flight.completion.complete(it) }
+            } catch (error: CancellationException) {
+                abandonCancelledFlight(flight, error)
+                throw error
             } catch (error: Exception) {
                 Result.failure<List<DiscoveredNamespace>>(error)
                     .also { flight.completion.complete(it) }
@@ -80,6 +87,16 @@ class SettingsDiscoveryLifecycle(
                 onFailure = { SettingsNamespaceOptions.Failed }
             )
             SettingsDiscoveryCompletion.Applied(currentOptions)
+        }
+    }
+
+    private fun abandonCancelledFlight(flight: DiscoveryFlight, error: CancellationException) {
+        flight.completion.cancel(error)
+        synchronized(lock) {
+            if (inFlight === flight) inFlight = null
+            if (flight.token === currentToken && currentOptions is SettingsNamespaceOptions.Loading) {
+                currentOptions = SettingsNamespaceOptions.Empty
+            }
         }
     }
 

@@ -6,11 +6,17 @@ import com.nanyin.nacos.search.services.operations.DiagnosticReport
 import com.nanyin.nacos.search.services.operations.DiagnosticSnapshot
 import com.nanyin.nacos.search.services.operations.DiagnosticStageResult
 import com.nanyin.nacos.search.services.operations.DiscoveredNamespace
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.fail
 import org.junit.jupiter.api.Test
 
 class SettingsDiscoveryLifecycleTest {
@@ -158,6 +164,90 @@ class SettingsDiscoveryLifecycleTest {
 
         assertEquals(SettingsDiscoveryCompletion.Stale, completion)
         assertEquals(SettingsNamespaceOptions.Empty, lifecycle.updateIntent(base))
+    }
+
+    @Test
+    fun `provider CancellationException propagates and does not publish Failed`() = runBlocking {
+        val lifecycle = SettingsDiscoveryLifecycle {
+            throw CancellationException("provider cancelled")
+        }
+
+        try {
+            lifecycle.discover(intent())
+            fail("expected CancellationException")
+        } catch (error: CancellationException) {
+            assertEquals("provider cancelled", error.message)
+        }
+        assertEquals(SettingsNamespaceOptions.Empty, lifecycle.updateIntent(intent()))
+    }
+
+    @Test
+    fun `owner cancellation terminates shared waiters`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val lifecycle = SettingsDiscoveryLifecycle {
+            started.complete(Unit)
+            awaitCancellation()
+        }
+        val waiterDone = CompletableDeferred<Throwable?>()
+        val owner = launch { lifecycle.discover(intent()) }
+        started.await()
+        val waiter = launch {
+            try {
+                lifecycle.discover(intent())
+                waiterDone.complete(null)
+            } catch (error: Throwable) {
+                waiterDone.complete(error)
+                if (error is CancellationException) throw error
+            }
+        }
+        yield()
+        owner.cancel()
+        val waiterError = withTimeout(1_000) { waiterDone.await() }
+        assertTrue(waiterError is CancellationException, waiterError.toString())
+        owner.join()
+        waiter.join()
+        assertEquals(SettingsNamespaceOptions.Empty, lifecycle.updateIntent(intent()))
+    }
+
+    @Test
+    fun `a later request starts a new flight after cancellation`() = runBlocking {
+        var discoveryCalls = 0
+        val started = CompletableDeferred<Unit>()
+        val team = DiscoveredNamespace("team-id", "Team")
+        val lifecycle = SettingsDiscoveryLifecycle {
+            discoveryCalls++
+            if (discoveryCalls == 1) {
+                started.complete(Unit)
+                awaitCancellation()
+            }
+            Result.success(listOf(team))
+        }
+
+        val first = launch { lifecycle.discover(intent()) }
+        started.await()
+        first.cancel()
+        first.join()
+        assertEquals(1, discoveryCalls)
+        assertEquals(SettingsNamespaceOptions.Empty, lifecycle.updateIntent(intent()))
+
+        val retry = lifecycle.discover(intent())
+        assertEquals(
+            SettingsDiscoveryCompletion.Applied(SettingsNamespaceOptions.Available(listOf(team))),
+            retry
+        )
+        assertEquals(2, discoveryCalls)
+    }
+
+    @Test
+    fun `ordinary provider failure still publishes Failed`() = runBlocking {
+        val lifecycle = SettingsDiscoveryLifecycle {
+            Result.failure(IllegalStateException("down"))
+        }
+
+        assertEquals(
+            SettingsDiscoveryCompletion.Applied(SettingsNamespaceOptions.Failed),
+            lifecycle.discover(intent())
+        )
     }
 
     private fun intent() = ProfileIntent(

@@ -14,6 +14,7 @@ import com.nanyin.nacos.search.ui.DraftDiscardPrompt
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.options.Configurable
+import com.intellij.openapi.progress.EmptyProgressIndicator
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
@@ -28,7 +29,6 @@ import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
-import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.*
 import javax.swing.*
@@ -1368,7 +1368,8 @@ class NacosConfigurable @JvmOverloads constructor(
         val diagnosticRequest = settingsDiscoveryLifecycle.beginDiagnostic(intent)
 
         testConnectionButton.isEnabled = false
-        testStatusLabel.text = NacosSearchBundle.message("settings.test.connecting")
+        val connectingText = NacosSearchBundle.message("settings.test.connecting")
+        testStatusLabel.text = connectingText
         testStatusLabel.foreground = JBColor.GRAY
 
         fun applyOutcome(
@@ -1405,32 +1406,33 @@ class NacosConfigurable @JvmOverloads constructor(
             }
         }
 
-        fun runDiagnostic(): Result<com.nanyin.nacos.search.services.operations.DiagnosticReport> =
-            try {
-                Result.success(
-                    runBlocking(Dispatchers.IO) {
-                        diagnoseConnection(diagnosticRequest.snapshot)
-                    }
-                )
-            } catch (e: Exception) {
-                Result.failure(e)
+        fun applyCancelled() {
+            testConnectionButton.isEnabled = true
+            if (testStatusLabel.text == connectingText) {
+                testStatusLabel.text = ""
+                testStatusLabel.foreground = JBColor.GRAY
+                testStatusLabel.toolTipText = null
             }
-
-        if (ApplicationManager.getApplication().isUnitTestMode) {
-            applyOutcome(runDiagnostic())
-            return
         }
 
-        ProgressManager.getInstance().run(object : Task.Backgroundable(null, NacosSearchBundle.message("settings.test.progress"), true) {
-            override fun run(indicator: ProgressIndicator) {
-                indicator.text = NacosSearchBundle.message("settings.test.connecting")
-                val outcome = runDiagnostic()
-
-                Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
-                    applyOutcome(outcome)
+        runCancellableSettingsTask(
+            title = NacosSearchBundle.message("settings.test.progress"),
+            indicatorText = connectingText,
+            work = { indicator ->
+                try {
+                    Result.success(
+                        runBlockingWithProgressIndicator(indicator) {
+                            diagnoseConnection(diagnosticRequest.snapshot)
+                        }
+                    )
+                } catch (error: Exception) {
+                    if (error.isCooperativeCancellation()) throw error
+                    Result.failure(error)
                 }
-            }
-        })
+            },
+            onSuccess = { applyOutcome(it) },
+            onCancelled = { applyCancelled() }
+        )
     }
 
     internal fun requestSuggestedNamespaceOptions() {
@@ -1456,23 +1458,58 @@ class NacosConfigurable @JvmOverloads constructor(
             }
         }
 
+        runCancellableSettingsTask(
+            title = NacosSearchBundle.message("settings.namespace.chooser.loading"),
+            indicatorText = NacosSearchBundle.message("settings.namespace.chooser.loading"),
+            work = { indicator ->
+                runBlockingWithProgressIndicator(indicator) {
+                    settingsDiscoveryLifecycle.discover(intent)
+                }
+            },
+            onSuccess = { applyCompletion(it) },
+            onCancelled = {
+                renderNamespaceOptions(settingsDiscoveryLifecycle.updateIntent(intent))
+            }
+        )
+    }
+
+    private fun <T> runCancellableSettingsTask(
+        title: String,
+        indicatorText: String,
+        work: (ProgressIndicator) -> T,
+        onSuccess: (T) -> Unit,
+        onCancelled: () -> Unit
+    ) {
         if (ApplicationManager.getApplication().isUnitTestMode) {
-            applyCompletion(runBlocking { settingsDiscoveryLifecycle.discover(intent) })
+            try {
+                onSuccess(work(EmptyProgressIndicator()))
+            } catch (error: Exception) {
+                if (error.isCooperativeCancellation()) {
+                    onCancelled()
+                } else {
+                    throw error
+                }
+            }
             return
         }
 
-        ProgressManager.getInstance().run(object : Task.Backgroundable(
-            null,
-            NacosSearchBundle.message("settings.namespace.chooser.loading"),
-            true
-        ) {
+        ProgressManager.getInstance().run(object : Task.Backgroundable(null, title, true) {
             override fun run(indicator: ProgressIndicator) {
-                indicator.text = NacosSearchBundle.message("settings.namespace.chooser.loading")
-                val completion = runBlocking(Dispatchers.IO) {
-                    settingsDiscoveryLifecycle.discover(intent)
-                }
-                Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
-                    applyCompletion(completion)
+                indicator.text = indicatorText
+                try {
+                    val value = work(indicator)
+                    if (indicator.isCanceled) throw ProcessCanceledException()
+                    Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
+                        onSuccess(value)
+                    }
+                } catch (error: Exception) {
+                    if (error.isCooperativeCancellation()) {
+                        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
+                            onCancelled()
+                        }
+                        throw error.asProcessCanceled()
+                    }
+                    throw error
                 }
             }
         })

@@ -3,12 +3,15 @@ package com.nanyin.nacos.search.settings
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
+import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.nanyin.nacos.search.models.ProfileIntent
 import com.nanyin.nacos.search.services.operations.DiagnosticReport
 import com.nanyin.nacos.search.services.operations.DiagnosticStageResult
 import com.nanyin.nacos.search.services.operations.DiscoveredNamespace
+import kotlinx.coroutines.CancellationException
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -504,6 +507,90 @@ class NacosConfigurableInteractionTest {
     }
 
     @Test
+    fun chooserDiscoveryCancellationDoesNotShowFailureRowOrHeadline() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
+        val status = privateField<JLabel>(configurable, "testStatusLabel")
+        val urlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+        configurable.suggestedNamespaceDiscoverer = { _ ->
+            throw CancellationException("cancelled")
+        }
+
+        runOnEdt {
+            urlField.text = "http://nacos.example:8848"
+            combo.setNamespaceId("keep-me")
+            status.text = ""
+            configurable.requestSuggestedNamespaceOptions()
+        }
+        waitForUi()
+
+        assertFalse(isFailureRowVisible(combo))
+        assertEquals(0, combo.discoveredCount())
+        assertEquals("keep-me", combo.namespaceId())
+        assertEquals("", status.text)
+    }
+
+    @Test
+    fun connectionDiagnosticCancellationDoesNotShowRedFailure() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
+        val status = privateField<JLabel>(configurable, "testStatusLabel")
+        val urlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+        val authCombo = privateField<javax.swing.JComboBox<*>>(configurable, "authModeComboBox")
+        val testButton = privateField<JButton>(configurable, "testConnectionButton")
+        configurable.connectionDiagnoser = {
+            throw CancellationException("cancelled")
+        }
+
+        runOnEdt {
+            urlField.text = "http://nacos.example:8848"
+            authCombo.selectedItem = AuthMode.ANONYMOUS
+            testButton.doClick()
+        }
+        waitForUi()
+
+        assertTrue(testButton.isEnabled)
+        assertFalse(isFailureRowVisible(combo))
+        assertNotEquals(
+            NacosSearchBundle.message("settings.test.failed", "cancelled"),
+            status.text
+        )
+        assertNotEquals(
+            NacosSearchBundle.message("settings.connection.failed"),
+            status.text
+        )
+        assertFalse(
+            status.text.contains("Connection failed", ignoreCase = true),
+            "cancellation must not headline a connection failure: ${status.text}"
+        )
+    }
+
+    @Test
+    fun connectionDiagnosticExceptionStillShowsRedFailure() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val status = privateField<JLabel>(configurable, "testStatusLabel")
+        val urlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+        val authCombo = privateField<javax.swing.JComboBox<*>>(configurable, "authModeComboBox")
+        val testButton = privateField<JButton>(configurable, "testConnectionButton")
+        configurable.connectionDiagnoser = { error("boom") }
+
+        runOnEdt {
+            urlField.text = "http://nacos.example:8848"
+            authCombo.selectedItem = AuthMode.ANONYMOUS
+            testButton.doClick()
+        }
+        waitForUi()
+
+        assertEquals(
+            NacosSearchBundle.message("settings.test.failed", "boom"),
+            status.text
+        )
+    }
+
+    @Test
     fun identityChangeClearsChooserFailureRowAndKeepsTypedId() {
         val configurable = NacosConfigurable()
         configurable.createComponent()
@@ -720,6 +807,9 @@ class NacosConfigurableInteractionTest {
         assertEquals("", draftAfterAnon.principal)
         assertEquals("", draftAfterAnon.secret)
     }
+
+    private fun isFailureRowVisible(combo: SuggestedNamespaceComboBox): Boolean =
+        combo.isTransientRowVisible() && combo.getItemAt(0) === SuggestedNamespaceChooserStatus.FAILED
 
     private fun selectedDraft(configurable: NacosConfigurable): ProfileIntent {
         val list = privateField<JList<*>>(configurable, "profileList")
