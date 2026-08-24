@@ -574,6 +574,77 @@ class EnvironmentProfileStoreTest {
         assertEquals("CUSTOM_GROUP", settings.preferencesFor("dev").defaultGroup)
     }
 
+    @Test
+    fun `valid active plus invalid inactive snapshot is rejected before any staging`() {
+        val (store, slots, previousDev) = seeded("dev", secret = "s1")
+        val qaSeed = store.applyIntents(
+            intents = listOf(
+                intent(id = "dev", secret = "s1", principal = "alice"),
+                intent(id = "qa", secret = "s2", principal = "bob", endpoint = "https://qa.example")
+            ),
+            activeProfileId = "dev",
+            previousProfiles = listOf(previousDev)
+        )
+        val previousQa = qaSeed.publishedProfiles.single { it.id == "qa" }
+        val writesAfterSeed = slots.writes.size
+
+        val outcome = store.applyIntents(
+            intents = listOf(
+                intent(id = "dev", secret = "s1", principal = "alice", displayName = "Dev renamed"),
+                intent(id = "qa", secret = "s2-rotated", principal = "bob", endpoint = "not a url")
+            ),
+            activeProfileId = "dev",
+            previousProfiles = qaSeed.publishedProfiles,
+            previousPreferences = qaSeed.publishedPreferences,
+            previousActiveId = "dev"
+        )
+
+        assertEquals("qa", outcome.rejectedInvalidProfileId)
+        assertTrue(outcome.isRejectedInvalidSnapshot())
+        assertEquals(writesAfterSeed, slots.writes.size)
+        assertEquals("s1", slots.read("dev", previousDev.credentialSlotVersion))
+        assertEquals("s2", slots.read("qa", previousQa.credentialSlotVersion))
+        assertNull(slots.read("qa", previousQa.credentialSlotVersion + 1))
+        val publishedDev = outcome.publishedProfiles.single { it.id == "dev" }
+        val publishedQa = outcome.publishedProfiles.single { it.id == "qa" }
+        assertEquals("https://nacos.example", publishedDev.canonicalEndpoint)
+        assertEquals(previousDev.accessRevision, publishedDev.accessRevision)
+        assertEquals(previousDev.displayName, publishedDev.displayName)
+        assertEquals("https://qa.example", publishedQa.canonicalEndpoint)
+        assertEquals(previousQa.accessRevision, publishedQa.accessRevision)
+    }
+
+    @Test
+    fun `repairing a persisted invalid endpoint publishes the canonical value and advances revisions`() {
+        val slots = InMemoryCredentialSlotStore()
+        val store = EnvironmentProfileStore(slots)
+        val damaged = EnvironmentProfile(
+            id = "qa",
+            displayName = "QA",
+            canonicalEndpoint = "not a url",
+            authMode = AuthMode.ANONYMOUS,
+            profileRevision = 3,
+            accessRevision = 2,
+            credentialSlotId = CredentialSlotStore.slotKey("qa", 1),
+            credentialSlotVersion = 1
+        )
+
+        val outcome = store.applyIntents(
+            intents = listOf(
+                intent(id = "qa", endpoint = "HTTPS://QA.example:443/", authMode = AuthMode.ANONYMOUS)
+            ),
+            activeProfileId = "qa",
+            previousProfiles = listOf(damaged)
+        )
+
+        assertNull(outcome.rejectedInvalidProfileId)
+        val published = outcome.publishedProfiles.single()
+        assertEquals("https://qa.example", published.canonicalEndpoint)
+        assertEquals(4L, published.profileRevision)
+        assertEquals(3L, published.accessRevision)
+        assertEquals(setOf("qa"), outcome.accessRevisionAdvancedIds)
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------

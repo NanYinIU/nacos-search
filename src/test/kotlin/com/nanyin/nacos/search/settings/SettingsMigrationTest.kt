@@ -333,6 +333,42 @@ class SettingsMigrationTest {
         assertTrue(session.upgradeSummaryShownForSchemaVersion >= SettingsSchema.CURRENT)
     }
 
+    @Test
+    fun `CURRENT damaged invalid endpoint remains loadable as repair state`() {
+        val slots = InMemoryCredentialSlotStore()
+        val input = SettingsMigrationInput(
+            schemaVersion = SettingsSchema.CURRENT,
+            servers = emptyList(),
+            activeServerId = "",
+            flatNamespace = "public",
+            profiles = listOf(
+                EnvironmentProfile(
+                    id = "dev",
+                    displayName = "Dev",
+                    canonicalEndpoint = "https://nacos.example",
+                    authMode = AuthMode.ANONYMOUS
+                ),
+                EnvironmentProfile(
+                    id = "qa",
+                    displayName = "QA",
+                    canonicalEndpoint = "not a url",
+                    authMode = AuthMode.ANONYMOUS
+                )
+            ),
+            preferences = listOf(
+                EnvironmentPreferences.defaultsFor("dev"),
+                EnvironmentPreferences.defaultsFor("qa")
+            ),
+            defaultProfileId = "dev",
+            defaultNamespaceId = "public"
+        )
+
+        val report = SettingsMigrator(slots).migrate(input)
+        assertEquals("not a url", report.profiles.single { it.id == "qa" }.canonicalEndpoint)
+        assertEquals("https://nacos.example", report.profiles.single { it.id == "dev" }.canonicalEndpoint)
+        assertEquals(0, report.credentialSlotWrites)
+    }
+
     private fun snapshot(profile: EnvironmentProfile): List<Any?> = listOf(
         profile.id,
         profile.displayName,

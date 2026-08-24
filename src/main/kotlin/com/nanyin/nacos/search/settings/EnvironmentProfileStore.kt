@@ -28,6 +28,12 @@ import com.nanyin.nacos.search.models.ProfileIntent
  * responsible for replacing its published profiles and preference records.
  * Legacy server rows are never rewritten from this path (ADR-0049 / issue #153).
  *
+ * Every intent endpoint must parse before any credential is staged or any
+ * profile is published (issue #249). An already-persisted invalid endpoint is
+ * not rewritten here; it stays loadable as repair state until a valid snapshot
+ * replaces it. Classification still compares raw text so a bad in-progress edit
+ * stays dirty.
+ *
  * Removals are **classified** here (ids present previously and absent from
  * intents) but not executed: the host runs [ProfileDeletionLifecycle] at the
  * write boundary so the tombstone lands before the published set omits the
@@ -76,6 +82,16 @@ class EnvironmentProfileStore(
             intent.copy(
                 profileId = id,
                 preferences = intent.preferences.copyPreferences().also { it.profileId = id }
+            )
+        }
+
+        CanonicalNacosEndpoint.firstInvalidIntent(normalizedIntents)?.let { invalid ->
+            return rejectedInvalidSnapshot(
+                invalidProfileId = invalid.profileId,
+                previousProfiles = previousProfiles,
+                previousPreferences = previousPreferences,
+                previousActiveId = previousActiveId,
+                previousSuggestedNamespaces = previousSuggestedNamespaces
             )
         }
 
@@ -585,6 +601,20 @@ class EnvironmentProfileStore(
     private fun normalizeEndpoint(raw: String): String =
         CanonicalNacosEndpoint.parse(raw).getOrNull()?.value
             ?: raw.trim()
+
+    private fun rejectedInvalidSnapshot(
+        invalidProfileId: String,
+        previousProfiles: List<EnvironmentProfile>,
+        previousPreferences: List<EnvironmentPreferences>,
+        previousActiveId: String,
+        previousSuggestedNamespaces: Map<String, String>
+    ): ProfileStoreWriteOutcome = ProfileStoreWriteOutcome(
+        rejectedInvalidProfileId = invalidProfileId,
+        publishedProfiles = previousProfiles.map { snapshot(it) },
+        publishedPreferences = previousPreferences.map { it.copyPreferences() },
+        activeProfileId = previousActiveId,
+        suggestedNamespaces = previousSuggestedNamespaces.toMap()
+    )
 
     private fun preferencesEqual(a: EnvironmentPreferences, b: EnvironmentPreferences): Boolean =
         a.allowCrossNamespaceNavigation == b.allowCrossNamespaceNavigation &&

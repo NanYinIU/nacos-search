@@ -344,7 +344,7 @@ class NacosApiServiceTest {
    fun `test settings validation`() {
        assertTrue(settings.isValid())
 
-       publishEnvironment(serverUrl = "not a url", authMode = AuthMode.ANONYMOUS)
+       settings.profiles.single().canonicalEndpoint = "not a url"
        assertFalse(settings.isValid())
    }
 

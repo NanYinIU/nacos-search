@@ -52,7 +52,10 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
      * Initialize the plugin components
      */
     private fun initializePlugin() {
-        // Validate settings
+        // Validate the selected profile and cache settings only. A dormant
+        // invalid profile must not skip initialization of an otherwise valid
+        // environment (issue #249); operation capture still fail-closes for
+        // the selected invalid profile.
         val validationErrors = settings.validate()
         if (validationErrors.isNotEmpty()) {
             logger.warn("Plugin settings validation failed: ${validationErrors.joinToString(", ")}")

@@ -430,6 +430,11 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             previousActiveId = previousActiveId,
             previousSuggestedNamespaces = previousNamespaces
         )
+        // Invalid snapshots are refused before tombstones, credential slots,
+        // preference records, or session epochs move (issue #249).
+        if (rawOutcome.isRejectedInvalidSnapshot()) {
+            return rawOutcome
+        }
 
         // Confirmed removals run the one deletion lifecycle at this write
         // boundary. Tombstone first; on failure withhold that id from the
@@ -823,20 +828,21 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     /**
-     * Validates the current settings.
+     * Validates settings that can block plugin initialization.
+     *
+     * Endpoint checks apply only to the selected (migration-default) profile.
+     * A dormant invalid profile stays loadable as repair state and must not
+     * prevent a valid selected environment from starting (issue #249).
+     * Publication still requires every edited endpoint to parse.
      */
     fun validate(): List<String> {
         val errors = mutableListOf<String>()
 
-        if (profiles.isEmpty()) {
+        val selected = getProfile(resolveDefaultProfileId())
+        if (selected == null || selected.canonicalEndpoint.isBlank()) {
             errors += "Server URL cannot be empty"
-        }
-        for (profile in profiles) {
-            if (profile.canonicalEndpoint.isBlank()) {
-                errors += "Server URL cannot be empty"
-            } else if (!isValidServerUrl(profile.canonicalEndpoint)) {
-                errors += "Invalid server URL format"
-            }
+        } else if (!isValidServerUrl(selected.canonicalEndpoint)) {
+            errors += "Invalid server URL format"
         }
 
         if (cacheEnabled) {

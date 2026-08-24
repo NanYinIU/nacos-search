@@ -24,9 +24,11 @@ data class ProfileIntent(
     /** Display label. Changing it advances neither revision. */
     val displayName: String = "",
     /**
-     * User-entered endpoint origin. The store normalizes it to a
-     * [CanonicalNacosEndpoint] value on publish; an unparseable value still
-     * participates in access-boundary comparison so a bad edit cannot be lost.
+     * User-entered endpoint origin. Publication requires every intent in the
+     * snapshot to parse as a [CanonicalNacosEndpoint] (issue #249); the store
+     * then normalizes the value. Classification still compares the raw text so
+     * a bad in-progress edit stays dirty, and already-persisted invalid rows
+     * remain loadable as repair state.
      */
     val endpoint: String = "http://localhost:8848",
     val apiPolicy: NacosApiPolicy = NacosApiPolicy.AUTO,

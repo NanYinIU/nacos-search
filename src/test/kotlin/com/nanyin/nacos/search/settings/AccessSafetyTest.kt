@@ -5,6 +5,7 @@ import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosServerConfig
 import com.nanyin.nacos.search.models.NacosApiGeneration
 import com.nanyin.nacos.search.models.NacosApiPolicy
+import com.nanyin.nacos.search.models.ProfileIntent
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
@@ -465,6 +466,81 @@ class AccessSafetyTest {
         val identity = OperationContextResolver.identityFromProfile(profile)
 
         assertEquals("<anonymous>", identity.principal)
+    }
+
+    @Test
+    fun `valid selected profile captures context while an invalid dormant profile exists`() {
+        val settings = NacosSettings()
+        settings.applyProfileIntents(
+            intents = listOf(
+                profileIntentFixture(
+                    id = "dev-249",
+                    displayName = "Dev",
+                    serverUrl = "https://nacos.example",
+                    authMode = AuthMode.ANONYMOUS
+                ),
+                profileIntentFixture(
+                    id = "qa-249",
+                    displayName = "QA",
+                    serverUrl = "https://qa.example",
+                    authMode = AuthMode.ANONYMOUS
+                )
+            ),
+            newActiveId = "dev-249",
+            credentialSlots = InMemoryCredentialSlotStore()
+        )
+        settings.profiles.first { it.id == "qa-249" }.canonicalEndpoint = "not a url"
+
+        val captured = settings.captureOperationContext("dev-249").getOrThrow()
+        assertEquals("dev-249", captured.identity.profileId)
+        assertEquals("https://nacos.example", captured.endpoint.value)
+        assertTrue(settings.validate().isEmpty())
+    }
+
+    @Test
+    fun `selecting an invalid dormant profile fails closed before a request`() {
+        val settings = NacosSettings()
+        settings.applyProfileIntents(
+            intents = listOf(
+                profileIntentFixture(
+                    id = "dev-249",
+                    displayName = "Dev",
+                    serverUrl = "https://nacos.example",
+                    authMode = AuthMode.ANONYMOUS
+                ),
+                profileIntentFixture(
+                    id = "qa-249",
+                    displayName = "QA",
+                    serverUrl = "https://qa.example",
+                    authMode = AuthMode.ANONYMOUS
+                )
+            ),
+            newActiveId = "dev-249",
+            credentialSlots = InMemoryCredentialSlotStore()
+        )
+        settings.profiles.first { it.id == "qa-249" }.canonicalEndpoint = "https://qa.example/nacos"
+
+        val result = settings.captureOperationContext("qa-249")
+        assertInstanceOf(ConfigurationRequired::class.java, result.exceptionOrNull())
+        assertTrue(settings.captureOperationContext("dev-249").isSuccess)
+    }
+
+    @Test
+    fun `first invalid intent is the first snapshot row that fails canonical parse`() {
+        val valid = ProfileIntent(
+            profileId = "dev",
+            displayName = "Dev",
+            endpoint = "https://nacos.example",
+            authMode = AuthMode.ANONYMOUS
+        )
+        val invalid = ProfileIntent(
+            profileId = "qa",
+            displayName = "QA",
+            endpoint = "not a url",
+            authMode = AuthMode.ANONYMOUS
+        )
+        assertEquals("qa", CanonicalNacosEndpoint.firstInvalidIntent(listOf(valid, invalid))?.profileId)
+        assertNull(CanonicalNacosEndpoint.firstInvalidIntent(listOf(valid)))
     }
 
 }
