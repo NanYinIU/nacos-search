@@ -1008,20 +1008,20 @@ private fun setupEventHandlers() {
             onLoadingChanged = { refreshLoadingActions() },
             onPresented = { state ->
                 render(state)
-                if (state !is DetailViewState.Body) return@onPresented
-                if (state.overlay != DetailOverlay.None && state.overlay != DetailOverlay.Deleted) {
-                    return@onPresented
-                }
-                // First load / forced refresh: rebuild + daemon restart so gutters
-                // see new keys immediately.
-                // Quiet confirm of a fresh body: only schedule an async index
-                // rebuild. If the cache version moved, publish notifies a
-                // coalesced gutter pass — a synchronous DaemonCodeAnalyzer.restart
-                // here was the blue↔gray flicker.
-                if (!keepCachedVisible || forceRefresh) {
-                    refreshNavigationState()
-                } else {
-                    warmKeyIndexAfterQuietConfirm()
+                if (state is DetailViewState.Body &&
+                    (state.overlay == DetailOverlay.None || state.overlay == DetailOverlay.Deleted)
+                ) {
+                    // First load / forced refresh: rebuild + daemon restart so gutters
+                    // see new keys immediately.
+                    // Quiet confirm of a fresh body: only schedule an async index
+                    // rebuild. If the cache version moved, publish notifies a
+                    // coalesced gutter pass — a synchronous DaemonCodeAnalyzer.restart
+                    // here was the blue↔gray flicker.
+                    if (!keepCachedVisible || forceRefresh) {
+                        refreshNavigationState()
+                    } else {
+                        warmKeyIndexAfterQuietConfirm()
+                    }
                 }
             },
             mapFailure = { error ->
