@@ -43,6 +43,8 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
     // Available groups for the filter popup
     private var availableGroups: List<String> = listOf(NacosSearchBundle.message("search.group.filter.all"))
     private var selectedGroup: String = NacosSearchBundle.message("search.group.filter.all")
+    private var groupsNamespaceId: String? = null
+    private var groupsNamespaceBound = false
     
     init {
         initializeComponents()
@@ -216,17 +218,28 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
     fun getSearchQuery(): String = searchField.text.trim()
 
     /**
-     * Clear all search criteria
+     * Clears the Data ID box and the Group picker. Used when the window
+     * abandons this Namespace; the X button only clears the Data ID.
      */
     fun clearAllCriteria() {
+        selectedGroup = allGroupsLabel()
+        updateGroupFilterLabel()
         clearSearch()
     }
 
     /**
-     * Updates the list of available groups (called by the window after data loads).
+     * Updates Group picker options. [namespaceId] is the Namespace these
+     * groups belong to: switching it resets the picker to All, but an empty
+     * hit page in the same Namespace must not.
      */
-    fun setAvailableGroups(groups: List<String>) {
-        val allLabel = NacosSearchBundle.message("search.group.filter.all")
+    fun setAvailableGroups(groups: List<String>, namespaceId: String? = groupsNamespaceId) {
+        val allLabel = allGroupsLabel()
+        val namespaceChanged = groupsNamespaceBound && groupsNamespaceId != namespaceId
+        groupsNamespaceBound = true
+        groupsNamespaceId = namespaceId
+        if (namespaceChanged) {
+            selectedGroup = allLabel
+        }
         val incoming = groups.filter { it.isNotBlank() && it != allLabel }.distinct()
         val withSelection =
             if (selectedGroup != allLabel && selectedGroup.isNotBlank() && selectedGroup !in incoming) {
@@ -237,6 +250,8 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
         availableGroups = listOf(allLabel) + withSelection.sorted()
         updateGroupFilterLabel()
     }
+
+    private fun allGroupsLabel(): String = NacosSearchBundle.message("search.group.filter.all")
 
     /**
      * Shows a popup menu of available groups above the filter button.

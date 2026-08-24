@@ -176,9 +176,12 @@ class NacosSearchServiceDataIdSearchTest {
         try {
             service.searchAsYouType(enterCriteria, scope)
             val live = withTimeout(3_000) {
+                var leftPrevious = false
                 service.searchState.first { state ->
-                    state is NacosSearchService.SearchState.Success &&
-                        state.configurations.map { it.dataId }.toSet() == entered
+                    val ids = (state as? NacosSearchService.SearchState.Success)
+                        ?.configurations?.map { it.dataId }?.toSet()
+                    if (ids != entered) leftPrevious = true
+                    leftPrevious && ids == entered
                 }
             }
             assertEquals(

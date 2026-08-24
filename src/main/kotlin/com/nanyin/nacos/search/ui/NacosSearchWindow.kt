@@ -570,7 +570,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
     private fun refreshGroupOptions(presented: List<NacosConfiguration>) {
         val session = searchController.sessionContext()
         val namespaceId = session.namespaceId
-        searchPanel.setAvailableGroups(groupFacet.absorb(namespaceId, presented.map { it.group }))
+        searchPanel.setAvailableGroups(
+            groupFacet.absorb(namespaceId, presented.map { it.group }),
+            namespaceId
+        )
         val identity = session.operationContext?.identity ?: return
         coroutineScope.launch(Dispatchers.IO) {
             val index = try {
@@ -582,7 +585,10 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
             } ?: return@launch
             Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
                 if (searchController.sessionContext().namespaceId != namespaceId) return@invokeOnEdt
-                searchPanel.setAvailableGroups(groupFacet.absorb(namespaceId, index.map { it.group }))
+                searchPanel.setAvailableGroups(
+                    groupFacet.absorb(namespaceId, index.map { it.group }),
+                    namespaceId
+                )
             }
         }
     }

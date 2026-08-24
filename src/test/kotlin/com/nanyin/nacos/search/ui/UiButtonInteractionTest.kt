@@ -119,24 +119,81 @@ class UiButtonInteractionTest {
 
     @Test
     fun emptyHitsDoNotDropSelectedGroupFromLaterLiveSearch() {
+        // Same sequence the window uses: unfiltered listing populates the
+        // Namespace facet, then an empty hit page is absorbed and pushed to
+        // the picker. Sibling groups must stay, and later live search must
+        // still carry the selected Group.
+        val facet = NamespaceGroupFacet()
         val panel = SearchPanel(mockProject)
         val searchField = privateField<JTextField>(panel, "searchField")
         val lives = mutableListOf<SearchCriteria>()
         panel.onRealTimeSearch = { lives += it }
 
         runOnEdt {
+            panel.setAvailableGroups(
+                facet.absorb("ns-a", listOf("DEFAULT_GROUP", "PROD_GROUP")),
+                "ns-a"
+            )
             setPrivateField(panel, "selectedGroup", "PROD_GROUP")
-            panel.setAvailableGroups(emptyList())
+            panel.setAvailableGroups(facet.absorb("ns-a", emptyList()), "ns-a")
             searchField.text = "nomatch"
         }
 
+        val groupsAfterEmpty = privateField<List<String>>(panel, "availableGroups")
         assertEquals("PROD_GROUP", lives.last().group)
-        assertTrue("PROD_GROUP" in privateField<List<String>>(panel, "availableGroups"))
+        assertTrue("PROD_GROUP" in groupsAfterEmpty)
+        assertTrue("DEFAULT_GROUP" in groupsAfterEmpty)
 
         runOnEdt { searchField.text = "nomatch2" }
 
         assertEquals("PROD_GROUP", lives.last().group)
         assertEquals("PROD_GROUP", privateField<String>(panel, "selectedGroup"))
+        Disposer.dispose(panel)
+    }
+
+    @Test
+    fun emptyGroupOptionsDoNotResetSelection() {
+        val panel = SearchPanel(mockProject)
+
+        runOnEdt {
+            setPrivateField(panel, "selectedGroup", "PROD_GROUP")
+            panel.setAvailableGroups(emptyList())
+        }
+
+        assertEquals("PROD_GROUP", privateField<String>(panel, "selectedGroup"))
+        assertTrue("PROD_GROUP" in privateField<List<String>>(panel, "availableGroups"))
+        Disposer.dispose(panel)
+    }
+
+    @Test
+    fun switchingNamespaceResetsGroupSelection() {
+        val facet = NamespaceGroupFacet()
+        val panel = SearchPanel(mockProject)
+        val allLabel = NacosSearchBundle.message("search.group.filter.all")
+
+        runOnEdt {
+            panel.setAvailableGroups(facet.absorb("ns-a", listOf("PROD_GROUP")), "ns-a")
+            setPrivateField(panel, "selectedGroup", "PROD_GROUP")
+            panel.setAvailableGroups(facet.absorb("ns-b", listOf("OTHER_GROUP")), "ns-b")
+        }
+
+        assertEquals(allLabel, privateField<String>(panel, "selectedGroup"))
+        assertTrue("PROD_GROUP" !in privateField<List<String>>(panel, "availableGroups"))
+        assertTrue("OTHER_GROUP" in privateField<List<String>>(panel, "availableGroups"))
+        Disposer.dispose(panel)
+    }
+
+    @Test
+    fun clearAllCriteriaResetsGroupFilter() {
+        val panel = SearchPanel(mockProject)
+        val allLabel = NacosSearchBundle.message("search.group.filter.all")
+
+        runOnEdt {
+            setPrivateField(panel, "selectedGroup", "PROD_GROUP")
+            panel.clearAllCriteria()
+        }
+
+        assertEquals(allLabel, privateField<String>(panel, "selectedGroup"))
         Disposer.dispose(panel)
     }
 

@@ -23,4 +23,16 @@ class NamespaceGroupFacetTest {
 
         assertEquals(listOf("OTHER_GROUP"), facet.absorb("ns-b", listOf("OTHER_GROUP")))
     }
+
+    @Test
+    fun `index groups enrich the facet after an empty hit page`() {
+        val facet = NamespaceGroupFacet()
+        facet.absorb("ns-a", listOf("DEFAULT_GROUP", "PROD_GROUP"))
+        facet.absorb("ns-a", emptyList())
+
+        assertEquals(
+            listOf("DEFAULT_GROUP", "PROD_GROUP", "QA_GROUP"),
+            facet.absorb("ns-a", listOf("DEFAULT_GROUP", "PROD_GROUP", "QA_GROUP"))
+        )
+    }
 }
