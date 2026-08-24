@@ -50,7 +50,7 @@ class DetailController(
 
     @Synchronized
     fun finishLoad(ticket: LoadTicket) {
-        if (stillOwns(ticket)) isLoading = false
+        if (ticket.generation == loadGeneration) isLoading = false
     }
 
     /** Clear / dispose: drop ownership so an older job cannot revive loading. */

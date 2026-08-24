@@ -45,6 +45,7 @@ internal class DetailLatestLoad(
                 if (!controller.stillOwns(ticket)) return@launch
                 controller.finishLoad(ticket)
                 onLoadingChanged(controller.isLoading)
+                if (!controller.stillOwns(ticket)) return@launch
                 onPresented(state)
             } catch (e: CancellationException) {
                 throw e
@@ -53,6 +54,7 @@ internal class DetailLatestLoad(
                 val state = mapFailure(e) ?: return@launch
                 controller.finishLoad(ticket)
                 onLoadingChanged(controller.isLoading)
+                if (!controller.stillOwns(ticket)) return@launch
                 onPresented(state)
             }
         }
