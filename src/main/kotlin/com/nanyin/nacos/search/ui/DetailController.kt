@@ -4,7 +4,6 @@ import com.nanyin.nacos.search.models.CacheConfidence
 import com.nanyin.nacos.search.services.CacheService
 import com.nanyin.nacos.search.services.operations.ConfigurationDetailConfirmation
 import com.nanyin.nacos.search.services.operations.DetailReadResult
-import com.nanyin.nacos.search.services.operations.Observed
 
 /**
  * Maps operation-layer 配置详情 confirmation into the closed [DetailViewState]
