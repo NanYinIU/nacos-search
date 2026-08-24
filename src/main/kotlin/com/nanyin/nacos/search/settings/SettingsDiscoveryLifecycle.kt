@@ -4,6 +4,7 @@ import com.nanyin.nacos.search.models.ProfileIntent
 import com.nanyin.nacos.search.services.operations.DiagnosticReport
 import com.nanyin.nacos.search.services.operations.DiagnosticSnapshot
 import com.nanyin.nacos.search.services.operations.DiscoveredNamespace
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 
 /**
@@ -63,7 +64,13 @@ class SettingsDiscoveryLifecycle(
         val (flight, ownsFlight) = flightAndOwnership
         val result = if (ownsFlight) {
             try {
-                discoverNamespaces(derived.snapshot).also { flight.completion.complete(it) }
+                val discovered = discoverNamespaces(derived.snapshot)
+                val packed = discovered.exceptionOrNull()
+                if (packed is CancellationException) throw packed
+                discovered.also { flight.completion.complete(it) }
+            } catch (error: CancellationException) {
+                abandonCancelledFlight(flight, error)
+                throw error
             } catch (error: Exception) {
                 Result.failure<List<DiscoveredNamespace>>(error)
                     .also { flight.completion.complete(it) }
@@ -83,6 +90,16 @@ class SettingsDiscoveryLifecycle(
         }
     }
 
+    private fun abandonCancelledFlight(flight: DiscoveryFlight, error: CancellationException) {
+        flight.completion.cancel(error)
+        synchronized(lock) {
+            if (inFlight === flight) inFlight = null
+            if (flight.token === currentToken && currentOptions is SettingsNamespaceOptions.Loading) {
+                currentOptions = SettingsNamespaceOptions.Empty
+            }
+        }
+    }
+
     /**
      * Adopts the latest unsaved intent, invalidating options when its discovery
      * identity changed. Suggested Namespace is deliberately outside that identity.
@@ -94,6 +111,13 @@ class SettingsDiscoveryLifecycle(
             currentOptions
         }
     }
+
+    /**
+     * Current options for the identity the lifecycle already holds. Does not
+     * adopt a captured request intent, so a cancelled stale callback cannot
+     * invalidate a newer flight.
+     */
+    fun options(): SettingsNamespaceOptions = synchronized(lock) { currentOptions }
 
     private fun adopt(identity: DiscoveryIdentity) {
         if (currentIdentity == identity) return

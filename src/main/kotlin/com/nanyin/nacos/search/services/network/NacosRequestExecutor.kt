@@ -1,11 +1,15 @@
 package com.nanyin.nacos.search.services.network
 
-import com.intellij.openapi.diagnostic.thisLogger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Executes a single HTTP GET against a Nacos endpoint with bounded, cancellable
@@ -77,7 +81,7 @@ class NacosRequestExecutor(
                )
 
                try {
-                   return@withTimeout transport.get(request)
+                   return@withTimeout invokeCancellable { transport.get(request) }
                } catch (ce: kotlinx.coroutines.CancellationException) {
                    throw ce
                } catch (e: NacosRequestError) {
@@ -104,18 +108,37 @@ class NacosRequestExecutor(
         authHeaders: Map<String, String> = emptyMap()
     ): String = coroutineScope {
         withTimeout(policy.totalBudgetMs) {
-            transport.post(TransportRequest(
-                url = url,
-                connectTimeoutMs = policy.connectTimeoutMs,
-                readTimeoutMs = policy.readTimeoutMs,
-                authHeaders = authHeaders,
-                attempt = 1,
-                postBody = body
-            ))
+            invokeCancellable {
+                transport.post(TransportRequest(
+                    url = url,
+                    connectTimeoutMs = policy.connectTimeoutMs,
+                    readTimeoutMs = policy.readTimeoutMs,
+                    authHeaders = authHeaders,
+                    attempt = 1,
+                    postBody = body
+                ))
+            }
         }
     }
 
-   private fun isRetriable(error: NacosRequestError): Boolean = when (error) {
+    private suspend fun invokeCancellable(block: () -> String): String =
+        suspendCancellableCoroutine { continuation ->
+            val thread = Thread({
+                try {
+                    continuation.resume(block())
+                } catch (error: Throwable) {
+                    continuation.resumeWithException(
+                        HttpCallGuard.cancellationOr(error)
+                    )
+                }
+            }, "nacos-http")
+            thread.start()
+            continuation.invokeOnCancellation {
+                HttpCallGuard.cancel(thread)
+            }
+        }
+
+    private fun isRetriable(error: NacosRequestError): Boolean = when (error) {
        is NacosRequestError.ConnectTimeout -> true
         is NacosRequestError.ReadTimeout -> true
         is NacosRequestError.Connection -> true
@@ -182,6 +205,7 @@ object DefaultHttpTransport : NacosRequestExecutor.HttpTransport {
     }
 
     private fun execute(conn: java.net.HttpURLConnection, writeBody: String?): String {
+        HttpCallGuard.bind(conn)
         try {
             if (writeBody != null) {
                 conn.outputStream.use { it.write(writeBody.toByteArray(Charsets.UTF_8)) }
@@ -194,18 +218,25 @@ object DefaultHttpTransport : NacosRequestExecutor.HttpTransport {
             }
             return body
         } catch (e: java.net.SocketTimeoutException) {
+            HttpCallGuard.throwIfCancelled(e)
             if (e.message?.contains("connect") == true) {
                 throw NacosRequestError.ConnectTimeout(e)
             }
             throw NacosRequestError.ReadTimeout(e)
+        } catch (e: java.io.InterruptedIOException) {
+            throw CancellationException("http cancelled", e)
         } catch (e: java.net.ConnectException) {
+            HttpCallGuard.throwIfCancelled(e)
             throw NacosRequestError.Connection(e)
         } catch (e: java.io.IOException) {
+            HttpCallGuard.throwIfCancelled(e)
             val status = extractStatus(e)
             if (status != null) {
                 throw classifyStatus(status, e.message ?: "")
             }
             throw NacosRequestError.Connection(e)
+        } finally {
+            HttpCallGuard.unbind(conn)
         }
     }
 
@@ -240,5 +271,42 @@ object DefaultHttpTransport : NacosRequestExecutor.HttpTransport {
             .replace(Regex("(?i)(authorization)[\"\\s:=]*[^\"\\s,}]*"), "$1: ***")
             .replace(Regex("(?i)(accesstoken)[\"\\s:=&]*[^\"\\s,&}]*"), "$1=***")
             .take(500)
+    }
+}
+
+/**
+ * Lets coroutine cancellation disconnect the thread currently blocked in
+ * [HttpURLConnection]. [Thread.interrupt] alone does not unblock that API.
+ */
+internal object HttpCallGuard {
+    private val connections = ConcurrentHashMap<Thread, java.net.HttpURLConnection>()
+    private val cancelled = ConcurrentHashMap.newKeySet<Thread>()
+
+    fun bind(conn: java.net.HttpURLConnection) {
+        connections[Thread.currentThread()] = conn
+    }
+
+    fun unbind(conn: java.net.HttpURLConnection) {
+        connections.remove(Thread.currentThread(), conn)
+    }
+
+    fun cancel(thread: Thread) {
+        cancelled.add(thread)
+        connections.remove(thread)?.disconnect()
+        thread.interrupt()
+    }
+
+    fun throwIfCancelled(cause: Throwable) {
+        if (Thread.currentThread().isInterrupted || cancelled.remove(Thread.currentThread())) {
+            throw CancellationException("http cancelled", cause)
+        }
+    }
+
+    fun cancellationOr(error: Throwable): Throwable {
+        if (error is CancellationException) return error
+        if (Thread.currentThread().isInterrupted || cancelled.remove(Thread.currentThread())) {
+            return CancellationException("http cancelled", error)
+        }
+        return error
     }
 }

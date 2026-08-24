@@ -16,8 +16,6 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.progress.ProgressManager
-import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.Messages
@@ -28,7 +26,6 @@ import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
-import kotlinx.coroutines.*
 import java.awt.*
 import java.awt.event.*
 import javax.swing.*
@@ -109,6 +106,7 @@ class NacosConfigurable @JvmOverloads constructor(
     private val settingsDiscoveryLifecycle = SettingsDiscoveryLifecycle { snapshot ->
         discoverSuggestedNamespaces(snapshot)
     }
+    private var background = SettingsBackgroundOperations()
 
     // Language
     private lateinit var languageComboBox: JComboBox<LanguageService.SupportedLanguage>
@@ -128,6 +126,8 @@ class NacosConfigurable @JvmOverloads constructor(
     override fun getDisplayName(): String = NacosSearchBundle.message("settings.title")
 
     override fun createComponent(): JComponent {
+        background.dispose()
+        background = SettingsBackgroundOperations()
         initializeDraft()
         buildComponents()
         mainPanel = buildPanel()
@@ -138,6 +138,11 @@ class NacosConfigurable @JvmOverloads constructor(
         refreshProfileListDecorations()
         updateApplyEnabledState()
         return mainPanel!!
+    }
+
+    override fun disposeUIResources() {
+        background.dispose()
+        mainPanel = null
     }
 
     // ------------------------------------------------------------------
@@ -1379,7 +1384,8 @@ class NacosConfigurable @JvmOverloads constructor(
         val diagnosticRequest = settingsDiscoveryLifecycle.beginDiagnostic(intent)
 
         testConnectionButton.isEnabled = false
-        testStatusLabel.text = NacosSearchBundle.message("settings.test.connecting")
+        val connectingText = NacosSearchBundle.message("settings.test.connecting")
+        testStatusLabel.text = connectingText
         testStatusLabel.foreground = JBColor.GRAY
 
         fun applyOutcome(
@@ -1416,32 +1422,33 @@ class NacosConfigurable @JvmOverloads constructor(
             }
         }
 
-        fun runDiagnostic(): Result<com.nanyin.nacos.search.services.operations.DiagnosticReport> =
-            try {
-                Result.success(
-                    runBlocking(Dispatchers.IO) {
-                        diagnoseConnection(diagnosticRequest.snapshot)
-                    }
-                )
-            } catch (e: Exception) {
-                Result.failure(e)
+        fun applyCancelled() {
+            testConnectionButton.isEnabled = true
+            if (testStatusLabel.text == connectingText) {
+                testStatusLabel.text = ""
+                testStatusLabel.foreground = JBColor.GRAY
+                testStatusLabel.toolTipText = null
             }
-
-        if (ApplicationManager.getApplication().isUnitTestMode) {
-            applyOutcome(runDiagnostic())
-            return
         }
 
-        ProgressManager.getInstance().run(object : Task.Backgroundable(null, NacosSearchBundle.message("settings.test.progress"), true) {
-            override fun run(indicator: ProgressIndicator) {
-                indicator.text = NacosSearchBundle.message("settings.test.connecting")
-                val outcome = runDiagnostic()
-
-                Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
-                    applyOutcome(outcome)
+        runCancellableSettingsTask(
+            title = NacosSearchBundle.message("settings.test.progress"),
+            indicatorText = connectingText,
+            work = { indicator ->
+                try {
+                    Result.success(
+                        runBlockingWithProgressIndicator(indicator) {
+                            diagnoseConnection(diagnosticRequest.snapshot)
+                        }
+                    )
+                } catch (error: Exception) {
+                    if (error.isCooperativeCancellation()) throw error
+                    Result.failure(error)
                 }
-            }
-        })
+            },
+            onSuccess = { applyOutcome(it) },
+            onCancelled = { applyCancelled() }
+        )
     }
 
     internal fun requestSuggestedNamespaceOptions() {
@@ -1467,26 +1474,29 @@ class NacosConfigurable @JvmOverloads constructor(
             }
         }
 
-        if (ApplicationManager.getApplication().isUnitTestMode) {
-            applyCompletion(runBlocking { settingsDiscoveryLifecycle.discover(intent) })
-            return
-        }
-
-        ProgressManager.getInstance().run(object : Task.Backgroundable(
-            null,
-            NacosSearchBundle.message("settings.namespace.chooser.loading"),
-            true
-        ) {
-            override fun run(indicator: ProgressIndicator) {
-                indicator.text = NacosSearchBundle.message("settings.namespace.chooser.loading")
-                val completion = runBlocking(Dispatchers.IO) {
+        runCancellableSettingsTask(
+            title = NacosSearchBundle.message("settings.namespace.chooser.loading"),
+            indicatorText = NacosSearchBundle.message("settings.namespace.chooser.loading"),
+            work = { indicator ->
+                runBlockingWithProgressIndicator(indicator) {
                     settingsDiscoveryLifecycle.discover(intent)
                 }
-                Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
-                    applyCompletion(completion)
-                }
+            },
+            onSuccess = { applyCompletion(it) },
+            onCancelled = {
+                renderNamespaceOptions(settingsDiscoveryLifecycle.options())
             }
-        })
+        )
+    }
+
+    private fun <T> runCancellableSettingsTask(
+        title: String,
+        indicatorText: String,
+        work: (ProgressIndicator) -> T,
+        onSuccess: (T) -> Unit,
+        onCancelled: () -> Unit
+    ) {
+        background.run(title, indicatorText, work, onSuccess, onCancelled)
     }
 
     private fun synchronizeSettingsDiscoveryIntent(intent: ProfileIntent) {

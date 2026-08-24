@@ -245,6 +245,36 @@ class ConnectionDiagnosticTest {
     }
 
     @Test
+    fun `CancellationException from chooser discovery probe propagates`() = runBlocking {
+        val v3 = object : ProtocolAdapter {
+            override val capabilities = ProtocolCapabilities.NONE.copy(
+                namespaceDiscovery = CapabilityCoverage.COMPLETE
+            )
+            override suspend fun probe(target: OperationTarget): Result<Unit> = Result.success(Unit)
+            override suspend fun listSummaries(target: OperationTarget, query: SummaryQuery) =
+                Result.success(SummaryPage(0, 1, 0, emptyList()))
+            override suspend fun readDetail(target: OperationTarget, coordinate: ConfigurationCoordinate) =
+                Result.success(null)
+            override suspend fun publish(target: OperationTarget, command: PublishCommand) =
+                Result.success(PublishOutcome.Written("true"))
+            override suspend fun discoverNamespaces(target: OperationTarget): Result<List<DiscoveredNamespace>> {
+                throw kotlinx.coroutines.CancellationException("discovery cancelled")
+            }
+        }
+        val diagnostic = ConnectionDiagnostic(
+            GenerationResolver(v3, StubAdapter(NacosApiGeneration.V1)),
+            OperationGateway(mapOf(NacosApiGeneration.V3 to v3))
+        )
+
+        try {
+            diagnostic.discover(validAnonymousSnapshot().copy(apiPolicy = "V3"))
+            org.junit.jupiter.api.Assertions.fail("expected CancellationException")
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            assertEquals("discovery cancelled", error.message)
+        }
+    }
+
+    @Test
     fun `diagnostic never mutates shared state`() = runBlocking {
         val cache = InMemoryOperationCache()
         val v3 = StubAdapter(NacosApiGeneration.V3)

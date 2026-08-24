@@ -170,6 +170,24 @@ class ProtocolTransportTest {
         }
     }
 
+    @Test
+    fun `CancellationException is not mapped to a connection failure`() {
+        val executor = NacosRequestExecutor(
+            ThrowingTransport { throw kotlinx.coroutines.CancellationException("cancelled") }
+        )
+        val transport = NacosRequestExecutorProtocolTransport(executor)
+
+        val thrown = assertThrows<kotlinx.coroutines.CancellationException> {
+            runBlocking {
+                transport.execute(ProtocolRequest(
+                    method = "GET", endpoint = "https://nacos.example",
+                    path = "/p", query = emptyList(), headers = emptyMap()
+                ))
+            }
+        }
+        assertEquals("cancelled", thrown.message)
+    }
+
     private class ThrowingTransport(private val behavior: () -> String) : NacosRequestExecutor.HttpTransport {
         override fun get(request: NacosRequestExecutor.TransportRequest): String = behavior()
         override fun post(request: NacosRequestExecutor.TransportRequest): String = behavior()
