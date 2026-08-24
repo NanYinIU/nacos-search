@@ -72,6 +72,20 @@ internal abstract class ProtocolDialectContractTest {
     /** Successful discovery list whose single entry has namespace id [rawNamespace]. */
     protected abstract fun discoveryBody(rawNamespace: String): String
 
+    /**
+     * V3 generation detection GETs state without a token first. Return a 401
+     * (or dialect equivalent) so password-probe scripts still exercise login.
+     * V1 probes log in first and should leave this null.
+     */
+    protected open fun passwordProbeAuthChallenge(): ProtocolResponse? = null
+
+    protected fun passwordProbeChallengeCount(): Int = if (passwordProbeAuthChallenge() != null) 1 else 0
+
+    protected fun withPasswordProbeChallenge(vararg rest: ProtocolResponse): Array<ProtocolResponse> {
+        val challenge = passwordProbeAuthChallenge()
+        return if (challenge != null) arrayOf(challenge, *rest) else arrayOf(*rest)
+    }
+
     /** Successful generation probe body (after optional login). */
     protected abstract fun probeBody(): String
 
@@ -247,30 +261,49 @@ internal abstract class ProtocolDialectContractTest {
     @Test
     fun `NACOS_PASSWORD probe logs in over the transport then probes once`() = runBlocking {
         val transport = ScriptedTransport(
-            ProtocolResponse(200, loginBody("shared-token")),
-            ProtocolResponse(200, probeBody())
+            *withPasswordProbeChallenge(
+                ProtocolResponse(200, loginBody("shared-token")),
+                ProtocolResponse(200, probeBody())
+            )
         )
         val sessions = AuthenticationSessionRegistry()
 
         newAdapter(transport, sessions).probe(passwordTarget()).getOrThrow()
 
-        assertEquals(2, transport.requests.size, requestCountDiagnostic(transport))
-        assertEquals("POST", transport.requests[0].method)
-        assertEquals(loginPath, transport.requests[0].path)
-        assertEquals("GET", transport.requests[1].method)
-        assertEquals(probePath, transport.requests[1].path)
-        assertTrue(transport.requests[1].query.any { it == "accessToken" to "shared-token" })
+        val loginIndex = passwordProbeChallengeCount()
+        assertEquals(2 + loginIndex, transport.requests.size, requestCountDiagnostic(transport))
+        if (loginIndex > 0) {
+            assertEquals("GET", transport.requests[0].method)
+            assertEquals(probePath, transport.requests[0].path)
+            assertTrue(transport.requests[0].query.none { it.first == "accessToken" })
+        }
+        assertEquals("POST", transport.requests[loginIndex].method)
+        assertEquals(loginPath, transport.requests[loginIndex].path)
+        assertEquals("GET", transport.requests[loginIndex + 1].method)
+        assertEquals(probePath, transport.requests[loginIndex + 1].path)
+        assertTrue(transport.requests[loginIndex + 1].query.any { it == "accessToken" to "shared-token" })
         assertEquals(setOf(passwordTarget().context.identity), sessions.trackedIdentities())
         assertNoSecrets(requestCountDiagnostic(transport))
     }
 
     @Test
     fun `concurrent cold NACOS_PASSWORD probes share one login flight`() = runBlocking {
-        val transport = ScriptedTransport(
-            ProtocolResponse(200, loginBody("once")),
-            ProtocolResponse(200, probeBody()),
-            ProtocolResponse(200, probeBody())
-        )
+        // FIFO scripts race once V3 GETs state before login: one probe can
+        // consume the other's 401 as a login response. Dispatch by request.
+        val challenge = passwordProbeAuthChallenge()
+        val requests = java.util.Collections.synchronizedList(mutableListOf<ProtocolRequest>())
+        val transport = ProtocolTransport { request ->
+            requests += request
+            when {
+                request.path == loginPath -> ProtocolResponse(200, loginBody("once"))
+                request.path == probePath &&
+                    request.query.none { it.first == "accessToken" } ->
+                    challenge
+                        ?: error("unauthenticated probe GET is V3-only; ${request.method} ${request.path}")
+                request.path == probePath -> ProtocolResponse(200, probeBody())
+                else -> error("unexpected ${request.method} ${request.path}")
+            }
+        }
         val sessions = AuthenticationSessionRegistry()
         val adapter = newAdapter(transport, sessions)
         val target = passwordTarget()
@@ -280,18 +313,28 @@ internal abstract class ProtocolDialectContractTest {
         first.await().getOrThrow()
         second.await().getOrThrow()
 
-        val logins = transport.requests.filter { it.path == loginPath }
-        assertEquals(1, logins.size, requestCountDiagnostic(transport))
-        assertEquals(2, transport.requests.count { it.path == probePath })
-        assertNoSecrets(requestCountDiagnostic(transport))
+        val snapshot = requests.toList()
+        val diagnostic = requestCountDiagnostic(snapshot)
+        val logins = snapshot.filter { it.path == loginPath }
+        assertEquals(1, logins.size, diagnostic)
+        assertEquals(
+            2 + 2 * passwordProbeChallengeCount(),
+            snapshot.count { it.path == probePath },
+            diagnostic
+        )
+        assertNoSecrets(diagnostic)
     }
 
     @Test
     fun `two adapters sharing one registry reuse one authentication session`() = runBlocking {
         val transport = ScriptedTransport(
-            ProtocolResponse(200, loginBody("reuse-me")),
-            ProtocolResponse(200, probeBody()),
-            ProtocolResponse(200, probeBody())
+            *withPasswordProbeChallenge(
+                ProtocolResponse(200, loginBody("reuse-me")),
+                ProtocolResponse(200, probeBody())
+            ),
+            *withPasswordProbeChallenge(
+                ProtocolResponse(200, probeBody())
+            )
         )
         val sessions = AuthenticationSessionRegistry()
         val target = passwordTarget()
@@ -300,16 +343,23 @@ internal abstract class ProtocolDialectContractTest {
         newAdapter(transport, sessions).probe(target).getOrThrow()
 
         assertEquals(1, transport.requests.count { it.path == loginPath }, requestCountDiagnostic(transport))
-        assertEquals(2, transport.requests.count { it.path == probePath })
+        assertEquals(
+            2 + 2 * passwordProbeChallengeCount(),
+            transport.requests.count { it.path == probePath }
+        )
     }
 
     @Test
     fun `identities that differ in principal never share a completed token`() = runBlocking {
         val transport = ScriptedTransport(
-            ProtocolResponse(200, loginBody("alice-token")),
-            ProtocolResponse(200, probeBody()),
-            ProtocolResponse(200, loginBody("bob-token")),
-            ProtocolResponse(200, probeBody())
+            *withPasswordProbeChallenge(
+                ProtocolResponse(200, loginBody("alice-token")),
+                ProtocolResponse(200, probeBody())
+            ),
+            *withPasswordProbeChallenge(
+                ProtocolResponse(200, loginBody("bob-token")),
+                ProtocolResponse(200, probeBody())
+            )
         )
         val sessions = AuthenticationSessionRegistry()
         val adapter = newAdapter(transport, sessions)
@@ -318,17 +368,24 @@ internal abstract class ProtocolDialectContractTest {
         adapter.probe(passwordTarget(principal = "bob")).getOrThrow()
 
         assertEquals(2, transport.requests.count { it.path == loginPath }, requestCountDiagnostic(transport))
-        assertTrue(transport.requests[1].query.any { it == "accessToken" to "alice-token" })
-        assertTrue(transport.requests[3].query.any { it == "accessToken" to "bob-token" })
+        val authedProbes = transport.requests.filter { request ->
+            request.path == probePath && request.query.any { it.first == "accessToken" }
+        }
+        assertTrue(authedProbes[0].query.any { it == "accessToken" to "alice-token" })
+        assertTrue(authedProbes[1].query.any { it == "accessToken" to "bob-token" })
     }
 
     @Test
     fun `invalidating the access identity forces the next operation to log in again`() = runBlocking {
         val transport = ScriptedTransport(
-            ProtocolResponse(200, loginBody("first")),
-            ProtocolResponse(200, probeBody()),
-            ProtocolResponse(200, loginBody("second")),
-            ProtocolResponse(200, probeBody())
+            *withPasswordProbeChallenge(
+                ProtocolResponse(200, loginBody("first")),
+                ProtocolResponse(200, probeBody())
+            ),
+            *withPasswordProbeChallenge(
+                ProtocolResponse(200, loginBody("second")),
+                ProtocolResponse(200, probeBody())
+            )
         )
         val sessions = AuthenticationSessionRegistry()
         val adapter = newAdapter(transport, sessions)
@@ -339,7 +396,10 @@ internal abstract class ProtocolDialectContractTest {
         adapter.probe(target).getOrThrow()
 
         assertEquals(2, transport.requests.count { it.path == loginPath }, requestCountDiagnostic(transport))
-        assertTrue(transport.requests[3].query.any { it == "accessToken" to "second" })
+        val authedProbes = transport.requests.filter { request ->
+            request.path == probePath && request.query.any { it.first == "accessToken" }
+        }
+        assertTrue(authedProbes.last().query.any { it == "accessToken" to "second" })
     }
 
     @Test
@@ -367,29 +427,37 @@ internal abstract class ProtocolDialectContractTest {
     @Test
     fun `NACOS_PASSWORD probe recovers once from a refused token with a fixed request sequence`() = runBlocking {
         val transport = ScriptedTransport(
-            ProtocolResponse(200, loginBody("stale")),
-            refusedTokenProbeResponse(),
-            ProtocolResponse(200, loginBody("fresh")),
-            ProtocolResponse(200, probeBody())
+            *withPasswordProbeChallenge(
+                ProtocolResponse(200, loginBody("stale")),
+                refusedTokenProbeResponse(),
+                ProtocolResponse(200, loginBody("fresh")),
+                ProtocolResponse(200, probeBody())
+            )
         )
         val sessions = AuthenticationSessionRegistry()
 
         newAdapter(transport, sessions).probe(passwordTarget()).getOrThrow()
 
-        assertEquals(4, transport.requests.size, requestCountDiagnostic(transport))
-        assertEquals(loginPath, transport.requests[0].path)
-        assertEquals(probePath, transport.requests[1].path)
-        assertEquals(loginPath, transport.requests[2].path)
-        assertEquals(probePath, transport.requests[3].path)
-        assertTrue(transport.requests[3].query.any { it == "accessToken" to "fresh" })
+        val loginIndex = passwordProbeChallengeCount()
+        assertEquals(4 + loginIndex, transport.requests.size, requestCountDiagnostic(transport))
+        if (loginIndex > 0) {
+            assertEquals(probePath, transport.requests[0].path)
+        }
+        assertEquals(loginPath, transport.requests[loginIndex].path)
+        assertEquals(probePath, transport.requests[loginIndex + 1].path)
+        assertEquals(loginPath, transport.requests[loginIndex + 2].path)
+        assertEquals(probePath, transport.requests[loginIndex + 3].path)
+        assertTrue(transport.requests[loginIndex + 3].query.any { it == "accessToken" to "fresh" })
         assertNoSecrets(requestCountDiagnostic(transport))
     }
 
     @Test
     fun `permission denial on probe is not recovered and stays Authorization`() = runBlocking {
         val transport = ScriptedTransport(
-            ProtocolResponse(200, loginBody("current")),
-            permissionDeniedProbeResponse()
+            *withPasswordProbeChallenge(
+                ProtocolResponse(200, loginBody("current")),
+                permissionDeniedProbeResponse()
+            )
         )
         val sessions = AuthenticationSessionRegistry()
         val target = passwordTarget()
@@ -397,7 +465,7 @@ internal abstract class ProtocolDialectContractTest {
         val error = newAdapter(transport, sessions).probe(target).exceptionOrNull()
 
         assertInstanceOf(RemoteOperationError.Authorization::class.java, error)
-        assertEquals(2, transport.requests.size, requestCountDiagnostic(transport))
+        assertEquals(2 + passwordProbeChallengeCount(), transport.requests.size, requestCountDiagnostic(transport))
         assertEquals("current", sessions.completedToken(target.context.identity)?.value)
         assertNoSecrets(requestCountDiagnostic(transport))
     }
@@ -451,12 +519,12 @@ internal abstract class ProtocolDialectContractTest {
             val transport = object : ProtocolTransport {
                 val requests = mutableListOf<ProtocolRequest>()
                 private val script = ArrayDeque(
-                    listOf(
+                    withPasswordProbeChallenge(
                         ProtocolResponse(200, loginBody("stale")),
                         refusedTokenProbeResponse(),
                         ProtocolResponse(200, loginBody("fresh")),
                         ProtocolResponse(200, probeBody())
-                    )
+                    ).toList()
                 )
 
                 override suspend fun execute(request: ProtocolRequest): ProtocolResponse {
@@ -478,8 +546,8 @@ internal abstract class ProtocolDialectContractTest {
                 "expected budget exhaustion, got: ${error.message}"
             )
             assertTrue(
-                transport.requests.size < 4,
-                "shared budget must stop recovery before a fourth request; ${transport.requests.size}"
+                transport.requests.size < 4 + passwordProbeChallengeCount(),
+                "shared budget must stop recovery before a fourth authed request; ${transport.requests.size}"
             )
             assertNoSecrets(
                 transport.requests.joinToString(prefix = "requests=", separator = "; ") {
@@ -924,7 +992,10 @@ internal abstract class ProtocolDialectContractTest {
     }
 
     private fun requestCountDiagnostic(transport: ScriptedTransport): String =
-        transport.requests.joinToString(prefix = "requests=", separator = "; ") { request ->
+        requestCountDiagnostic(transport.requests)
+
+    private fun requestCountDiagnostic(requests: List<ProtocolRequest>): String =
+        requests.joinToString(prefix = "requests=", separator = "; ") { request ->
             "${request.method} ${request.path} keys=${request.query.map { it.first }}"
         }
 
@@ -1028,6 +1099,8 @@ internal class V3ProtocolDialectContractTest : ProtocolDialectContractTest() {
     override val loginPath: String = "/nacos/v3/auth/user/login"
     override val probePath: String = "/nacos/v3/admin/core/state"
     override val publishPath: String = "/nacos/v3/admin/cs/config"
+
+    override fun passwordProbeAuthChallenge(): ProtocolResponse? = authenticationFailureProbeResponse()
 
     override fun newAdapter(
         transport: ProtocolTransport,

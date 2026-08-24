@@ -54,6 +54,14 @@ class V3ProtocolAdapter(
 
     override suspend fun probe(target: OperationTarget): Result<Unit> {
         validate(target)
+        // ADR-0006: generation detection hits the read-only state endpoint first.
+        // A NACOS_PASSWORD login on a V1-only front (Nacos 2.x) can consume the
+        // whole request budget; the subsequent state GET then surfaces
+        // Protocol("Request budget exhausted") instead of GenerationUnsupported,
+        // and AUTO never tries V1.
+        if (target.context.authenticationStrategy == V1AuthenticationStrategy.NACOS_PASSWORD) {
+            unauthenticatedStateProbe(target)?.let { return it }
+        }
         return core.executeIdempotent(
             target = target,
             build = { auth -> applyAuth(stateRequest(target), auth) },
@@ -61,6 +69,40 @@ class V3ProtocolAdapter(
             parse = { response -> parseRawStateMap(response.body) },
             login = { performLogin(it) }
         )
+    }
+
+    /**
+     * Null means the state endpoint demanded credentials; the caller should
+     * log in and probe again. Any other outcome (including public-state
+     * success and generation absence) is already a completed Result.
+     */
+    private suspend fun unauthenticatedStateProbe(target: OperationTarget): Result<Unit>? {
+        val response = try {
+            transport.execute(stateRequest(target))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: RemoteOperationError) {
+            return Result.failure(error)
+        } catch (error: Throwable) {
+            return Result.failure(RemoteOperationError.Connection(error))
+        }
+        return when (val classified = classifyProbeResponse(target, response)) {
+            is ClassifiedResponse.Success -> runCatching {
+                parseRawStateMap(classified.response.body)
+            }.fold(
+                onSuccess = { Result.success(Unit) },
+                onFailure = { Result.failure(it) }
+            )
+            is ClassifiedResponse.RecoverableTokenRefusal -> null
+            is ClassifiedResponse.Failure -> when (classified.error) {
+                // No credentials were sent yet. 401 and 403 both mean "log in
+                // and retry" on this path; a real permission denial is judged
+                // after the authenticated state GET.
+                is RemoteOperationError.Authentication,
+                is RemoteOperationError.Authorization -> null
+                else -> Result.failure(classified.error)
+            }
+        }
     }
 
     private fun classifyProbeResponse(
@@ -374,6 +416,7 @@ class V3ProtocolAdapter(
         )
         val response = transport.execute(request)
         if (response.status !in 200..299) {
+            if (response.status == 404) classifyStateNotFound(response)
             throw mapStatusFailure(response)
         }
         // V3 login may return either a bare token object or a {code,message,data} envelope.

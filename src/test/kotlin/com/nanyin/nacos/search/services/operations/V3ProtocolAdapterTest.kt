@@ -358,12 +358,49 @@ class V3ProtocolAdapterTest {
     }
 
     @Test
+    fun `V3 password probe does not log in when unauthenticated state is four-zero-four`() = runBlocking {
+        val spring404 = """{"timestamp":"2026-08-19T20:13:44.915+08:00","status":404,"error":"Not Found","message":"No message available","path":"/nacos/v3/admin/core/state"}"""
+        val fixture = RecordingTransport(ProtocolResponse(404, spring404))
+
+        val error = V3ProtocolAdapter(fixture)
+            .probe(passwordTarget())
+            .exceptionOrNull()
+
+        assertInstanceOf(RemoteOperationError.GenerationUnsupported::class.java, error)
+        assertEquals("/nacos/v3/admin/core/state", fixture.lastRequest.path)
+        assertEquals("GET", fixture.lastRequest.method)
+        assertTrue(fixture.lastRequest.query.none { it.first == "accessToken" })
+    }
+
+    @Test
+    fun `V3 password probe logs in when unauthenticated state is forbidden`() = runBlocking {
+        val fixture = ScriptedTransport(
+            listOf(
+                ProtocolResponse(403, "forbidden"),
+                ProtocolResponse(200, """{"accessToken":"v3-token","tokenTtl":18000}"""),
+                ProtocolResponse(200, RAW_STATE_MAP)
+            )
+        )
+
+        V3ProtocolAdapter(fixture).probe(passwordTarget()).getOrThrow()
+
+        assertEquals("GET", fixture.requests[0].method)
+        assertEquals("/nacos/v3/admin/core/state", fixture.requests[0].path)
+        assertEquals("/nacos/v3/auth/user/login", fixture.requests[1].path)
+        assertTrue(fixture.requests[2].query.any { it == "accessToken" to "v3-token" })
+    }
+
+    @Test
     fun `V3 probe login envelope code minus one is generation unsupported`() = runBlocking {
         // Non-V3 / legacy fronts often answer /v3/auth/user/login with
         // {code:-1,message:"No message available"}. AUTO must be allowed to
-        // try V1 rather than sticking on a Protocol failure.
-        val fixture = RecordingTransport(
-            ProtocolResponse(200, """{"code":-1,"message":"No message available","data":null}""")
+        // try V1 rather than sticking on a Protocol failure. Probe hits state
+        // first; 401 then login still has to classify this envelope.
+        val fixture = ScriptedTransport(
+            listOf(
+                ProtocolResponse(401, "not a json envelope"),
+                ProtocolResponse(200, """{"code":-1,"message":"No message available","data":null}""")
+            )
         )
 
         val error = V3ProtocolAdapter(fixture)
@@ -538,15 +575,18 @@ class V3ProtocolAdapterTest {
     fun `V3 nacos password logs in then attaches accessToken query`() = runBlocking {
         val fixture = ScriptedTransport(
             listOf(
+                ProtocolResponse(401, "not a json envelope"),
                 ProtocolResponse(200, """{"accessToken":"v3-token","tokenTtl":18000}"""),
                 ProtocolResponse(200, RAW_STATE_MAP)
             )
         )
         V3ProtocolAdapter(fixture).probe(passwordTarget()).getOrThrow()
-        assertEquals("/nacos/v3/auth/user/login", fixture.requests[0].path)
-        assertEquals("POST", fixture.requests[0].method)
-        assertEquals("/nacos/v3/admin/core/state", fixture.requests[1].path)
-        assertTrue(fixture.requests[1].query.any { it == "accessToken" to "v3-token" })
+        assertEquals("/nacos/v3/admin/core/state", fixture.requests[0].path)
+        assertTrue(fixture.requests[0].query.none { it.first == "accessToken" })
+        assertEquals("/nacos/v3/auth/user/login", fixture.requests[1].path)
+        assertEquals("POST", fixture.requests[1].method)
+        assertEquals("/nacos/v3/admin/core/state", fixture.requests[2].path)
+        assertTrue(fixture.requests[2].query.any { it == "accessToken" to "v3-token" })
     }
 
     @Test

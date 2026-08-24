@@ -215,6 +215,27 @@ class GenerationResolverTest {
         return OperationTarget(context, "public")
     }
 
+    private fun passwordAutoTarget(): OperationTarget {
+        val endpoint = CanonicalNacosEndpoint.parse("https://nacos.example").getOrThrow()
+        val context = NacosOperationContext(
+            identity = AccessIdentity.ofProfile(
+                profileId = "auto-profile",
+                accessRevision = 1,
+                canonicalEndpoint = endpoint.value,
+                resolvedGeneration = NacosApiGeneration.UNKNOWN,
+                authMode = AuthMode.NACOS_PASSWORD,
+                principal = "alice"
+            ),
+            endpoint = endpoint,
+            credential = CredentialSnapshot("p@ss"),
+            authMode = AuthMode.NACOS_PASSWORD,
+            profileRevision = 1,
+            accessRevision = 1,
+            resolvedGeneration = NacosApiGeneration.UNKNOWN
+        )
+        return OperationTarget(context, "public")
+    }
+
     private class StubAdapter(
         val generation: NacosApiGeneration,
         val probeResult: Result<Unit> = Result.success(Unit)
@@ -267,6 +288,38 @@ class GenerationResolverTest {
         val result = resolver.resolve(autoTarget())
 
         assertEquals(NacosApiGeneration.V1, result.getOrThrow())
+    }
+
+    @Test
+    fun `AUTO password falls back to V1 without a V3 login when state is four-zero-four`() = runBlocking {
+        val posts = mutableListOf<String>()
+        val http = object : NacosRequestExecutor.HttpTransport {
+            override fun get(request: NacosRequestExecutor.TransportRequest): String {
+                if (request.url.contains("/v3/admin/core/state")) {
+                    throw NacosRequestError.Client(
+                        404,
+                        """{"timestamp":"2026-08-19T20:13:44.915+08:00","status":404,"error":"Not Found","message":"No message available","path":"/nacos/v3/admin/core/state"}"""
+                    )
+                }
+                return """{"code":200,"data":[{"namespace":"","namespaceShowName":"public"}]}"""
+            }
+
+            override fun post(request: NacosRequestExecutor.TransportRequest): String {
+                posts += request.url
+                check(!request.url.contains("/v3/auth/user/login")) {
+                    "V3 login must not run after an unauthenticated state 404"
+                }
+                return """{"accessToken":"v1-token","tokenTtl":18000}"""
+            }
+        }
+        val transport = NacosRequestExecutorProtocolTransport(NacosRequestExecutor(http))
+        val resolver = GenerationResolver(V3ProtocolAdapter(transport), V1ProtocolAdapter(transport))
+
+        val result = resolver.resolve(passwordAutoTarget())
+
+        assertEquals(NacosApiGeneration.V1, result.getOrThrow())
+        assertTrue(posts.any { it.contains("/v1/auth/login") })
+        assertTrue(posts.none { it.contains("/v3/auth") })
     }
 
     @Test
