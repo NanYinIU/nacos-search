@@ -148,18 +148,20 @@ class NacosSearchServiceTest {
             .getService(NacosSettings::class.java)
         try {
             settings.resetToDefaults()
-            // Invalid origin (path present) — must fail closed via profile capture.
             settings.applyProfileIntents(
                 listOf(
                     com.nanyin.nacos.search.settings.profileIntentFixture(
                         id = "s_local",
                         displayName = "Bad",
-                        serverUrl = "https://nacos.example/not-an-origin",
+                        serverUrl = "https://nacos.example",
                         authMode = AuthMode.ANONYMOUS
                     )
                 ),
                 "s_local"
             )
+            // Publication refuses an unparseable endpoint; inject the damaged
+            // persisted state the same way runtime repair does (issue #249).
+            settings.profiles.single().canonicalEndpoint = "https://nacos.example/not-an-origin"
             val api = mock<NacosApiService>()
             val service = NacosSearchService()
 
