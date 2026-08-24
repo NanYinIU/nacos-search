@@ -231,7 +231,7 @@ class ConfigDetailPanel internal constructor(
 
     // Coroutine scope for async operations
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private val latestLoad = DetailLatestLoad(detailController, coroutineScope)
+    private val latestLoad = DetailLatestLoad(coroutineScope)
 
     // Callback fired when dirty state changes (so the window can update the list row dot)
     var onDirtyStateChanged: ((NacosConfiguration?, Boolean) -> Unit)? = null
@@ -988,22 +988,38 @@ private fun setupEventHandlers() {
         val retainedBody = keptCachedBody
         latestLoad.replace(
             keepCachedVisible = keepCachedVisible,
-            confirm = {
-                confirmation.confirm(
-                    namespaceId = operationNamespaceId(configuration),
-                    coordinate = ConfigurationCoordinate(configuration.dataId, configuration.group),
-                    forceRefresh = forceRefresh,
-                    useCache = true,
-                    keepCachedVisible = keepCachedVisible,
-                    retained = retained
-                )
-            },
-            present = { result ->
-                detailController.present(
-                    result = result,
-                    issued = issued,
-                    retainedConfidence = retainedBody?.confidence
-                )
+            run = {
+                try {
+                    val result = confirmation.confirm(
+                        namespaceId = operationNamespaceId(configuration),
+                        coordinate = ConfigurationCoordinate(configuration.dataId, configuration.group),
+                        forceRefresh = forceRefresh,
+                        useCache = true,
+                        keepCachedVisible = keepCachedVisible,
+                        retained = retained
+                    )
+                    detailController.present(
+                        result = result,
+                        issued = issued,
+                        retainedConfidence = retainedBody?.confidence
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (!presentation.admitAndRecord(issued)) {
+                        null
+                    } else if (keepCachedVisible && retainedBody != null) {
+                        DetailPresentation.fromRefreshFailure(
+                            retainedBody.configuration,
+                            retainedBody.confidence
+                        )
+                    } else {
+                        DetailPresentation.fromFailure(
+                            e,
+                            e.message ?: "Unknown error"
+                        )
+                    }
+                }
             },
             onLoadingChanged = { refreshLoadingActions() },
             onPresented = { state ->
@@ -1022,21 +1038,6 @@ private fun setupEventHandlers() {
                     } else {
                         warmKeyIndexAfterQuietConfirm()
                     }
-                }
-            },
-            mapFailure = { error ->
-                if (!presentation.admitAndRecord(issued)) {
-                    null
-                } else if (keepCachedVisible && retainedBody != null) {
-                    DetailPresentation.fromRefreshFailure(
-                        retainedBody.configuration,
-                        retainedBody.confidence
-                    )
-                } else {
-                    DetailPresentation.fromFailure(
-                        error,
-                        error.message ?: "Unknown error"
-                    )
                 }
             }
         )
@@ -1879,7 +1880,7 @@ private fun setupEventHandlers() {
             // which is exactly what Revert does, deliberately, right beside
             // Save. Two buttons for one destructive act is how a draft gets
             // thrown away by accident (ADR-0027), so only Revert offers it.
-            e.presentation.isEnabled = currentConfiguration != null && !detailController.isLoading &&
+            e.presentation.isEnabled = currentConfiguration != null && !latestLoad.isLoading &&
                 !editSessions.isDirty()
         }
     }

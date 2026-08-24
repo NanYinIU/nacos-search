@@ -1,61 +1,59 @@
 package com.nanyin.nacos.search.ui
 
-import com.nanyin.nacos.search.services.operations.DetailReadResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
  * Latest-wins in-flight 配置详情 confirmation (issue #247).
  *
- * Every approved selection is admitted. The previous job is cancelled before
- * the new confirmation starts. [DetailController.isLoading] is presentation
- * state only: it never rejects the newer selection, and cleanup from an older
- * ticket cannot clear loading owned by a newer one.
+ * Owns the Job, [isLoading] presentation flag, and replace/cancel protocol in
+ * one place. [DetailController] stays a pure mapper; [ConfigDetailPanel]
+ * supplies the confirm/present/paint work. A newer [replace] is always
+ * admitted — [isLoading] never rejects it — and an older job cannot clear
+ * loading or paint once it has been replaced.
  *
- * Holds no Swing. [ConfigDetailPanel] supplies confirm / present / paint.
+ * When [run] returns null (a result the 展示门禁 will not paint), loading is
+ * still released if this job owns it, so an epoch change cannot leave the
+ * panel stuck on Loading with Refresh disabled.
  */
 internal class DetailLatestLoad(
-    private val controller: DetailController,
     private val scope: CoroutineScope
 ) {
     private var job: Job? = null
+    private var generation = 0
+
+    @Volatile
+    var isLoading: Boolean = false
+        private set
 
     fun replace(
         keepCachedVisible: Boolean,
-        confirm: suspend () -> DetailReadResult,
-        present: (DetailReadResult) -> DetailViewState,
+        run: suspend () -> DetailViewState?,
         onLoadingChanged: (Boolean) -> Unit,
-        onPresented: (DetailViewState) -> Unit,
-        mapFailure: (Exception) -> DetailViewState?
+        onPresented: (DetailViewState) -> Unit
     ) {
         job?.cancel()
-        val ticket = controller.admitLoad()
+        val mine = ++generation
+        isLoading = true
         onLoadingChanged(true)
         if (!keepCachedVisible) {
             onPresented(DetailViewState.Loading)
         }
         job = scope.launch {
             try {
-                val result = confirm()
-                if (!isActive || !controller.stillOwns(ticket)) return@launch
-                val state = present(result)
-                if (!controller.stillOwns(ticket)) return@launch
-                controller.finishLoad(ticket)
-                onLoadingChanged(controller.isLoading)
-                if (!controller.stillOwns(ticket)) return@launch
-                onPresented(state)
+                val state = run()
+                if (mine != generation) return@launch
+                isLoading = false
+                onLoadingChanged(false)
+                if (state != null) onPresented(state)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (!isActive || !controller.stillOwns(ticket)) return@launch
-                val state = mapFailure(e) ?: return@launch
-                controller.finishLoad(ticket)
-                onLoadingChanged(controller.isLoading)
-                if (!controller.stillOwns(ticket)) return@launch
-                onPresented(state)
+                if (mine != generation) return@launch
+                isLoading = false
+                onLoadingChanged(false)
             }
         }
     }
@@ -63,6 +61,7 @@ internal class DetailLatestLoad(
     fun cancelAndRelease() {
         job?.cancel()
         job = null
-        controller.releaseLoad()
+        generation++
+        isLoading = false
     }
 }
