@@ -209,7 +209,6 @@ class ConfigDetailPanel internal constructor(
      */
     private var selectedCoordinate: PresentedCoordinate? = null
     private var pendingNavigation: PendingNavigation? = null
-    private var isLoading = false
     /** What the dirty indicators currently show, so they are only repainted on a change. */
     private var renderedDirty = false
     /** Last closed view state rendered — language change re-derives copy from it. */
@@ -232,7 +231,7 @@ class ConfigDetailPanel internal constructor(
 
     // Coroutine scope for async operations
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private var currentLoadingJob: Job? = null
+    private val latestLoad = DetailLatestLoad(detailController, coroutineScope)
 
     // Callback fired when dirty state changes (so the window can update the list row dot)
     var onDirtyStateChanged: ((NacosConfiguration?, Boolean) -> Unit)? = null
@@ -985,37 +984,33 @@ private fun setupEventHandlers() {
         forceRefresh: Boolean = false,
         keepCachedVisible: Boolean = false
     ) {
-        if (isLoading) return
-
-        // Cancel previous loading operation
-        currentLoadingJob?.cancel()
-
-        setLoadingState(true)
-        if (!keepCachedVisible) {
-            render(DetailViewState.Loading)
-        }
-
-        currentLoadingJob = coroutineScope.launch {
-            try {
-                val result = confirmation.confirm(
+        val retained = keptCached
+        val retainedBody = keptCachedBody
+        latestLoad.replace(
+            keepCachedVisible = keepCachedVisible,
+            confirm = {
+                confirmation.confirm(
                     namespaceId = operationNamespaceId(configuration),
                     coordinate = ConfigurationCoordinate(configuration.dataId, configuration.group),
                     forceRefresh = forceRefresh,
                     useCache = true,
                     keepCachedVisible = keepCachedVisible,
-                    retained = keptCached
+                    retained = retained
                 )
-                if (!isActive) return@launch
-                val state = detailController.present(
+            },
+            present = { result ->
+                detailController.present(
                     result = result,
                     issued = issued,
-                    retainedConfidence = keptCachedBody?.confidence
+                    retainedConfidence = retainedBody?.confidence
                 )
-                setLoadingState(false)
+            },
+            onLoadingChanged = { refreshLoadingActions() },
+            onPresented = { state ->
                 render(state)
-                if (state !is DetailViewState.Body) return@launch
+                if (state !is DetailViewState.Body) return@onPresented
                 if (state.overlay != DetailOverlay.None && state.overlay != DetailOverlay.Deleted) {
-                    return@launch
+                    return@onPresented
                 }
                 // First load / forced refresh: rebuild + daemon restart so gutters
                 // see new keys immediately.
@@ -1028,27 +1023,23 @@ private fun setupEventHandlers() {
                 } else {
                     warmKeyIndexAfterQuietConfirm()
                 }
-            } catch (e: Exception) {
-                if (isActive && presentation.admitAndRecord(issued)) {
-                    setLoadingState(false)
-                    if (keepCachedVisible && keptCachedBody != null) {
-                        render(
-                            DetailPresentation.fromRefreshFailure(
-                                keptCachedBody!!.configuration,
-                                keptCachedBody!!.confidence
-                            )
-                        )
-                    } else {
-                        render(
-                            DetailPresentation.fromFailure(
-                                e,
-                                e.message ?: "Unknown error"
-                            )
-                        )
-                    }
+            },
+            mapFailure = { error ->
+                if (!presentation.admitAndRecord(issued)) {
+                    null
+                } else if (keepCachedVisible && retainedBody != null) {
+                    DetailPresentation.fromRefreshFailure(
+                        retainedBody.configuration,
+                        retainedBody.confidence
+                    )
+                } else {
+                    DetailPresentation.fromFailure(
+                        error,
+                        error.message ?: "Unknown error"
+                    )
                 }
             }
-        }
+        )
     }
     
     private fun displayConfigurationContentSafely(
@@ -1244,11 +1235,7 @@ private fun setupEventHandlers() {
         }
     }
     
-    private fun setLoadingState(loading: Boolean) {
-        // Gate [loadConfigurationContent] synchronously — deferring only the
-        // flag to invokeLater left a window where a second selection started
-        // another load while the first was still in flight.
-        isLoading = loading
+    private fun refreshLoadingActions() {
         Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             updateActionsEnabled()
         }
@@ -1710,9 +1697,8 @@ private fun setupEventHandlers() {
      * Clear the current configuration display
      */
     fun clearConfiguration() {
-        // Cancel any ongoing loading operation
-        currentLoadingJob?.cancel()
-        setLoadingState(false)
+        latestLoad.cancelAndRelease()
+        refreshLoadingActions()
 
         // Nothing is selected any more, so every result still in flight now
         // names a coordinate this panel does not present, and is discarded.
@@ -1755,8 +1741,7 @@ private fun setupEventHandlers() {
      * Clean up resources
      */
     override fun dispose() {
-        // Cancel any ongoing operations
-        currentLoadingJob?.cancel()
+        latestLoad.cancelAndRelease()
         coroutineScope.cancel()
         
         // Dispose editor safely
@@ -1894,7 +1879,7 @@ private fun setupEventHandlers() {
             // which is exactly what Revert does, deliberately, right beside
             // Save. Two buttons for one destructive act is how a draft gets
             // thrown away by accident (ADR-0027), so only Revert offers it.
-            e.presentation.isEnabled = currentConfiguration != null && !isLoading &&
+            e.presentation.isEnabled = currentConfiguration != null && !detailController.isLoading &&
                 !editSessions.isDirty()
         }
     }
