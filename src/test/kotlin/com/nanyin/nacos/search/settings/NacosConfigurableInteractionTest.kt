@@ -532,6 +532,47 @@ class NacosConfigurableInteractionTest {
     }
 
     @Test
+    fun disposingConfigurableCancelsSuspendedDiscoveryWithoutUiMutation() {
+        val configurable = NacosConfigurable()
+        configurable.createComponent()
+        val combo = privateField<SuggestedNamespaceComboBox>(configurable, "namespaceCombo")
+        val urlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+        val started = java.util.concurrent.CountDownLatch(1)
+        val hang = kotlinx.coroutines.CompletableDeferred<Unit>()
+        configurable.suggestedNamespaceDiscoverer = {
+            started.countDown()
+            hang.await()
+            Result.success(emptyList())
+        }
+
+        runOnEdt {
+            urlField.text = "http://nacos.example:8848"
+            combo.setNamespaceId("keep-me")
+        }
+        waitForUi()
+
+        val finished = kotlinx.coroutines.CompletableDeferred<Throwable?>()
+        val thread = Thread({
+            try {
+                configurable.requestSuggestedNamespaceOptions()
+                finished.complete(null)
+            } catch (error: Throwable) {
+                finished.complete(error)
+            }
+        }, "settings-dispose-discovery")
+        thread.start()
+        assertTrue(started.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        runOnEdt { configurable.disposeUIResources() }
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withTimeout(1_000) { finished.await() }
+        }
+        thread.join(1_000)
+        assertFalse(thread.isAlive)
+        assertFalse(isFailureRowVisible(combo))
+        assertEquals("keep-me", combo.namespaceId())
+    }
+
+    @Test
     fun connectionDiagnosticCancellationDoesNotShowRedFailure() {
         val configurable = NacosConfigurable()
         configurable.createComponent()

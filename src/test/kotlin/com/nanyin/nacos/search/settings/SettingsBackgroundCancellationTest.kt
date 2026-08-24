@@ -44,6 +44,56 @@ class SettingsBackgroundCancellationTest {
     }
 
     @Test
+    fun `cancelling the progress indicator unblocks a hanging HttpURLConnection`() {
+        val keepOpen = java.util.concurrent.CountDownLatch(1)
+        val accepted = java.util.concurrent.CountDownLatch(1)
+        val server = java.net.ServerSocket(0)
+        val serverThread = Thread({
+            val client = server.accept()
+            accepted.countDown()
+            try {
+                keepOpen.await()
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            client.close()
+        }, "hanging-nacos-http")
+        serverThread.start()
+        try {
+            val url = "http://127.0.0.1:${server.localPort}/nacos/v1/cs/configs"
+            val executor = com.nanyin.nacos.search.services.network.NacosRequestExecutor()
+            val indicator = EmptyProgressIndicator()
+            val finished = CompletableDeferred<Throwable?>()
+            val thread = Thread({
+                try {
+                    runBlockingWithProgressIndicator(indicator) {
+                        executor.get(
+                            url,
+                            com.nanyin.nacos.search.services.network.RequestPolicy.INTERACTIVE
+                        )
+                    }
+                    finished.complete(null)
+                } catch (error: Throwable) {
+                    finished.complete(error)
+                }
+            }, "blocked-http-cancel")
+            thread.start()
+            assertTrue(accepted.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            Thread.sleep(150)
+            indicator.cancel()
+            val error = runBlocking { withTimeout(1_000) { finished.await() } }
+            assertTrue(error is ProcessCanceledException, error.toString())
+            thread.join(1_000)
+            assertFalse(thread.isAlive)
+        } finally {
+            keepOpen.countDown()
+            server.close()
+            serverThread.interrupt()
+            serverThread.join(1_000)
+        }
+    }
+
+    @Test
     fun `already cancelled indicator does not start the coroutine`() {
         val indicator = EmptyProgressIndicator()
         indicator.cancel()

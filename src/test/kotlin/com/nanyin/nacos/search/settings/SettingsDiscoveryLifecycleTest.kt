@@ -239,6 +239,40 @@ class SettingsDiscoveryLifecycleTest {
     }
 
     @Test
+    fun `cancelling a superseded request does not invalidate the current flight`() = runBlocking {
+        val aStarted = CompletableDeferred<Unit>()
+        val bStarted = CompletableDeferred<Unit>()
+        val bRelease = CompletableDeferred<Result<List<DiscoveredNamespace>>>()
+        val team = DiscoveredNamespace("team-id", "Team")
+        var discoveryCalls = 0
+        val lifecycle = SettingsDiscoveryLifecycle {
+            discoveryCalls++
+            if (discoveryCalls == 1) {
+                aStarted.complete(Unit)
+                awaitCancellation()
+            }
+            bStarted.complete(Unit)
+            bRelease.await()
+        }
+        val aIntent = intent()
+        val bIntent = aIntent.copy(endpoint = "https://other.example")
+        val stale = launch { lifecycle.discover(aIntent) }
+        aStarted.await()
+        val current = async { lifecycle.discover(bIntent) }
+        bStarted.await()
+        stale.cancel()
+        stale.join()
+
+        assertEquals(SettingsNamespaceOptions.Loading, lifecycle.options())
+        bRelease.complete(Result.success(listOf(team)))
+        assertEquals(
+            SettingsDiscoveryCompletion.Applied(SettingsNamespaceOptions.Available(listOf(team))),
+            current.await()
+        )
+        assertEquals(2, discoveryCalls)
+    }
+
+    @Test
     fun `ordinary provider failure still publishes Failed`() = runBlocking {
         val lifecycle = SettingsDiscoveryLifecycle {
             Result.failure(IllegalStateException("down"))

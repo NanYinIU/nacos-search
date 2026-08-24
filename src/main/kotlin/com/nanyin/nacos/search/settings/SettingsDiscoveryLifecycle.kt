@@ -112,6 +112,13 @@ class SettingsDiscoveryLifecycle(
         }
     }
 
+    /**
+     * Current options for the identity the lifecycle already holds. Does not
+     * adopt a captured request intent, so a cancelled stale callback cannot
+     * invalidate a newer flight.
+     */
+    fun options(): SettingsNamespaceOptions = synchronized(lock) { currentOptions }
+
     private fun adopt(identity: DiscoveryIdentity) {
         if (currentIdentity == identity) return
         currentIdentity = identity

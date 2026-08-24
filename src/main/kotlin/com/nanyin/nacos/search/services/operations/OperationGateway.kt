@@ -11,6 +11,7 @@ import com.nanyin.nacos.search.services.CacheWriteAccess
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.network.NacosRequestExecutor
 import com.nanyin.nacos.search.services.network.RequestPolicy
+import kotlinx.coroutines.CancellationException
 import com.nanyin.nacos.search.services.visibility.CompletedObservation
 import com.nanyin.nacos.search.services.visibility.NoOpVisibilityReporter
 import com.nanyin.nacos.search.services.visibility.ObservationOutcome
@@ -393,18 +394,23 @@ class NacosRequestExecutorProtocolTransport(
     override suspend fun execute(request: ProtocolRequest): ProtocolResponse = when (request.method) {
         "GET" -> try {
             ProtocolResponse(200, executor.get(request.url, policy, request.headers))
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Throwable) {
             toResponseOrThrow(error)
         }
         "POST" -> try {
             ProtocolResponse(200, executor.post(request.url, request.body ?: "", policy, request.headers))
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Throwable) {
             toResponseOrThrow(error)
         }
-        else -> throw RemoteOperationError.Unsupported("Unsupported HTTP method: ${'$'}{request.method}")
+        else -> throw RemoteOperationError.Unsupported("Unsupported HTTP method: ${request.method}")
     }
 
     private fun toResponseOrThrow(error: Throwable): ProtocolResponse = when (error) {
+        is CancellationException -> throw error
         is NacosRequestError.Client -> ProtocolResponse(error.status, error.body)
         is NacosRequestError.Server -> ProtocolResponse(error.status, error.body)
         // Pass the sanitized body through so V1/V3 recovery predicates can classify

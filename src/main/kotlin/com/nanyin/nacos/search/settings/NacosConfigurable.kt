@@ -14,11 +14,8 @@ import com.nanyin.nacos.search.ui.DraftDiscardPrompt
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.options.Configurable
-import com.intellij.openapi.progress.EmptyProgressIndicator
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.progress.ProgressManager
-import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.Messages
@@ -109,6 +106,7 @@ class NacosConfigurable @JvmOverloads constructor(
     private val settingsDiscoveryLifecycle = SettingsDiscoveryLifecycle { snapshot ->
         discoverSuggestedNamespaces(snapshot)
     }
+    private var background = SettingsBackgroundOperations()
 
     // Language
     private lateinit var languageComboBox: JComboBox<LanguageService.SupportedLanguage>
@@ -128,6 +126,8 @@ class NacosConfigurable @JvmOverloads constructor(
     override fun getDisplayName(): String = NacosSearchBundle.message("settings.title")
 
     override fun createComponent(): JComponent {
+        background.dispose()
+        background = SettingsBackgroundOperations()
         initializeDraft()
         buildComponents()
         mainPanel = buildPanel()
@@ -138,6 +138,11 @@ class NacosConfigurable @JvmOverloads constructor(
         refreshProfileListDecorations()
         updateApplyEnabledState()
         return mainPanel!!
+    }
+
+    override fun disposeUIResources() {
+        background.dispose()
+        mainPanel = null
     }
 
     // ------------------------------------------------------------------
@@ -1468,7 +1473,7 @@ class NacosConfigurable @JvmOverloads constructor(
             },
             onSuccess = { applyCompletion(it) },
             onCancelled = {
-                renderNamespaceOptions(settingsDiscoveryLifecycle.updateIntent(intent))
+                renderNamespaceOptions(settingsDiscoveryLifecycle.options())
             }
         )
     }
@@ -1480,39 +1485,7 @@ class NacosConfigurable @JvmOverloads constructor(
         onSuccess: (T) -> Unit,
         onCancelled: () -> Unit
     ) {
-        if (ApplicationManager.getApplication().isUnitTestMode) {
-            try {
-                onSuccess(work(EmptyProgressIndicator()))
-            } catch (error: Exception) {
-                if (error.isCooperativeCancellation()) {
-                    onCancelled()
-                } else {
-                    throw error
-                }
-            }
-            return
-        }
-
-        ProgressManager.getInstance().run(object : Task.Backgroundable(null, title, true) {
-            override fun run(indicator: ProgressIndicator) {
-                indicator.text = indicatorText
-                try {
-                    val value = work(indicator)
-                    if (indicator.isCanceled) throw ProcessCanceledException()
-                    Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
-                        onSuccess(value)
-                    }
-                } catch (error: Exception) {
-                    if (error.isCooperativeCancellation()) {
-                        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
-                            onCancelled()
-                        }
-                        throw error.asProcessCanceled()
-                    }
-                    throw error
-                }
-            }
-        })
+        background.run(title, indicatorText, work, onSuccess, onCancelled)
     }
 
     private fun synchronizeSettingsDiscoveryIntent(intent: ProfileIntent) {
