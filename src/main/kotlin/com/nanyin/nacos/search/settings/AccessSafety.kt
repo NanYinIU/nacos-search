@@ -47,6 +47,16 @@ internal fun AuthMode.toV1AuthenticationStrategy(): V1AuthenticationStrategy = w
 /** A typed fail-closed result that UI callers can render as configuration required. */
 class ConfigurationRequired(val reasons: List<String>) : IllegalStateException(reasons.joinToString("; "))
 
+/**
+ * The Settings intent snapshot contained an endpoint that failed canonical parse
+ * (issue #249). Publication did not start: no credential was staged, no revision
+ * advanced, and no tombstone, preference, or session mutation ran.
+ */
+class InvalidProfileEndpoint(
+    val profileId: String,
+    val displayName: String
+) : IllegalStateException("Invalid server URL")
+
 object OperationContextResolver {
 
     /**

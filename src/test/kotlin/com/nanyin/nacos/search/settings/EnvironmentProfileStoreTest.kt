@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 
 /**
  * Issue #103 / ADR-0049 / ADR-0024 / ADR-0035: profile intents publish through
@@ -572,6 +573,117 @@ class EnvironmentProfileStoreTest {
         assertEquals(before.accessRevision, settings.getProfile("dev")!!.accessRevision)
         assertFalse(outcome.isOperationalChange())
         assertEquals("CUSTOM_GROUP", settings.preferencesFor("dev").defaultGroup)
+    }
+
+    @Test
+    fun `valid active plus invalid inactive snapshot is rejected before any staging`() {
+        val (store, slots, previousDev) = seeded("dev", secret = "s1")
+        val qaSeed = store.applyIntents(
+            intents = listOf(
+                intent(id = "dev", secret = "s1", principal = "alice"),
+                intent(id = "qa", secret = "s2", principal = "bob", endpoint = "https://qa.example")
+            ),
+            activeProfileId = "dev",
+            previousProfiles = listOf(previousDev)
+        )
+        val previousQa = qaSeed.publishedProfiles.single { it.id == "qa" }
+        val writesAfterSeed = slots.writes.size
+
+        val thrown = assertThrows<InvalidProfileEndpoint> {
+            store.applyIntents(
+                intents = listOf(
+                    intent(id = "dev", secret = "s1", principal = "alice", displayName = "Dev renamed"),
+                    intent(id = "qa", secret = "s2-rotated", principal = "bob", endpoint = "not a url", displayName = "QA")
+                ),
+                activeProfileId = "dev",
+                previousProfiles = qaSeed.publishedProfiles,
+                previousPreferences = qaSeed.publishedPreferences,
+                previousActiveId = "dev"
+            )
+        }
+
+        assertEquals("qa", thrown.profileId)
+        assertEquals("QA", thrown.displayName)
+        assertEquals(writesAfterSeed, slots.writes.size)
+        assertEquals("s1", slots.read("dev", previousDev.credentialSlotVersion))
+        assertEquals("s2", slots.read("qa", previousQa.credentialSlotVersion))
+        assertNull(slots.read("qa", previousQa.credentialSlotVersion + 1))
+    }
+
+    @Test
+    fun `invalid endpoint on a duplicate id row is rejected before any staging`() {
+        val (store, slots, previousDev) = seeded("dev", secret = "s1")
+        val writesAfterSeed = slots.writes.size
+
+        val thrown = assertThrows<InvalidProfileEndpoint> {
+            store.applyIntents(
+                intents = listOf(
+                    intent(id = "dev", secret = "s1", principal = "alice"),
+                    intent(id = "dev", secret = "s2", principal = "bob", endpoint = "not a url", displayName = "Dev dup")
+                ),
+                activeProfileId = "dev",
+                previousProfiles = listOf(previousDev)
+            )
+        }
+
+        assertEquals("dev", thrown.profileId)
+        assertEquals("Dev dup", thrown.displayName)
+        assertEquals(writesAfterSeed, slots.writes.size)
+        assertEquals("s1", slots.read("dev", previousDev.credentialSlotVersion))
+        assertNull(slots.read("dev", previousDev.credentialSlotVersion + 1))
+    }
+
+    @Test
+    fun `invalid endpoint on a blank id row is rejected before any staging`() {
+        val (store, slots, previousDev) = seeded("dev", secret = "s1")
+        val writesAfterSeed = slots.writes.size
+
+        val thrown = assertThrows<InvalidProfileEndpoint> {
+            store.applyIntents(
+                intents = listOf(
+                    intent(id = "dev", secret = "s1", principal = "alice"),
+                    intent(id = "  ", secret = "s2", principal = "bob", endpoint = "not a url", displayName = "Blank")
+                ),
+                activeProfileId = "dev",
+                previousProfiles = listOf(previousDev)
+            )
+        }
+
+        assertEquals("  ", thrown.profileId)
+        assertEquals("Blank", thrown.displayName)
+        assertEquals(writesAfterSeed, slots.writes.size)
+        assertEquals("s1", slots.read("dev", previousDev.credentialSlotVersion))
+        assertNull(slots.read("dev", previousDev.credentialSlotVersion + 1))
+    }
+
+    @Test
+    fun `repairing a persisted invalid endpoint publishes the canonical value and advances revisions`() {
+        val slots = InMemoryCredentialSlotStore()
+        val store = EnvironmentProfileStore(slots)
+        val damaged = EnvironmentProfile(
+            id = "qa",
+            displayName = "QA",
+            canonicalEndpoint = "not a url",
+            authMode = AuthMode.ANONYMOUS,
+            profileRevision = 3,
+            accessRevision = 2,
+            credentialSlotId = CredentialSlotStore.slotKey("qa", 1),
+            credentialSlotVersion = 1
+        )
+
+        val outcome = store.applyIntents(
+            intents = listOf(
+                intent(id = "qa", endpoint = "HTTPS://QA.example:443/", authMode = AuthMode.ANONYMOUS)
+            ),
+            activeProfileId = "qa",
+            previousProfiles = listOf(damaged)
+        )
+
+        val published = outcome.publishedProfiles.single()
+        assertEquals("https://qa.example", published.canonicalEndpoint)
+        assertEquals(4L, published.profileRevision)
+        assertEquals(3L, published.accessRevision)
+        assertEquals(setOf("qa"), outcome.accessRevisionAdvancedIds)
     }
 
     // ------------------------------------------------------------------

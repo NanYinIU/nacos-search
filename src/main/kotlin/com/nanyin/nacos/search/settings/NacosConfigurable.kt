@@ -1184,17 +1184,8 @@ class NacosConfigurable @JvmOverloads constructor(
         commitDetailFormToDraft()
 
         val snapshot = intentDraft.snapshot()
-        val activeIntent = snapshot.find { it.profileId == intentDraft.activeProfileId }
-            ?: snapshot.first()
-        if (CanonicalNacosEndpoint.parse(activeIntent.endpoint).isFailure) {
-            Messages.showErrorDialog(
-                NacosSearchBundle.message("settings.server.url.invalid", activeIntent.displayName),
-                NacosSearchBundle.message("settings.invalid.title")
-            )
-            // Select the offending server
-            val idx = snapshot.indexOf(activeIntent)
-            if (idx >= 0) profileList.selectedIndex = idx
-            throw java.lang.IllegalStateException("Invalid server URL")
+        CanonicalNacosEndpoint.firstInvalidIntent(snapshot)?.let { invalidIntent ->
+            rejectInvalidEndpoint(invalidIntent, snapshot)
         }
 
         // ADR-0027: settings-path actions that would destroy a draft must
@@ -1207,12 +1198,20 @@ class NacosConfigurable @JvmOverloads constructor(
         // Sole write path: profile intents through the store (issue #106).
         // The write outcome is the sole classification for connection-vs-
         // preferences notifications — do not re-compare signatures, passwords,
-        // or list positions (#103).
-        val outcome = settings.applyProfileIntents(
-            intents = snapshot,
-            newActiveId = intentDraft.activeProfileId,
-            previousActiveId = intentDraft.openBaselineActiveId
-        )
+        // or list positions (#103). Invalid snapshots throw
+        // [InvalidProfileEndpoint] before any mutation, so this outcome only
+        // describes a write that started.
+        val outcome = try {
+            settings.applyProfileIntents(
+                intents = snapshot,
+                newActiveId = intentDraft.activeProfileId,
+                previousActiveId = intentDraft.openBaselineActiveId
+            )
+        } catch (rejected: InvalidProfileEndpoint) {
+            val invalidIntent = snapshot.firstOrNull { it.profileId == rejected.profileId }
+                ?: snapshot.first()
+            rejectInvalidEndpoint(invalidIntent, snapshot)
+        }
 
         // Stage / deletion withhold failures leave the previous publication
         // visible. Resync the draft from published state and tell the
@@ -1314,6 +1313,18 @@ class NacosConfigurable @JvmOverloads constructor(
             }.joinToString("; ")
             throw java.lang.IllegalStateException(failed)
         }
+    }
+
+    private fun rejectInvalidEndpoint(intent: ProfileIntent, snapshot: List<ProfileIntent>): Nothing {
+        Messages.showErrorDialog(
+            NacosSearchBundle.message("settings.server.url.invalid", intent.displayName),
+            NacosSearchBundle.message("settings.invalid.title")
+        )
+        val idx = snapshot.indexOfFirst { it.profileId == intent.profileId }
+        if (idx >= 0 && ::profileList.isInitialized) {
+            profileList.selectedIndex = idx
+        }
+        throw java.lang.IllegalStateException("Invalid server URL")
     }
 
     override fun reset() {

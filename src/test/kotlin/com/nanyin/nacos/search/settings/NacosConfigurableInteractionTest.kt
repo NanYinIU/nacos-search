@@ -479,6 +479,77 @@ class NacosConfigurableInteractionTest {
     }
 
     @Test
+    fun applyRejectsInvalidInactiveRowWithoutPublishing() {
+        val appSettings = settings()
+        val original = appSettings.loadIntentDraft().snapshot()
+        val originalActive = appSettings.resolveDefaultProfileId()
+        clearProfileTombstones(
+            original.map { it.profileId } + listOf("dev", "prod")
+        )
+        try {
+            appSettings.applyProfileIntents(
+                listOf(
+                    profileIntentFixture(
+                        id = "dev",
+                        displayName = "Dev",
+                        serverUrl = "https://nacos.example",
+                        authMode = AuthMode.ANONYMOUS
+                    ),
+                    profileIntentFixture(
+                        id = "prod",
+                        displayName = "Prod",
+                        serverUrl = "https://prod.example",
+                        authMode = AuthMode.ANONYMOUS
+                    )
+                ),
+                "dev"
+            )
+            val beforeDev = appSettings.getProfile("dev")!!
+            val beforeProd = appSettings.getProfile("prod")!!
+
+            val configurable = NacosConfigurable()
+            configurable.createComponent()
+            val list = privateField<JList<*>>(configurable, "profileList")
+            val urlField = privateField<javax.swing.JTextField>(configurable, "serverUrlField")
+
+            runOnEdt {
+                list.selectedIndex = configurable.draftIntents().indexOfFirst { it.profileId == "prod" }
+            }
+            waitForUi()
+            runOnEdt { urlField.text = "not-a-url" }
+            waitForUi()
+            runOnEdt {
+                list.selectedIndex = configurable.draftIntents().indexOfFirst { it.profileId == "dev" }
+            }
+            waitForUi()
+            assertEquals("dev", configurable.draftActiveProfileId())
+
+            val previousDialog = com.intellij.openapi.ui.TestDialogManager.setTestDialog(
+                com.intellij.openapi.ui.TestDialog.OK
+            )
+            val thrown = try {
+                org.junit.jupiter.api.assertThrows<IllegalStateException> {
+                    configurable.apply()
+                }
+            } finally {
+                com.intellij.openapi.ui.TestDialogManager.setTestDialog(previousDialog)
+            }
+            assertEquals("Invalid server URL", thrown.message)
+            assertEquals("https://prod.example", appSettings.getProfile("prod")!!.canonicalEndpoint)
+            assertEquals(beforeDev.accessRevision, appSettings.getProfile("dev")!!.accessRevision)
+            assertEquals(beforeProd.accessRevision, appSettings.getProfile("prod")!!.accessRevision)
+            assertEquals("prod", (list.selectedValue as ProfileIntent).profileId)
+        } finally {
+            val touched = (appSettings.publishedProfiles().map { it.id } +
+                original.map { it.profileId } + listOf("dev", "prod")).toSet()
+            clearProfileTombstones(touched)
+            appSettings.applyProfileIntents(original, originalActive)
+            clearProfileTombstones(touched)
+            appSettings.resetToDefaults()
+        }
+    }
+
+    @Test
     fun chooserDiscoveryFailureShowsTransientRowWithoutDiagnosticHeadline() {
         val configurable = NacosConfigurable()
         configurable.createComponent()

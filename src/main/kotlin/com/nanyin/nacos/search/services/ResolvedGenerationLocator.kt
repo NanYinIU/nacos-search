@@ -94,13 +94,14 @@ internal class ResolvedGenerationLocator(
             }
 
         /**
-         * For an application-level reader with no project of its own — startup
-         * warm-up, local search, the API service's clear gesture. It asks the
-         * session of whichever open project selected the profile, which is the
-         * same lookup the operation layer uses to decide where to commit a
-         * resolution. When no open project owns the profile the operation layer
-         * commits to a session of its own that nothing else can reach, and the
-         * persisted last-known value is what carries the answer here.
+         * For an application-level reader with no project of its own — local
+         * search, the API service's clear gesture. It asks the session of
+         * whichever open project selected the profile, which is the same lookup
+         * the operation layer uses to decide where to commit a resolution.
+         * Startup warm-up belongs to a project and uses [forProject] instead
+         * (issue #249). When no open project owns the profile the operation
+         * layer commits to a session of its own that nothing else can reach,
+         * and the persisted last-known value is what carries the answer here.
          */
         fun forSelectedProfile(): ResolvedGenerationLocator =
             askingSession { keys -> ProjectSessionEpochs.findForProfile(keys.profileId) }

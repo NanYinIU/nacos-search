@@ -28,6 +28,14 @@ value class CanonicalNacosEndpoint private constructor(val value: String) {
                 if (port != null && port >= 0) append(':').append(port)
             })
         }
+
+        /**
+         * First intent whose endpoint fails [parse], in snapshot order (issue #249).
+         * Apply, the profile store, and tests share this so publication cannot
+         * silently validate only the active row.
+         */
+        fun firstInvalidIntent(intents: List<ProfileIntent>): ProfileIntent? =
+            intents.firstOrNull { parse(it.endpoint).isFailure }
     }
 }
 

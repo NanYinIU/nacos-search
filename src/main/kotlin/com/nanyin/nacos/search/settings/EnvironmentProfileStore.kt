@@ -28,6 +28,13 @@ import com.nanyin.nacos.search.models.ProfileIntent
  * responsible for replacing its published profiles and preference records.
  * Legacy server rows are never rewritten from this path (ADR-0049 / issue #153).
  *
+ * Every intent endpoint in the received snapshot must parse before any
+ * credential is staged or any profile is published (issue #249), including
+ * blank-id and duplicate-id rows that publication later drops. An
+ * already-persisted invalid endpoint is not rewritten here; it stays loadable
+ * as repair state until a valid snapshot replaces it. Classification still
+ * compares raw text so a bad in-progress edit stays dirty.
+ *
  * Removals are **classified** here (ids present previously and absent from
  * intents) but not executed: the host runs [ProfileDeletionLifecycle] at the
  * write boundary so the tombstone lands before the published set omits the
@@ -68,6 +75,13 @@ class EnvironmentProfileStore(
         val previousPrefsById = previousPreferences
             .filter { it.profileId.isNotBlank() }
             .associate { it.profileId to it.copyPreferences() }
+
+        CanonicalNacosEndpoint.firstInvalidIntent(intents)?.let { invalid ->
+            throw InvalidProfileEndpoint(
+                profileId = invalid.profileId,
+                displayName = invalid.displayName
+            )
+        }
 
         val intentIds = linkedSetOf<String>()
         val normalizedIntents = intents.mapNotNull { intent ->

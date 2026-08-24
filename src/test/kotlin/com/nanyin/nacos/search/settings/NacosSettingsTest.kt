@@ -5,6 +5,7 @@ import com.nanyin.nacos.search.models.NacosServerConfig
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 
 @TestApplication
 class NacosSettingsTest {
@@ -70,6 +71,157 @@ class NacosSettingsTest {
         val errors = settings.validate()
         assertTrue(errors.contains("Invalid server URL format"))
         assertFalse(settings.isValid())
+    }
+
+    @Test
+    fun `validate ignores an invalid dormant profile when the selected profile is valid`() {
+        val slots = InMemoryCredentialSlotStore()
+        settings.applyProfileIntents(
+            intents = listOf(
+                profileIntentFixture(
+                    id = "s_dev_249",
+                    displayName = "Dev",
+                    serverUrl = "https://nacos.example",
+                    authMode = AuthMode.ANONYMOUS
+                ),
+                profileIntentFixture(
+                    id = "s_qa_249",
+                    displayName = "QA",
+                    serverUrl = "https://qa.example",
+                    authMode = AuthMode.ANONYMOUS
+                )
+            ),
+            newActiveId = "s_dev_249",
+            credentialSlots = slots
+        )
+        settings.migratedDefaultProfileId = "s_dev_249"
+        settings.profiles.first { it.id == "s_qa_249" }.canonicalEndpoint = "not a url"
+
+        assertTrue(settings.validate().isEmpty())
+        assertTrue(settings.isValid())
+    }
+
+    @Test
+    fun `validate of a project selected profile ignores a damaged migration seed`() {
+        val slots = InMemoryCredentialSlotStore()
+        settings.applyProfileIntents(
+            intents = listOf(
+                profileIntentFixture(
+                    id = "s_dev_249",
+                    displayName = "Dev",
+                    serverUrl = "https://nacos.example",
+                    authMode = AuthMode.ANONYMOUS
+                ),
+                profileIntentFixture(
+                    id = "s_qa_249",
+                    displayName = "QA",
+                    serverUrl = "https://qa.example",
+                    authMode = AuthMode.ANONYMOUS
+                )
+            ),
+            newActiveId = "s_dev_249",
+            credentialSlots = slots
+        )
+        settings.migratedDefaultProfileId = "s_dev_249"
+        settings.profiles.first { it.id == "s_dev_249" }.canonicalEndpoint = "not a url"
+
+        assertTrue(settings.validate().isNotEmpty())
+        assertFalse(settings.isValid())
+        assertTrue(settings.validate("s_qa_249").isEmpty())
+    }
+
+    @Test
+    fun `applyProfileIntents rejects a valid active plus invalid inactive snapshot without mutation`() {
+        val slots = InMemoryCredentialSlotStore()
+        val published = settings.applyProfileIntents(
+            intents = listOf(
+                profileIntentFixture(
+                    id = "s_dev_249",
+                    displayName = "Dev",
+                    serverUrl = "https://nacos.example",
+                    authMode = AuthMode.ANONYMOUS
+                ),
+                profileIntentFixture(
+                    id = "s_qa_249",
+                    displayName = "QA",
+                    serverUrl = "https://qa.example",
+                    authMode = AuthMode.ANONYMOUS
+                )
+            ),
+            newActiveId = "s_dev_249",
+            credentialSlots = slots
+        )
+        val before = published.publishedProfiles.map { it.copy(cacheTombstones = it.cacheTombstones.toMutableList()) }
+        val writesAfterSeed = slots.writes.size
+        val beforePrefs = settings.preferencesFor("s_dev_249").allowCrossNamespaceNavigation
+
+        val thrown = assertThrows<InvalidProfileEndpoint> {
+            settings.applyProfileIntents(
+                intents = listOf(
+                    profileIntentFixture(
+                        id = "s_dev_249",
+                        displayName = "Dev",
+                        serverUrl = "https://nacos.example",
+                        authMode = AuthMode.ANONYMOUS,
+                        allowCrossNamespaceNavigation = true
+                    ),
+                    profileIntentFixture(
+                        id = "s_qa_249",
+                        displayName = "QA",
+                        serverUrl = "not a url",
+                        authMode = AuthMode.ANONYMOUS
+                    )
+                ),
+                newActiveId = "s_dev_249",
+                credentialSlots = slots
+            )
+        }
+
+        assertEquals("s_qa_249", thrown.profileId)
+        assertEquals(writesAfterSeed, slots.writes.size)
+        assertEquals(
+            before.map { it.id to it.accessRevision to it.canonicalEndpoint },
+            settings.publishedProfiles().map { it.id to it.accessRevision to it.canonicalEndpoint }
+        )
+        assertEquals(beforePrefs, settings.preferencesFor("s_dev_249").allowCrossNamespaceNavigation)
+    }
+
+    @Test
+    fun `loadIntentDraft keeps a damaged persisted endpoint so it can be repaired`() {
+        val slots = InMemoryCredentialSlotStore()
+        settings.applyProfileIntents(
+            intents = listOf(
+                profileIntentFixture(
+                    id = "s_dev_249",
+                    displayName = "Dev",
+                    serverUrl = "https://nacos.example",
+                    authMode = AuthMode.ANONYMOUS
+                ),
+                profileIntentFixture(
+                    id = "s_qa_249",
+                    displayName = "QA",
+                    serverUrl = "https://qa.example",
+                    authMode = AuthMode.ANONYMOUS
+                )
+            ),
+            newActiveId = "s_dev_249",
+            credentialSlots = slots
+        )
+        settings.profiles.first { it.id == "s_qa_249" }.canonicalEndpoint = "not a url"
+
+        val draft = settings.loadIntentDraft(credentialSlots = slots)
+        assertEquals("not a url", draft.snapshot().single { it.profileId == "s_qa_249" }.endpoint)
+
+        val repaired = settings.applyProfileIntents(
+            intents = draft.snapshot().map { intent ->
+                if (intent.profileId == "s_qa_249") intent.copy(endpoint = "https://qa.example") else intent
+            },
+            newActiveId = "s_dev_249",
+            credentialSlots = slots
+        )
+        assertEquals("https://qa.example", repaired.publishedProfiles.single { it.id == "s_qa_249" }.canonicalEndpoint)
+        assertEquals("https://qa.example", settings.getProfile("s_qa_249")!!.canonicalEndpoint)
+        assertTrue(settings.getProfile("s_qa_249")!!.accessRevision > 1)
     }
 
     @Test

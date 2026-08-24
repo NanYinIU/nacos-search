@@ -823,20 +823,26 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     /**
-     * Validates the current settings.
+     * Validates settings that can block plugin initialization for one profile.
+     *
+     * Endpoint checks apply only to [profileId], or to the migration-default
+     * profile when omitted. A dormant invalid profile stays loadable as repair
+     * state and must not prevent a valid selected environment from starting
+     * (issue #249). Startup must pass the project-selected profile id, not the
+     * application-wide seed. Publication still requires every edited endpoint
+     * to parse.
      */
-    fun validate(): List<String> {
+    @JvmOverloads
+    fun validate(profileId: String? = null): List<String> {
         val errors = mutableListOf<String>()
 
-        if (profiles.isEmpty()) {
+        val selected = getProfile(
+            profileId?.trim()?.takeUnless { it.isNullOrBlank() } ?: resolveDefaultProfileId()
+        )
+        if (selected == null || selected.canonicalEndpoint.isBlank()) {
             errors += "Server URL cannot be empty"
-        }
-        for (profile in profiles) {
-            if (profile.canonicalEndpoint.isBlank()) {
-                errors += "Server URL cannot be empty"
-            } else if (!isValidServerUrl(profile.canonicalEndpoint)) {
-                errors += "Invalid server URL format"
-            }
+        } else if (!isValidServerUrl(selected.canonicalEndpoint)) {
+            errors += "Invalid server URL format"
         }
 
         if (cacheEnabled) {
