@@ -4,13 +4,17 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.junit5.TestApplication
-import com.nanyin.nacos.search.models.NacosServerConfig
+import com.nanyin.nacos.search.models.NacosApiPolicy
 import com.nanyin.nacos.search.services.network.NacosRequestError
 import com.nanyin.nacos.search.services.operations.RemoteOperationError
 import com.nanyin.nacos.search.settings.AuthMode
 import com.nanyin.nacos.search.settings.ConfigurationRequired
+import com.nanyin.nacos.search.settings.NacosProjectSession
 import com.nanyin.nacos.search.settings.NacosSettings
+import com.nanyin.nacos.search.settings.profileIntentFixture
+import com.nanyin.nacos.search.settings.selectedNacosProfileId
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -92,6 +96,68 @@ class NacosSearchPluginTest {
             }
         } finally {
             Disposer.dispose(plugin)
+        }
+    }
+
+    @Test
+    fun `startup validates the project selected environment not the migration seed`() {
+        val settings = ApplicationManager.getApplication().getService(NacosSettings::class.java)
+        val project = ProjectManager.getInstance().defaultProject
+        val session = project.getService(NacosProjectSession::class.java)
+        val previousSelection = session.sessionState.copy()
+        try {
+            // Keep s_local published so this test does not tombstone the
+            // @BeforeEach profile that later tests re-apply.
+            settings.applyProfileIntents(
+                listOf(
+                    profileIntentFixture(
+                        id = "s_local",
+                        displayName = "Local",
+                        serverUrl = "https://nacos.example",
+                        authMode = AuthMode.ANONYMOUS,
+                        apiPolicy = NacosApiPolicy.V1
+                    ),
+                    profileIntentFixture(
+                        id = "s_dev_249",
+                        displayName = "Dev",
+                        serverUrl = "https://dev.example.com",
+                        authMode = AuthMode.ANONYMOUS,
+                        apiPolicy = NacosApiPolicy.V1
+                    ),
+                    profileIntentFixture(
+                        id = "s_qa_249",
+                        displayName = "QA",
+                        serverUrl = "https://qa.example.com",
+                        authMode = AuthMode.ANONYMOUS,
+                        apiPolicy = NacosApiPolicy.V1
+                    )
+                ),
+                "s_dev_249"
+            )
+            settings.migratedDefaultProfileId = "s_dev_249"
+            settings.profiles.first { it.id == "s_dev_249" }.canonicalEndpoint = "not a url"
+            session.select("s_qa_249", "public")
+
+            assertTrue(settings.validate().isNotEmpty(), "migration seed (dev) is damaged")
+            assertTrue(settings.validate("s_qa_249").isEmpty(), "project selection (qa) is valid")
+            assertEquals("s_qa_249", project.selectedNacosProfileId(settings))
+            assertTrue(settings.captureOperationContext().isFailure)
+            assertTrue(settings.captureOperationContext("s_qa_249").isSuccess)
+
+            val plugin = NacosSearchPlugin()
+            try {
+                plugin.runActivity(project)
+                val selectedContext = settings.captureOperationContext("s_qa_249")
+                assertTrue(selectedContext.isSuccess)
+            } finally {
+                Disposer.dispose(plugin)
+            }
+        } finally {
+            session.sessionState.selectedProfileId = previousSelection.selectedProfileId
+            session.sessionState.namespaceId = previousSelection.namespaceId
+            session.sessionState.selectionWasExplicit = previousSelection.selectionWasExplicit
+            session.sessionState.sessionInitialized = previousSelection.sessionInitialized
+            settings.resetToDefaults()
         }
     }
 }

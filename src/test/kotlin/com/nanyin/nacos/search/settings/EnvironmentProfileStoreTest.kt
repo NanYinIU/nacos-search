@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 
 /**
  * Issue #103 / ADR-0049 / ADR-0024 / ADR-0035: profile intents publish through
@@ -588,30 +589,71 @@ class EnvironmentProfileStoreTest {
         val previousQa = qaSeed.publishedProfiles.single { it.id == "qa" }
         val writesAfterSeed = slots.writes.size
 
-        val outcome = store.applyIntents(
-            intents = listOf(
-                intent(id = "dev", secret = "s1", principal = "alice", displayName = "Dev renamed"),
-                intent(id = "qa", secret = "s2-rotated", principal = "bob", endpoint = "not a url")
-            ),
-            activeProfileId = "dev",
-            previousProfiles = qaSeed.publishedProfiles,
-            previousPreferences = qaSeed.publishedPreferences,
-            previousActiveId = "dev"
-        )
+        val thrown = assertThrows<InvalidProfileEndpoint> {
+            store.applyIntents(
+                intents = listOf(
+                    intent(id = "dev", secret = "s1", principal = "alice", displayName = "Dev renamed"),
+                    intent(id = "qa", secret = "s2-rotated", principal = "bob", endpoint = "not a url", displayName = "QA")
+                ),
+                activeProfileId = "dev",
+                previousProfiles = qaSeed.publishedProfiles,
+                previousPreferences = qaSeed.publishedPreferences,
+                previousActiveId = "dev"
+            )
+        }
 
-        assertEquals("qa", outcome.rejectedInvalidProfileId)
-        assertTrue(outcome.isRejectedInvalidSnapshot())
+        assertEquals("qa", thrown.profileId)
+        assertEquals("QA", thrown.displayName)
         assertEquals(writesAfterSeed, slots.writes.size)
         assertEquals("s1", slots.read("dev", previousDev.credentialSlotVersion))
         assertEquals("s2", slots.read("qa", previousQa.credentialSlotVersion))
         assertNull(slots.read("qa", previousQa.credentialSlotVersion + 1))
-        val publishedDev = outcome.publishedProfiles.single { it.id == "dev" }
-        val publishedQa = outcome.publishedProfiles.single { it.id == "qa" }
-        assertEquals("https://nacos.example", publishedDev.canonicalEndpoint)
-        assertEquals(previousDev.accessRevision, publishedDev.accessRevision)
-        assertEquals(previousDev.displayName, publishedDev.displayName)
-        assertEquals("https://qa.example", publishedQa.canonicalEndpoint)
-        assertEquals(previousQa.accessRevision, publishedQa.accessRevision)
+    }
+
+    @Test
+    fun `invalid endpoint on a duplicate id row is rejected before any staging`() {
+        val (store, slots, previousDev) = seeded("dev", secret = "s1")
+        val writesAfterSeed = slots.writes.size
+
+        val thrown = assertThrows<InvalidProfileEndpoint> {
+            store.applyIntents(
+                intents = listOf(
+                    intent(id = "dev", secret = "s1", principal = "alice"),
+                    intent(id = "dev", secret = "s2", principal = "bob", endpoint = "not a url", displayName = "Dev dup")
+                ),
+                activeProfileId = "dev",
+                previousProfiles = listOf(previousDev)
+            )
+        }
+
+        assertEquals("dev", thrown.profileId)
+        assertEquals("Dev dup", thrown.displayName)
+        assertEquals(writesAfterSeed, slots.writes.size)
+        assertEquals("s1", slots.read("dev", previousDev.credentialSlotVersion))
+        assertNull(slots.read("dev", previousDev.credentialSlotVersion + 1))
+    }
+
+    @Test
+    fun `invalid endpoint on a blank id row is rejected before any staging`() {
+        val (store, slots, previousDev) = seeded("dev", secret = "s1")
+        val writesAfterSeed = slots.writes.size
+
+        val thrown = assertThrows<InvalidProfileEndpoint> {
+            store.applyIntents(
+                intents = listOf(
+                    intent(id = "dev", secret = "s1", principal = "alice"),
+                    intent(id = "  ", secret = "s2", principal = "bob", endpoint = "not a url", displayName = "Blank")
+                ),
+                activeProfileId = "dev",
+                previousProfiles = listOf(previousDev)
+            )
+        }
+
+        assertEquals("  ", thrown.profileId)
+        assertEquals("Blank", thrown.displayName)
+        assertEquals(writesAfterSeed, slots.writes.size)
+        assertEquals("s1", slots.read("dev", previousDev.credentialSlotVersion))
+        assertNull(slots.read("dev", previousDev.credentialSlotVersion + 1))
     }
 
     @Test
@@ -637,7 +679,6 @@ class EnvironmentProfileStoreTest {
             previousProfiles = listOf(damaged)
         )
 
-        assertNull(outcome.rejectedInvalidProfileId)
         val published = outcome.publishedProfiles.single()
         assertEquals("https://qa.example", published.canonicalEndpoint)
         assertEquals(4L, published.profileRevision)

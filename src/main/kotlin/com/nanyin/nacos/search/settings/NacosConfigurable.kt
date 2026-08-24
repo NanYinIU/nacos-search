@@ -1198,14 +1198,17 @@ class NacosConfigurable @JvmOverloads constructor(
         // Sole write path: profile intents through the store (issue #106).
         // The write outcome is the sole classification for connection-vs-
         // preferences notifications — do not re-compare signatures, passwords,
-        // or list positions (#103).
-        val outcome = settings.applyProfileIntents(
-            intents = snapshot,
-            newActiveId = intentDraft.activeProfileId,
-            previousActiveId = intentDraft.openBaselineActiveId
-        )
-        if (outcome.isRejectedInvalidSnapshot()) {
-            val invalidIntent = snapshot.firstOrNull { it.profileId == outcome.rejectedInvalidProfileId }
+        // or list positions (#103). Invalid snapshots throw
+        // [InvalidProfileEndpoint] before any mutation, so this outcome only
+        // describes a write that started.
+        val outcome = try {
+            settings.applyProfileIntents(
+                intents = snapshot,
+                newActiveId = intentDraft.activeProfileId,
+                previousActiveId = intentDraft.openBaselineActiveId
+            )
+        } catch (rejected: InvalidProfileEndpoint) {
+            val invalidIntent = snapshot.firstOrNull { it.profileId == rejected.profileId }
                 ?: snapshot.first()
             rejectInvalidEndpoint(invalidIntent, snapshot)
         }

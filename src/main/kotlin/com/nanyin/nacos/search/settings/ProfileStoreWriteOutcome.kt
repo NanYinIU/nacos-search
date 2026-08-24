@@ -45,13 +45,6 @@ data class ProfileStoreWriteOutcome(
      * They remain in [publishedProfiles]; callers must not treat them as removed.
      */
     val withheldDeletionProfileIds: Set<String> = emptySet(),
-    /**
-     * First profile id in intent order whose endpoint failed canonical parse.
-     * When set, the snapshot was rejected in full: [publishedProfiles] are the
-     * previous snapshots, no credential slot was staged, and no revision
-     * advanced (issue #249). Callers must not adopt this outcome as a write.
-     */
-    val rejectedInvalidProfileId: String? = null,
     /** Immutable snapshots of the profiles that are now published, in intent order. */
     val publishedProfiles: List<EnvironmentProfile> = emptyList(),
     /**
@@ -94,28 +87,23 @@ data class ProfileStoreWriteOutcome(
         !isOperationalChange() &&
             !hasStageFailures() &&
             !hasWithheldDeletions() &&
-            !isRejectedInvalidSnapshot() &&
             (preferenceChangedIds.isNotEmpty() || displayOnlyChangedIds.isNotEmpty())
 
     /**
      * True when nothing observable changed (including pure reorder). Stage
-     * failures, withheld deletions, and rejected invalid snapshots are not
-     * no-ops — the user attempted a write that did not land.
+     * failures and withheld deletions are not no-ops — the user attempted a
+     * connection-level write that did not fully land.
      */
     fun isNoOp(): Boolean =
         !isOperationalChange() &&
             preferenceChangedIds.isEmpty() &&
             displayOnlyChangedIds.isEmpty() &&
             failedStageProfileIds.isEmpty() &&
-            withheldDeletionProfileIds.isEmpty() &&
-            rejectedInvalidProfileId == null
+            withheldDeletionProfileIds.isEmpty()
 
     /** True when at least one intent could not stage its credential slot. */
     fun hasStageFailures(): Boolean = failedStageProfileIds.isNotEmpty()
 
     /** True when at least one intended deletion was withheld (tombstone failure). */
     fun hasWithheldDeletions(): Boolean = withheldDeletionProfileIds.isNotEmpty()
-
-    /** True when the snapshot was refused because an endpoint failed canonical parse. */
-    fun isRejectedInvalidSnapshot(): Boolean = rejectedInvalidProfileId != null
 }

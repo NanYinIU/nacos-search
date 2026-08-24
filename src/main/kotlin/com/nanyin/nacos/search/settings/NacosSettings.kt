@@ -430,11 +430,6 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
             previousActiveId = previousActiveId,
             previousSuggestedNamespaces = previousNamespaces
         )
-        // Invalid snapshots are refused before tombstones, credential slots,
-        // preference records, or session epochs move (issue #249).
-        if (rawOutcome.isRejectedInvalidSnapshot()) {
-            return rawOutcome
-        }
 
         // Confirmed removals run the one deletion lifecycle at this write
         // boundary. Tombstone first; on failure withhold that id from the
@@ -828,17 +823,21 @@ class NacosSettings : PersistentStateComponent<NacosSettings> {
     }
 
     /**
-     * Validates settings that can block plugin initialization.
+     * Validates settings that can block plugin initialization for one profile.
      *
-     * Endpoint checks apply only to the selected (migration-default) profile.
-     * A dormant invalid profile stays loadable as repair state and must not
-     * prevent a valid selected environment from starting (issue #249).
-     * Publication still requires every edited endpoint to parse.
+     * Endpoint checks apply only to [profileId], or to the migration-default
+     * profile when omitted. A dormant invalid profile stays loadable as repair
+     * state and must not prevent a valid selected environment from starting
+     * (issue #249). Startup must pass the project-selected profile id, not the
+     * application-wide seed. Publication still requires every edited endpoint
+     * to parse.
      */
-    fun validate(): List<String> {
+    fun validate(profileId: String? = null): List<String> {
         val errors = mutableListOf<String>()
 
-        val selected = getProfile(resolveDefaultProfileId())
+        val selected = getProfile(
+            profileId?.trim()?.takeUnless { it.isNullOrBlank() } ?: resolveDefaultProfileId()
+        )
         if (selected == null || selected.canonicalEndpoint.isBlank()) {
             errors += "Server URL cannot be empty"
         } else if (!isValidServerUrl(selected.canonicalEndpoint)) {

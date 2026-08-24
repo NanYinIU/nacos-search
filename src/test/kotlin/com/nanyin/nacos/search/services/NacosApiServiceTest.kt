@@ -229,7 +229,7 @@ class NacosApiServiceTest {
     }
 
     @Test
-    fun `invalid endpoint or incomplete credentials fails closed before cache or transport`() = runBlocking {
+    fun `invalid endpoint or incomplete credentials fails closed before cache or transport`(): Unit = runBlocking {
         val cache = ApplicationManager.getApplication().getService(CacheService::class.java)
         cache.clearAll()
         cache.writeDetail(
@@ -237,12 +237,9 @@ class NacosApiServiceTest {
             "test-ns",
             NacosConfiguration("test.properties", "DEFAULT_GROUP", "test-ns", "cached=value")
         )
-        publishEnvironment(
-            serverUrl = "http://localhost:$serverPort/nacos",
-            username = "nacos",
-            password = "",
-            authMode = AuthMode.BASIC
-        )
+        // Publication refuses an unparseable endpoint, so inject the damaged
+        // persisted state the same way runtime repair does (issue #249).
+        settings.profiles.single().canonicalEndpoint = "http://localhost:$serverPort/nacos"
         val before = requestCount.get()
 
         val result = apiService.getConfiguration("test.properties", "DEFAULT_GROUP", "test-ns")

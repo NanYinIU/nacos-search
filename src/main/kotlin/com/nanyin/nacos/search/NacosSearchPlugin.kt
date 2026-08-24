@@ -9,9 +9,12 @@ import com.nanyin.nacos.search.services.NavigationIndexRefreshService
 import com.nanyin.nacos.search.services.NavigationDetailPrefetchService
 import com.nanyin.nacos.search.services.requestManualNamespaceRefresh
 import com.nanyin.nacos.search.services.requestStartupNamespaceIndex
+import com.nanyin.nacos.search.services.ResolvedGenerationLocator
 import com.nanyin.nacos.search.psi.NacosKeyIndexService
 import com.nanyin.nacos.search.settings.NacosSettings
 import com.nanyin.nacos.search.settings.NacosOperationContext
+import com.nanyin.nacos.search.settings.captureSelectedAccessIdentity
+import com.nanyin.nacos.search.settings.selectedNacosProfileId
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
@@ -41,7 +44,7 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
         logger.info("Initializing Nacos Search Plugin")
 
        try {
-           initializePlugin()
+           initializePlugin(project)
            logger.info("Nacos Search Plugin initialized successfully")
         } catch (e: Exception) {
             logger.error("Failed to initialize Nacos Search Plugin", e)
@@ -49,14 +52,21 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
     }
     
     /**
-     * Initialize the plugin components
+     * Initialize the plugin components for [project].
+     *
+     * Validation, cache warm, connection test, and index preheat all address
+     * this project's selected profile (issue #249 / ADR-0004). A damaged
+     * migration seed must not skip a valid project selection, and a valid seed
+     * must not warm the wrong environment when this project selected another.
      */
-    private fun initializePlugin() {
-        // Validate the selected profile and cache settings only. A dormant
-        // invalid profile must not skip initialization of an otherwise valid
-        // environment (issue #249); operation capture still fail-closes for
-        // the selected invalid profile.
-        val validationErrors = settings.validate()
+    private fun initializePlugin(project: Project) {
+        val profileId = project.selectedNacosProfileId(settings)
+        val locator = ResolvedGenerationLocator.forProject(project)
+        // Validate the project-selected profile and cache settings only. A
+        // dormant invalid profile must not skip initialization of an otherwise
+        // valid environment (issue #249); operation capture still fail-closes
+        // for the selected invalid profile.
+        val validationErrors = settings.validate(profileId)
         if (validationErrors.isNotEmpty()) {
             logger.warn("Plugin settings validation failed: ${validationErrors.joinToString(", ")}")
             return
@@ -69,7 +79,9 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
         if (settings.cacheEnabled) {
             coroutineScope.launch {
                 try {
-                    val cachedConfigs = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
+                    val cachedConfigs = cacheService.getAllCachedConfigurations(
+                        settings.captureAccessIdentity(profileId, locator)
+                    )
                     logger.info("Loaded ${cachedConfigs.size} configurations from cache")
                 } catch (e: Exception) {
                     logger.error("Error loading cached configurations", e)
@@ -81,7 +93,7 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
         // module never re-reads settings mid-flight (issue #50).
         coroutineScope.launch {
             try {
-                val context = settings.captureOperationContext().getOrElse { error ->
+                val context = settings.captureOperationContext(profileId).getOrElse { error ->
                     logger.warn("Connection test skipped: ${error.message}")
                     return@launch
                 }
@@ -91,16 +103,18 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
                     
                     // Load initial data if cache is empty or disabled
                     if (!settings.cacheEnabled) {
-                        loadInitialData()
+                        loadInitialData(project, profileId)
                     } else {
                         try {
-                            val cachedConfigs = cacheService.getAllCachedConfigurations(settings.captureAccessIdentity())
+                            val cachedConfigs = cacheService.getAllCachedConfigurations(
+                                settings.captureAccessIdentity(profileId, locator)
+                            )
                             if (cachedConfigs.isEmpty()) {
-                                loadInitialData()
+                                loadInitialData(project, profileId)
                             }
                         } catch (e: Exception) {
                             logger.error("Error checking cached configurations", e)
-                            loadInitialData()
+                            loadInitialData(project, profileId)
                         }
                     }
                 } else {
@@ -117,9 +131,12 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
      * metadata list used to run here and was only logged before the preheat
      * paged the same namespace again (issue #147) — dropped.
      */
-    private suspend fun loadInitialData() {
+    private suspend fun loadInitialData(project: Project, profileId: String) {
         try {
-            val identity = settings.captureAccessIdentity()
+            val identity = settings.captureAccessIdentity(
+                profileId,
+                ResolvedGenerationLocator.forProject(project)
+            )
             // Warm the @NacosValue key index from persisted/opened configs so
             // code gutter markers appear without blocking the highlighter.
             keyIndexService().ensureIndexBuilt(cacheService.snapshot(identity))
@@ -129,7 +146,7 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
             // on demand. Best-effort: failures are logged and silently
             // fall back to the existing on-demand pull path. A persisted
             // (possibly stale) index short-circuits the pagination.
-            preheatNamespaceIndex(namespaceId = null)
+            preheatNamespaceIndex(project, profileId, namespaceId = null)
         } catch (e: Exception) {
             logger.error("Error loading initial data", e)
         }
@@ -141,28 +158,31 @@ class NacosSearchPlugin : StartupActivity, com.intellij.openapi.Disposable {
      * background and never blocks startup or UI. On failure the caller's
      * on-demand pull (searchWithLocalIndex) still works.
      */
-    private fun preheatNamespaceIndex(namespaceId: String?) {
+    private fun preheatNamespaceIndex(project: Project, profileId: String, namespaceId: String?) {
         if (!settings.cacheEnabled) return
+        val locator = ResolvedGenerationLocator.forProject(project)
         // Prefetch is project-scoped and independent of index completion
-        // (ADR-0043). Kick it for every open project up front — do not wait
-        // for the namespace index flight, which carries no project at startup.
-        val identityForPrefetch = try {
-            settings.captureAccessIdentity()
-        } catch (_: Exception) {
-            null
-        }
-        if (identityForPrefetch != null) {
-            com.intellij.openapi.project.ProjectManager.getInstance().openProjects
-                .filter { !it.isDefault && !it.isDisposed }
-                .forEach { openProject ->
-                    ApplicationManager.getApplication()
-                        .getService(NavigationDetailPrefetchService::class.java)
-                        .requestIfNeeded(openProject, identityForPrefetch, namespaceId)
-                }
-        }
+        // (ADR-0043). Kick it for every open project up front — each with
+        // that project's own identity, not the seed (issue #249).
+        com.intellij.openapi.project.ProjectManager.getInstance().openProjects
+            .filter { !it.isDefault && !it.isDisposed }
+            .forEach { openProject ->
+                val identity = openProject.captureSelectedAccessIdentity(settings)
+                ApplicationManager.getApplication()
+                    .getService(NavigationDetailPrefetchService::class.java)
+                    .requestIfNeeded(openProject, identity, namespaceId)
+            }
         coroutineScope.launch {
             try {
-                val indexRequest = settings.captureNamespaceIndexRequest(namespaceId)
+                val context = settings.captureOperationContext(profileId).getOrElse { error ->
+                    logger.warn("Namespace index preheat skipped: ${error.message}")
+                    return@launch
+                }
+                val indexRequest = settings.captureNamespaceIndexRequest(
+                    namespaceId,
+                    context,
+                    locator
+                )
                 // Persisted STALE indexes count: restart must not re-page when
                 // a prior complete index is already on disk (issue #147).
                 val existing = cacheService.getNamespaceIndex(
