@@ -524,7 +524,7 @@ class NacosConfigurableInteractionTest {
             waitForUi()
             assertEquals("dev", configurable.draftActiveProfileId())
 
-            val previousDialog = com.intellij.openapi.ui.Messages.setTestDialog(
+            val previousDialog = com.intellij.openapi.ui.TestDialogManager.setTestDialog(
                 com.intellij.openapi.ui.TestDialog.OK
             )
             val thrown = try {
@@ -532,7 +532,7 @@ class NacosConfigurableInteractionTest {
                     configurable.apply()
                 }
             } finally {
-                com.intellij.openapi.ui.Messages.setTestDialog(previousDialog)
+                com.intellij.openapi.ui.TestDialogManager.setTestDialog(previousDialog)
             }
             assertEquals("Invalid server URL", thrown.message)
             assertEquals("https://prod.example", appSettings.getProfile("prod")!!.canonicalEndpoint)
