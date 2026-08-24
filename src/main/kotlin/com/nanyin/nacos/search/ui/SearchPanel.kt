@@ -37,7 +37,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
     // Search listener
     var onSearchRequested: ((SearchCriteria) -> Unit)? = null
     var onSearchCleared: (() -> Unit)? = null
-    var onRealTimeSearch: ((String) -> Unit)? = null
+    var onRealTimeSearch: ((SearchCriteria) -> Unit)? = null
     var onGroupFilterChanged: ((String) -> Unit)? = null
 
     // Available groups for the filter popup
@@ -58,6 +58,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
             putClientProperty("JTextField.Search.noBorderRing", true)
             setUI(BasicTextFieldUI())
             placeholder = NacosSearchBundle.message("search.placeholder")
+            toolTipText = NacosSearchBundle.message("search.placeholder")
             columns = 20
             font = com.intellij.util.ui.UIUtil.getFontWithFallback("JetBrains Mono", Font.PLAIN, 12)
             border = JBUI.Borders.empty(0, 6)
@@ -182,67 +183,21 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
     }
     
     private fun handleTextChange() {
-        val text = searchField.text.trim()
-        
-        // Update search mode display
-        updateSearchModeDisplay(text)
-        
-        // Trigger real-time search with validation
-        if (text.isNotEmpty() && isValidSearchInput(text)) {
-            onRealTimeSearch?.invoke(text)
-        } else if (text.isEmpty()) {
-            // Clear search when input is empty
-            onRealTimeSearch?.invoke(text)
-        }
+        searchCriteria = currentCriteria()
+        onRealTimeSearch?.invoke(searchCriteria)
     }
-    
-    /**
-     * Validates if the search input is valid for prefix search
-     */
-    private fun isValidPrefixSearch(input: String): Boolean {
-        // Valid prefix search: starts with * and has content after
-        return input.startsWith("*") && input.length > 1
+
+    private fun currentGroupValue(): String {
+        val allLabel = NacosSearchBundle.message("search.group.filter.all")
+        return if (selectedGroup == allLabel) "" else selectedGroup
     }
-    
-    /**
-     * Validates if the search input is valid
-     */
-    private fun isValidSearchInput(input: String): Boolean {
-        return when {
-            input == "*" -> true // Wildcard-only search
-            input.startsWith("*") -> isValidPrefixSearch(input)
-            else -> true // Regular search
-        }
-    }
-    
-    /**
-     * Updates search mode display with color coding
-     */
-    private fun updateSearchModeDisplay(searchText: String) {
-        // This method can be used to show search mode hints
-        // For now, we'll update the search field's tooltip
-        Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
-            val tooltip = when {
-                searchText.isEmpty() -> NacosSearchBundle.message("search.placeholder")
-                searchText == "*" -> NacosSearchBundle.message("search.wildcard.tooltip")
-                searchText.startsWith("*") && searchText.length > 1 -> NacosSearchBundle.message("search.prefix.tooltip", searchText.substring(1))
-                searchText.contains("*") || searchText.contains("?") -> NacosSearchBundle.message("search.fuzzy.tooltip")
-                else -> NacosSearchBundle.message("search.exact.tooltip", searchText)
-            }
-            searchField.toolTipText = tooltip
-        }
-    }
-    
+
+    private fun currentCriteria(): SearchCriteria =
+        SearchCriteria(dataId = searchField.text.trim(), group = currentGroupValue())
+
     private fun performSearch() {
-        val query = searchField.text.trim()
-        if (query.isNotEmpty()) {
-            searchCriteria = SearchCriteria(
-            query = query,
-            useRegex = true,
-            caseSensitive = false
-        )
-            onSearchRequested?.invoke(searchCriteria)
-        }
+        searchCriteria = currentCriteria()
+        onSearchRequested?.invoke(searchCriteria)
     }
     
     private fun clearSearch() {
@@ -292,19 +247,10 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
                 addActionListener {
                     selectedGroup = group
                     updateGroupFilterLabel()
-                    val allLabel = NacosSearchBundle.message("search.group.filter.all")
-                    val groupValue = if (group == allLabel) "" else group
-                    // Trigger search with the new group filter
-                    val query = searchField.text.trim()
-                    val criteria = SearchCriteria(
-                        query = query,
-                        group = groupValue,
-                        useRegex = true,
-                        caseSensitive = false
-                    )
+                    val criteria = currentCriteria()
                     searchCriteria = criteria
-                    onGroupFilterChanged?.invoke(groupValue)
-                    // Always re-run the search so group filtering works even with an empty query.
+                    onGroupFilterChanged?.invoke(criteria.group)
+                    // Always re-run the search so group filtering works even with an empty Data ID.
                     onSearchRequested?.invoke(criteria)
                 }
             }
@@ -337,6 +283,7 @@ class SearchPanel(private val project: Project) : JPanel(BorderLayout()), NacosL
     override fun languageChanged() {
         Edt.invokeOnEdt(ModalityState.defaultModalityState()) {
             searchField.placeholder = NacosSearchBundle.message("search.placeholder")
+            searchField.toolTipText = NacosSearchBundle.message("search.placeholder")
             clearButton.toolTipText = NacosSearchBundle.message("search.clear.tooltip")
             revalidate()
             repaint()

@@ -247,8 +247,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         }
         
         // Real-time search
-        searchPanel.onRealTimeSearch = { query ->
-            handleRealTimeSearch(query)
+        searchPanel.onRealTimeSearch = { criteria ->
+            handleRealTimeSearch(criteria)
         }
         
         // Group filter change — re-search with the selected group
@@ -395,7 +395,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         requestMarkerInputGutterPass()
 
         // Preheat the full namespace index in the background so the first
-        // content/regex/wildcard search over this namespace is instant. The
+        // Data ID substring search over this namespace is instant. The
         // context comes from the session the service just adopted, which was
         // captured off the EDT.
         val operationContext = searchController.sessionContext().operationContext ?: return
@@ -431,8 +431,8 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         coroutineScope.launch { searchController.clearCriteria() }
     }
 
-    private fun handleRealTimeSearch(query: String) {
-        if (query.isBlank()) {
+    private fun handleRealTimeSearch(criteria: SearchCriteria) {
+        if (criteria.dataId.isBlank() && criteria.group.isBlank()) {
             handleSearchCleared()
             return
         }
@@ -441,7 +441,7 @@ class NacosSearchWindow(private val project: Project, private val toolWindow: To
         // Debounce so rapid typing only triggers one search after the user
         // pauses. The service cancels the previous in-flight search and launches
         // its own coroutine in this scope.
-        searchController.searchAsYouType(query, coroutineScope)
+        searchController.searchAsYouType(criteria, coroutineScope)
     }
 
     /**

@@ -92,8 +92,8 @@ class ToolWindowSearchController(
 
     suspend fun search(criteria: SearchCriteria) = searchService.search(criteria)
 
-    fun searchAsYouType(query: String, coroutineScope: CoroutineScope) =
-        searchService.searchAsYouType(query, coroutineScope)
+    fun searchAsYouType(criteria: SearchCriteria, coroutineScope: CoroutineScope) =
+        searchService.searchAsYouType(criteria, coroutineScope)
 
     /** Drops the criteria and shows the namespace's first page again. */
     suspend fun clearCriteria() = searchService.clearCriteria()

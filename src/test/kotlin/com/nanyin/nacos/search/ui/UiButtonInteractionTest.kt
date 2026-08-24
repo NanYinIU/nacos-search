@@ -4,9 +4,11 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.junit5.TestApplication
+import com.nanyin.nacos.search.bundle.NacosSearchBundle
 import com.nanyin.nacos.search.models.EnvironmentPreferences
 import com.nanyin.nacos.search.models.EnvironmentProfile
 import com.nanyin.nacos.search.models.NacosConfiguration
+import com.nanyin.nacos.search.models.SearchCriteria
 import com.nanyin.nacos.search.services.operations.EditEnvironment
 import com.nanyin.nacos.search.services.operations.EditSessionService
 import com.nanyin.nacos.search.services.operations.OperationGateway
@@ -71,7 +73,7 @@ class UiButtonInteractionTest {
         assertTrue(groupFilterButton.preferredSize.width >= groupFilterButton.minimumSize.width)
         assertTrue(groupFilterButton.preferredSize.width > 90)
 
-        panel.onSearchRequested = { calls.add("search:${it.query}") }
+        panel.onSearchRequested = { calls.add("search:${it.dataId}") }
         panel.onSearchCleared = { calls.add("clear") }
 
         runOnEdt {
@@ -85,6 +87,33 @@ class UiButtonInteractionTest {
         assertEquals(listOf("search:demo", "clear"), calls)
         assertEquals("", panel.getSearchQuery())
         Disposer.dispose(panel)
+    }
+
+    @Test
+    fun enterAndLiveSearchAssembleTheSameDataIdCriteria() {
+        val panel = SearchPanel(mockProject)
+        val searchField = privateField<JTextField>(panel, "searchField")
+        var enter: SearchCriteria? = null
+        var live: SearchCriteria? = null
+        panel.onSearchRequested = { enter = it }
+        panel.onRealTimeSearch = { live = it }
+
+        runOnEdt {
+            searchField.text = "APP*"
+            pressEnter(searchField)
+        }
+
+        assertEquals(SearchCriteria(dataId = "APP*"), live)
+        assertEquals(live, enter)
+        Disposer.dispose(panel)
+    }
+
+    @Test
+    fun searchPlaceholderDoesNotAdvertiseWildcards() {
+        val placeholder = NacosSearchBundle.message("search.placeholder")
+        assertFalse(placeholder.contains("*"))
+        assertFalse(placeholder.contains("wildcard", ignoreCase = true))
+        assertFalse(placeholder.contains("通配"))
     }
 
     @Test

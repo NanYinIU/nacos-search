@@ -1,14 +1,15 @@
 package com.nanyin.nacos.search.models
 
 /**
- * Search criteria consumed by the session-owned [com.nanyin.nacos.search.services.NacosSearchService].
- * Namespace and pagination live on the held search session / [PaginationState], not here.
+ * Visible search-box criteria consumed by the session-owned
+ * [com.nanyin.nacos.search.services.NacosSearchService].
+ *
+ * [dataId] is a case-insensitive literal substring of Data ID. [group] is the
+ * independent Group picker value and is never folded into that substring.
+ * Namespace and pagination live on the held search session /
+ * [com.nanyin.nacos.search.services.NacosSearchService.PaginationState], not here.
  */
 data class SearchCriteria(
-    val query: String = "",
-    val group: String = "",
     val dataId: String = "",
-    val useRegex: Boolean = false,
-    val caseSensitive: Boolean = false,
-    val searchContent: Boolean = true
+    val group: String = ""
 )

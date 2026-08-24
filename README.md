@@ -2,7 +2,7 @@
 
 在 IntelliJ IDEA 里搜索、查看和定位 Nacos 配置，不必在 IDE 与 Nacos 控制台之间反复切换。
 
-Nacos Search 支持管理多个 Nacos 环境，通过命名空间、Data ID、Group 和配置内容快速检索配置；同时将 Java 代码中的 `@NacosValue` / Spring `@Value` 占位符与 Nacos 配置键关联起来，提供 gutter 图标跳转、反向查找引用和源码用量导航。
+Nacos Search 支持管理多个 Nacos 环境，通过命名空间、Data ID 和 Group 快速检索配置；同时将 Java 代码中的 `@NacosValue` / Spring `@Value` 占位符与 Nacos 配置键关联起来，提供 gutter 图标跳转、反向查找引用和源码用量导航。
 
 ![Nacos Search 演示](docs/output.gif)
 
@@ -11,8 +11,8 @@ Nacos Search 支持管理多个 Nacos 环境，通过命名空间、Data ID、Gr
 ### 在 IDE 中检索 Nacos 配置
 
 - 在右侧工具窗口中浏览配置列表和完整配置内容。
-- 支持按 Data ID、Group、配置内容组合搜索。
-- 支持精确、模糊和通配符搜索，例如 `application`、`application*`、`*database`。
+- 支持按 Data ID 不区分大小写的子串搜索，并与独立的 Group 过滤器组合。
+- 搜索框把 `*` 和 `?` 当作普通字符，不是通配符或正则语法。
 - 支持命名空间选择、命名空间模糊过滤、Group 过滤与分页浏览。
 - 展示 Data ID、Group、Namespace、配置类型和更新时间等信息。
 - 支持中英文界面。
@@ -110,14 +110,14 @@ export JAVA_HOME=/Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home
 
 ### 3. 搜索配置
 
-基础搜索可直接输入 Data ID。展开高级条件后，可以分别填写 Data ID、Group 和配置内容，也可以使用 Group 过滤器缩小结果范围。
+搜索框按 Data ID 做不区分大小写的子串匹配；Group 过滤器独立生效，不会并入这段文本。`*` 和 `?` 是普通字符，只匹配 Data ID 里真正含有它们的配置。
 
 搜索示例：
 
 ```text
 application
-application*
-*database
+APP
+cation
 ```
 
 选择结果后即可查看完整内容和元信息。工具栏提供刷新与清空操作；同样的操作也注册在 IDEA 的 `Tools` 菜单中。
