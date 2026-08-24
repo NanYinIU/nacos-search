@@ -149,8 +149,18 @@ tasks {
        changeNotes.set("""
             <h3>1.4.2</h3>
             <ul>
+                <li><b>Settings</b>: Suggested Namespace is now an editable, filterable chooser. Opening it or testing the connection discovers available Namespaces without overwriting a manually entered ID, and stale discovery results are discarded when the endpoint or authentication changes.</li>
+                <li><b>设置</b>：建议 Namespace 现在是可编辑、可筛选的选择器。首次展开或测试连接时会发现可用 Namespace，同时保留手动输入的 ID；端点或认证信息变化后，过期的发现结果不会再回填界面。</li>
+                <li><b>Settings safety</b>: opening, cancelling, or resetting Settings no longer mutates published environments. Apply validates every edited endpoint before changing profiles or credentials, while a damaged inactive environment remains available for repair. Cancelling connection tests or Namespace discovery no longer appears as a connection failure or lets a late callback overwrite newer input.</li>
+                <li><b>设置安全</b>：打开、取消或重置设置页不再修改已发布的环境。应用设置前会先校验所有已编辑端点，避免部分更新配置档或凭据；已损坏但未选中的环境仍可进入设置修复。取消连接测试或 Namespace 发现时不再显示为连接失败，延迟回调也不会覆盖较新的输入。</li>
                 <li><b>Search</b>: the Data ID box is one case-insensitive substring. Enter search and live search use the same predicate; <code>*</code> and <code>?</code> are literal characters, not wildcards or regular expressions. Group filtering stays independent.</li>
                 <li><b>搜索</b>：Data ID 搜索框改为不区分大小写的子串匹配。按 Enter 与实时搜索使用同一谓词；<code>*</code> 和 <code>?</code> 是普通字符，不再当作通配符或正则。Group 过滤保持独立。</li>
+                <li><b>Search filters</b>: an empty result no longer resets the selected Group to All; Group options stay attached to the current Namespace and reset only when the Namespace actually changes.</li>
+                <li><b>搜索过滤</b>：搜索结果为空时不再把已选 Group 重置为全部；Group 选项与当前 Namespace 绑定，仅在 Namespace 真正切换时重置。</li>
+                <li><b>Configuration details</b>: selecting another configuration while one is loading now cancels and replaces the older load. A late response can no longer repaint the newer selection, and gutter refresh plus click navigation share the same in-flight configuration read.</li>
+                <li><b>配置详情</b>：上一条配置仍在加载时选择新配置，会取消并替换旧加载；延迟返回的旧结果不会再覆盖新选择。Gutter 刷新与点击跳转也会复用同一个进行中的配置读取，减少重复请求。</li>
+                <li><b>Fixes</b>: fixed the Settings page failing to open when the Namespace chooser had no options, and tightened environment migration, credential-slot publication, access-visibility ordering, placeholder indexing, and cancellation handling without changing their public workflows.</li>
+                <li><b>问题修复</b>：修复 Namespace 选择器没有选项时设置页无法打开的问题；同时加强环境迁移、凭据槽发布、访问可见性顺序、占位符索引与取消处理，保持既有操作流程不变。</li>
             </ul>
             <h3>1.4.1</h3>
             <ul>

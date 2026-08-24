@@ -140,7 +140,7 @@ private boolean paymentEnabled;
 
 | 项目 | 版本 |
 | --- | --- |
-| 插件版本 | `1.4.1` |
+| 插件版本 | `1.4.2` |
 | IntelliJ IDEA | `2022.3`（build 223）及之后（无上限） |
 | Java / Gradle Toolchain | Java 17 |
 | Kotlin | 2.0.21 |
