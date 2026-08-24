@@ -4,7 +4,7 @@ This repository is **Nacos Search**, an IntelliJ IDEA Community plugin (Kotlin +
 
 ## Gradle
 
-AI agents and automation **must use the repository wrapper (`./gradlew`) for every build, test, verification, and IDE task; never invoke the system `gradle` command directly**. The wrapper pins Gradle 9.0.0. A separately installed Gradle (for example Homebrew Gradle 9.3.1) would build with the wrong version and create misleading version-specific caches under `~/.gradle/caches/` and `~/.gradle/daemon/`.
+AI agents and automation **must use the repository wrapper (`./gradlew`) for every build, test, verification, and IDE task; never invoke the system `gradle` command directly**. The wrapper distribution is declared in `gradle/wrapper/gradle-wrapper.properties`; inspect the current version with `./gradlew --version`. A separately installed Gradle would build with a different version and create misleading version-specific caches under `~/.gradle/caches/` and `~/.gradle/daemon/`.
 
 ## Codegraph
 
